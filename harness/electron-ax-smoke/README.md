@@ -56,17 +56,43 @@ Harness НЕ записывает ничего и НЕ часть приложе
 запускай из второго окна терминала). Прогони по очереди для VS Code (с открытым большим файлом и
 выделенным текстом), Obsidian, Slack (с открытым каналом), Chrome (на тяжёлой странице).
 
-## Как читать результат
-Главный вопрос: **сколько твоих Electron-приложений дают `quality` ≥ `partialUseful` с приемлемым
-`cpuDeltaTargetApp`?** Сводка в конце stderr печатает `useful (full/partial): N/M`.
-- Если большинство `fullUseful`/`partialUseful` и cpuΔ небольшой → ставка держится, идём строить ядро.
-- Если много `titleOnly`/`none`/`attributeUnsupported` → AX-first на Electron не выходит, нужно
-  пересмотреть (больше OCR, либо принять что часть аппов только-OCR).
+## Как читать результат (v2 — честные метрики)
+v1 маркировал почти всё `fullUseful`, считая ВЕСЬ текст (включая кнопки/меню). v2 различает:
+- **`contentChars`** — текст из content-ролей (TextArea/TextField/WebArea/длинный StaticText) = реальный
+  контент. **Это и есть честная метрика.**
+- **`chromeChars`** — текст из кнопок/меню/табов = UI-chrome (не ценность).
+- **`textSample`** — первые ~700 символов извлечённого контента: глазами проверь, это контент диалога/
+  редактора или «File / Edit / Settings».
+- **`preFlagsTextChars`** — был ли текст ДО установки флага. Если высокий → дерево уже было доступно
+  (accessibility включена чем-то другим), и наш флаг ни при чём.
 
-Пришли мне получившиеся JSON (или они уже в `workspace/`) — разберу матрицу и зафиксирую решение в плане.
+Главный вопрос: **сколько Electron-приложений дают `quality` ≥ `partialUseful` ПО КОНТЕНТУ**, и
+`textSample` — это реально контент, а не chrome?
+
+### ⚠️ Загрязнение эксперимента (критично)
+Если на машине запущены **screenpipe, Limitless, superwhisper, krisp, Hammerspoon, VoiceOver, Raycast**
+и т.п. — они глобально держат accessibility включённой, и «дерево доступно без флага» может быть НЕ
+нашей заслугой. Harness печатает их в `otherAXConsumers` и предупреждает.
+
+**Для честного «холодного» замера:** закрой эти инструменты (особенно screenpipe/Limitless/superwhisper/
+krisp/Hammerspoon) и перепрогони. Сравни два прогона — если без них Electron-деревья просели → значит на
+чистой машине нам придётся самим поднимать accessibility (и тут проверяется, реально ли помогает флаг).
+
+### Идеальный набор прогонов
+```
+# 1) «грязный» (как есть, со всеми инструментами) — уже сделан
+# 2) «чистый»: закрой screenpipe/Limitless/superwhisper/krisp/Hammerspoon, потом:
+./.build/release/ElectronAXSmoke --out ~/ai/slishu/workspace/ax-smoke-clean.json
+# 3) focused-editor: открой VS Code с большим файлом + ВЫДЕЛИ кусок текста, сделай активным:
+./.build/release/ElectronAXSmoke --frontmost --out ~/ai/slishu/workspace/ax-smoke-vscode.json
+# (повтори --frontmost для Obsidian с заметкой, Slack с каналом, Chrome на статье)
+```
+
+Пришли JSON (они в `workspace/`) — разберу `contentChars` + `textSample` и зафиксирую решение в плане.
 
 ## Замечания
 - `apiDisabled` в `manualSetError` = у harness нет Accessibility-прав (см. шаг 3).
-- `cpuDeltaTargetApp` грубый (sampling-интервал 0.4с) — индикатор, не точное измерение.
-- Telegram Desktop (tdesktop) — Qt, не Electron; нативный Telegram для Mac — Swift. Оба попадут в
-  матрицу как `isElectron=false`, но их AX-quality тоже полезно знать.
+- `cpuDeltaTargetApp` грубый (sampling 0.4с) — индикатор, не точное измерение.
+- `contentChars`/`chromeChars` — эвристика по ролям AX; не идеальна, но отделяет контент от chrome.
+- Нативные приложения (Finder/Preview/iTerm) ожидаемо дают много контента — нас интересуют именно
+  Electron (`isElectron=yes`) и веб-области.

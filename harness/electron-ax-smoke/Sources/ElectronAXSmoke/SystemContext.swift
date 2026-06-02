@@ -42,6 +42,34 @@ enum SystemContext {
         return found
     }
 
+    // Запущенные инструменты, которые сами дёргают AX и могут ГЛОБАЛЬНО держать accessibility
+    // включённой — это загрязняет эксперимент (дерево «уже доступно» не из-за наших флагов).
+    static func detectAXConsumers() -> [String] {
+        let knownBundles: [String: String] = [
+            "com.apple.VoiceOver": "VoiceOver",
+            "org.hammerspoon.Hammerspoon": "Hammerspoon",
+            "com.raycast.macos": "Raycast",
+            "com.superduper.superwhisper": "superwhisper",
+            "ai.superwhisper.app": "superwhisper",
+            "com.limitless.desktop": "Limitless",
+            "com.dexterleng.Shortcat": "Shortcat",
+            "com.lowtechguys.rcmd": "rcmd",
+            "com.knollsoft.Hookshot": "Rectangle Pro",
+            "com.electron.realtime-stt": "krisp",
+        ]
+        var found: Set<String> = []
+        for app in NSWorkspace.shared.runningApplications {
+            let bid = app.bundleIdentifier ?? ""
+            let name = (app.localizedName ?? "").lowercased()
+            if let n = knownBundles[bid] { found.insert(n) }
+            // по имени — ловим то, что не угадали по bundleId
+            for needle in ["screenpipe", "krisp", "limitless", "superwhisper", "rewind", "hammerspoon", "voiceover", "shortcat", "homerow", "vimac"] {
+                if name.contains(needle) || bid.lowercased().contains(needle) { found.insert(needle) }
+            }
+        }
+        return found.sorted()
+    }
+
     // Electron-эвристика: наличие "Electron Framework.framework" или app.asar в бандле.
     static func electronInfo(bundleURL: URL?) -> (isElectron: Bool, version: String?) {
         guard let bundleURL else { return (false, nil) }

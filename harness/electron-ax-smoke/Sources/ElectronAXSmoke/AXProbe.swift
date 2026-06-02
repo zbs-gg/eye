@@ -74,18 +74,46 @@ private func setFlag(_ app: AXUIElement, _ name: String, _ value: Bool) -> AXErr
 struct TraverseResult {
     var nodeCount = 0
     var textChars = 0
+    var contentChars = 0
+    var chromeChars = 0
     var webAreaFound = false
     var url: String?
     var hitDeadline = false
+    var sample = ""             // role:value фрагменты, до sampleCap
 }
 
-private func nodeText(_ e: AXUIElement) -> Int {
-    var n = 0
+private let sampleCap = 700
+
+// Роли, чей текст — реальный КОНТЕНТ (а не UI-chrome).
+private let contentRoles: Set<String> = [
+    "AXTextArea", "AXTextField", "AXText", "AXWebArea", "AXComboBox", "AXSearchField",
+]
+// Роли, чей текст — UI-chrome (кнопки/меню/табы).
+private let chromeRoles: Set<String> = [
+    "AXButton", "AXMenuItem", "AXMenuBarItem", "AXMenu", "AXMenuBar", "AXPopUpButton",
+    "AXCheckBox", "AXRadioButton", "AXTab", "AXTabGroup", "AXToolbar", "AXImage",
+    "AXDisclosureTriangle", "AXIncrementor", "AXSlider",
+]
+
+private func nodeStrings(_ e: AXUIElement) -> [String] {
+    var out: [String] = []
     for attr in [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute,
                  kAXPlaceholderValueAttribute, kAXSelectedTextAttribute] {
-        if let s = copyString(e, attr) { n += s.count }
+        if let s = copyString(e, attr), !s.isEmpty { out.append(s) }
     }
-    return n
+    return out
+}
+
+// Классифицируем вклад текста узла: content vs chrome.
+// Эвристика: длинный AXStaticText (>40) — это контент (абзац), короткий — лейбл/chrome.
+private func classifyContribution(role: String, totalLen: Int) -> (content: Int, chrome: Int) {
+    if contentRoles.contains(role) { return (totalLen, 0) }
+    if chromeRoles.contains(role) { return (0, totalLen) }
+    if role == "AXStaticText" || role == "AXHeading" {
+        return totalLen > 40 ? (totalLen, 0) : (0, totalLen)
+    }
+    // прочие роли (AXGroup/AXScrollArea/AXRow/AXCell/...) — нейтрально, не считаем ни туда, ни сюда
+    return (0, 0)
 }
 
 // Итеративный обход (стек, не рекурсия), wall-clock deadline проверяется на каждом узле.
@@ -99,16 +127,30 @@ private func traverse(app: AXUIElement, budgetMs: Int) -> TraverseResult {
         if r.nodeCount >= nodeCap { break }
         r.nodeCount += 1
 
-        if r.textChars < charCap { r.textChars += nodeText(node) }
+        let role = copyString(node, kAXRoleAttribute) ?? "?"
+        let strings = nodeStrings(node)
+        let joined = strings.joined(separator: " ")
+        let len = joined.count
+        if len > 0 && r.textChars < charCap {
+            r.textChars += len
+            let (c, ch) = classifyContribution(role: role, totalLen: len)
+            r.contentChars += c
+            r.chromeChars += ch
+            // сэмпл: берём только content-вклад, чтобы глазами увидеть реальный контент
+            if c > 0 && r.sample.count < sampleCap {
+                let snippet = joined.prefix(120).replacingOccurrences(of: "\n", with: "⏎")
+                r.sample += "[\(role)] \(snippet)\n"
+            }
+        }
 
-        if let role = copyString(node, kAXRoleAttribute), role == "AXWebArea" {
+        if role == "AXWebArea" {
             r.webAreaFound = true
             if r.url == nil, let u = copyURL(node) { r.url = u }
         }
-        // children в конец стека
         let kids = copyChildren(node)
         if !kids.isEmpty { stack.append(contentsOf: kids) }
     }
+    if r.sample.count > sampleCap { r.sample = String(r.sample.prefix(sampleCap)) + "…" }
     return r
 }
 
@@ -137,11 +179,14 @@ enum AXProbe {
             firstUsefulTextMs: nil,
             nodeCount: 0,
             textCharCount: 0,
+            contentChars: 0,
+            chromeChars: 0,
             focusedTextChars: 0,
             webAreaFound: false,
             urlFound: false,
             url: nil,
             windowTitle: nil,
+            textSample: "",
             cpuBeforePct: nil,
             cpuAfterPct: nil,
             cpuDeltaTargetApp: nil,
@@ -194,13 +239,14 @@ enum AXProbe {
             if result.firstNonEmptyMs == nil && t.nodeCount > 1 {
                 result.firstNonEmptyMs = elapsed
             }
-            if result.firstUsefulTextMs == nil && t.textChars >= usefulTextThreshold {
+            // «полезный» = появился КОНТЕНТ-текст, не chrome
+            if result.firstUsefulTextMs == nil && t.contentChars >= usefulTextThreshold {
                 result.firstUsefulTextMs = elapsed
             }
 
-            // conservative: добиваем Enhanced только если manual не дал useful-текста
+            // conservative: добиваем Enhanced только если manual не дал useful-КОНТЕНТА
             if mode == .conservative && result.enhancedSetError == "skipped" {
-                let stillWeak = (t.textChars < usefulTextThreshold) || (manualErr != .success)
+                let stillWeak = (t.contentChars < usefulTextThreshold) || (manualErr != .success)
                 if stillWeak && i >= 1 {   // после второй попытки
                     let enhErr = setFlag(appElem, "AXEnhancedUserInterface", true)
                     result.enhancedSetError = axErrorString(enhErr)
@@ -208,15 +254,20 @@ enum AXProbe {
                 }
             }
 
-            if result.firstUsefulTextMs != nil && t.textChars >= fullUsefulThreshold { break }
+            if result.firstUsefulTextMs != nil && t.contentChars >= fullUsefulThreshold { break }
         }
 
         // финальный полный обход
         let finalStart = Date()
         let fin = traverse(app: appElem, budgetMs: result.budgetMs)
         result.traversalMs = Int(Date().timeIntervalSince(finalStart) * 1000)
+        // берём обход с бОльшим контентом (финальный обычно полнее)
+        let best = fin.contentChars >= lastTraverse.contentChars ? fin : lastTraverse
         result.nodeCount = max(fin.nodeCount, lastTraverse.nodeCount)
         result.textCharCount = max(fin.textChars, lastTraverse.textChars)
+        result.contentChars = best.contentChars
+        result.chromeChars = best.chromeChars
+        result.textSample = best.sample
         result.webAreaFound = fin.webAreaFound || lastTraverse.webAreaFound
         result.url = fin.url ?? lastTraverse.url
         result.urlFound = result.url != nil
@@ -242,14 +293,15 @@ enum AXProbe {
         return result
     }
 
+    // classify по КОНТЕНТУ (а не суммарному тексту) — это честная метрика.
     private static func classify(_ r: AppProbeResult, manualErr: AXError) -> String {
         if manualErr == .apiDisabled { return "sickPID" }
         if r.focusedTextChars >= focusedUsefulThreshold { return "fullUseful" }
-        if r.webAreaFound && r.textCharCount >= webAreaUsefulThreshold { return "fullUseful" }
-        if r.textCharCount >= fullUsefulThreshold { return "fullUseful" }
-        if r.textCharCount >= usefulTextThreshold { return "partialUseful" }
+        if r.webAreaFound && r.contentChars >= webAreaUsefulThreshold { return "fullUseful" }
+        if r.contentChars >= fullUsefulThreshold { return "fullUseful" }
+        if r.contentChars >= usefulTextThreshold { return "partialUseful" }
         if r.windowTitle != nil && !(r.windowTitle!.isEmpty) { return "titleOnly" }
-        if r.traversalMs >= r.budgetMs && r.textCharCount == 0 { return "timedOut" }
+        if r.traversalMs >= r.budgetMs && r.contentChars == 0 { return "timedOut" }
         return "none"
     }
 }
