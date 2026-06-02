@@ -1,0 +1,6 @@
+{
+  "artifactType": "ARTIFACT_TYPE_IMPLEMENTATION_PLAN",
+  "summary": "План модернизации интерфейса Slishu с внедрением боковой панели (Sidebar), разделов Плагинов (Pipes) и Подключений (Connections), а также детальной диагностики прав записи экрана TCC (ошибка -3801).",
+  "updatedAt": "2026-05-21T13:37:06.907407Z",
+  "requestFeedback": true
+}

@@ -1,0 +1,37 @@
+name: Slishu
+options:
+  bundleIdPrefix: com.slishu
+  developmentLanguage: ru
+
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    from: 6.27.0
+  FlyingFox:
+    url: https://github.com/swhitty/FlyingFox
+    from: 0.16.0
+  ModelContextProtocol:
+    url: https://github.com/modelcontextprotocol/swift-sdk
+    branch: main
+
+targets:
+  Slishu:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: SlishuApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.slishu.SlishuApp
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Slishu требует доступ к микрофону для записи и транскрибирования аудиоактивности."
+        INFOPLIST_KEY_NSScreenCaptureUsageDescription: "Slishu требует доступ к экрану для записи вашей активности и работы таймлайна."
+    dependencies:
+      - package: GRDB
+        product: GRDB
+      - package: FlyingFox
+        product: FlyingFox
+      - package: ModelContextProtocol
+        product: MCP
