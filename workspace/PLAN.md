@@ -1,309 +1,245 @@
-# Slishu — чистая пересборка нативного macOS-рекордера (план)
+# Slishu — план пересборки (v2, после ревью ChatGPT 5.5 Pro)
 
 ## Context
 
-**Что это.** Slishu — лёгкий локальный «вечная память»-рекордер для macOS: история всего, что
-происходит на компе (экран + accessibility-текст + аудио), индексируется и отдаётся в LAM/LLM
-через REST API и MCP. 100% локально, приватно. Цель — быть **легче и быстрее screenpipe** на Mac,
-с нативным premium-интерфейсом.
+**Что это.** Slishu — лёгкий локальный «вечная память»-рекордер для macOS: история активности на компе
+(экран + accessibility-текст + аудио), индексируется и отдаётся в LAM/LLM через REST + MCP. 100%
+локально, приватно. Цель — быть легче и быстрее screenpipe на Mac, нативный premium-интерфейс.
 
-**Почему пересобираем.** Предыдущую версию собрал Gemini-агент. Ядро (захват, БД, семантика,
-REST, MCP) наполовину рабочее, но: Pipes/Connections — **чистые заглушки** (mock-данные, пустые
-кнопки — ровно то, на что жаловался Никита); приложение **зависает** (рекурсивный обход
-`AXUIElement` без таймаута на тяжёлых/Electron-деревьях); есть race conditions (состояние захвата,
-выбор порта), возможные утечки `CVPixelBuffer`/`AVAudioEngine`, `try!` в MCP. Решение Никиты —
-**чистая переписка с нуля** (архитектуру строим заново, проверенные низкоуровневые куски можно
-переносить).
+**Почему пересобираем.** Версию от Gemini переписываем с нуля: Pipes/Connections — заглушки;
+приложение зависает (рекурсивный AX без таймаута); race conditions; утечки; `try!` в MCP.
 
-**Поправленная посылка (важно, влияет на дизайн).** Исходно считалось: «screenpipe на OCR, а
-Slishu на accessibility — вот дифференциатор». По факту **screenpipe тоже accessibility-first**
-(их доки: accessibility tree primary, OCR fallback; event-driven, поэтому 5–10% CPU). НО на
-**Electron-приложениях** (VS Code, Obsidian, Slack, Telegram, Chrome — половина рабочего дня) у
-screenpipe AX-дерево приходит пустым (Chromium строит его лениво, screenpipe не ставит флаги
-`AXManualAccessibility`/`AXEnhancedUserInterface`) → он валится в дорогой OCR → ~147% CPU когда
-Obsidian в фокусе (их issue #3002). **Настоящий дифференциатор Slishu:** (1) заставить
-accessibility реально работать, включая Electron; (2) убрать Tauri/WebKit-обёртку (нативный
-SwiftUI); (3) **event-driven вместо polling**. Тогда он честно легче, а не на бумаге.
+**Поправленная посылка.** screenpipe тоже accessibility-first, но на Electron (VS Code/Obsidian/Slack/
+Telegram/Chrome) у него AX-дерево пустое → OCR → ~147% CPU. Дифференциатор Slishu: заставить AX
+работать на Electron + event-driven + нативный SwiftUI.
 
-**Решения Никиты по развилкам.** Чистая переписка с нуля · свой чистый REST API + MCP (без
-legacy-контракта screenpipe) · транскрипция MLX Whisper turbo по умолчанию + сменный бэкенд ·
-**сначала прогнать архитектуру через ChatGPT 5.5 Pro** (бандл для Pro).
+**Решения Никиты.** Чистая переписка · свой чистый REST + MCP · MLX Whisper turbo + сменный бэкенд ·
+Pro-ревью архитектуры (сделано).
 
-**Целевая платформа:** Swift 6 (strict concurrency `complete`), SwiftUI, deployment target
-macOS 15.0 (Observation + native async Vision), пользователь на macOS 26 Tahoe (Liquid Glass).
+**Целевая платформа.** Swift 6 (strict concurrency `complete`), SwiftUI, deployment target macOS 15.0,
+пользователь на macOS 26 Tahoe.
 
 ---
 
-## Шаг 0 — Pro-ревью архитектуры (ДО написания кода)
+## ⚠️ Вердикт Pro (главное изменение v2)
 
-Этот план = архитектура, которую ревьюит Pro. Порядок: одобряешь план → я гоню бандл (ниже,
-Приложение A) через ChatGPT 5.5 Pro (skill `check-with-pro`, Playwright, без доп. трат сверх
-подписки) → вношу правки от Pro в этот план → начинаю Фазу 1. Бандл уже собран в Приложении A.
+Pro: план держится как **инженерный скелет, но НЕ как v1 production architecture**. Slishu должен
+стартовать как **measured adaptive recorder** (AX-first, OCR fallback, event-driven + measured fallback,
+hard per-app health), а НЕ как «победили Electron accessibility». Главная архитектурная ошибка плана v1:
+**слишком рано смешивает recorder-core и automation-платформу**. Сначала железобетонное ядро
+capture/search, потом Pipes.
 
----
-
-## Целевая архитектура (синтез)
-
-Единый принцип: **акторы Swift 6, value-типы `Sendable` на границах, один логический writer**.
-`CVPixelBuffer`/`AXUIElement`/`CMSampleBuffer`/`VNRequest` никогда не пересекают границу актора —
-потребляются на месте внутри `autoreleasepool`.
-
-### A. Ядро захвата (event-driven) — заменяет `SlishuCapture`
-
-- **CaptureCoordinator (@MainActor)** — владелец жизненного цикла, дебаунс, single-flight.
-  Источники событий:
-  - `WorkspaceEventSource` — `NSWorkspace.didActivateApplication` (смена фронт-аппа; здесь же
-    ставим Electron-флаги и пересоздаём `AXObserver`), `screensDidSleep/Wake`,
-    `sessionDidResignActive/BecomeActive` (lock → suspend).
-  - `AXEventSource` — `AXObserver` на PID фронт-аппа: `kAXFocusedWindowChanged`,
-    `kAXFocusedUIElementChanged`, `kAXValueChanged` (жёстко коалесится),
-    `kAXTitleChanged`/`kAXMainWindowChanged`.
-  - `InputEventSource` — listen-only `CGEvent.tapCreate` (keyDown/mouseUp/scroll) → только сбрасывает
-    таймеры (typing-pause, scroll-settled), контент НЕ читает; graceful degrade на
-    `NSEvent.addGlobalMonitorForEvents` если нет Input Monitoring-гранта.
-  - Дебаунс 250 мс (0 для appActivated), rate-limit valueChanged ≥1.5 c, single-flight на дисплей.
-- **FrameCapturer (actor)** — **`SCScreenshotManager.captureSampleBuffer` (on-demand single frame,
-  macOS 14+), НЕ persistent `SCStream`**. В idle нет событий → нет захвата → CPU ≈ 0. `SCShareableContent`
-  кешируется, рефреш по `didChangeScreenParameters`.
-- **AXReaderActor (actor)** — обход БЕЗ зависаний: **wall-clock дедлайн 120 мс** (главный фикс) +
-  `AXUIElementSetMessagingTimeout` 100 мс (второй фикс — синхронный IPC к зависшему аппу) +
-  итеративный обход (стек, не рекурсия) + depth/node-cap + отмена по смене `generation`.
-  **Electron-coercion:** на фронт-аппе ставим `AXManualAccessibility=true` И
-  `AXEnhancedUserInterface=true` (оба — версия Chromium решает, какой нужен), ретрай при пустом
-  дереве (400/1200 мс), per-PID кеш здоровья (`healthy`/`empty`/`ocrOnly`). Достаём `browser_url`
-  из `AXWebArea`/omnibox для Safari/Chrome.
-- **OCRFallbackActor (actor)** — Vision только когда AX пуст/недостаточен/недоступен (remote desktop,
-  игры, canvas). Native async `RecognizeTextRequest` (macOS 15+) / `VNRecognizeTextRequest`,
-  ru+en, ANE, `autoreleasepool`, отменяемый, **даунскейл через Metal перед OCR**, gate по dedup-хешу.
-- **FrameEncoderActor (actor)** — единственный переиспользуемый `CIContext(mtlDevice:)`, HEIC через
-  аппаратный кодек, **дедуп perceptual-hash (aHash/dHash 64-bit)** — хранит `UInt64`, НЕ
-  предыдущий буфер (фикс back-pressure/утечки).
-- **Smart pause** — emergent: нет событий = нет захвата. Явно: teardown источников на lock/sleep;
-  idle = просто решедул fallback-тика; fullscreen+AX-empty → только fallback-тик.
-- Контракт наружу — `ScreenCaptureRecord`/`AudioCaptureRecord` (Sendable) → `IngestService`.
-  Захват НЕ трогает SQL/FTS/embeddings напрямую.
-
-### B. Слой данных + поиск — заменяет `SlishuDatabase`/`SlishuSemanticSearch`
-
-- **Схема GRDB v1:** `apps`, `screen_captures` (ts epoch-ms, app_id, window_title, browser_url,
-  monitor_id, relative_path, w/h, bytes), `text_blocks` (capture_id, **source `ax`|`ocr`**, text,
-  confidence, bbox?), `audio_captures`, `transcriptions` (сегменты с таймкодами, language, engine),
-  `embeddings`. `DatabasePool` + WAL + PRAGMA (synchronous=NORMAL, mmap, busy_timeout, foreign_keys).
-- **FTS5 external-content** (`content='text_blocks'`) с триггерами ai/ad/au — **без декартова
-  произведения** (старый баг). Поиск дедупит `GROUP BY capture_id`, не `JOIN`-ом всех элементов.
-  Альтернатива для простоты ранжирования — денормализованная `fts_text` на кадре.
-- **Вектор: sqlite-vec (vec0)** загружается в GRDB через `sqlite3_auto_extension` в
-  `prepareDatabase` — масштаб «месяцы 24/7» (сотни тыс.–млн строк) brute-force C+SIMD за десятки мс,
-  фильтры по времени/app в том же SQL. **Страховка:** протокол `VectorIndex` с
-  `AccelerateBruteForceIndex` (vDSP) если расширение не соберётся — проверить загрузку на целевом
-  toolchain **рано** (главный техриск).
-- **Эмбеддинги:** дефолт **multilingual-e5-small (384-dim) через MLX** (тот же рантайм, что Whisper;
-  cross-lingual ru→en), сменный протокол `EmbeddingBackend` с `NLEmbedding` (нулевой вес) и bge-m3
-  опциями. Все вектора L2-нормализованы. Модель фиксируется в `embeddings.model`+`dim`.
-- **Гибридный поиск:** FTS (bm25) + semantic (vec) → **Reciprocal Rank Fusion** (k≈60, без калибровки
-  шкал). Режимы `fts|semantic|hybrid` (default hybrid). Фильтры app/window/time/source.
-- **IngestService (actor)** — ЕДИНСТВЕННЫЙ writer: пишет файл + `screen_captures`+`text_blocks` (триггеры
-  наполняют FTS) + ставит embed; для аудио → в `TranscriptionService`. Убирает `Task.detached`-гонки.
-- **RetentionManager (actor)** — прунинг по дням И размеру (GB), каскад + явный `DELETE` из vec0,
-  orphan-sweep, FTS `optimize` + `wal_checkpoint(TRUNCATE)`, батчами. Релокация хранилища через
-  **security-scoped bookmark** (не plain string — иначе сломается).
-
-### C. REST + MCP — заменяет `SlishuServer`/`SlishuMCP`
-
-- **Сервер: остаёмся на FlyingFox** (уже собран, лёгкий, async, SSE). Чинит: **Codable DTO вместо
-  ручной сборки JSON-строк**; **динамический порт корректно** (различать `EADDRINUSE` от прочих
-  ошибок; `self.server` ставить ПОСЛЕ успешного `start()`; дефолт **не 8080** — `8088`/`11435` или
-  `port=0`; писать активный порт в `~/Library/Application Support/Slishu/port`).
-- **Эндпоинты `/v1`:** `/health`, `/search` (q, mode, app, window, source, from/to, limit),
-  `/timeline` (бакеты для скруббера), `/frames/{id}` (+`?thumb=1`, числовой id → lookup, не путь из
-  URL), `/media/{filename}` (Range-стриминг + traversal-hardening regex+resolvedSymlinks+pathComponents),
-  `/frames/{id}/context`, `/capture/toggle` (auth), `/settings/storage`, `/stats`. Bind только
-  `127.0.0.1`, опциональный `Bearer` токен на мутации.
-- **MCP: официальный `modelcontextprotocol/swift-sdk`** (запинить ревизию, не `branch: main`),
-  **stdio (`Slishu --mcp` для Claude Desktop/Cursor) + SSE на `/mcp`**. Tools: `search_history`,
-  `get_timeline`, `get_context_at`, `get_status`, `toggle_recording` — тонкие обёртки над общим
-  `SearchService`/`TimelineService`. Никаких `try!` — ошибки → MCP error result.
-
-### D. Транскрипция — заменяет `SlishuTranscriptionManager`
-
-- **Протокол `TranscriptionBackend`** (async, отменяемый через `withTaskCancellationHandler`, прогресс),
-  сегменты с таймкодами/языком.
-- **`MLXWhisperBackend` (default)** — MLX Swift, `whisper-large-v3-turbo`, **warmUp один раз** (не
-  перезагружать модель на чанк), decode m4a→PCM 16k mono, чанки 30 c, язык auto/ru/en. Модель не в
-  бандле — качается по требованию (~1.5 ГБ).
-- **Сменные:** `SFSpeechBackend` (нулевой вес, для слабых машин), `WhisperCppBackend`, `CloudBackend`
-  (opt-in, помечен — нарушает «локально»). **`TranscriptionService (actor)`** — очередь, прогресс,
-  смена движка из настроек, запись в БД (триггер наполняет `transcription_fts`).
-
-### E. UI / оболочка — заменяет `ContentView`/`SlishuApp` (1531-строчный монолит → декомпозиция)
-
-- **App shell:** `@main` с `Window(id:"main")` (не WindowGroup) + `MenuBarExtra(.window)` (живой
-  glass-popover: toggle, счётчики, активный порт, варнинги прав, выход). Корневое состояние — один
-  `@Observable AppEnvironment` через `.environment` (убираем 14-биндинговый антипаттерн). Счётчики —
-  через **GRDB `ValueObservation`**, не `Timer.publish(1s)`. `LSUIElement=NO` по умолчанию + тумблер
-  «скрывать из Dock» (runtime `setActivationPolicy`).
-- **Онбординг прав:** `PermissionChecker` — чистые пробы: Screen (`CGPreflightScreenCaptureAccess`),
-  Accessibility (`AXIsProcessTrusted`), Mic (`AVCaptureDevice.authorizationStatus`), Speech.
-  Пошаговый flow + диагностическая панель в Settings (общий `PermissionRow`). **Правильная обработка
-  -3801:** статус `.needsRestart` (право выдано, но `SCStream` надо пересоздать) → кнопки
-  «Перезапустить захват»/«Перезапустить Slishu». Поллинг статусов 1.5 c (у TCC нет KVO).
-- **Timeline + time-travel scrubber (keystone):** `TimelineStore` — **ось = время, не индекс массива**
-  (старый грузил всю историю в массив — не масштабируется). `Canvas`-density-strip (высота =
-  активность, цвет = доминирующий апп), draggable playhead с **debounced seek 60–80 мс** (thumbnail
-  сразу, HEIC+OCR асинхронно), zoom День/Час/10мин, transport play/pause + 1×/2×/4× + step, crossfade
-  между кадрами. Spotlight-поиск сверху **унифицирован со скруббером** (клик по хиту → playhead на
-  его время), фильтры app/time/source, тумблер Полнотекст/Смысл.
-- **Pipes — РЕАЛЬНЫЙ backend.** Модель: **декларативные scheduled local-LLM агенты (markdown+YAML +
-  cron)**, как у screenpipe (НЕ JavaScriptCore в v1 — оставить `kind:script` как точку расширения).
-  Пайп = папка `Pipes/<id>/` с `pipe.yaml`+`pipe.md`. `PipeScheduler` (cron, catch-up на wake) →
-  `PipeRuntime.run` (resolve inputs из DB/REST → context → LLM Connection → output Connection →
-  `pipe_runs` лог). Capability-list прав в yaml + явное согласие при установке. UI: грид с реальным
-  toggle/статусом/nextRun, **рабочая «Настроить»** (schema-driven форма из `config:`), «Запустить
-  сейчас», live-лог. 3 готовых пайпа (саммари дня → Obsidian; поиск по встречам → Notion/Slack;
-  экспорт истории → файл). Миграция `v4_pipes` (`pipes`, `pipe_runs`).
-- **Connections — РЕАЛЬНЫЙ backend.** Протокол `Connector` (test/write/query). Клиенты: Obsidian
-  (vault bookmark), Ollama/MLX (localhost), Slack (webhook), Notion (internal token), File.
-  **Секреты — Keychain (`kSecClassGenericPassword`, AfterFirstUnlock), НЕ UserDefaults** (явное
-  требование Никиты). Auth v1 = api-key/token/webhook (OAuth позже за тем же enum). UI: реальный
-  статус здоровья + **рабочая «Проверить подключение»** (`Connector.test()`), `SecureField`. Миграция
-  `v5_connections` (только не-секретный конфиг). **Pipes зависят от Connections** — делать Connections
-  раньше.
-- **Settings:** Хранилище (путь+NSOpenPanel+bookmark, размер на диске, retention дни/GB) ·
-  Транскрипция (движок MLX/SF/whisper.cpp) · Сервер (**показ реального активного порта**, base URL,
-  рестарт) · Приватность (опциональная **пауза по приложению** — НЕ блэклист по умолчанию, Никита
-  пишет всё) · Запуск при логине (`SMAppService.mainApp`) · О приложении (AppIcon из workspace).
-- **Упаковка:** XcodeGen `project.yml` — deployment 15.0, Swift 6 `complete`, **Hardened Runtime БЕЗ
-  App Sandbox** (SCK full-display + cross-app AX + локальный сервер + внешнее хранилище несовместимы с
-  sandbox; так же shipping у Rewind/screenpipe-класса). Entitlements минимальные (audio-input,
-  apple-events опц., allow-jit/disable-library-validation для MLX). Usage strings (+Speech). Подпись
-  Developer ID + **нотаризация** (`notarytool`+`stapler`), DMG. AppIcon `.appiconset` из
-  `workspace/slishu_isolated_icon_*.png` (изолированная сфера на белом — готовый источник 1024²).
+**4 BLOCKING harness ДО любого production-кода** (иначе строим UI/Pipes поверх неизмеренного ядра):
+1. **Electron AX coercion harness** — доказать на реальной машине, что флаги дают *useful* tree.
+2. **SCScreenshotManager vs SCStream burst benchmark** — найти порог, где warmed-stream бьёт on-demand.
+3. **sqlite-vec scale benchmark** на 100k–1M × 384 — измерить реальную латентность, решить sqlite-vec/ANN.
+4. **signed/notarized empty app** + real TCC onboarding + authenticated localhost — нотаризация ломает
+   skeleton в Фазе 1, не 40k строк позже.
 
 ---
 
-## Целевая структура файлов
+## Жёсткий scope v1 (что сужено по Pro)
 
-Чистая переписка с группировкой по папкам (вместо плоского `SlishuApp/*.swift`):
-```
-SlishuApp/
-  App/         SlishuApp.swift, AppEnvironment.swift, AppLifecycle.swift
-  Capture/     CaptureCoordinator, FrameCapturer, AXReaderActor, OCRFallbackActor,
-               FrameEncoderActor, EventSources/*, CaptureConfig, CaptureRecord
-  Data/        SlishuDatabase, Models/*, IngestService, RetentionManager, StorageManager,
-               Vector/{VectorIndex,SqliteVecIndex,AccelerateBruteForceIndex}, Embedding/*
-  Search/      SearchService, TimelineService
-  Transcription/ TranscriptionBackend, MLXWhisperBackend, SFSpeechBackend, TranscriptionService
-  Server/      SlishuHTTPServer, SlishuAPIDTO, Routes/*
-  MCP/         SlishuMCPServer, Tools/*
-  State/       *Store.swift (@Observable)
-  Views/       Sidebar, Timeline, Pipes, Connections, Settings, Onboarding, MenuBar, Components
-  Services/    Pipes/{PipeEngine,PipeScheduler,PipeRuntime}, Connections/ConnectorClients/*,
-               Keychain/KeychainStore, Permissions/PermissionChecker
-  Resources/   Assets.xcassets/AppIcon.appiconset, BundledPipes/
-project.yml, Slishu.entitlements
-```
-Старые файлы из `workspace/` (отчёты, иконки) — оставить как есть, не трогать.
+**В v1:**
+- Adaptive AX/OCR recorder с режимами (idle/active-text/burst-stream) и per-app health-телеметрией.
+- DB/FTS/retention/search **без embeddings вначале** (embeddings добавляем после benchmark'а).
+- Authenticated localhost REST (**все /v1 кроме /health требуют Bearer**, токен в Keychain).
+- MCP **только stdio** (`Slishu --mcp`). HTTP/SSE MCP отложен.
+- Один Timeline/Search UI.
+- **Один Pipe**: daily summary → локальный файл / Obsidian. Никакого Slack/Notion/cloud egress.
+- Connections v1: только **File export + Obsidian + Local LLM**.
+- Транскрипция **OFF by default**; при включении — light backend (SFSpeech / whisper.cpp small /
+  WhisperKit small). MLX Whisper turbo — отдельный optional Quality mode, не bundled, не default.
+
+**Отложено за v1:** Slack/Notion коннекторы · HTTP/SSE MCP · MLX turbo как default · semantic vector на
+миллионах (сначала benchmark + temporal shards) · multi-step pipe-маркетплейс · JS-плагины.
 
 ---
 
-## Порядок реализации (фазы)
+## Целевая архитектура (с правками Pro)
 
-0. **Pro-ревью** (Приложение A) → правки в план.
-1. **Каркас + БД-фундамент:** `project.yml` (Swift6/macOS15/entitlements), схема GRDB v1 + миграции
-   (FTS-триггеры без декартова, убрать `eraseDatabaseOnSchemaChange`), **sqlite-vec загрузка** +
-   `VectorIndex` с Accelerate-fallback (проверить рано!), `IngestService`, app-shell skeleton
-   (`AppEnvironment`+stores+`NavigationSplitView`+MenuBar) поверх заглушек сервисов.
-2. **Захват event-driven:** CaptureCoordinator + акторы, Electron-флаги, AX-таймауты, dedup,
-   smart-pause. → пишет через `IngestService`. Профилировать CPU/RAM в idle и на Electron.
-3. **Поиск:** `EmbeddingBackend` (старт NLEmbedding → MLX e5), `SearchService` (FTS+vec+RRF), DTO.
-4. **REST `/v1`:** фикс порта, все эндпоинты, traversal-hardening, реальный порт в UI.
-5. **Права + онбординг:** `PermissionChecker`/`PermissionsStore`, flow, -3801 → needsRestart.
-6. **Timeline + scrubber:** `TimelineStore` (ось-время), `ScrubberView`, унифицированный Spotlight.
-7. **Транскрипция:** `TranscriptionBackend` + `SFSpeechBackend` → `MLXWhisperBackend` (default),
-   `TranscriptionService`, сменность движка в Settings.
-8. **Connections:** `KeychainStore`, `Connector` + 5 клиентов, `v5`, UI + test.
-9. **Pipes:** формат, `PipeEngine/Scheduler/Runtime`, `v4`, UI, 3 готовых пайпа.
-10. **MCP:** официальный SDK, stdio (`--mcp`) + SSE, 5 tools, port-файл.
-11. **Settings glue + RetentionManager** (прунинг/размер/bookmark/login).
-12. **Упаковка:** entitlements, AppIcon, подпись + нотаризация, DMG.
+Принцип: **акторы Swift 6, Sendable на границах, один логический writer**. Не-Sendable
+(`CVPixelBuffer`/`CMSampleBuffer`/`AXUIElement`/`VNRequest`) живут и умирают внутри одного актора.
 
-После каждой фазы: `xcodebuild` зелёный + `post-commit-verifier` на нетривиальных коммитах
-(правило harness). Бранч не `main`.
+### A. Ядро захвата — adaptive, не «event-driven победа»
+
+- **Режимы захвата** (вместо чистого event-driven):
+  - `idle`: fallback 60–120с, OCR только manual.
+  - `active-text`: event-driven + fallback 5–15с, app-specific (IDE/chat/browser 5–10с, docs/static
+    15–30с).
+  - `burst-stream`: warmed `SCStream` 10–30с. Вход: ≥4 триггера/10с, fullscreen video, meeting-app,
+    fast scroll, повторные захваты. **Это закрывает дыру «входящий контент без input-события»**
+    (Slack/Telegram/CI logs/toasts/meetings) — чистый on-demand их теряет.
+- **Burst trio на appActivated**: capture 0мс / 700мс / 2000мс (Electron/web AX-дерево и визуал часто
+  не готовы к первому immediate кадру).
+- **FramePipelineActor (ОДИН actor)** — capture + encode + hash в одной isolation domain. `SCStream`/
+  `SCScreenshotManager` + `CMSampleBuffer`/`CVPixelBuffer` живут и умирают здесь; наружу только Sendable
+  (`Data`/`URL`/`UInt64` phash/dims/timestamp). Переиспользуемый `CIContext(mtlDevice:)`, HEIC HW-кодек,
+  perceptual-hash дедуп (`UInt64`, не буфер). **FrameEncoderActor как отдельный actor — убран** (Pro:
+  граница capture→encode = мина для Swift 6 / zero-copy).
+- **AXReaderActor — фасад над dedicated serial DispatchQueue/thread** (НЕ обычный actor с blocking C
+  calls — иначе забьём cooperative executor). Никогда не возвращает `AXUIElement`, только `AXExtraction`
+  (Sendable). **Priority extraction** (не generic traversal) под общим бюджетом 120мс:
+  title 10–20мс → focused selected/value 20–30мс → focused window direct value-bearing 40–60мс →
+  visible controls остаток → deep web/document scan = background enrichment, не capture-blocking.
+  `AXUIElementSetMessagingTimeout` 100мс, итеративный стек, отмена по `generation`. Помнить: Swift
+  cancellation НЕ прерывает blocking C-call — wall-clock budget это soft-SLA, не hard.
+- **AXQuality модель** (вместо healthy/empty/ocrOnly):
+  `enum AXQuality { none, titleOnly, partialUseful(chars), fullUseful(chars), timedOut(chars),
+  sickPID(error) }`. Per-PID health: `healthy / slow (focused-only) / sick (skip AX 30–120с) / ocrOnly`.
+- **Electron coercion — adaptive probe, не ставка.** Режимы `conservative` (AXManualAccessibility only,
+  retry 250/750/1500/3000мс, Enhanced только если empty/unsupported) / `aggressive` (allow
+  AXEnhancedUserInterface, warn про side-effects). **Не перетягивать режим если активен реальный
+  VoiceOver.** Помнить: `AXManualAccessibility` исторически даёт `kAXErrorAttributeUnsupported` на части
+  версий → честный OCR fallback. Claim: «probes/coerces/records quality/falls back», НЕ «заставляет».
+- **OCR fallback** (Vision, native async `RecognizeTextRequest` 15+, ru+en, ANE, downscale через Metal,
+  cancellable) при: `treeWasEmpty | titleOnly | (hitBudgetLimit && usefulChars<threshold) | sickPID |
+  canvas/game/remote`.
+- **Telemetry на каждый capture** (доказать AX-first): `ax_quality, useful_text_chars, node_count,
+  hit_budget_limit, tree_was_empty, ocr_fallback_reason, manual_accessibility_result,
+  enhanced_ui_result`.
+- **Smart pause** emergent (нет событий = нет захвата) + явный teardown на lock/sleep.
+
+### B. Данные + поиск — ядро БЕЗ embeddings вначале
+
+- **Схема GRDB v1**: `apps`, `screen_captures` (ts epoch-ms, app_id, window_title, browser_url,
+  monitor_id, relative_path, w/h, bytes, **ax_quality + telemetry-поля**), `text_blocks` (source
+  ax|ocr, text, confidence, bbox?), `audio_captures`, `transcriptions`. `DatabasePool`+WAL+PRAGMA.
+  **FTS5 external-content** с триггерами ai/ad/au (без декартова бага). Убрать
+  `eraseDatabaseOnSchemaChange`.
+- **Retention с первого дня**: default **7 дней OR 20 GB** (НЕ «forever»; 30/90/forever — явный выбор
+  юзера). `RetentionManager` (actor): прунинг по дням И размеру, каскад + orphan-sweep + FTS optimize +
+  wal_checkpoint, батчами. Релокация через security-scoped bookmark.
+- **Embeddings — ПОСЛЕ benchmark'а (Шаг 1c harness)**. `VectorIndex` протокол расширенный:
+  `upsert/delete/search(query, filters, limit, candidateBudget)`, `supportsANN/supportsPreFilter/
+  supportsQuantization`. Thresholds: ≤250k exact (sqlite-vec); 250k–1M только с time/app/source
+  prefilter или temporal shard; >1M — ANN required OR time-windowed. **Temporal shards** (bucket_month),
+  default search last 7/30 дней → expand on demand. **Static link sqlite-vec** (не loadable extension
+  под Hardened Runtime). Fallback `AccelerateBruteForceIndex`. Не embed на каждый дубль-кадр — только
+  при материальном изменении текста. Эмбеддинги: старт NLEmbedding (нулевой вес) → multilingual-e5-small
+  via MLX как опция. Гибрид FTS+vector через RRF (k≈60) — после того как vector доказан.
+- **IngestService (actor)** — единственный writer.
+
+### C. REST + MCP — security-first
+
+- **FlyingFox**, Codable DTO, динамический порт корректно (различать EADDRINUSE; дефолт не 8080;
+  активный порт в `~/Library/Application Support/Slishu/port`). Bind только `127.0.0.1`.
+- **Auth на ВСЁ кроме /health** (правка Pro — главная): `/search`, `/frames`, `/media`, `/timeline`,
+  `/stats`, мутации — все требуют `Authorization: Bearer`. Токен генерится at first launch, хранится в
+  **Keychain**. **Reject Host != localhost/127.0.0.1/::1**, CORS deny by default. Никаких
+  unauthenticated frame/audio/media reads (это экран/тексты/аудио — основная ценность и риск).
+  Path-traversal hardening (числовой id→lookup, regex на filename, resolvedSymlinks+pathComponents).
+- **MCP только stdio** в v1 (`Slishu --mcp`), официальный Swift SDK (запинить ревизию), без `try!`.
+  stdio получает токен через env/config. Tools: search_history, get_timeline, get_context_at,
+  get_status, toggle_recording. **HTTP/SSE MCP отложен.**
+
+### D. Транскрипция — OFF by default
+
+- `TranscriptionBackend` протокол (async, cancellable, progress). **v1 default OFF.** При включении —
+  light backend: SFSpeech / whisper.cpp small / WhisperKit small. **MLX large-v3-turbo = optional
+  Quality mode** (отдельный download, не bundled, не default). Cloud — за флагом, dev only.
+- Pipeline: audio → **VAD** → coalesce → queue → транскрипт → FTS/vector. VAD до очереди (drop silence/
+  music), word timestamps off unless needed, **unload model after 10–15мин idle / memory pressure**,
+  queue limit by duration. Soak test 8ч обязателен (RSS plateau, no unbounded queue, sleep/wake×2,
+  AirPods×2). `TranscriptionService` (actor).
+
+### E. UI / оболочка
+
+- App shell: `@main` `Window(id:"main")` + `MenuBarExtra(.window)`, корень `@Observable
+  AppEnvironment`. Счётчики через GRDB `ValueObservation` (не Timer.publish(1s)). LSUIElement=NO +
+  тумблер Dock.
+- **Онбординг прав** (Шаг 1d harness): `PermissionChecker` (Screen
+  `CGPreflightScreenCaptureAccess`, Accessibility `AXIsProcessTrusted`, Mic, Speech). `-3801` →
+  `.needsRestart` (happy path, не edge): кнопки «Перезапустить захват»/«Перезапустить Slishu». Поллинг
+  1.5с.
+- **Timeline + scrubber**: `TimelineStore` ось-время (не индекс массива). Canvas density-strip, debounced
+  seek 60–80мс, zoom День/Час/10мин, play/pause 1×/2×/4×, crossfade. **Spotlight унифицирован со
+  скруббером** (клик по хиту → playhead). Показывать источник (AX/OCR) и ax_quality.
+- **Pipes — step-based, один pipe в v1.** Schema со steps (collect→summarize→write) + `safety`
+  (firstRunRequiresPreview, requirePreviewForExternalEgress, maxInputItems, maxTokensOut, timeout,
+  idempotencyKey). **Prompt-injection защита**: pipe читает приватную историю → LLM → egress; first-run
+  preview/dry-run обязателен, audit log, egress caps. Script-future = `runtime: script-jsc` (не сейчас).
+  **v1 ship: Daily summary → local file/Obsidian.** Не Slack/Notion/cloud.
+- **Connections v1**: File export, Obsidian (vault bookmark), Local LLM (Ollama/MLX localhost). Секреты
+  в **Keychain**. `Connector.test()`. Slack/Notion — отложены.
+- **Settings**: хранилище (путь+bookmark, размер, retention 7/20GB default), транскрипция (OFF default,
+  light/MLX), сервер (реальный порт), приватность (опц. пауза по приложению — не блэклист), запуск при
+  логине (`SMAppService`), about.
+- **Упаковка**: **Hardened Runtime БЕЗ App Sandbox**. **Минимальные entitlements** (правка Pro):
+  `allow-jit NO`, `disable-library-validation NO` (пока signed MLX не докажет необходимость),
+  `automation.apple-events NO` (пока AppleScript-URL не shipped), `device.audio-input YES` только если
+  mic включён. Developer ID + нотаризация **в Фазе 1**.
+
+---
+
+## Pre-code порядок (по Pro) — заменяет старые фазы
+
+**Шаг 0 — Pro-ревью.** ✅ Сделано (`workspace/pro-review-response.md`).
+
+**Шаг 1 — 4 BLOCKING harness** (отдельные мелкие программы/скрипты, НЕ приложение):
+- **1a. Electron AX smoke harness** — JSON-матрица per app/version (manualSetError, enhancedSetError,
+  firstNonEmptyMs, firstUsefulTextMs, nodeCount, textCharCount, webAreaFound, urlFound,
+  cpuDeltaTargetApp, quality). Apps: VS Code/Slack/Obsidian/Telegram/Chrome/Arc/Edge/Brave × режимы ×
+  macOS 15/26 × VoiceOver off/on × window-manager off/on. **Решает, держится ли продуктовая ставка.**
+- **1b. SCScreenshotManager vs SCStream burst benchmark** — cold/warm p50/p95, energy 10мин, dropped
+  captures под burst → точный порог burst-stream.
+- **1c. sqlite-vec scale benchmark** 100k–1M × 384 (static-linked), с prefilter и без, concurrent
+  ingest+search → решение sqlite-vec/ANN/temporal-shard.
+- **1d. signed/notarized empty app** + TCC onboarding + authenticated localhost (codesign --verify
+  --strict, spctl, notarytool, stapler в CI).
+
+**Шаг 2 — ядро (после harness'ов, с учётом их цифр):**
+2. signed/notarized skeleton + TCC onboarding (из 1d).
+3. **FramePipelineActor** (capture+encode+hash в одной isolation domain).
+4. DB/FTS/retention/search **без embeddings**.
+5. **Authenticated localhost REST** для search/frame/media.
+6. AX/OCR capture loop с **telemetry** (режимы + AXQuality + per-PID health).
+7. **VectorIndex benchmark** (из 1c) → sqlite-vec/ANN решение → embeddings + hybrid.
+8. Один Timeline/Search UI.
+9. Один Pipe: daily summary → local file/Obsidian (step-based + preview).
+10. Только потом audio/transcription (light default, MLX опц., VAD, soak test).
+
+После каждой фазы: `xcodebuild` зелёный + `post-commit-verifier` на нетривиальных коммитах. Бранч не main.
 
 ---
 
 ## Verification (end-to-end)
-
-- **Сборка:** `xcodebuild -scheme Slishu build` зелёный после каждой фазы; финально — запуск `.app`.
-- **Захват не виснет:** открыть Obsidian/VS Code/Slack в фокусе → подтвердить, что текст идёт из AX
-  (`text_blocks.source='ax'`), а НЕ OCR; CPU в idle ≈ 0, на Electron — единицы %, не 147%.
-  Instruments: нет роста RAM за час (нет утечки `CVPixelBuffer`/Vision/AVAudioEngine).
-- **Права:** свежий запуск → онбординг проводит через Screen/Accessibility/Mic; искусственно отозвать
-  Screen Recording → увидеть `.needsRestart` и рабочую кнопку перезапуска (нет вечного -3801).
-- **Порт:** занять 8088 → сервер берёт следующий и показывает реальный порт в UI и `/health`.
-- **Поиск:** ru-запрос по en-контенту («ошибки компиляции» → экран «build failed») находит через
-  semantic; FTS находит точные строки; hybrid ранжирует. `curl /v1/search`.
-- **Timeline:** скруббер плавно тянется по дню, кадр+текст+app/url подгружаются, play/pause идёт по
-  времени (idle-промежутки проматываются).
-- **Pipes:** «Запустить сейчас» на «Саммари дня» → реальная запись в Obsidian-vault через Connection;
-  лог в `pipe_runs`.
-- **Connections:** добавить Slack webhook → «Проверить» шлёт тестовое сообщение; токен в Keychain, не
-  в UserDefaults (проверить `defaults read`/Keychain Access).
-- **MCP:** подключить `Slishu --mcp` в Claude Desktop → `search_history`/`get_context_at` отвечают.
-- **Прунинг:** выставить лимит → старые кадры+строки+файлы+вектора удаляются каскадно, orphan-sweep
-  чистит висячие файлы.
+- **Harness 1a**: на реальной машине Никиты (macOS 26, его VS Code/Obsidian/Slack/Telegram/Chrome) —
+  получить JSON-матрицу AX-quality. Критерий продолжения: на большинстве его Electron-аппов quality ≥
+  partialUseful с приемлемым cpuDeltaTargetApp. Иначе — пересмотреть продуктовую ставку.
+- **Harness 1b/1c**: цифры порога burst-stream и латентности vector → фиксируются в плане.
+- **Harness 1d**: `spctl -a -vvv -t exec Slishu.app` проходит; localhost без токена → 401.
+- **Захват не виснет**: Obsidian/VS Code/Slack в фокусе → текст из AX (`text_blocks.source='ax'`), CPU
+  idle ≈ 0, Electron — единицы %, не 147%. Instruments: нет роста RSS за час.
+- **Права**: онбординг; отозвать Screen Recording → `.needsRestart` + рабочий рестарт.
+- **REST security**: `curl /v1/search` без Bearer → 401; с чужим Host → reject.
+- **Поиск**: ru-запрос по en-контенту через semantic (после Шага 7); FTS точные строки.
+- **Timeline**: скруббер плавно, кадр+текст+app/url, play идёт по времени.
+- **Pipe**: «Запустить сейчас» daily summary → preview → запись в Obsidian; audit log.
+- **Прунинг**: лимит 7д/20GB → каскадное удаление + orphan-sweep.
+- **Транскрипция** (если включена): soak 8ч, RSS plateau.
 
 ---
 
-## Главные риски
-
-1. **sqlite-vec под Swift 6 toolchain** — проверить загрузку расширения в Фазе 1; держать
-   Accelerate-fallback. 2. **MLX Whisper** — модель в actor, warmUp один раз, корректная отмена.
-3. **Electron AX-флаги** — могут дать version-drift; кешировать per-PID health, OCR-fallback честный.
-4. **AX messaging-timeout** — wall-clock дедлайн 120 мс это HARD-стоп, проверять первым в каждом узле.
-5. **Hardened-runtime/нотаризация** — без sandbox; MAS отпадает (ожидаемо). 6. **Security-scoped
-   bookmark** обязателен для внешнего хранилища. 7. **Swift 6 strict concurrency** с не-Sendable
-   `CVPixelBuffer`/`AXUIElement` — строго внутри одного актора, узкие `@unchecked Sendable`-обёртки
-   только в точке потребления.
-
----
-
-## Приложение A — бандл для ChatGPT 5.5 Pro (Шаг 0)
-
-Промпт, который пойдёт в Pro (вместе с этим планом как контекст):
-
-> Я строю нативное macOS-приложение (Swift 6, SwiftUI, target 15+) — локальный «вечная
-> память»-рекордер экрана+accessibility-текста+аудио, индексация + выдача в LLM через REST+MCP. Цель —
-> легче/быстрее screenpipe (Rust+Tauri). Ниже моя целевая архитектура (event-driven захват на
-> акторах, accessibility-first с Electron-coercion через AXManualAccessibility/AXEnhancedUserInterface,
-> SCScreenshotManager on-demand вместо SCStream, GRDB+FTS5 external-content + sqlite-vec, MLX Whisper
-> turbo, FlyingFox REST `/v1`, официальный MCP Swift SDK stdio+SSE, hardened-runtime без sandbox).
-> Прежде чем я начну писать код, стресс-тесть архитектуру:
-> 1. **Event-driven захват:** `SCScreenshotManager.captureSampleBuffer` on-demand vs persistent
->    `SCStream` — где подводные камни (cold-start latency, TCC, пропуск контента между событиями)?
->    Достаточно ли AX-нотификаций+input-tap, или нужен лёгкий fallback-поллинг?
-> 2. **Electron accessibility:** реально ли `AXManualAccessibility`+`AXEnhancedUserInterface` дают
->    непустое дерево в актуальных VS Code/Slack/Obsidian/Telegram? Тайминги ленивой инициализации,
->    PID renderer vs main, риски на новых Chromium. Это ключевой дифференциатор — он держится?
-> 3. **AX без зависаний:** wall-clock дедлайн 120 мс + `AXUIElementSetMessagingTimeout` 100 мс +
->    итеративный обход — закрывает ли это класс зависаний на тяжёлых деревьях? Что упускаю?
-> 4. **Вектор-поиск на масштабе:** sqlite-vec (vec0, brute-force) для «месяцы 24/7» (1–3M строк) —
->    хватит ли латентности, или сразу нужен HNSW/другой индекс? Эмбеддинги multilingual-e5-small via
->    MLX vs NLEmbedding — оправдан ли вес?
-> 5. **Swift 6 strict concurrency:** модель акторов с не-Sendable `CVPixelBuffer`/`AXUIElement`/
->    `CMSampleBuffer` — где `@unchecked Sendable` укусит, как безопаснее?
-> 6. **Транскрипция MLX Whisper turbo:** резидентность модели, отмена, память при 24/7 — грабли?
-> 7. **Hardened runtime без App Sandbox** для SCK+AX+локального сервера+внешнего хранилища +
->    нотаризация — правильный ли это путь дистрибуции, что сломается?
-> 8. **Pipes:** декларативные cron+markdown+local-LLM агенты vs JavaScriptCore — что выбрать для v1?
-> Назови конкретные грабли, неверные допущения и что бы ты изменил ДО написания кода. Не хвали — ищи,
-> где архитектура треснет на проде.
-
-Файлы для прикрепления к Pro: этот план + три полных дизайн-документа (ядро захвата / данные-API-MCP /
-UI-плагины) из Plan-агентов (сохраню их в `workspace/` при старте Фазы 0).
+## Главные риски (обновлено)
+1. **Electron AX ставка не доказана** — harness 1a первым; claim «adaptive», не «победа».
+2. **AX wall-clock = soft-SLA** (blocking C-call); priority extraction + dedicated thread + messaging
+   timeout; partial хуже OCR — gate по AXQuality.
+3. **Vector overclaim на 1–3M** — thresholds + temporal shards + retention default; static-link sqlite-vec.
+4. **Swift 6 граница capture→encode** — один FramePipelineActor; `@unchecked Sendable` только в
+   NonSendableBridges.swift.
+5. **MLX 24/7 memory/thermal** — не default; VAD; unload on idle; soak test.
+6. **Localhost read API = privacy breach** — auth на всё кроме /health; Host-check; Keychain token.
+7. **Prompt injection через Pipes** — один pipe, local-only egress, first-run preview, audit, caps.
+8. **Hardened-runtime/нотаризация** — минимальные entitlements; нотаризация в Фазе 1.
+9. **Recorder-core vs automation смешение** — сначала ядро, Pipes последними.
 
 ---
 
-## Заметка на после плана
-- Сохранить project-memory о Slishu (видение, развилки, архитектурные решения) — сейчас нельзя
-  (plan mode read-only).
+## Артефакты
+- `workspace/PLAN.md` (этот файл, v2) · `workspace/pro-review-response.md` (ответ Pro) ·
+  `workspace/pro-bundle.md` + `pro-prompt.txt` (бандл) · `workspace/design/01..03.md` (исходные дизайны
+  — частично переопределены правками Pro выше).
+
+## Заметка
+- Сохранить project-memory о Slishu (видение, развилки, вердикт Pro, v1-scope).
