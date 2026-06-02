@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+
+# Xcode / build
+DerivedData/
+build/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+**/xcuserdata/
+**/*.xcodeproj/xcuserdata/
+**/*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# MLX / ML model weights (качаются по требованию, не в репо)
+*.safetensors
+*.gguf
+*.mlmodelc/
+Models/weights/
+
+# Служебные артефакты прошлого Gemini/Antigravity-агента (логи, транскрипты, внутренние сообщения)
+workspace/.system_generated/
+workspace/.agents/
+
+# Локальные данные приложения (на всякий случай, если попадут в дерево)
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.heic
+*.m4a
