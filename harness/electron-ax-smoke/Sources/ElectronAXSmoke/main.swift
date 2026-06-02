@@ -102,10 +102,12 @@ if apps.isEmpty {
 }
 
 // ── контекст хоста ───────────────────────────────────────────────────────────
+let consumers = SystemContext.detectAXConsumers()
 let host = HostInfo(
     macOS: SystemContext.macOSVersionString(),
     voiceOverRunning: SystemContext.isVoiceOverRunning(),
     windowManagers: SystemContext.detectWindowManagers(),
+    otherAXConsumers: consumers,
     harnessVersion: harnessVersion,
     mode: mode.rawValue
 )
@@ -113,6 +115,11 @@ let host = HostInfo(
 eprint("Slishu Electron AX Smoke — macOS \(host.macOS), mode=\(mode.rawValue), VoiceOver=\(host.voiceOverRunning), WM=\(host.windowManagers.joined(separator: ",").isEmpty ? "none" : host.windowManagers.joined(separator: ","))")
 if host.voiceOverRunning {
     eprint("⚠️  VoiceOver активен — не перетягиваем режим; результаты могут отличаться от обычного использования.")
+}
+if !consumers.isEmpty {
+    eprint("⚠️  ЗАГРЯЗНЕНИЕ: запущены AX-инструменты [\(consumers.joined(separator: ", "))] — они могли")
+    eprint("    глобально включить accessibility. «Дерево доступно без флага» может быть НЕ нашей заслугой.")
+    eprint("    Для честного «холодного» замера закрой их и перепрогони.")
 }
 eprint("Приложений к пробе: \(apps.count). Каждая проба ~4–5с (ретраи 250/750/1500/3000мс).\n")
 
@@ -125,9 +132,9 @@ for (idx, app) in apps.enumerated() {
     results.append(r)
     let cpu = r.cpuDeltaTargetApp.map { String(format: "%+.1f%%", $0) } ?? "?"
     let firstUseful = r.firstUsefulTextMs.map { "\($0)ms" } ?? "—"
-    eprint(String(format: "    electron=%@ manual=%@ enhanced=%@ quality=%@ text=%d focused=%d url=%@ firstUseful=%@ cpuΔ=%@",
-                  r.isElectron ? "yes" : "no", r.manualSetError, r.enhancedSetError,
-                  r.quality, r.textCharCount, r.focusedTextChars,
+    eprint(String(format: "    electron=%@ manual=%@ quality=%@ content=%d chrome=%d pre=%d focused=%d url=%@ firstUseful=%@ cpuΔ=%@",
+                  r.isElectron ? "yes" : "no", r.manualSetError,
+                  r.quality, r.contentChars, r.chromeChars, r.preFlagsTextChars, r.focusedTextChars,
                   r.urlFound ? "yes" : "no", firstUseful, cpu))
 }
 
@@ -153,11 +160,19 @@ if let outPath {
 // краткая сводка по Electron в stderr
 let electron = results.filter { $0.isElectron }
 if !electron.isEmpty {
-    eprint("\n── Сводка по Electron (\(electron.count)) ──")
+    eprint("\n── Сводка по Electron (\(electron.count)) ── (content = реальный текст, chrome = кнопки/меню)")
     for r in electron {
-        eprint(String(format: "  %-22@ quality=%-13@ text=%-6d manual=%@",
-                      r.appName as NSString, r.quality as NSString, r.textCharCount, r.manualSetError))
+        eprint(String(format: "  %-22@ quality=%-13@ content=%-6d chrome=%-6d manual=%@",
+                      r.appName as NSString, r.quality as NSString, r.contentChars, r.chromeChars, r.manualSetError))
+        if !r.textSample.isEmpty {
+            let firstLine = r.textSample.split(separator: "\n").first.map(String.init) ?? ""
+            eprint("      ↳ \(firstLine.prefix(100))")
+        }
     }
     let good = electron.filter { $0.quality == "fullUseful" || $0.quality == "partialUseful" }.count
-    eprint("\n  useful (full/partial): \(good)/\(electron.count) — это и есть проверка продуктовой ставки.")
+    eprint("\n  useful по КОНТЕНТУ (full/partial): \(good)/\(electron.count)")
+    if !consumers.isEmpty {
+        eprint("  ⚠️  но на машине активны AX-инструменты \(consumers) — для честного вывода нужен прогон без них.")
+    }
+    eprint("  Глянь textSample в JSON: это реальный контент или «File/Edit/Settings»-chrome?")
 }
