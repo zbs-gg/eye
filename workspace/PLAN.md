@@ -48,8 +48,9 @@ capture/search, потом Pipes.
 - Один Timeline/Search UI.
 - **Один Pipe**: daily summary → локальный файл / Obsidian. Никакого Slack/Notion/cloud egress.
 - Connections v1: только **File export + Obsidian + Local LLM**.
-- Транскрипция **OFF by default**; при включении — light backend (SFSpeech / whisper.cpp small /
-  WhisperKit small). MLX Whisper turbo — отдельный optional Quality mode, не bundled, не default.
+- Транскрипция **ON с light-движком + VAD** (выбор Никиты — «записывать всё»): дефолт light backend
+  (SFSpeech / WhisperKit small / whisper.cpp small), VAD до очереди (не транскрайбить тишину/музыку),
+  unload-on-idle. MLX Whisper turbo — отдельный optional **Quality mode**, не bundled. Cloud — за флагом.
 
 **Отложено за v1:** Slack/Notion коннекторы · HTTP/SSE MCP · MLX turbo как default · semantic vector на
 миллионах (сначала benchmark + temporal shards) · multi-step pipe-маркетплейс · JS-плагины.
@@ -133,11 +134,13 @@ capture/search, потом Pipes.
   stdio получает токен через env/config. Tools: search_history, get_timeline, get_context_at,
   get_status, toggle_recording. **HTTP/SSE MCP отложен.**
 
-### D. Транскрипция — OFF by default
+### D. Транскрипция — ON с light-движком (выбор Никиты, не OFF как у Pro)
 
-- `TranscriptionBackend` протокол (async, cancellable, progress). **v1 default OFF.** При включении —
-  light backend: SFSpeech / whisper.cpp small / WhisperKit small. **MLX large-v3-turbo = optional
-  Quality mode** (отдельный download, не bundled, не default). Cloud — за флагом, dev only.
+- `TranscriptionBackend` протокол (async, cancellable, progress). **v1 ON, дефолт light backend**
+  (SFSpeech / whisper.cpp small / WhisperKit small). **MLX large-v3-turbo = optional Quality mode**
+  (отдельный download, не bundled). Cloud — за флагом, dev only. Pro советовал OFF by default ради
+  RAM/thermal — Никита хочет «записывать всё», поэтому ON, но риск гасим: light-дефолт + VAD +
+  unload-on-idle + soak test (а не резидентный turbo 24/7).
 - Pipeline: audio → **VAD** → coalesce → queue → транскрипт → FTS/vector. VAD до очереди (drop silence/
   music), word timestamps off unless needed, **unload model after 10–15мин idle / memory pressure**,
   queue limit by duration. Soak test 8ч обязателен (RSS plateau, no unbounded queue, sleep/wake×2,
