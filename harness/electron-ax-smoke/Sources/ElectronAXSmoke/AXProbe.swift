@@ -8,8 +8,8 @@ private let usefulTextThreshold = 40        // символов, чтобы сч
 private let fullUsefulThreshold = 800       // символов всего → fullUseful
 private let webAreaUsefulThreshold = 400
 private let focusedUsefulThreshold = 200
-private let nodeCap = 6000
-private let charCap = 40_000
+private let nodeCap = 20_000                // большие деревья (Chrome/IDE)
+private let charCap = 200_000
 
 // ── низкоуровневые AX-обёртки ──────────────────────────────────────────────
 
@@ -79,7 +79,8 @@ struct TraverseResult {
     var webAreaFound = false
     var url: String?
     var hitDeadline = false
-    var sample = ""             // role:value фрагменты, до sampleCap
+    var sample = ""             // role:value content-фрагменты, до sampleCap
+    var raw = ""                // любой текст дерева, до sampleCap
 }
 
 private let sampleCap = 700
@@ -110,7 +111,7 @@ private func classifyContribution(role: String, totalLen: Int) -> (content: Int,
     if contentRoles.contains(role) { return (totalLen, 0) }
     if chromeRoles.contains(role) { return (0, totalLen) }
     if role == "AXStaticText" || role == "AXHeading" {
-        return totalLen > 40 ? (totalLen, 0) : (0, totalLen)
+        return totalLen > 25 ? (totalLen, 0) : (0, totalLen)
     }
     // прочие роли (AXGroup/AXScrollArea/AXRow/AXCell/...) — нейтрально, не считаем ни туда, ни сюда
     return (0, 0)
@@ -136,10 +137,14 @@ private func traverse(app: AXUIElement, budgetMs: Int) -> TraverseResult {
             let (c, ch) = classifyContribution(role: role, totalLen: len)
             r.contentChars += c
             r.chromeChars += ch
-            // сэмпл: берём только content-вклад, чтобы глазами увидеть реальный контент
+            let snippet = joined.prefix(120).replacingOccurrences(of: "\n", with: "⏎")
+            // content-сэмпл: только content-вклад
             if c > 0 && r.sample.count < sampleCap {
-                let snippet = joined.prefix(120).replacingOccurrences(of: "\n", with: "⏎")
                 r.sample += "[\(role)] \(snippet)\n"
+            }
+            // raw-сэмпл: любой текст, чтобы увидеть что вообще в дереве (даже chrome/neutral)
+            if r.raw.count < sampleCap {
+                r.raw += "[\(role)] \(snippet)\n"
             }
         }
 
@@ -151,6 +156,7 @@ private func traverse(app: AXUIElement, budgetMs: Int) -> TraverseResult {
         if !kids.isEmpty { stack.append(contentsOf: kids) }
     }
     if r.sample.count > sampleCap { r.sample = String(r.sample.prefix(sampleCap)) + "…" }
+    if r.raw.count > sampleCap { r.raw = String(r.raw.prefix(sampleCap)) + "…" }
     return r
 }
 
@@ -187,18 +193,19 @@ enum AXProbe {
             url: nil,
             windowTitle: nil,
             textSample: "",
+            rawSample: "",
             cpuBeforePct: nil,
             cpuAfterPct: nil,
             cpuDeltaTargetApp: nil,
             quality: "none",
-            budgetMs: 300,
+            budgetMs: 2000,
             traversalMs: 0,
             retriesUsed: 0,
             notes: []
         )
 
         let appElem = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(appElem, 0.2)   // 200мс на каждый AX-вызов (для замера лояльнее 100мс)
+        AXUIElementSetMessagingTimeout(appElem, 0.05)  // 50мс/вызов — чтобы один медленный узел не съел весь бюджет (Pro #3)
 
         // CPU baseline до флагов
         result.cpuBeforePct = sampleCPUPercent(pid, intervalSec: 0.4)
@@ -232,7 +239,7 @@ enum AXProbe {
             Thread.sleep(forTimeInterval: Double(sleepMs) / 1000.0)
             result.retriesUsed = i + 1
 
-            let t = traverse(app: appElem, budgetMs: 120)
+            let t = traverse(app: appElem, budgetMs: 400)
             lastTraverse = t
             let elapsed = Int(Date().timeIntervalSince(tFlags) * 1000)
 
@@ -268,6 +275,7 @@ enum AXProbe {
         result.contentChars = best.contentChars
         result.chromeChars = best.chromeChars
         result.textSample = best.sample
+        result.rawSample = fin.raw.count >= lastTraverse.raw.count ? fin.raw : lastTraverse.raw
         result.webAreaFound = fin.webAreaFound || lastTraverse.webAreaFound
         result.url = fin.url ?? lastTraverse.url
         result.urlFound = result.url != nil

@@ -166,7 +166,11 @@ if !electron.isEmpty {
                       r.appName as NSString, r.quality as NSString, r.contentChars, r.chromeChars, r.manualSetError))
         if !r.textSample.isEmpty {
             let firstLine = r.textSample.split(separator: "\n").first.map(String.init) ?? ""
-            eprint("      ↳ \(firstLine.prefix(100))")
+            eprint("      ↳ content: \(firstLine.prefix(100))")
+        } else if !r.rawSample.isEmpty {
+            // контента ноль — но что вообще есть в дереве?
+            let firstLine = r.rawSample.split(separator: "\n").first.map(String.init) ?? ""
+            eprint("      ↳ raw(нет content): \(firstLine.prefix(100))")
         }
     }
     let good = electron.filter { $0.quality == "fullUseful" || $0.quality == "partialUseful" }.count

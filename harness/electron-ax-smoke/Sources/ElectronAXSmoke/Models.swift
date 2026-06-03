@@ -30,7 +30,8 @@ struct AppProbeResult: Codable {
     var urlFound: Bool
     var url: String?
     var windowTitle: String?
-    var textSample: String          // первые ~700 симв. реально извлечённого текста (role:value) — глазами проверить
+    var textSample: String          // первые ~700 симв. КОНТЕНТ-текста (content-роли) — глазами проверить
+    var rawSample: String           // первые ~700 симв. ЛЮБОГО текста дерева — увидеть что есть даже если classifier пропустил
 
     // CPU target-приложения (грубо, через proc_pid_rusage delta)
     var cpuBeforePct: Double?
