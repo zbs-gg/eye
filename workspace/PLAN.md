@@ -38,6 +38,43 @@ capture/search, потом Pipes.
 
 ---
 
+## ✅ Результат harness 1a + ресёрч (2026-06-03) — ВЕРДИКТ ПО СТАВКЕ
+
+Прогон на реальной машине (macOS 26) + 3-агентный ресёрч (`workspace/research-ax-extraction.md`):
+
+**«AX-first побеждает на Electron» — НЕВЕРНО как абсолют. Реальная рамка: adaptive AX-first +
+OCR-fallback, решается per-app в рантайме по content-quality.** Это НЕ провал — это defensible
+дифференциация: screenpipe делает walk-once → преждевременный OCR → 147% CPU на Obsidian; мы — нет.
+
+**Три класса приложений (эмпирически + архитектурно подтверждено):**
+1. **AX работает** (большая доля экрана): нативные AppKit/SwiftUI (iTerm2 49k, Mail, Preview), Electron
+   на DOM-редакторах CodeMirror/Monaco/ProseMirror/Lexical (Obsidian 6k, VS Code/Codex 34k), браузеры
+   Chrome/Edge/Arc (с retry-walk), Safari (дерево по умолчанию), Flutter.
+2. **OCR-only навсегда** (AX физически не отдаёт): GPU-рендереры (Zed/GPUI, Warp, вероятно
+   Alacritty/kitty/WezTerm/Ghostty), canvas (Figma, Slack Canvas), игры, `<canvas>` внутри Electron.
+3. **Per-app лотерея**: Notion=0 (custom widgets + DOM-virtualization, не пофиксить), Slack
+   (virtualized), Claude desktop=67 (React без text-роли).
+
+**Что фиксило мои «148 символов Chrome» / низкий content:** дерево строится лениво/асинхронно; timeout
+200мс убивал обход до AXWebArea. v3 (timeout 50мс + budget 2с + retry 250/750/1500/3000) это чинит.
+Chrome web-текст доступен через **main PID** (renderer не нужен) → AXWebArea → AXGroup → AXStaticText.AXValue.
+
+**Загрязнение подтверждено:** на машине Никиты screenpipe/Limitless/superwhisper/krisp/Hammerspoon
+глобально включают a11y → «дерево без флага». На чистой машине нужен наш флаг+retry → **это и есть наша
+ценность**.
+
+**Наша дифференциация vs screenpipe (в архитектуру):**
+(1) retry-walk после флага · (2) content-quality gate (по contentChars, не flag-success/суммарному) ·
+(3) **per-app capability table**: seed эвристикой editor-engine (CodeMirror/Monaco→AX; canvas/Notion→OCR),
+confirmed empirically, **invalidated on app-update** · (4) resolve main vs renderer PID + walk AXWebArea ·
+(5) честный OCR-tier для GPU/canvas/virtualized.
+
+**Следствие для продукта:** Slishu = «AX где app даёт semantic editor, OCR elsewhere, decided per-app at
+runtime». OCR — НЕ редкий fallback, а равноправный второй путь для целого класса (GPU/canvas/Notion).
+Это меняет позиционирование (не «победили Electron»), но даёт реалистичную защитимую нишу.
+
+---
+
 ## Жёсткий scope v1 (что сужено по Pro)
 
 **В v1:**
@@ -88,11 +125,19 @@ capture/search, потом Pipes.
 - **AXQuality модель** (вместо healthy/empty/ocrOnly):
   `enum AXQuality { none, titleOnly, partialUseful(chars), fullUseful(chars), timedOut(chars),
   sickPID(error) }`. Per-PID health: `healthy / slow (focused-only) / sick (skip AX 30–120с) / ocrOnly`.
-- **Electron coercion — adaptive probe, не ставка.** Режимы `conservative` (AXManualAccessibility only,
-  retry 250/750/1500/3000мс, Enhanced только если empty/unsupported) / `aggressive` (allow
-  AXEnhancedUserInterface, warn про side-effects). **Не перетягивать режим если активен реальный
-  VoiceOver.** Помнить: `AXManualAccessibility` исторически даёт `kAXErrorAttributeUnsupported` на части
-  версий → честный OCR fallback. Claim: «probes/coerces/records quality/falls back», НЕ «заставляет».
+- **Electron coercion — adaptive probe, не ставка** (подтверждено harness 1a + ресёрчем). Режимы
+  `conservative` (AXManualAccessibility, retry 250/750/1500/3000мс, Enhanced только если empty) /
+  `aggressive`. **Не перетягивать VoiceOver.** `AXManualAccessibility=attributeUnsupported` —
+  бесполезный gate (Electron #37465), решать по **contentChars после retry-walk**, не по флагу. Walk
+  into AXWebArea; lazy async build — первый обход пустой, re-walk обязателен.
+- **Per-app capability table** (ключевая дифференциация): кэш `bundleID → {axViable, contentClass,
+  lastChecked, appVersion}`. Seed эвристикой editor-engine (CodeMirror/Monaco/ProseMirror→AX;
+  canvas/Notion/Slack/Claude-desktop→OCR; GPU-apps Zed/Warp→OCR), confirmed empirically на первом
+  захвате, **invalidated при смене версии приложения**. Не «Electron = один bucket».
+- **OCR-tier (равноправный, не редкий fallback)**: GPU-рендереры (Zed/GPUI, Warp, Alacritty/kitty/
+  WezTerm/Ghostty), canvas (Figma, Slack Canvas), игры, virtualized/custom Electron (Notion, Slack,
+  Claude desktop). Для них AX не пытаемся (по capability-кэшу) → сразу Vision OCR. Гейт переключения:
+  AX content ≈ 0 при визуально-текстовом окне.
 - **OCR fallback** (Vision, native async `RecognizeTextRequest` 15+, ru+en, ANE, downscale через Metal,
   cancellable) при: `treeWasEmpty | titleOnly | (hitBudgetLimit && usefulChars<threshold) | sickPID |
   canvas/game/remote`.
