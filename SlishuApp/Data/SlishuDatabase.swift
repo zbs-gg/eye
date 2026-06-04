@@ -1,0 +1,121 @@
+import Foundation
+import GRDB
+
+/// Владелец DatabasePool + миграции. Sendable (только `let pool`). Пишут/читают через pool
+/// (он thread-safe). FTS5 external-content + триггеры — БЕЗ декартова бага старой версии.
+final class SlishuDatabase: Sendable {
+    let pool: DatabasePool
+
+    init(path: String) throws {
+        var config = Configuration()
+        config.prepareDatabase { db in
+            try db.execute(sql: "PRAGMA foreign_keys = ON")
+            try db.execute(sql: "PRAGMA synchronous = NORMAL")    // WAL + NORMAL = безопасно+быстро
+            try db.execute(sql: "PRAGMA busy_timeout = 5000")
+            try db.execute(sql: "PRAGMA mmap_size = 268435456")   // 256 MB
+        }
+        pool = try DatabasePool(path: path, configuration: config)
+        try Self.migrator.migrate(pool)
+    }
+
+    /// Стандартное расположение БД (медиа — отдельно, через StorageManager).
+    static func defaultURL() throws -> URL {
+        let support = try FileManager.default.url(for: .applicationSupportDirectory,
+                                                  in: .userDomainMask, appropriateFor: nil, create: true)
+        let dir = support.appendingPathComponent("Slishu", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("slishu.sqlite")
+    }
+
+    static var migrator: DatabaseMigrator {
+        var m = DatabaseMigrator()
+        // НЕ erase on schema change — это history-рекордер, данные пользователя ценны.
+
+        m.registerMigration("v1") { db in
+            try db.create(table: "apps") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("bundleId", .text).notNull().unique()
+                t.column("name", .text).notNull()
+            }
+            try db.create(table: "screen_captures") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("ts", .integer).notNull().indexed()
+                t.column("appId", .integer).references("apps", onDelete: .setNull)
+                t.column("windowTitle", .text)
+                t.column("browserUrl", .text)
+                t.column("monitorId", .text).notNull()
+                t.column("relativePath", .text)
+                t.column("width", .integer)
+                t.column("height", .integer)
+                t.column("bytes", .integer)
+                t.column("axQuality", .text)
+            }
+            try db.create(indexOn: "screen_captures", columns: ["appId", "ts"])
+
+            try db.create(table: "text_blocks") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("captureId", .integer).notNull()
+                    .references("screen_captures", onDelete: .cascade).indexed()
+                t.column("source", .text).notNull()
+                t.column("text", .text).notNull()
+                t.column("confidence", .double).notNull().defaults(to: 1.0)
+                t.column("bboxX", .double); t.column("bboxY", .double)
+                t.column("bboxW", .double); t.column("bboxH", .double)
+            }
+            try db.create(table: "audio_captures") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("ts", .integer).notNull().indexed()
+                t.column("relativePath", .text).notNull()
+                t.column("durationSec", .double).notNull()
+                t.column("channel", .text).notNull().defaults(to: "mic")
+            }
+            try db.create(table: "transcriptions") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("audioId", .integer).notNull()
+                    .references("audio_captures", onDelete: .cascade).indexed()
+                t.column("text", .text).notNull()
+                t.column("language", .text).notNull()
+                t.column("speaker", .text)
+                t.column("startOffset", .double); t.column("endOffset", .double)
+                t.column("engine", .text).notNull()
+            }
+
+            // FTS5 external-content: индекс без дублирования текста. Связь rowid→id строго 1:1.
+            try db.execute(sql: """
+                CREATE VIRTUAL TABLE text_fts USING fts5(
+                    text, content='text_blocks', content_rowid='id',
+                    tokenize="unicode61 remove_diacritics 2");
+                """)
+            try db.execute(sql: """
+                CREATE TRIGGER text_blocks_ai AFTER INSERT ON text_blocks BEGIN
+                    INSERT INTO text_fts(rowid, text) VALUES (new.id, new.text);
+                END;
+                CREATE TRIGGER text_blocks_ad AFTER DELETE ON text_blocks BEGIN
+                    INSERT INTO text_fts(text_fts, rowid, text) VALUES('delete', old.id, old.text);
+                END;
+                CREATE TRIGGER text_blocks_au AFTER UPDATE ON text_blocks BEGIN
+                    INSERT INTO text_fts(text_fts, rowid, text) VALUES('delete', old.id, old.text);
+                    INSERT INTO text_fts(rowid, text) VALUES (new.id, new.text);
+                END;
+                """)
+            try db.execute(sql: """
+                CREATE VIRTUAL TABLE transcription_fts USING fts5(
+                    text, content='transcriptions', content_rowid='id',
+                    tokenize="unicode61 remove_diacritics 2");
+                """)
+            try db.execute(sql: """
+                CREATE TRIGGER transcriptions_ai AFTER INSERT ON transcriptions BEGIN
+                    INSERT INTO transcription_fts(rowid, text) VALUES (new.id, new.text);
+                END;
+                CREATE TRIGGER transcriptions_ad AFTER DELETE ON transcriptions BEGIN
+                    INSERT INTO transcription_fts(transcription_fts, rowid, text) VALUES('delete', old.id, old.text);
+                END;
+                CREATE TRIGGER transcriptions_au AFTER UPDATE ON transcriptions BEGIN
+                    INSERT INTO transcription_fts(transcription_fts, rowid, text) VALUES('delete', old.id, old.text);
+                    INSERT INTO transcription_fts(rowid, text) VALUES (new.id, new.text);
+                END;
+                """)
+        }
+        return m
+    }
+}

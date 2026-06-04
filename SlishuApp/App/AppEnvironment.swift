@@ -12,10 +12,25 @@ final class AppEnvironment {
 
     var selectedSection: SidebarSection = .timeline
 
-    /// Порядок запуска фоновых сервисов. Пока — только пробы прав; capture/server/pipes добавятся
+    // Data-слой (создаётся в bootstrap; nil до инициализации / при ошибке).
+    private(set) var database: SlishuDatabase?
+    private(set) var ingest: IngestService?
+    private(set) var retention: RetentionManager?
+    private(set) var dataError: String?
+
+    /// Порядок запуска фоновых сервисов. Пока — пробы прав + Data-слой; capture/server/pipes добавятся
     /// по мере появления модулей (Фаза 2, шаги 3+).
     func bootstrap() async {
         await permissions.refreshAll()
+        do {
+            let storage = try StorageManager()
+            let db = try SlishuDatabase(path: SlishuDatabase.defaultURL().path)
+            self.database = db
+            self.ingest = IngestService(db: db, storage: storage)
+            self.retention = RetentionManager(db: db, storage: storage)
+        } catch {
+            self.dataError = String(describing: error)
+        }
         // TODO(Фаза 2): server.start(); recording.startIfPermittedAndEnabled(); pipes.resume()
     }
 }
