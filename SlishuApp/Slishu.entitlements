@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- НЕТ com.apple.security.app-sandbox: SCK full-display + cross-app AX + локальный сервер
+	     несовместимы с App Sandbox. Hardened Runtime без sandbox (как Rewind/screenpipe-класс).
+	     Минимальные entitlements (по Pro): audio-input добавится с микрофоном. -->
+</dict>
+</plist>
