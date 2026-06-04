@@ -15,6 +15,9 @@ packages:
   GRDB:
     url: https://github.com/groue/GRDB.swift
     from: "7.0.0"
+  FlyingFox:
+    url: https://github.com/swhitty/FlyingFox
+    from: "0.26.0"
 
 targets:
   Slishu:
@@ -25,6 +28,8 @@ targets:
     dependencies:
       - package: GRDB
         product: GRDB
+      - package: FlyingFox
+        product: FlyingFox
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.slishu.app
