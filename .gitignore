@@ -31,3 +31,6 @@ workspace/.agents/
 *.sqlite-shm
 *.heic
 *.m4a
+
+# XcodeGen генерит из project.yml
+Slishu.xcodeproj/

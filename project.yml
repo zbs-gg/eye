@@ -2,36 +2,30 @@ name: Slishu
 options:
   bundleIdPrefix: com.slishu
   developmentLanguage: ru
+  deploymentTarget:
+    macOS: "15.0"
 
-packages:
-  GRDB:
-    url: https://github.com/groue/GRDB.swift
-    from: 6.27.0
-  FlyingFox:
-    url: https://github.com/swhitty/FlyingFox
-    from: 0.16.0
-  ModelContextProtocol:
-    url: https://github.com/modelcontextprotocol/swift-sdk
-    branch: main
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
 
 targets:
   Slishu:
     type: application
     platform: macOS
-    deploymentTarget: "14.0"
     sources:
       - path: SlishuApp
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.slishu.SlishuApp
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        PRODUCT_BUNDLE_IDENTIFIER: com.slishu.app
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Slishu требует доступ к микрофону для записи и транскрибирования аудиоактивности."
-        INFOPLIST_KEY_NSScreenCaptureUsageDescription: "Slishu требует доступ к экрану для записи вашей активности и работы таймлайна."
-    dependencies:
-      - package: GRDB
-        product: GRDB
-      - package: FlyingFox
-        product: FlyingFox
-      - package: ModelContextProtocol
-        product: MCP
+        CODE_SIGN_ENTITLEMENTS: SlishuApp/Slishu.entitlements
+        CODE_SIGN_IDENTITY: "-"
+        # Hardened Runtime БЕЗ App Sandbox — добавится при упаковке (1d). Для dev — ad-hoc.
+        INFOPLIST_KEY_NSScreenCaptureUsageDescription: "Slishu читает экран, чтобы вести историю вашей активности и таймлайн. Всё остаётся на устройстве."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Slishu записывает и транскрибирует аудио локально, для поиска по разговорам."
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Slishu распознаёт речь на устройстве для поиска по аудио."
+        INFOPLIST_KEY_LSUIElement: "NO"
+        INFOPLIST_KEY_LSMinimumSystemVersion: "15.0"
