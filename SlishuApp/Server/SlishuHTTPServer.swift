@@ -1,8 +1,11 @@
 import Foundation
 import FlyingFox
+import FlyingSocks
 import GRDB
+import CoreImage
+import CoreGraphics
 
-/// Локальный REST `/v1` (FlyingFox). Bind только 127.0.0.1, динамический порт (различает EADDRINUSE),
+/// Локальный REST `/v1` (FlyingFox). Bind ТОЛЬКО 127.0.0.1 (loopback, не INADDR_ANY!), динамический порт,
 /// **auth на ВСЁ кроме /health** (Bearer-токен из Keychain), Host-check, path-traversal hardening.
 actor SlishuHTTPServer {
     struct Deps: Sendable {
@@ -28,7 +31,10 @@ actor SlishuHTTPServer {
 
     func start(preferredPorts: [UInt16] = [8731, 8732, 11435, 8088]) async -> Int? {
         for port in preferredPorts {
-            let srv = HTTPServer(port: port)
+            // КРИТИЧНО: bind на 127.0.0.1 (loopback), а НЕ HTTPServer(port:) — он биндит INADDR_ANY (0.0.0.0)
+            // и открыл бы историю экрана всей локальной сети.
+            guard let address = try? sockaddr_in.inet(ip4: "127.0.0.1", port: port) else { continue }
+            let srv = HTTPServer(address: address)
             await registerRoutes(srv)
             let task = Task { try await srv.run() }
             if await Self.raceListening(srv) {
@@ -45,6 +51,7 @@ actor SlishuHTTPServer {
     }
 
     func stop() async {
+        await server?.stop()        // корректная остановка FlyingFox (не только cancel)
         runTask?.cancel()
         runTask = nil
         server = nil
@@ -177,13 +184,22 @@ actor SlishuHTTPServer {
         guard let id = Self.query(req)["id"].flatMap({ Int64($0) }),
               let d = try? await deps.timeline.frameDetail(id: id),
               let rel = d.relativePath else { return Self.notFound("image") }
-        // path-traversal hardening: имя из БД (не из URL) + проверка нахождения внутри mediaDir
+        // path-traversal hardening: имя из БД (не из URL) + явный reject ".." / абсолютных + границы mediaDir
+        guard !rel.contains(".."), !rel.hasPrefix("/") else { return Self.notFound("image") }
         let base = deps.mediaDir.standardizedFileURL.resolvingSymlinksInPath()
         let target = base.appendingPathComponent(rel).standardizedFileURL.resolvingSymlinksInPath()
         guard Array(target.pathComponents.prefix(base.pathComponents.count)) == base.pathComponents,
               let data = try? Data(contentsOf: target) else { return Self.notFound("image") }
-        return HTTPResponse(statusCode: .ok,
-                            headers: [HTTPHeader.contentType: "image/heic"], body: data)
+        // ?format=jpeg — для браузеров/LLM-вьюеров (HEIC они не декодируют)
+        if Self.query(req)["format"] == "jpeg", let jpeg = Self.heicToJPEG(data) {
+            return HTTPResponse(statusCode: .ok, headers: [HTTPHeader.contentType: "image/jpeg"], body: jpeg)
+        }
+        return HTTPResponse(statusCode: .ok, headers: [HTTPHeader.contentType: "image/heic"], body: data)
+    }
+
+    private static func heicToJPEG(_ heic: Data) -> Data? {
+        guard let ci = CIImage(data: heic) else { return nil }
+        return CIContext().jpegRepresentation(of: ci, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [:])
     }
 
     private func handleStats() async -> HTTPResponse {
