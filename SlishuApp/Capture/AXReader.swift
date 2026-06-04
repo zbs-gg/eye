@@ -14,16 +14,22 @@ actor AXReader {
     init(config: CaptureConfig) { self.config = config }
 
     func reset() { flaggedPIDs.removeAll() }
+    func forget(pid: pid_t) { flaggedPIDs.remove(pid) }   // при смерти процесса (pid reuse)
 
     func extract(pid: pid_t) async -> AXExtraction {
         let needFlags = !flaggedPIDs.contains(pid)
         if needFlags { flaggedPIDs.insert(pid) }
         let cfg = config
-        return await withCheckedContinuation { (cont: CheckedContinuation<AXExtraction, Never>) in
+        let result = await withCheckedContinuation { (cont: CheckedContinuation<AXExtraction, Never>) in
             queue.async {
                 cont.resume(returning: AXCore.perform(pid: pid, setFlags: needFlags, config: cfg))
             }
         }
+        // Флаги не «прилипли»? Откатываем — попробуем выставить в следующий раз (Electron поднимается лениво).
+        if needFlags && result.manualResult != "success" && result.enhancedResult != "success" {
+            flaggedPIDs.remove(pid)
+        }
+        return result
     }
 }
 
@@ -49,12 +55,12 @@ private enum AXCore {
         }
 
         var result = traverse(app: app, config: config)
-        // lazy Electron build: пустое дерево → один ретрай после паузы
-        if result.contentChars == 0 && result.nodeCount <= 1 {
+        // lazy Electron build: нет контента и НЕ упёрлись в бюджет → один ретрай после паузы
+        if result.contentChars == 0 && !result.hitDeadline {
             usleep(useconds_t(config.axEmptyRetryMs * 1000))
             result = traverse(app: app, config: config)
-            ext.treeWasEmpty = result.contentChars == 0
         }
+        ext.treeWasEmpty = result.contentChars == 0   // всегда, не только в ветке ретрая
 
         ext.contentText = String(result.text.prefix(20_000))
         ext.contentChars = result.contentChars

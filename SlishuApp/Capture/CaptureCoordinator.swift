@@ -1,24 +1,38 @@
 import Foundation
 import AppKit
+import CoreGraphics
 
 /// Оркестратор захвата (@MainActor — владеет observer'ами/таймером, делает только debounce+dispatch).
-/// MVP-режим: event-driven по смене активного приложения + active-tick fallback. Burst-stream и
-/// input-tap — позже (по плану v2). Тяжёлая работа — на акторах (AXReader/FramePipeline), main не блокируется.
+/// Event-driven по смене активного приложения + active-tick fallback. Smart-pause (lock/sleep/idle),
+/// per-app capability cache (GPU/canvas → OCR-only, не дёргаем AX впустую). Тяжёлая работа — на акторах.
 @MainActor
 final class CaptureCoordinator {
+    private enum CaptureClass { case unknown, axViable, ocrOnly }
+
+    /// Известные GPU/canvas-приложения (план: «OCR-only навсегда»). Остальное — обучается per-app.
+    private static let knownOCROnly: Set<String> = [
+        "dev.zed.Zed", "dev.warp.Warp-Stable", "dev.warp.Warp",
+        "net.kovidgoyal.kitty", "com.mitchellh.ghostty", "com.github.wez.wezterm",
+        "io.alacritty", "org.alacritty", "com.figma.Desktop",
+    ]
+
     private let ingest: IngestService
     private let config: CaptureConfig
     private let axReader: AXReader
     private let pipeline: FramePipeline
 
     private(set) var isRunning = false
+    private var suspended = false              // lock/sleep
     private var tickTimer: Timer?
-    private var activationObserver: NSObjectProtocol?
+    private var observers: [NSObjectProtocol] = []
+    private var distributedObservers: [NSObjectProtocol] = []
     private var cycleTask: Task<Void, Never>?
     private var pendingCycle = false
-    private var lastCaptureByApp: [String: Date] = [:]
 
-    /// Колбэк после успешной записи кадра (для UI-счётчика).
+    private var capability: [String: CaptureClass] = [:]
+    private var emptyStreak: [String: Int] = [:]
+    private var lastContentText: [String: String] = [:]
+
     var onFrame: (@MainActor () -> Void)?
 
     init(ingest: IngestService, config: CaptureConfig = CaptureConfig()) {
@@ -28,36 +42,82 @@ final class CaptureCoordinator {
         self.pipeline = FramePipeline(config: config)
     }
 
+    // MARK: lifecycle
+
     func start() {
         guard !isRunning else { return }
         isRunning = true
-        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
-        ) { [weak self] _ in
+        suspended = false
+
+        let wsc = NSWorkspace.shared.notificationCenter
+        observers.append(wsc.addObserver(forName: NSWorkspace.didActivateApplicationNotification,
+                                         object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.invalidateAndTrigger() }
-        }
+        })
+        observers.append(wsc.addObserver(forName: NSWorkspace.willSleepNotification,
+                                         object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.suspended = true }
+        })
+        observers.append(wsc.addObserver(forName: NSWorkspace.didWakeNotification,
+                                         object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.suspended = false }
+        })
+        observers.append(wsc.addObserver(forName: NSWorkspace.didTerminateApplicationNotification,
+                                         object: nil, queue: .main) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            let pid = app.processIdentifier
+            Task { @MainActor in await self?.axReader.forget(pid: pid) }
+        })
+
+        let dnc = DistributedNotificationCenter.default()
+        distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screenIsLocked"),
+                                                    object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.suspended = true }
+        })
+        distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screenIsUnlocked"),
+                                                    object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.suspended = false }
+        })
+
         tickTimer = Timer.scheduledTimer(withTimeInterval: config.activeTickSeconds, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.trigger() }
+            Task { @MainActor in self?.tickFired() }
         }
         trigger()
     }
 
     func stop() {
         isRunning = false
-        if let o = activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(o) }
-        activationObserver = nil
+        let wsc = NSWorkspace.shared.notificationCenter
+        observers.forEach { wsc.removeObserver($0) }
+        observers.removeAll()
+        let dnc = DistributedNotificationCenter.default()
+        distributedObservers.forEach { dnc.removeObserver($0) }
+        distributedObservers.removeAll()
         tickTimer?.invalidate(); tickTimer = nil
         cycleTask?.cancel(); cycleTask = nil
         pendingCycle = false
+        emptyStreak.removeAll(); lastContentText.removeAll()
+        Task { await axReader.reset() }
+    }
+
+    // MARK: triggers
+
+    private func tickFired() {
+        guard isRunning, !suspended else { return }
+        // idle: нет ввода дольше порога → не захватываем по тику (smart-pause)
+        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        if idle > config.idleThresholdSec { return }
+        trigger()
     }
 
     private func invalidateAndTrigger() {
-        Task { await pipeline.invalidateContent() }   // дисплеи могли смениться при app-switch
+        guard !suspended else { return }
+        Task { await pipeline.invalidateContent() }
         trigger()
     }
 
     private func trigger() {
-        guard isRunning else { return }
+        guard isRunning, !suspended else { return }
         if cycleTask != nil { pendingCycle = true; return }   // single-flight
         cycleTask = Task { @MainActor [weak self] in
             await self?.runCycle()
@@ -67,51 +127,77 @@ final class CaptureCoordinator {
         }
     }
 
+    // MARK: cycle
+
     private func runCycle() async {
         guard let app = NSWorkspace.shared.frontmostApplication,
               let bundleId = app.bundleIdentifier else { return }
         let pid = app.processIdentifier
         let appName = app.localizedName ?? bundleId
 
-        // rate-limit на приложение
-        if let last = lastCaptureByApp[bundleId],
-           Date().timeIntervalSince(last) * 1000 < Double(config.captureMinIntervalMs) { return }
-        lastCaptureByApp[bundleId] = Date()
+        // per-app capability: GPU/canvas → сразу OCR, не тратим AX
+        let cls = capability[bundleId] ?? (Self.knownOCROnly.contains(bundleId) ? .ocrOnly : .unknown)
 
-        // 1) AX (на dedicated очереди)
-        let ax = await axReader.extract(pid: pid)
-        let needsOCR = ax.contentChars < config.ocrMinContentChars
-            && (ax.quality == .none || ax.quality == .titleOnly || ax.treeWasEmpty)
+        var ax = AXExtraction()
+        var needsOCR: Bool
+        if cls == .ocrOnly {
+            needsOCR = true
+        } else {
+            ax = await axReader.extract(pid: pid)
+            needsOCR = ax.contentChars < config.ocrMinContentChars
+                && (ax.quality == .none || ax.quality == .titleOnly || ax.treeWasEmpty)
+            // обучение capability
+            if ax.contentChars >= config.usefulThreshold {
+                capability[bundleId] = .axViable
+                emptyStreak[bundleId] = 0
+            } else if ax.treeWasEmpty {
+                let n = (emptyStreak[bundleId] ?? 0) + 1
+                emptyStreak[bundleId] = n
+                if n >= config.ocrOnlyEmptyStreak { capability[bundleId] = .ocrOnly }
+            }
+        }
 
-        // 2) кадр (+OCR при нужде) — в одной isolation domain
         let frame: ProcessedFrame?
         do { frame = try await pipeline.process(displayIndex: 0, needsOCR: needsOCR) }
         catch { return }   // -3801 / нет дисплея
-        guard let frame, !frame.isDuplicate else { return }   // MVP: дубли пропускаем
+        guard let frame else { return }
 
-        // 3) собрать запись
+        if frame.isDuplicate {
+            // картинка та же — но если AX-текст изменился (скролл/новое сообщение), пишем context-only
+            if ax.contentChars > 0, ax.contentText != (lastContentText[bundleId] ?? "") {
+                await write(bundleId: bundleId, appName: appName, ax: ax, ocr: [],
+                            image: .none, width: frame.width, height: frame.height)
+                lastContentText[bundleId] = ax.contentText
+            }
+            return
+        }
+
+        await write(bundleId: bundleId, appName: appName, ax: ax, ocr: frame.ocr,
+                    image: .heicData(frame.heicData), width: frame.width, height: frame.height)
+        lastContentText[bundleId] = ax.contentText
+    }
+
+    private func write(bundleId: String, appName: String, ax: AXExtraction,
+                       ocr: [OCRLine], image: ImagePayload, width: Int, height: Int) async {
         var blocks: [CapturedTextBlock] = []
         if ax.contentChars > 0 {
             blocks.append(CapturedTextBlock(source: .ax, text: ax.contentText, confidence: 1.0))
         }
-        for line in frame.ocr where !line.text.isEmpty {
+        for line in ocr where !line.text.isEmpty {
             blocks.append(CapturedTextBlock(source: .ocr, text: line.text, confidence: line.confidence))
         }
-        let quality: AXQuality = frame.ocr.isEmpty
-            ? ax.quality
-            : (ax.contentChars > 0 ? .partialUseful : .ocr)
+        let quality: AXQuality = ocr.isEmpty ? ax.quality : (ax.contentChars > 0 ? .partialUseful : .ocr)
         let tel = CaptureTelemetry(
             usefulTextChars: ax.contentChars, nodeCount: ax.nodeCount,
             treeWasEmpty: ax.treeWasEmpty, hitBudgetLimit: ax.hitBudgetLimit,
-            ocrFallbackReason: needsOCR ? "ax=\(ax.quality.rawValue)" : nil,
+            ocrFallbackReason: ocr.isEmpty ? nil : "ax=\(ax.quality.rawValue)",
             manualAccessibilityResult: ax.manualResult, enhancedUiResult: ax.enhancedResult)
 
         let record = ScreenCaptureRecord(
             timestamp: Date(), bundleId: bundleId, appName: appName,
             windowTitle: ax.windowTitle, browserURL: ax.browserURL, monitorId: "0",
-            image: .heicData(frame.heicData), pixelWidth: frame.width, pixelHeight: frame.height,
+            image: image, pixelWidth: width, pixelHeight: height,
             textBlocks: blocks, axQuality: quality, telemetry: tel)
-
         do {
             _ = try await ingest.ingest(record)
             onFrame?()

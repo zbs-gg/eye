@@ -11,6 +11,9 @@ struct OCRLine: Sendable {
     var confidence: Double
 }
 
+/// CGImage иммутабелен и thread-safe — безопасно гонять вне актора для OCR.
+struct SendableCGImage: @unchecked Sendable { let image: CGImage }
+
 struct ProcessedFrame: Sendable {
     var heicData: Data
     var phash: UInt64
@@ -78,11 +81,21 @@ actor FramePipeline {
         guard let heic = encodeHEIC(ciImage) else { throw CaptureError.encodeFailed }
 
         var ocr: [OCRLine] = []
-        if needsOCR {
-            ocr = recognizeText(cgImage: cgImage)   // синхронно, внутри actor (OCR — редкий путь)
+        if needsOCR, let small = downscaledForOCR(ciImage) {
+            // OCR уходит с actor executor (dedicated queue) — актор свободен для следующего захвата
+            ocr = await Self.runOCR(SendableCGImage(image: small), languages: config.ocrLanguages)
         }
         return ProcessedFrame(heicData: heic, phash: phash, isDuplicate: false,
                               width: display.width, height: display.height, ocr: ocr)
+    }
+
+    /// Даунскейл до ocrDownscaleMaxDim (Pro: не OCR-ить полный Retina-кадр). Рендер через Metal.
+    private func downscaledForOCR(_ image: CIImage) -> CGImage? {
+        let w = image.extent.width, h = image.extent.height
+        guard w > 0, h > 0 else { return nil }
+        let scale = min(1.0, config.ocrDownscaleMaxDim / max(w, h))
+        let scaled = scale < 1 ? image.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) : image
+        return ciContext.createCGImage(scaled, from: scaled.extent)
     }
 
     // ── HEIC через аппаратный кодек ──
@@ -119,21 +132,25 @@ actor FramePipeline {
 
     static func hamming(_ a: UInt64, _ b: UInt64) -> Int { (a ^ b).nonzeroBitCount }
 
-    // ── Vision OCR (синхронно; autoreleasepool; ANE) ──
-    private func recognizeText(cgImage: CGImage) -> [OCRLine] {
-        var lines: [OCRLine] = []
-        autoreleasepool {
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-            request.recognitionLanguages = config.ocrLanguages
-            request.automaticallyDetectsLanguage = true
-            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-            try? handler.perform([request])
-            lines = (request.results ?? []).compactMap { obs in
-                obs.topCandidates(1).first.map { OCRLine(text: $0.string, confidence: Double($0.confidence)) }
+    // ── Vision OCR на dedicated queue (НЕ блокирует actor executor; autoreleasepool; ANE) ──
+    nonisolated static func runOCR(_ img: SendableCGImage, languages: [String]) async -> [OCRLine] {
+        await withCheckedContinuation { (cont: CheckedContinuation<[OCRLine], Never>) in
+            DispatchQueue.global(qos: .utility).async {
+                var lines: [OCRLine] = []
+                autoreleasepool {
+                    let request = VNRecognizeTextRequest()
+                    request.recognitionLevel = .accurate
+                    request.usesLanguageCorrection = true
+                    request.recognitionLanguages = languages
+                    request.automaticallyDetectsLanguage = true
+                    let handler = VNImageRequestHandler(cgImage: img.image, options: [:])
+                    try? handler.perform([request])
+                    lines = (request.results ?? []).compactMap { obs in
+                        obs.topCandidates(1).first.map { OCRLine(text: $0.string, confidence: Double($0.confidence)) }
+                    }
+                }
+                cont.resume(returning: lines)
             }
         }
-        return lines
     }
 }
