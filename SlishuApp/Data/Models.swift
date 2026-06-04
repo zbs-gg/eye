@@ -25,6 +25,14 @@ struct ScreenCaptureRow: Codable, FetchableRecord, MutablePersistableRecord {
     var height: Int?
     var bytes: Int?
     var axQuality: String?
+    // телеметрия (план v2 — доказывать AX-first)
+    var usefulTextChars: Int?
+    var nodeCount: Int?
+    var treeWasEmpty: Bool?
+    var hitBudgetLimit: Bool?
+    var ocrFallbackReason: String?
+    var manualAccessibilityResult: String?
+    var enhancedUiResult: String?
     mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 }
 
@@ -49,6 +57,7 @@ struct AudioCaptureRow: Codable, FetchableRecord, MutablePersistableRecord {
     var relativePath: String
     var durationSec: Double
     var channel: String
+    var bytes: Int?
     mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 }
 

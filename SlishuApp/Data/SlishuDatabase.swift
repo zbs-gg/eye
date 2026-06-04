@@ -10,6 +10,7 @@ final class SlishuDatabase: Sendable {
         var config = Configuration()
         config.prepareDatabase { db in
             try db.execute(sql: "PRAGMA foreign_keys = ON")
+            try db.execute(sql: "PRAGMA recursive_triggers = ON")  // FK-каскад → DELETE на text_blocks → FTS-триггер
             try db.execute(sql: "PRAGMA synchronous = NORMAL")    // WAL + NORMAL = безопасно+быстро
             try db.execute(sql: "PRAGMA busy_timeout = 5000")
             try db.execute(sql: "PRAGMA mmap_size = 268435456")   // 256 MB
@@ -49,6 +50,14 @@ final class SlishuDatabase: Sendable {
                 t.column("height", .integer)
                 t.column("bytes", .integer)
                 t.column("axQuality", .text)
+                // телеметрия (план v2 — доказывать AX-first)
+                t.column("usefulTextChars", .integer)
+                t.column("nodeCount", .integer)
+                t.column("treeWasEmpty", .boolean)
+                t.column("hitBudgetLimit", .boolean)
+                t.column("ocrFallbackReason", .text)
+                t.column("manualAccessibilityResult", .text)
+                t.column("enhancedUiResult", .text)
             }
             try db.create(indexOn: "screen_captures", columns: ["appId", "ts"])
 
@@ -68,6 +77,7 @@ final class SlishuDatabase: Sendable {
                 t.column("relativePath", .text).notNull()
                 t.column("durationSec", .double).notNull()
                 t.column("channel", .text).notNull().defaults(to: "mic")
+                t.column("bytes", .integer)
             }
             try db.create(table: "transcriptions") { t in
                 t.autoIncrementedPrimaryKey("id")

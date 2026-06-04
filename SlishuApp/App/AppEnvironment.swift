@@ -27,7 +27,13 @@ final class AppEnvironment {
             let db = try SlishuDatabase(path: SlishuDatabase.defaultURL().path)
             self.database = db
             self.ingest = IngestService(db: db, storage: storage)
-            self.retention = RetentionManager(db: db, storage: storage)
+            let retention = RetentionManager(db: db, storage: storage)
+            self.retention = retention
+            // Прунинг по дефолтам (7д/20GB) фоном при старте. Позже (шаг 11) — таймер + size-trigger.
+            Task.detached(priority: .utility) {
+                _ = try? await retention.prune(retentionDays: RetentionPolicy.defaultDays,
+                                               maxBytes: RetentionPolicy.defaultMaxBytes)
+            }
         } catch {
             self.dataError = String(describing: error)
         }

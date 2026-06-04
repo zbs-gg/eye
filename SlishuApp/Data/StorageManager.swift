@@ -28,6 +28,10 @@ final class StorageManager: Sendable {
         try? FileManager.default.removeItem(at: url(forRelative: relativePath))
     }
 
+    func fileSize(relativePath: String) -> Int? {
+        try? url(forRelative: relativePath).resourceValues(forKeys: [.fileSizeKey]).fileSize
+    }
+
     func totalBytes() -> Int64 {
         guard let en = FileManager.default.enumerator(at: mediaDirectory,
                   includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
