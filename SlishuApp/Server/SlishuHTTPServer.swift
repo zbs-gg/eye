@@ -22,7 +22,7 @@ actor SlishuHTTPServer {
 
     private let deps: Deps
     private var server: HTTPServer?
-    private var runTask: Task<Void, Error>?
+    private var runTask: Task<Void, Never>?
     private(set) var activePort: Int?
 
     init(deps: Deps) { self.deps = deps }
@@ -33,11 +33,15 @@ actor SlishuHTTPServer {
         for port in preferredPorts {
             // КРИТИЧНО: bind на 127.0.0.1 (loopback), а НЕ HTTPServer(port:) — он биндит INADDR_ANY (0.0.0.0)
             // и открыл бы историю экрана всей локальной сети.
-            guard let address = try? sockaddr_in.inet(ip4: "127.0.0.1", port: port) else { continue }
+            guard let address = try? sockaddr_in.inet(ip4: "127.0.0.1", port: port) else { Self.log("bad addr \(port)"); continue }
             let srv = HTTPServer(address: address)
             await registerRoutes(srv)
-            let task = Task { try await srv.run() }
-            if await Self.raceListening(srv) {
+            let task = Task {
+                do { try await srv.run() } catch { Self.log("run error on \(port): \(error)") }
+            }
+            let ok = await Self.raceListening(srv)
+            Self.log("port \(port): listened=\(ok)")
+            if ok {
                 server = srv
                 runTask = task
                 activePort = Int(port)
@@ -47,7 +51,23 @@ actor SlishuHTTPServer {
                 task.cancel()
             }
         }
+        Self.log("server: all ports failed")
         return nil
+    }
+
+    static func log(_ s: String) {
+        let line = "[\(Date())] \(s)\n"
+        guard let data = line.data(using: .utf8),
+              let dir = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                     appropriateFor: nil, create: true)
+                .appendingPathComponent("Slishu", isDirectory: true) else { return }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("server.log")
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile(); h.write(data); try? h.close()
+        } else {
+            try? data.write(to: url)
+        }
     }
 
     func stop() async {

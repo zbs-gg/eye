@@ -23,10 +23,12 @@ final class AppEnvironment {
     /// Порядок запуска фоновых сервисов. Пока — пробы прав + Data-слой; capture/server/pipes добавятся
     /// по мере появления модулей (Фаза 2, шаги 3+).
     func bootstrap() async {
+        SlishuHTTPServer.log("bootstrap: begin")
         await permissions.refreshAll()
         do {
             let storage = try StorageManager()
             let db = try SlishuDatabase(path: SlishuDatabase.defaultURL().path)
+            SlishuHTTPServer.log("bootstrap: db ok")
             self.database = db
             let ingestService = IngestService(db: db, storage: storage)
             self.ingest = ingestService
@@ -62,9 +64,9 @@ final class AppEnvironment {
             let server = SlishuHTTPServer(deps: deps)
             self.httpServer = server
             Task { [weak self] in
-                if let port = await server.start() {
-                    await MainActor.run { self?.server.setActive(port: port, token: token) }
-                }
+                let port = await server.start()
+                SlishuHTTPServer.log("bootstrap: start -> \(String(describing: port))")
+                if let port { await MainActor.run { self?.server.setActive(port: port, token: token) } }
             }
             // Прунинг по дефолтам (7д/20GB) фоном при старте. Позже (шаг 11) — таймер + size-trigger.
             Task.detached(priority: .utility) {
@@ -73,6 +75,7 @@ final class AppEnvironment {
             }
         } catch {
             self.dataError = String(describing: error)
+            SlishuHTTPServer.log("bootstrap: dataError \(error)")
         }
         // TODO(Фаза 2): server.start(); recording.startIfPermittedAndEnabled(); pipes.resume()
     }
