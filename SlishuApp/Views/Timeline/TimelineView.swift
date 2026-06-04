@@ -132,7 +132,7 @@ private struct TimelineBody: View {
                     if let u = c.browserURL { Text(u).font(.caption).foregroundStyle(.blue).lineLimit(2) }
                     HStack {
                         Text(c.ts.formatted(date: .abbreviated, time: .standard)).font(.caption).foregroundStyle(.secondary)
-                        if let q = c.axQuality { StatusPill(text: q, color: q == "ocr" ? .orange : .green) }
+                        if let q = c.axQuality { StatusPill(text: Self.qualityLabel(q), color: Self.qualityColor(q)) }
                     }
                     Divider()
                     Text(c.text.isEmpty ? "(текст не извлечён)" : c.text)
@@ -146,24 +146,28 @@ private struct TimelineBody: View {
         }
     }
 
+    private func scheduleSeek(toEpoch v: Double) {
+        store.cursor = Date(timeIntervalSince1970: v)   // курсор следует мгновенно
+        seekTask?.cancel()
+        seekTask = Task {
+            try? await Task.sleep(for: .milliseconds(70))
+            if Task.isCancelled { return }
+            await store.seek(to: Date(timeIntervalSince1970: v))
+        }
+    }
+
     private var controls: some View {
         VStack(spacing: 8) {
-            DensityStrip(buckets: store.density, start: store.rangeStart, end: store.rangeEnd, cursor: store.cursor)
-                .frame(height: 36)
+            DensityStrip(buckets: store.density, start: store.rangeStart, end: store.rangeEnd,
+                         cursor: store.cursor,
+                         onSeek: { scheduleSeek(toEpoch: $0.timeIntervalSince1970) })
+                .frame(height: 40)
 
             if let lo = store.bounds.oldest?.timeIntervalSince1970,
                let hi = store.bounds.newest?.timeIntervalSince1970, hi > lo {
                 Slider(value: Binding(
                     get: { min(max(store.cursor.timeIntervalSince1970, lo), hi) },
-                    set: { v in
-                        store.cursor = Date(timeIntervalSince1970: v)
-                        seekTask?.cancel()
-                        seekTask = Task {
-                            try? await Task.sleep(for: .milliseconds(70))
-                            if Task.isCancelled { return }
-                            await store.seek(to: Date(timeIntervalSince1970: v))
-                        }
-                    }
+                    set: { scheduleSeek(toEpoch: $0) }
                 ), in: lo...hi)
             }
 
@@ -180,6 +184,25 @@ private struct TimelineBody: View {
         }
         .padding(16)
         .background(.ultraThinMaterial)
+    }
+
+    static func qualityColor(_ q: String) -> Color {
+        switch q {
+        case "fullUseful": return .green
+        case "partialUseful", "titleOnly": return .yellow
+        case "ocr", "timedOut": return .orange
+        default: return .red            // none / sickPID
+        }
+    }
+    static func qualityLabel(_ q: String) -> String {
+        switch q {
+        case "fullUseful": return "AX полный"
+        case "partialUseful": return "AX частично"
+        case "titleOnly": return "заголовок"
+        case "ocr": return "OCR"
+        case "timedOut": return "таймаут"
+        default: return "пусто"
+        }
     }
 }
 
@@ -199,8 +222,9 @@ private struct FramePreview: View {
             }
         }
         .task(id: url) {
-            let u = url
-            image = await Task.detached { u.flatMap { NSImage(contentsOf: $0) } }.value
+            guard let u = url else { image = nil; return }
+            let img = await Task.detached { NSImage(contentsOf: u) }.value
+            if !Task.isCancelled { image = img }
         }
     }
 }
@@ -212,23 +236,30 @@ private struct DensityStrip: View {
     let start: Date
     let end: Date
     let cursor: Date
+    let onSeek: (Date) -> Void
 
     var body: some View {
-        Canvas { ctx, size in
-            let span = max(1, end.timeIntervalSince1970 - start.timeIntervalSince1970)
-            let maxCount = max(1, buckets.map(\.count).max() ?? 1)
-            for b in buckets {
-                let x = (b.ts.timeIntervalSince1970 - start.timeIntervalSince1970) / span * size.width
-                guard x >= 0, x <= size.width else { continue }
-                let h = CGFloat(b.count) / CGFloat(maxCount) * size.height
-                let rect = CGRect(x: x, y: size.height - h, width: max(1.5, size.width / 200), height: h)
-                ctx.fill(Path(roundedRect: rect, cornerRadius: 1),
-                         with: .color(.accentColor.opacity(0.7)))
+        GeometryReader { geo in
+            Canvas { ctx, size in
+                let span = max(1, end.timeIntervalSince1970 - start.timeIntervalSince1970)
+                let maxCount = max(1, buckets.map(\.count).max() ?? 1)
+                for b in buckets {
+                    let x = (b.ts.timeIntervalSince1970 - start.timeIntervalSince1970) / span * size.width
+                    guard x >= 0, x <= size.width else { continue }
+                    let h = CGFloat(b.count) / CGFloat(maxCount) * size.height
+                    let rect = CGRect(x: x, y: size.height - h, width: max(1.5, size.width / 240), height: h)
+                    ctx.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(.accentColor.opacity(0.7)))
+                }
+                let cx = (cursor.timeIntervalSince1970 - start.timeIntervalSince1970) / span * size.width
+                ctx.stroke(Path { p in p.move(to: CGPoint(x: cx, y: 0)); p.addLine(to: CGPoint(x: cx, y: size.height)) },
+                           with: .color(.primary.opacity(0.6)), lineWidth: 1.5)
             }
-            // курсор
-            let cx = (cursor.timeIntervalSince1970 - start.timeIntervalSince1970) / span * size.width
-            ctx.stroke(Path { p in p.move(to: CGPoint(x: cx, y: 0)); p.addLine(to: CGPoint(x: cx, y: size.height)) },
-                       with: .color(.primary.opacity(0.5)), lineWidth: 1)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { v in
+                let frac = max(0, min(1, v.location.x / max(1, geo.size.width)))
+                let span = end.timeIntervalSince1970 - start.timeIntervalSince1970
+                onSeek(Date(timeIntervalSince1970: start.timeIntervalSince1970 + frac * span))
+            })
         }
         .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
     }
