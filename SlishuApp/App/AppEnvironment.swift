@@ -17,6 +17,7 @@ final class AppEnvironment {
     private(set) var ingest: IngestService?
     private(set) var retention: RetentionManager?
     private(set) var timelineStore: TimelineStore?
+    private(set) var httpServer: SlishuHTTPServer?
     private(set) var dataError: String?
 
     /// Порядок запуска фоновых сервисов. Пока — пробы прав + Data-слой; capture/server/pipes добавятся
@@ -42,6 +43,29 @@ final class AppEnvironment {
             let timelineSvc = TimelineService(db: db)
             self.timelineStore = TimelineStore(search: searchSvc, timeline: timelineSvc,
                                                mediaDirectory: storage.mediaDirectory)
+
+            // Локальный REST /v1 (auth на всё кроме /health).
+            let token = KeychainStore.apiToken()
+            let rec = recording
+            let deps = SlishuHTTPServer.Deps(
+                search: searchSvc, timeline: timelineSvc, db: db, mediaDir: storage.mediaDirectory,
+                token: token, version: "0.1.0",
+                isCapturing: { await MainActor.run { rec.isCapturing } },
+                toggleCapture: { enable in
+                    await MainActor.run {
+                        if let enable, enable == rec.isCapturing { return rec.isCapturing }
+                        rec.toggle()
+                        return rec.isCapturing
+                    }
+                },
+                mediaBytes: { storage.totalBytes() })
+            let server = SlishuHTTPServer(deps: deps)
+            self.httpServer = server
+            Task { [weak self] in
+                if let port = await server.start() {
+                    await MainActor.run { self?.server.setActive(port: port, token: token) }
+                }
+            }
             // Прунинг по дефолтам (7д/20GB) фоном при старте. Позже (шаг 11) — таймер + size-trigger.
             Task.detached(priority: .utility) {
                 _ = try? await retention.prune(retentionDays: RetentionPolicy.defaultDays,

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct SettingsView: View {
     @Environment(AppEnvironment.self) private var env
@@ -52,13 +53,31 @@ struct SettingsView: View {
     private var serverCard: some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Локальный сервер").font(.headline)
+                Text("Локальный API").font(.headline)
                 HStack {
                     Text("Адрес")
                     Spacer()
-                    Text(env.server.baseURL).foregroundStyle(.secondary).monospaced()
+                    Text(env.server.baseURL).foregroundStyle(.secondary).monospaced().textSelection(.enabled)
                 }
-                Text("REST API + MCP появятся в Фазе 2 (auth на всё кроме /health, токен в Keychain).")
+                if let token = env.server.token {
+                    HStack {
+                        Text("Токен")
+                        Spacer()
+                        Text(token.prefix(14) + "…").monospaced().foregroundStyle(.secondary)
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(token, forType: .string)
+                        } label: { Image(systemName: "doc.on.doc") }
+                        .buttonStyle(.borderless)
+                        .help("Скопировать токен")
+                    }
+                    Text("curl -H 'Authorization: Bearer <токен>' '\(env.server.baseURL)/v1/search?q=test'")
+                        .font(.caption2).monospaced().foregroundStyle(.secondary)
+                        .textSelection(.enabled).lineLimit(2)
+                } else {
+                    Text("Сервер запускается…").font(.caption).foregroundStyle(.secondary)
+                }
+                Text("Auth на всё кроме /health (токен в Keychain), bind 127.0.0.1. MCP — следующий шаг.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

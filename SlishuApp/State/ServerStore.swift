@@ -8,6 +8,13 @@ import Observation
 final class ServerStore {
     private(set) var activePort: Int?
     private(set) var running = false
+    private(set) var token: String?
 
     var baseURL: String { activePort.map { "http://127.0.0.1:\($0)" } ?? "—" }
+
+    func setActive(port: Int, token: String) {
+        activePort = port
+        self.token = token
+        running = true
+    }
 }
