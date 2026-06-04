@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// Бюджеты/пороги захвата (DI, тестируемо). Из плана v2 + цифр harness.
 struct CaptureConfig: Sendable {
@@ -11,8 +12,10 @@ struct CaptureConfig: Sendable {
     var dedupHammingThreshold = 3
     var ocrMinContentChars = 24            // ниже + пустой AX → OCR
     var ocrLanguages = ["ru-RU", "en-US"]
-    var activeTickSeconds = 6.0            // active-text fallback тик (MVP; burst-stream — позже)
-    var captureMinIntervalMs = 1500        // не чаще этого на одно окно
+    var ocrDownscaleMaxDim: CGFloat = 1800 // даунскейл перед OCR (Pro: не OCR-ить полный Retina)
+    var activeTickSeconds = 3.0            // active-text fallback тик (single-flight+dedup защищают)
+    var idleThresholdSec = 180.0           // нет ввода дольше → не захватывать по тику
+    var ocrOnlyEmptyStreak = 2             // подряд пустых AX → пометить bundleId как ocrOnly
 }
 
 /// Результат AX-извлечения (Sendable; AXUIElement не пересекает границу).
