@@ -16,6 +16,7 @@ final class AppEnvironment {
     private(set) var database: SlishuDatabase?
     private(set) var ingest: IngestService?
     private(set) var retention: RetentionManager?
+    private(set) var timelineStore: TimelineStore?
     private(set) var dataError: String?
 
     /// Порядок запуска фоновых сервисов. Пока — пробы прав + Data-слой; capture/server/pipes добавятся
@@ -35,6 +36,12 @@ final class AppEnvironment {
             let coordinator = CaptureCoordinator(ingest: ingestService)
             coordinator.onFrame = { [weak rec = recording] in rec?.noteFrame() }
             recording.coordinator = coordinator
+
+            // Поиск + таймлайн (FTS; vector — шаг 7).
+            let searchSvc = SearchService(db: db)
+            let timelineSvc = TimelineService(db: db)
+            self.timelineStore = TimelineStore(search: searchSvc, timeline: timelineSvc,
+                                               mediaDirectory: storage.mediaDirectory)
             // Прунинг по дефолтам (7д/20GB) фоном при старте. Позже (шаг 11) — таймер + size-trigger.
             Task.detached(priority: .utility) {
                 _ = try? await retention.prune(retentionDays: RetentionPolicy.defaultDays,
