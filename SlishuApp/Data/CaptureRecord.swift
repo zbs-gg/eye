@@ -30,6 +30,25 @@ public enum ImagePayload: Sendable {
     case none                                 // dedup context-only record (без кадра)
 }
 
+/// Телеметрия извлечения (план v2 — доказывать AX-first, не «tree непустой = успех»). Из harness 1a.
+public struct CaptureTelemetry: Sendable {
+    public var usefulTextChars: Int = 0
+    public var nodeCount: Int = 0
+    public var treeWasEmpty: Bool = false
+    public var hitBudgetLimit: Bool = false
+    public var ocrFallbackReason: String? = nil
+    public var manualAccessibilityResult: String? = nil   // success/attributeUnsupported/...
+    public var enhancedUiResult: String? = nil
+    public init() {}
+    public init(usefulTextChars: Int, nodeCount: Int, treeWasEmpty: Bool, hitBudgetLimit: Bool,
+                ocrFallbackReason: String?, manualAccessibilityResult: String?, enhancedUiResult: String?) {
+        self.usefulTextChars = usefulTextChars; self.nodeCount = nodeCount
+        self.treeWasEmpty = treeWasEmpty; self.hitBudgetLimit = hitBudgetLimit
+        self.ocrFallbackReason = ocrFallbackReason
+        self.manualAccessibilityResult = manualAccessibilityResult; self.enhancedUiResult = enhancedUiResult
+    }
+}
+
 public struct ScreenCaptureRecord: Sendable {
     public let timestamp: Date
     public let bundleId: String
@@ -42,16 +61,16 @@ public struct ScreenCaptureRecord: Sendable {
     public let pixelHeight: Int
     public let textBlocks: [CapturedTextBlock]
     public let axQuality: AXQuality
-    public let ocrFallbackReason: String?
+    public let telemetry: CaptureTelemetry
 
     public init(timestamp: Date, bundleId: String, appName: String, windowTitle: String?,
                 browserURL: String?, monitorId: String, image: ImagePayload,
                 pixelWidth: Int, pixelHeight: Int, textBlocks: [CapturedTextBlock],
-                axQuality: AXQuality, ocrFallbackReason: String? = nil) {
+                axQuality: AXQuality, telemetry: CaptureTelemetry = CaptureTelemetry()) {
         self.timestamp = timestamp; self.bundleId = bundleId; self.appName = appName
         self.windowTitle = windowTitle; self.browserURL = browserURL; self.monitorId = monitorId
         self.image = image; self.pixelWidth = pixelWidth; self.pixelHeight = pixelHeight
-        self.textBlocks = textBlocks; self.axQuality = axQuality; self.ocrFallbackReason = ocrFallbackReason
+        self.textBlocks = textBlocks; self.axQuality = axQuality; self.telemetry = telemetry
     }
 }
 
@@ -60,8 +79,10 @@ public struct AudioCaptureRecord: Sendable {
     public let relativePath: String
     public let durationSec: Double
     public let channel: String   // "mic" | "system"
-    public init(timestamp: Date, relativePath: String, durationSec: Double, channel: String = "mic") {
+    public let bytes: Int?       // размер файла (для retention size-accounting)
+    public init(timestamp: Date, relativePath: String, durationSec: Double,
+                channel: String = "mic", bytes: Int? = nil) {
         self.timestamp = timestamp; self.relativePath = relativePath
-        self.durationSec = durationSec; self.channel = channel
+        self.durationSec = durationSec; self.channel = channel; self.bytes = bytes
     }
 }

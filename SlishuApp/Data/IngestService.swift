@@ -1,9 +1,12 @@
 import Foundation
 import GRDB
 
-/// ЕДИНСТВЕННЫЙ writer (actor). Capture/Transcription отдают сюда Sendable-записи; здесь — файл +
+/// Writer для capture-данных (actor). Capture/Transcription отдают сюда Sendable-записи; здесь — файл +
 /// одна транзакция (upsert app, insert screen_capture, insert text_blocks → триггеры наполняют FTS).
 /// Убирает Task.detached-гонки старой версии.
+/// NB: записи в БД сериализует GRDB DatabasePool через RetentionManager И IngestService (не один объект-
+/// writer, а один сериализованный writer-канал пула). Координация с retention — через grace-window в
+/// sweepOrphans (см. RetentionManager), чтобы orphan-sweep не удалил in-flight кадр.
 actor IngestService {
     private let db: SlishuDatabase
     private let storage: StorageManager
@@ -38,12 +41,18 @@ actor IngestService {
             return try await db.pool.write { dbc -> Int64 in
                 // upsert app
                 let appId = try Self.upsertApp(dbc, bundleId: rec.bundleId, name: rec.appName)
+                let tel = rec.telemetry
                 var cap = ScreenCaptureRow(
                     id: nil, ts: tsMs, appId: appId,
                     windowTitle: rec.windowTitle, browserUrl: rec.browserURL,
                     monitorId: rec.monitorId, relativePath: relativePath,
                     width: rec.pixelWidth, height: rec.pixelHeight,
-                    bytes: bytes, axQuality: rec.axQuality.rawValue)
+                    bytes: bytes, axQuality: rec.axQuality.rawValue,
+                    usefulTextChars: tel.usefulTextChars, nodeCount: tel.nodeCount,
+                    treeWasEmpty: tel.treeWasEmpty, hitBudgetLimit: tel.hitBudgetLimit,
+                    ocrFallbackReason: tel.ocrFallbackReason,
+                    manualAccessibilityResult: tel.manualAccessibilityResult,
+                    enhancedUiResult: tel.enhancedUiResult)
                 try cap.insert(dbc)
                 let captureId = cap.id!
                 for b in blocks {
@@ -57,7 +66,8 @@ actor IngestService {
                 return captureId
             }
         } catch {
-            // Транзакция упала — не оставляем orphan-файл (фикс дыры старой версии).
+            // Транзакция упала — чистим файл, записанный ЭТИМ слоем (.heicData). Файлы .fileWritten
+            // принадлежат capture-слою — их при сбое подберёт sweepOrphans (после grace-window).
             if case .heicData = rec.image, let p = relativePath { storage.deleteFile(relativePath: p) }
             throw error
         }
@@ -66,9 +76,10 @@ actor IngestService {
     @discardableResult
     func ingest(_ rec: AudioCaptureRecord) async throws -> Int64 {
         let tsMs = Int64(rec.timestamp.timeIntervalSince1970 * 1000)
+        let bytes = rec.bytes ?? storage.fileSize(relativePath: rec.relativePath)
         return try await db.pool.write { dbc -> Int64 in
             var row = AudioCaptureRow(id: nil, ts: tsMs, relativePath: rec.relativePath,
-                                      durationSec: rec.durationSec, channel: rec.channel)
+                                      durationSec: rec.durationSec, channel: rec.channel, bytes: bytes)
             try row.insert(dbc)
             return row.id!
         }

@@ -1,17 +1,27 @@
 import Foundation
 import GRDB
 
+/// Дефолты retention (план v2 — НЕ «forever»). Пользователь может расширить в Settings.
+enum RetentionPolicy: Sendable {
+    static let defaultDays = 7
+    static let defaultMaxBytes: Int64 = 20 * 1024 * 1024 * 1024   // 20 GB
+}
+
 struct PruneReport: Sendable {
     var framesDeleted = 0
     var audioDeleted = 0
     var orphansDeleted = 0
 }
 
-/// Прунинг по дням И размеру (default 7д/20GB — НЕ «forever», по Pro). Каскад чистит text_blocks →
-/// триггеры чистят FTS. Файлы удаляются по relativePath. Батчами, чтобы не держать длинный writer-лок.
+/// Прунинг по дням И размеру (default 7д/20GB). Каскад чистит text_blocks → триггеры чистят FTS.
+/// Размер считается из БД (`SUM(bytes)`), а не обходом FS (фикс HIGH из ревью). Orphan-sweep уважает
+/// grace-window, чтобы не удалить кадр, который IngestService записал, но ещё не закоммитил (фикс race).
 actor RetentionManager {
     private let db: SlishuDatabase
     private let storage: StorageManager
+
+    /// Файлы моложе этого окна считаются возможно in-flight и не трогаются orphan-sweep'ом.
+    private let orphanGraceSeconds: TimeInterval = 60
 
     init(db: SlishuDatabase, storage: StorageManager) {
         self.db = db
@@ -25,32 +35,40 @@ actor RetentionManager {
             report.framesDeleted += try await deleteFramesOlderThan(cutoff)
             report.audioDeleted += try await deleteAudioOlderThan(cutoff)
         }
-        if let maxBytes, storage.totalBytes() > maxBytes {
-            report.framesDeleted += try await enforceSizeLimit(maxBytes)
+        if let maxBytes {
+            let (f, a) = try await enforceSizeLimit(maxBytes)
+            report.framesDeleted += f
+            report.audioDeleted += a
         }
         report.orphansDeleted = try await sweepOrphans()
         try await checkpoint()
         return report
     }
 
+    // ── размер из БД, не из FS ──
+    private func dbBytes() async throws -> Int64 {
+        try await db.pool.read { db in
+            let f = try Int64.fetchOne(db, sql: "SELECT COALESCE(SUM(bytes), 0) FROM screen_captures") ?? 0
+            let a = try Int64.fetchOne(db, sql: "SELECT COALESCE(SUM(bytes), 0) FROM audio_captures") ?? 0
+            return f + a
+        }
+    }
+
+    // ── удаление по времени (выход по числу удалённых строк, не по paths — фикс dedup-nil-paths) ──
     private func deleteFramesOlderThan(_ cutoffMs: Int64) async throws -> Int {
         var deleted = 0
         while true {
-            // батч из 500 старейших файлов кадров до cutoff
-            let paths: [String] = try await db.pool.write { db in
+            let (count, paths): (Int, [String]) = try await db.pool.write { db in
                 let rows = try ScreenCaptureRow
-                    .filter(Column("ts") < cutoffMs)
-                    .order(Column("ts"))
-                    .limit(500)
-                    .fetchAll(db)
-                if rows.isEmpty { return [] }
+                    .filter(Column("ts") < cutoffMs).order(Column("ts")).limit(500).fetchAll(db)
+                if rows.isEmpty { return (0, []) }
                 let ids = rows.compactMap(\.id)
-                try ScreenCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)  // каскад → text_blocks → FTS
-                return rows.compactMap(\.relativePath)
+                try ScreenCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)  // каскад → FTS
+                return (rows.count, rows.compactMap(\.relativePath))
             }
-            if paths.isEmpty { break }
+            if count == 0 { break }
             for p in paths { storage.deleteFile(relativePath: p) }
-            deleted += paths.count
+            deleted += count
         }
         return deleted
     }
@@ -58,40 +76,54 @@ actor RetentionManager {
     private func deleteAudioOlderThan(_ cutoffMs: Int64) async throws -> Int {
         var deleted = 0
         while true {
-            let paths: [String] = try await db.pool.write { db in
+            let (count, paths): (Int, [String]) = try await db.pool.write { db in
                 let rows = try AudioCaptureRow
                     .filter(Column("ts") < cutoffMs).order(Column("ts")).limit(500).fetchAll(db)
-                if rows.isEmpty { return [] }
+                if rows.isEmpty { return (0, []) }
                 let ids = rows.compactMap(\.id)
                 try AudioCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
-                return rows.map(\.relativePath)
+                return (rows.count, rows.map(\.relativePath))
             }
-            if paths.isEmpty { break }
+            if count == 0 { break }
             for p in paths { storage.deleteFile(relativePath: p) }
-            deleted += paths.count
+            deleted += count
         }
         return deleted
     }
 
-    /// FIFO по ts, пока размер media-папки не уложится в лимит.
-    private func enforceSizeLimit(_ maxBytes: Int64) async throws -> Int {
-        var deleted = 0
-        while storage.totalBytes() > maxBytes {
-            let paths: [String] = try await db.pool.write { db in
+    // ── размер: удаляем старейшие кадры, затем аудио, пока SUM(bytes) > лимита ──
+    private func enforceSizeLimit(_ maxBytes: Int64) async throws -> (frames: Int, audio: Int) {
+        var frames = 0, audio = 0
+        while try await dbBytes() > maxBytes {
+            // сначала кадры (основной объём)
+            let (fc, fp): (Int, [String]) = try await db.pool.write { db in
                 let rows = try ScreenCaptureRow.order(Column("ts")).limit(500).fetchAll(db)
-                if rows.isEmpty { return [] }
+                if rows.isEmpty { return (0, []) }
                 let ids = rows.compactMap(\.id)
                 try ScreenCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
-                return rows.compactMap(\.relativePath)
+                return (rows.count, rows.compactMap(\.relativePath))
             }
-            if paths.isEmpty { break }
-            for p in paths { storage.deleteFile(relativePath: p) }
-            deleted += paths.count
+            if fc > 0 {
+                for p in fp { storage.deleteFile(relativePath: p) }
+                frames += fc
+                continue
+            }
+            // кадры кончились — старейшее аудио
+            let (ac, ap): (Int, [String]) = try await db.pool.write { db in
+                let rows = try AudioCaptureRow.order(Column("ts")).limit(500).fetchAll(db)
+                if rows.isEmpty { return (0, []) }
+                let ids = rows.compactMap(\.id)
+                try AudioCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
+                return (rows.count, rows.map(\.relativePath))
+            }
+            if ac == 0 { break }   // нечего удалять — не зацикливаемся
+            for p in ap { storage.deleteFile(relativePath: p) }
+            audio += ac
         }
-        return deleted
+        return (frames, audio)
     }
 
-    /// Файлы в media без записи в БД (защита от рассинхрона при крашах).
+    // ── orphan-sweep с grace-window (фикс race с in-flight ingest) ──
     private func sweepOrphans() async throws -> Int {
         let known: Set<String> = try await db.pool.read { db in
             let s = try String.fetchAll(db, sql: "SELECT relativePath FROM screen_captures WHERE relativePath IS NOT NULL")
@@ -99,13 +131,19 @@ actor RetentionManager {
             return Set(s).union(a)
         }
         let files = (try? FileManager.default.contentsOfDirectory(
-            at: storage.mediaDirectory, includingPropertiesForKeys: nil)) ?? []
+            at: storage.mediaDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        let graceCutoff = Date().addingTimeInterval(-orphanGraceSeconds)
         var deleted = 0
         for url in files {
             let name = url.lastPathComponent
-            if !known.contains(name) && (name.hasSuffix(".heic") || name.hasSuffix(".m4a")) {
-                try? FileManager.default.removeItem(at: url); deleted += 1
-            }
+            guard name.hasSuffix(".heic") || name.hasSuffix(".m4a") else { continue }
+            if known.contains(name) { continue }
+            // слишком свежий файл может быть кадром in-flight ingest (записан, ещё не закоммичен) — не трогаем
+            let mdate = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            if mdate > graceCutoff { continue }
+            try? FileManager.default.removeItem(at: url)
+            deleted += 1
         }
         return deleted
     }
@@ -113,6 +151,7 @@ actor RetentionManager {
     private func checkpoint() async throws {
         try await db.pool.write { db in
             try db.execute(sql: "INSERT INTO text_fts(text_fts) VALUES('optimize')")
+            try db.execute(sql: "INSERT INTO transcription_fts(transcription_fts) VALUES('optimize')")
             _ = try? db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
         }
     }
