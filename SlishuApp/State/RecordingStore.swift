@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// Заглушка состояния записи. В Фазе 2 (шаг 3+) обёрнёт CaptureCoordinator/FramePipelineActor.
+/// Состояние записи. Делегирует старт/стоп в CaptureCoordinator (ставится из AppEnvironment.bootstrap).
 @MainActor
 @Observable
 final class RecordingStore {
@@ -9,8 +9,18 @@ final class RecordingStore {
     private(set) var screenFrameCount = 0
     private(set) var audioChunkCount = 0
 
+    @ObservationIgnored var coordinator: CaptureCoordinator?
+
     func toggle() {
-        isCapturing.toggle()
-        // TODO(Фаза 2): start/stop CaptureCoordinator
+        guard let coordinator else { return }
+        if isCapturing {
+            coordinator.stop()
+            isCapturing = false
+        } else {
+            coordinator.start()
+            isCapturing = true
+        }
     }
+
+    func noteFrame() { screenFrameCount += 1 }
 }
