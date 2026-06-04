@@ -13,18 +13,21 @@ actor SearchService {
         return try await db.pool.read { db in
             var out: [SearchResult] = []
 
+            // ROW_NUMBER по captureId: берём ЛУЧШИЙ блок (snippet+rank согласованы, детерминированно).
             let screenSQL = """
-            SELECT c.id AS id, c.ts AS ts, a.bundleId AS bundleId, a.name AS appName,
-                   c.windowTitle AS windowTitle, c.browserUrl AS browserUrl, c.relativePath AS relativePath,
-                   snippet(text_fts, 0, '⟦', '⟧', '…', 12) AS snip, bm25(text_fts) AS rank
-            FROM text_fts
-            JOIN text_blocks tb ON tb.id = text_fts.rowid
-            JOIN screen_captures c ON c.id = tb.captureId
-            LEFT JOIN apps a ON a.id = c.appId
-            WHERE text_fts MATCH ?
-            GROUP BY c.id
-            ORDER BY rank
-            LIMIT ?
+            WITH ranked AS (
+                SELECT c.id AS id, c.ts AS ts, a.bundleId AS bundleId, a.name AS appName,
+                       c.windowTitle AS windowTitle, c.browserUrl AS browserUrl, c.relativePath AS relativePath,
+                       snippet(text_fts, 0, '⟦', '⟧', '…', 12) AS snip, bm25(text_fts) AS rank,
+                       ROW_NUMBER() OVER (PARTITION BY c.id ORDER BY bm25(text_fts)) AS rn
+                FROM text_fts
+                JOIN text_blocks tb ON tb.id = text_fts.rowid
+                JOIN screen_captures c ON c.id = tb.captureId
+                LEFT JOIN apps a ON a.id = c.appId
+                WHERE text_fts MATCH ?
+            )
+            SELECT id, ts, bundleId, appName, windowTitle, browserUrl, relativePath, snip, rank
+            FROM ranked WHERE rn = 1 ORDER BY rank LIMIT ?
             """
             for row in try Row.fetchAll(db, sql: screenSQL, arguments: [match, limit]) {
                 out.append(SearchResult(
@@ -35,15 +38,16 @@ actor SearchService {
             }
 
             let audioSQL = """
-            SELECT ac.id AS id, ac.ts AS ts, ac.relativePath AS relativePath,
-                   snippet(transcription_fts, 0, '⟦', '⟧', '…', 12) AS snip, bm25(transcription_fts) AS rank
-            FROM transcription_fts
-            JOIN transcriptions tr ON tr.id = transcription_fts.rowid
-            JOIN audio_captures ac ON ac.id = tr.audioId
-            WHERE transcription_fts MATCH ?
-            GROUP BY ac.id
-            ORDER BY rank
-            LIMIT ?
+            WITH ranked AS (
+                SELECT ac.id AS id, ac.ts AS ts, ac.relativePath AS relativePath,
+                       snippet(transcription_fts, 0, '⟦', '⟧', '…', 12) AS snip, bm25(transcription_fts) AS rank,
+                       ROW_NUMBER() OVER (PARTITION BY ac.id ORDER BY bm25(transcription_fts)) AS rn
+                FROM transcription_fts
+                JOIN transcriptions tr ON tr.id = transcription_fts.rowid
+                JOIN audio_captures ac ON ac.id = tr.audioId
+                WHERE transcription_fts MATCH ?
+            )
+            SELECT id, ts, relativePath, snip, rank FROM ranked WHERE rn = 1 ORDER BY rank LIMIT ?
             """
             for row in try Row.fetchAll(db, sql: audioSQL, arguments: [match, limit]) {
                 out.append(SearchResult(
