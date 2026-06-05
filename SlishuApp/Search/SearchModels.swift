@@ -12,6 +12,10 @@ struct SearchResult: Sendable, Identifiable {
     let browserURL: String?
     let snippet: String
     let relativePath: String?
+
+    /// `id` (rowid) сам по себе не уникален между screen и audio — в ForEach это коллизия.
+    /// Композитный ключ kind:id уникален.
+    var uniqueKey: String { "\(kind.rawValue):\(id)" }
 }
 
 struct DensityBucket: Sendable, Identifiable {
@@ -30,6 +34,12 @@ struct FrameDetail: Sendable, Identifiable {
     let browserURL: String?
     let text: String
     let axQuality: String?
+    /// Источники текста этого кадра (distinct по text_blocks.source): "ax" и/или "ocr".
+    /// ax_quality ≠ источник: кадр может быть fullUseful, а блоки — смесь ax+ocr.
+    var sources: [String] = []
+
+    var hasAX: Bool { sources.contains("ax") }
+    var hasOCR: Bool { sources.contains("ocr") }
 }
 
 struct TimeBounds: Sendable {
