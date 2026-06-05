@@ -14,12 +14,6 @@ struct SearchResult: Sendable, Identifiable {
     let relativePath: String?
 }
 
-struct FrameTick: Sendable, Identifiable {
-    let id: Int64
-    let ts: Date
-    let appId: Int64?
-}
-
 struct DensityBucket: Sendable, Identifiable {
     let ts: Date
     let count: Int
