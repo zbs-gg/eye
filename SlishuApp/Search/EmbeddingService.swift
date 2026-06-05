@@ -1,4 +1,5 @@
 import Foundation
+import CoreML
 import Embeddings
 
 /// Cross-lingual эмбеддинги (ru↔en) через multilingual-e5-small (384-dim) поверх swift-embeddings
@@ -38,8 +39,15 @@ actor EmbeddingService {
     private func encode(_ text: String) async -> [Float]? {
         let t = String(text.prefix(1800)).trimmingCharacters(in: .whitespacesAndNewlines)
         guard t.count > "passage: ".count, let bundle = await ready() else { return nil }
-        guard let tensor = try? bundle.encode(t) else { return nil }
-        let shaped = await tensor.shapedArray(of: Float.self)
+        // e5 требует MEAN pooling по всем токенам (average_pool с attention-маской). Библиотечный
+        // `bundle.encode()` берёт CLS-токен (sequenceOutput[.., 0, ..]) — это верно для классификации,
+        // но НЕ для e5-retrieval: схлопывает косинусный зазор (ru↔en падал до ~0.03). Поэтому идём через
+        // model напрямую и усредняем сами. Single-text без паддинга → маска вся = 1 → mean по всем токенам.
+        guard let tokens = try? bundle.tokenizer.tokenizeText(t, maxLength: 512), !tokens.isEmpty else { return nil }
+        let inputIds = MLTensor(shape: [1, tokens.count], scalars: tokens)
+        let sequence = bundle.model(inputIds: inputIds).sequenceOutput   // [1, seqLen, 384]
+        let pooled = sequence.mean(alongAxes: 1)                         // среднее по токенам → [1, 384]
+        let shaped = await pooled.shapedArray(of: Float.self)
         var f = shaped.scalars
         var norm: Float = 0
         for x in f { norm += x * x }
