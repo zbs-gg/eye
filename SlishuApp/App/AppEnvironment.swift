@@ -30,8 +30,9 @@ final class AppEnvironment {
             let db = try SlishuDatabase(path: SlishuDatabase.defaultURL().path)
             SlishuHTTPServer.log("bootstrap: db ok")
             self.database = db
-            let embedder = EmbeddingService()
-            let ingestService = IngestService(db: db, storage: storage, embedder: embedder)
+            // Отдельные embedder для ingest и search — иначе тяжёлый embed на захвате блокирует
+            // эмбеддинг поискового запроса (head-of-line, по ревью).
+            let ingestService = IngestService(db: db, storage: storage, embedder: EmbeddingService())
             self.ingest = ingestService
             let retention = RetentionManager(db: db, storage: storage)
             self.retention = retention
@@ -42,7 +43,7 @@ final class AppEnvironment {
             recording.coordinator = coordinator
 
             // Поиск (гибрид FTS+vector) + таймлайн.
-            let searchSvc = SearchService(db: db, embedder: embedder)
+            let searchSvc = SearchService(db: db, embedder: EmbeddingService())
             let timelineSvc = TimelineService(db: db)
             self.timelineStore = TimelineStore(search: searchSvc, timeline: timelineSvc,
                                                mediaDirectory: storage.mediaDirectory)

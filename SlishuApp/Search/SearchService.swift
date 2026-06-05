@@ -14,10 +14,12 @@ actor SearchService {
     }
 
     func search(query: String, limit: Int = 60) async throws -> [SearchResult] {
-        let fts = try await ftsSearch(query, limit: 80)
+        // FTS и эмбеддинг запроса — параллельно (не зависят друг от друга).
+        async let ftsTask = ftsSearch(query, limit: 80)
+        async let qvecTask = embedder.embed(query)
+        let fts = try await ftsTask
 
-        // semantic leg (если эмбеддинг доступен)
-        guard let qvec = await embedder.embed(query) else {
+        guard let qvec = await qvecTask else {
             return Array(fts.prefix(limit))
         }
         let semIds = try await semanticSearch(qvec, limit: 80)
