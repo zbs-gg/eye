@@ -1,0 +1,4 @@
+module CSqliteVec {
+    header "shim.h"
+    export *
+}
