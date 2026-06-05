@@ -21,9 +21,15 @@ final class SlishuDatabase: Sendable {
             try db.execute(sql: "PRAGMA busy_timeout = 5000")
             try db.execute(sql: "PRAGMA mmap_size = 268435456")   // 256 MB
             // Регистрируем sqlite-vec (static, без loadable-extension) на каждом соединении пула.
+            // rc проверяем — иначе ошибка всплыла бы позже как «no such module: vec0».
             if let conn = db.sqliteConnection {
                 var err: UnsafeMutablePointer<CChar>?
-                _ = sqlite3_vec_init(conn, &err, nil)
+                let rc = sqlite3_vec_init(conn, &err, nil)
+                if rc != SQLITE_OK {
+                    let msg = err.map { String(cString: $0) } ?? "unknown"
+                    if err != nil { sqlite3_free(err) }
+                    throw DatabaseError(message: "sqlite-vec init failed: \(msg)")
+                }
             }
         }
         pool = try DatabasePool(path: path, configuration: config)

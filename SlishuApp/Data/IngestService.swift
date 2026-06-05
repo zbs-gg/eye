@@ -39,9 +39,9 @@ actor IngestService {
         let tsMs = Int64(rec.timestamp.timeIntervalSince1970 * 1000)
         let blocks = rec.textBlocks
 
-        // эмбеддинг — ДО транзакции (async). Embed-on-content: только если есть текст.
+        // эмбеддинг — ДО транзакции (async). Embed только если есть текст (не дёргаем actor на пустом).
         let fullText = blocks.map(\.text).joined(separator: " ")
-        let embedding: [Float]? = await embedder.embed(fullText)
+        let embedding: [Float]? = fullText.isEmpty ? nil : await embedder.embed(fullText)
         let bucket = monthBucket(rec.timestamp)
 
         do {
