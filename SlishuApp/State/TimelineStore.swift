@@ -6,12 +6,17 @@ import Observation
 @MainActor
 @Observable
 final class TimelineStore {
-    /// Детальность density-strip (strip и slider — оба по ВСЕЙ истории, согласованы; zoom = размер бакета).
+    /// Зум = ширина видимого ОКНА времени для density-strip (overview+detail). Слайдер всегда по всей
+    /// истории (глобальная позиция); strip показывает окно вокруг playhead. seconds=nil → вся история.
     enum Zoom: String, CaseIterable, Identifiable {
-        case fine, medium, coarse
+        case full, day, hour, tenMin
         var id: String { rawValue }
-        var bucketMs: Int64 { switch self { case .fine: 15_000; case .medium: 60_000; case .coarse: 300_000 } }
-        var label: String { switch self { case .fine: "Детально"; case .medium: "Средне"; case .coarse: "Обзор" } }
+        var seconds: Double? {
+            switch self { case .full: nil; case .day: 86_400; case .hour: 3_600; case .tenMin: 600 }
+        }
+        var label: String {
+            switch self { case .full: "Вся"; case .day: "День"; case .hour: "Час"; case .tenMin: "10 мин" }
+        }
     }
 
     @ObservationIgnored private let search: SearchService
@@ -20,10 +25,11 @@ final class TimelineStore {
     @ObservationIgnored private var searchGen = 0
     @ObservationIgnored private var playTask: Task<Void, Never>?
     @ObservationIgnored private var playGen = 0   // как searchGen: инвалидирует устаревший цикл плеера
+    @ObservationIgnored private var windowStart: Date?   // левый край окна strip; nil = вся история (.full)
 
     var bounds = TimeBounds(oldest: nil, newest: nil)
     var cursor = Date()
-    var zoom: Zoom = .medium
+    var zoom: Zoom = .full
     var current: FrameDetail?
     var density: [DensityBucket] = []
     var searchQuery = ""
@@ -35,15 +41,58 @@ final class TimelineStore {
     var speed: Double = 1            // 1× / 2× / 4×
     static let speeds: [Double] = [1, 2, 4]
 
-    // strip и slider — оба по всей истории (согласованы). Окно с запасом, если истории ещё нет.
-    var rangeStart: Date { bounds.oldest ?? Date().addingTimeInterval(-1800) }
-    var rangeEnd: Date { bounds.newest ?? Date() }
+    // Окно density-strip: при .full = вся история; иначе — страница [windowStart, +zoom.seconds].
+    var rangeStart: Date {
+        if let ws = windowStart, zoom.seconds != nil { return ws }
+        return bounds.oldest ?? Date().addingTimeInterval(-1800)
+    }
+    var rangeEnd: Date {
+        if let ws = windowStart, let w = zoom.seconds { return ws.addingTimeInterval(w) }
+        return bounds.newest ?? Date()
+    }
     var hasData: Bool { bounds.oldest != nil }
 
-    /// Бакет с capping: не больше ~400 столбиков на всю историю.
+    /// ~300 столбиков на ТЕКУЩЕЕ окно при любом зуме (на 10-мин окне — секундная детализация).
     private var effectiveBucketMs: Int64 {
         let span = max(1, msFromDate(rangeEnd) - msFromDate(rangeStart))
-        return max(zoom.bucketMs, span / 400)
+        return max(1000, span / 300)
+    }
+
+    /// Левый край окна шириной w вокруг времени c, прижатый к границам истории.
+    private func clampedWindowStart(around c: Date, width w: Double) -> Date {
+        guard let o = bounds.oldest, let n = bounds.newest else { return c.addingTimeInterval(-w / 2) }
+        if n.timeIntervalSince(o) <= w { return o }       // история короче окна → окно = вся история
+        var start = c.addingTimeInterval(-w / 2)
+        if start < o { start = o }
+        if start.addingTimeInterval(w) > n { start = n.addingTimeInterval(-w) }
+        return start
+    }
+
+    /// Держит cursor в комфортной зоне окна; при выходе перецентрирует страницу. true → density пересчитать.
+    /// Страничный сдвиг (не каждый кадр) — поэтому density не дёргается при play на каждом тике.
+    private func reframeWindowIfNeeded() -> Bool {
+        // .full ИЛИ пустая история — окно не используется (иначе фантомный windowStart вокруг Date()).
+        guard let w = zoom.seconds, bounds.oldest != nil else {
+            if windowStart != nil { windowStart = nil; return true }
+            return false
+        }
+        let margin = w * 0.15
+        if let ws = windowStart,
+           cursor >= ws.addingTimeInterval(margin), cursor <= ws.addingTimeInterval(w - margin) {
+            return false                                  // в зоне — страницу не трогаем
+        }
+        // У края истории clamp упирается в тот же ws → возвращаем false, иначе density пересчитывался бы
+        // вхолостую каждый кадр в крайних 15% окна (нарушало бы «страничный, не покадровый» сдвиг).
+        let new = clampedWindowStart(around: cursor, width: w)
+        let changed = (windowStart != new)
+        windowStart = new
+        return changed
+    }
+
+    private func refreshDensity() async {
+        if let d = try? await timeline.density(from: rangeStart, to: rangeEnd, bucketMs: effectiveBucketMs) {
+            density = d
+        }
     }
 
     init(search: SearchService, timeline: TimelineService, mediaDirectory: URL) {
@@ -61,9 +110,8 @@ final class TimelineStore {
     }
 
     func refresh() async {
-        if let d = try? await timeline.density(from: rangeStart, to: rangeEnd, bucketMs: effectiveBucketMs) {
-            density = d
-        }
+        _ = reframeWindowIfNeeded()
+        await refreshDensity()
         // Прямое присваивание: до первого кадра истории frameAt вернёт nil — кадр надо ОЧИСТИТЬ,
         // иначе в пустой зоне залипает прежний кадр (детали-«Нет кадра» иначе недостижимы).
         current = try? await timeline.frameAt(cursor)
@@ -73,6 +121,7 @@ final class TimelineStore {
         if isPlaying { pause() }        // ручная перемотка забирает управление у плеера
         cursor = t
         current = try? await timeline.frameAt(t)   // nil до начала истории → очищаем (см. refresh)
+        if reframeWindowIfNeeded() { await refreshDensity() }   // окно сдвинулось (напр. coarse-seek слайдером)
     }
 
     // MARK: плеер
@@ -132,12 +181,14 @@ final class TimelineStore {
             guard isPlaying, !Task.isCancelled, gen == playGen else { return }  // не писать stale cursor
             cursor = next.ts
             current = next
+            if reframeWindowIfNeeded() { await refreshDensity() }   // playhead дошёл до края окна → сдвиг страницы
         }
     }
 
     func setZoom(_ z: Zoom) async {
         zoom = z
-        // только density зависит от zoom; guard на устаревание при быстром переключении
+        _ = reframeWindowIfNeeded()
+        // guard на устаревание при быстром переключении зума
         if let d = try? await timeline.density(from: rangeStart, to: rangeEnd, bucketMs: effectiveBucketMs),
            zoom == z {
             density = d
