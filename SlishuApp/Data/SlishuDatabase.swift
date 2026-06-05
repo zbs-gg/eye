@@ -6,7 +6,9 @@ import GRDB
 final class SlishuDatabase: Sendable {
     let pool: DatabasePool
 
-    init(path: String) throws {
+    /// `runMigrations: false` — для read-only потребителей (MCP-процесс), чтобы не брать exclusive
+    /// write-lock на grdb_migrations и не контендить с пишущим GUI-инстансом. Схемой владеет GUI.
+    init(path: String, runMigrations: Bool = true) throws {
         var config = Configuration()
         config.prepareDatabase { db in
             try db.execute(sql: "PRAGMA foreign_keys = ON")
@@ -16,7 +18,7 @@ final class SlishuDatabase: Sendable {
             try db.execute(sql: "PRAGMA mmap_size = 268435456")   // 256 MB
         }
         pool = try DatabasePool(path: path, configuration: config)
-        try Self.migrator.migrate(pool)
+        if runMigrations { try Self.migrator.migrate(pool) }
     }
 
     /// Стандартное расположение БД (медиа — отдельно, через StorageManager).

@@ -7,14 +7,24 @@ import GRDB
 /// в запущенный GUI-инстанс через локальный REST (порт из port-файла, токен из Keychain).
 enum SlishuMCPServer {
 
+    /// Короткий timeout для localhost-вызовов к GUI-инстансу (иначе URLSession.shared ждёт 7 дней).
+    private static let localSession: URLSession = {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 3
+        cfg.timeoutIntervalForResource = 5
+        return URLSession(configuration: cfg)
+    }()
+
     static func runStdio() async {
-        // БД на чтение (миграция на уже-мигрированной — no-op; WAL допускает параллель с GUI).
+        // БД на ЧТЕНИЕ, БЕЗ миграций (схемой владеет GUI; не берём write-lock).
         let search: SearchService?
         let timeline: TimelineService?
         let db: SlishuDatabase?
-        if let d = try? SlishuDatabase(path: SlishuDatabase.defaultURL().path) {
+        do {
+            let d = try SlishuDatabase(path: SlishuDatabase.defaultURL().path, runMigrations: false)
             db = d; search = SearchService(db: d); timeline = TimelineService(db: d)
-        } else {
+        } catch {
+            FileHandle.standardError.write("[mcp] db open failed: \(error)\n".data(using: .utf8)!)
             db = nil; search = nil; timeline = nil
         }
 
@@ -46,6 +56,15 @@ enum SlishuMCPServer {
                 let frame = try? await timeline.frameAt(date)
                 return .init(content: [.text(Self.formatFrame(frame))])
 
+            case "get_timeline":
+                guard let timeline,
+                      let from = Self.parseTime(args["from"]?.stringValue ?? ""),
+                      let to = Self.parseTime(args["to"]?.stringValue ?? "") else {
+                    return .init(content: [.text("Нужны from и to (ISO8601 или epoch-ms).")], isError: true)
+                }
+                let buckets = (try? await timeline.density(from: from, to: to, bucketMs: 300_000)) ?? []
+                return .init(content: [.text(Self.formatTimeline(from, to, buckets))])
+
             case "get_status":
                 return .init(content: [.text(await Self.formatStatus(db: db))])
 
@@ -65,6 +84,8 @@ enum SlishuMCPServer {
         do {
             try await server.start(transport: transport)
             await server.waitUntilCompleted()
+            await server.stop()
+            try? await Task.sleep(for: .milliseconds(50))   // дать долететь in-flight toggle-POST
         } catch {
             FileHandle.standardError.write("[mcp] start error: \(error)\n".data(using: .utf8)!)
         }
@@ -87,6 +108,12 @@ enum SlishuMCPServer {
                  inputSchema: .object(["type": .string("object"),
                                        "properties": .object(["time": strProp("ISO8601 или epoch-ms")]),
                                        "required": .array([.string("time")])])),
+            Tool(name: "get_timeline",
+                 description: "Активность по времени в диапазоне (сколько кадров в бакетах) — что юзер делал в окне времени.",
+                 inputSchema: .object(["type": .string("object"),
+                                       "properties": .object(["from": strProp("начало ISO8601/epoch-ms"),
+                                                              "to": strProp("конец ISO8601/epoch-ms")]),
+                                       "required": .array([.string("from"), .string("to")])])),
             Tool(name: "get_status",
                  description: "Статус Slishu: число кадров/текстов/аудио, диапазон истории, идёт ли запись.",
                  inputSchema: .object(["type": .string("object"), "properties": .object([:])])),
@@ -121,6 +148,15 @@ enum SlishuMCPServer {
         return out
     }
 
+    private static func formatTimeline(_ from: Date, _ to: Date, _ buckets: [DensityBucket]) -> String {
+        let total = buckets.reduce(0) { $0 + $1.count }
+        guard total > 0 else { return "С \(from.formatted()) по \(to.formatted()) активности не записано." }
+        let peak = buckets.max { $0.count < $1.count }
+        var out = "С \(from.formatted(date: .abbreviated, time: .shortened)) по \(to.formatted(date: .abbreviated, time: .shortened)): \(total) кадров в \(buckets.count) интервалах."
+        if let peak { out += "\nПик активности около \(peak.ts.formatted(date: .omitted, time: .shortened)) (\(peak.count))." }
+        return out
+    }
+
     private static func formatStatus(db: SlishuDatabase?) async -> String {
         guard let db else { return "БД недоступна." }
         let counts = try? await db.pool.read { db -> (Int, Int, Int, Int64?, Int64?) in
@@ -149,23 +185,30 @@ enum SlishuMCPServer {
         return Int(s.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// Проверяет, что на порту реально Slishu (а не чужой переиспользованный порт из stale port-файла).
+    private static func healthOK(port: Int) async -> [String: Any]? {
+        guard let url = URL(string: "http://127.0.0.1:\(port)/health"),
+              let (data, _) = try? await localSession.data(from: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              obj["status"] as? String == "ok" else { return nil }
+        return obj
+    }
+
     private static func mainInstanceCapturing() async -> Bool? {
-        guard let port = readPort(),
-              let url = URL(string: "http://127.0.0.1:\(port)/health"),
-              let (data, _) = try? await URLSession.shared.data(from: url),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        guard let port = readPort(), let obj = await healthOK(port: port) else { return nil }
         return obj["capturing"] as? Bool
     }
 
     private static func proxyToggle(enable: Bool?) async -> Bool? {
-        guard let port = readPort() else { return nil }
+        // Проверяем identity (это Slishu) ПЕРЕД отправкой токена — защита от stale/переиспользованного порта.
+        guard let port = readPort(), await healthOK(port: port) != nil else { return nil }
         var comps = URLComponents(string: "http://127.0.0.1:\(port)/v1/capture/toggle")!
         if let enable { comps.queryItems = [URLQueryItem(name: "enable", value: enable ? "true" : "false")] }
         guard let url = comps.url else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("Bearer \(KeychainStore.apiToken())", forHTTPHeaderField: "Authorization")
-        guard let (data, _) = try? await URLSession.shared.data(for: req),
+        guard let (data, _) = try? await localSession.data(for: req),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         return obj["capturing"] as? Bool
     }
