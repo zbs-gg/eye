@@ -22,7 +22,7 @@ enum SlishuMCPServer {
         let db: SlishuDatabase?
         do {
             let d = try SlishuDatabase(path: SlishuDatabase.defaultURL().path, runMigrations: false)
-            db = d; search = SearchService(db: d); timeline = TimelineService(db: d)
+            db = d; search = SearchService(db: d, embedder: EmbeddingService()); timeline = TimelineService(db: d)
         } catch {
             FileHandle.standardError.write("[mcp] db open failed: \(error)\n".data(using: .utf8)!)
             db = nil; search = nil; timeline = nil

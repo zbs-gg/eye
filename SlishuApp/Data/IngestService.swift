@@ -10,10 +10,12 @@ import GRDB
 actor IngestService {
     private let db: SlishuDatabase
     private let storage: StorageManager
+    private let embedder: EmbeddingService
 
-    init(db: SlishuDatabase, storage: StorageManager) {
+    init(db: SlishuDatabase, storage: StorageManager, embedder: EmbeddingService) {
         self.db = db
         self.storage = storage
+        self.embedder = embedder
     }
 
     @discardableResult
@@ -36,6 +38,11 @@ actor IngestService {
 
         let tsMs = Int64(rec.timestamp.timeIntervalSince1970 * 1000)
         let blocks = rec.textBlocks
+
+        // эмбеддинг — ДО транзакции (async). Embed-on-content: только если есть текст.
+        let fullText = blocks.map(\.text).joined(separator: " ")
+        let embedding: [Float]? = await embedder.embed(fullText)
+        let bucket = monthBucket(rec.timestamp)
 
         do {
             return try await db.pool.write { dbc -> Int64 in
@@ -62,6 +69,13 @@ actor IngestService {
                         bboxX: b.bbox.map { Double($0.origin.x) }, bboxY: b.bbox.map { Double($0.origin.y) },
                         bboxW: b.bbox.map { Double($0.size.width) }, bboxH: b.bbox.map { Double($0.size.height) })
                     try tb.insert(dbc)   // триггер text_blocks_ai наполнит text_fts
+                }
+                // семантический вектор в vec0 (temporal-партиция по месяцу).
+                // Защита: пишем только при совпадении размерности (иначе vec0 бросит и откатит ВЕСЬ
+                // ingest — кадр потеряется; лучше тихо пропустить semantic, FTS останется).
+                if let embedding, embedding.count == SlishuDatabase.embeddingDim {
+                    try dbc.execute(sql: "INSERT INTO vec_screen(capture_id, bucket_month, embedding) VALUES (?, ?, ?)",
+                                    arguments: [captureId, bucket, floatBlob(embedding)])
                 }
                 return captureId
             }
