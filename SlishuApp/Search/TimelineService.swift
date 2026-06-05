@@ -14,18 +14,6 @@ actor TimelineService {
         }
     }
 
-    func ticks(from: Date, to: Date, limit: Int = 4000) async throws -> [FrameTick] {
-        let f = msFromDate(from), t = msFromDate(to)
-        return try await db.pool.read { db in
-            try Row.fetchAll(db, sql: """
-                SELECT id, ts, appId FROM screen_captures
-                WHERE ts BETWEEN ? AND ? ORDER BY ts LIMIT ?
-                """, arguments: [f, t, limit]).map {
-                FrameTick(id: $0["id"], ts: dateFromMs($0["ts"]), appId: $0["appId"])
-            }
-        }
-    }
-
     /// Плотность активности по бакетам (для density-strip). bucketMs — ширина бакета.
     func density(from: Date, to: Date, bucketMs: Int64) async throws -> [DensityBucket] {
         let f = msFromDate(from), t = msFromDate(to)
