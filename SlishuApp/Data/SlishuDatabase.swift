@@ -7,8 +7,8 @@ import CSqliteVec
 final class SlishuDatabase: Sendable {
     let pool: DatabasePool
 
-    /// Размерность эмбеддингов (NLEmbedding sentence = 512). Фиксирована в vec0 DDL.
-    static let embeddingDim = 512
+    /// Размерность эмбеддингов (multilingual-e5-small = 384). Фиксирована в vec0 DDL.
+    static let embeddingDim = 384
 
     /// `runMigrations: false` — для read-only потребителей (MCP-процесс), чтобы не брать exclusive
     /// write-lock на grdb_migrations и не контендить с пишущим GUI-инстансом. Схемой владеет GUI.
@@ -144,14 +144,21 @@ final class SlishuDatabase: Sendable {
                 """)
         }
 
-        // v2: vec0-таблица для семантического поиска. partition key bucket_month = temporal sharding
-        // (план: поиск по текущему месяцу быстрый, brute-force в малом шарде). embedding нормализован L2.
+        // v2: vec0-таблица для семантического поиска (legacy 512-dim, NLEmbedding).
         m.registerMigration("v2_vector") { db in
             try db.execute(sql: """
                 CREATE VIRTUAL TABLE vec_screen USING vec0(
-                    capture_id integer,
-                    bucket_month integer partition key,
-                    embedding float[\(embeddingDim)]
+                    capture_id integer, bucket_month integer partition key, embedding float[512]
+                );
+                """)
+        }
+        // v3: переход на multilingual-e5 (384-dim, cross-lingual). Пересоздаём vec0 — старые 512-векторы
+        // дропаются (новые ingest переиндексируются под e5). bucket_month = temporal sharding.
+        m.registerMigration("v3_vec_e5_384") { db in
+            try db.execute(sql: "DROP TABLE IF EXISTS vec_screen")
+            try db.execute(sql: """
+                CREATE VIRTUAL TABLE vec_screen USING vec0(
+                    capture_id integer, bucket_month integer partition key, embedding float[\(embeddingDim)]
                 );
                 """)
         }

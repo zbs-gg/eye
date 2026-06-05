@@ -14,9 +14,9 @@ actor SearchService {
     }
 
     func search(query: String, limit: Int = 60) async throws -> [SearchResult] {
-        // FTS и эмбеддинг запроса — параллельно (не зависят друг от друга).
+        // FTS и эмбеддинг запроса — параллельно (не зависят друг от друга). query-префикс для e5.
         async let ftsTask = ftsSearch(query, limit: 80)
-        async let qvecTask = embedder.embed(query)
+        async let qvecTask = embedder.embed(query: query)
         let fts = try await ftsTask
 
         guard let qvec = await qvecTask else {
