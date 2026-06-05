@@ -70,6 +70,7 @@ final class AppEnvironment {
                 SlishuHTTPServer.log("bootstrap: start -> \(String(describing: port))")
                 if let port { await MainActor.run { self?.server.setActive(port: port, token: token) } }
             }
+
             // Прунинг по дефолтам (7д/20GB) фоном при старте. Позже (шаг 11) — таймер + size-trigger.
             Task.detached(priority: .utility) {
                 _ = try? await retention.prune(retentionDays: RetentionPolicy.defaultDays,
