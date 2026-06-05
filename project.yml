@@ -18,6 +18,9 @@ packages:
   FlyingFox:
     url: https://github.com/swhitty/FlyingFox
     from: "0.26.0"
+  MCP:
+    url: https://github.com/modelcontextprotocol/swift-sdk
+    from: "0.12.0"
 
 targets:
   Slishu:
@@ -30,6 +33,8 @@ targets:
         product: GRDB
       - package: FlyingFox
         product: FlyingFox
+      - package: MCP
+        product: MCP
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.slishu.app

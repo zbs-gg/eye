@@ -1,6 +1,5 @@
 import SwiftUI
 
-@main
 struct SlishuApp: App {
     @State private var env = AppEnvironment()
 
