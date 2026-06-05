@@ -1,26 +1,51 @@
 import Foundation
-import NaturalLanguage
+import Embeddings
 
-/// Локальные эмбеддинги. MVP — системный NLEmbedding (нулевой вес, sentence, 512-dim). Сменный бэкенд
-/// (план): multilingual-e5 via MLX для cross-lingual ru→en — следующая итерация. Векторы L2-нормализованы
-/// (косинус = скалярное произведение).
+/// Cross-lingual эмбеддинги (ru↔en) через multilingual-e5-small (384-dim) поверх swift-embeddings
+/// (Apple MLTensor, без MLX/Python). Модель качается с HuggingFace Hub при первом запуске (~250-470МБ),
+/// потом из кеша. e5 требует префиксы "query: " / "passage: ". Векторы L2-нормализованы.
 actor EmbeddingService {
-    private let embedding: NLEmbedding?
+    private var bundle: XLMRoberta.ModelBundle?
+    private var loadTask: Task<XLMRoberta.ModelBundle?, Never>?
+    private(set) var loadFailed = false
 
     init() {
-        embedding = NLEmbedding.sentenceEmbedding(for: .english)   // dim=512, совпадает с vec0 DDL
+        loadTask = Task {
+            do {
+                return try await XLMRoberta.loadModelBundle(from: "intfloat/multilingual-e5-small")
+            } catch {
+                FileHandle.standardError.write("[embed] e5 load failed: \(error)\n".data(using: .utf8)!)
+                return nil
+            }
+        }
     }
 
-    /// Возвращает 512-мерный L2-нормализованный вектор или nil (текст пуст / вне словаря модели).
-    func embed(_ text: String) -> [Float]? {
-        let t = String(text.prefix(2000)).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty, let embedding, let v = embedding.vector(for: t) else { return nil }
-        var f = v.map { Float($0) }
+    private func ready() async -> XLMRoberta.ModelBundle? {
+        if let bundle { return bundle }
+        let b = await loadTask?.value
+        bundle = b
+        loadFailed = (b == nil)
+        return b
+    }
+
+    /// Эмбеддинг поискового запроса (префикс "query: ").
+    func embed(query text: String) async -> [Float]? { await encode("query: " + text) }
+    /// Эмбеддинг индексируемого контента (префикс "passage: ").
+    func embed(passage text: String) async -> [Float]? { await encode("passage: " + text) }
+    /// Совместимость: по умолчанию контент = passage.
+    func embed(_ text: String) async -> [Float]? { await embed(passage: text) }
+
+    private func encode(_ text: String) async -> [Float]? {
+        let t = String(text.prefix(1800)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count > "passage: ".count, let bundle = await ready() else { return nil }
+        guard let tensor = try? bundle.encode(t) else { return nil }
+        let shaped = await tensor.shapedArray(of: Float.self)
+        var f = shaped.scalars
         var norm: Float = 0
         for x in f { norm += x * x }
         norm = norm.squareRoot()
         if norm > 1e-6 { for i in f.indices { f[i] /= norm } }
-        return f
+        return f.count == SlishuDatabase.embeddingDim ? f : nil
     }
 }
 
