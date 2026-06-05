@@ -64,6 +64,7 @@ actor RetentionManager {
                 if rows.isEmpty { return (0, []) }
                 let ids = rows.compactMap(\.id)
                 try ScreenCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)  // каскад → FTS
+                try Self.deleteVectors(db, captureIds: ids)                              // vec0 (нет FK-каскада)
                 return (rows.count, rows.compactMap(\.relativePath))
             }
             if count == 0 { break }
@@ -71,6 +72,13 @@ actor RetentionManager {
             deleted += count
         }
         return deleted
+    }
+
+    /// vec0 не поддерживает FK-каскад — чистим явно по capture_id.
+    private static func deleteVectors(_ db: Database, captureIds: [Int64]) throws {
+        guard !captureIds.isEmpty else { return }
+        let list = captureIds.map(String.init).joined(separator: ",")
+        try db.execute(sql: "DELETE FROM vec_screen WHERE capture_id IN (\(list))")
     }
 
     private func deleteAudioOlderThan(_ cutoffMs: Int64) async throws -> Int {
@@ -101,6 +109,7 @@ actor RetentionManager {
                 if rows.isEmpty { return (0, []) }
                 let ids = rows.compactMap(\.id)
                 try ScreenCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
+                try Self.deleteVectors(db, captureIds: ids)
                 return (rows.count, rows.compactMap(\.relativePath))
             }
             if fc > 0 {

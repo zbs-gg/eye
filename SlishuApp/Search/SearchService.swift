@@ -1,19 +1,65 @@
 import Foundation
 import GRDB
 
-/// FTS5-поиск по экрану и аудио (без vector — это шаг 7). Дедуп кадров `GROUP BY` (фикс декартова).
-/// Ранжирование bm25. Гибрид FTS+semantic добавится после benchmark'а vector (план).
+/// Гибридный поиск: FTS5 (точные слова, bm25) + semantic (vec0, по смыслу) → слияние Reciprocal Rank
+/// Fusion (RRF, k=60, без калибровки шкал). Дедуп кадров ROW_NUMBER. Vector — шаг 7 плана.
 actor SearchService {
     private let db: SlishuDatabase
-    init(db: SlishuDatabase) { self.db = db }
+    private let embedder: EmbeddingService
+    private let rrfK = 60.0
+
+    init(db: SlishuDatabase, embedder: EmbeddingService) {
+        self.db = db
+        self.embedder = embedder
+    }
 
     func search(query: String, limit: Int = 60) async throws -> [SearchResult] {
+        let fts = try await ftsSearch(query, limit: 80)
+
+        // semantic leg (если эмбеддинг доступен)
+        guard let qvec = await embedder.embed(query) else {
+            return Array(fts.prefix(limit))
+        }
+        let semIds = try await semanticSearch(qvec, limit: 80)
+
+        // RRF: ключ = "kind:id"
+        var score: [String: Double] = [:]
+        var byKey: [String: SearchResult] = [:]
+        func key(_ r: SearchResult) -> String { "\(r.kind.rawValue):\(r.id)" }
+
+        for (i, r) in fts.enumerated() {
+            let k = key(r)
+            score[k, default: 0] += 1.0 / (rrfK + Double(i + 1))
+            byKey[k] = r
+        }
+        for (rank, captureId) in semIds.enumerated() {
+            let k = "screen:\(captureId)"
+            score[k, default: 0] += 1.0 / (rrfK + Double(rank + 1))
+            if byKey[k] == nil, let r = try? await fetchScreenResult(captureId) {
+                byKey[k] = r
+            }
+        }
+
+        let ranked = byKey.values.sorted { (score[key($0)] ?? 0) > (score[key($1)] ?? 0) }
+        return Array(ranked.prefix(limit))
+    }
+
+    // MARK: legs
+
+    private func semanticSearch(_ qvec: [Float], limit: Int) async throws -> [Int64] {
+        let blob = floatBlob(qvec)
+        return try await db.pool.read { db in
+            try Int64.fetchAll(db, sql: """
+                SELECT capture_id FROM vec_screen WHERE embedding MATCH ? AND k = ? ORDER BY distance
+                """, arguments: [blob, limit])
+        }
+    }
+
+    private func ftsSearch(_ query: String, limit: Int) async throws -> [SearchResult] {
         let match = Self.ftsQuery(query)
         guard !match.isEmpty else { return [] }
         return try await db.pool.read { db in
             var out: [SearchResult] = []
-
-            // ROW_NUMBER по captureId: берём ЛУЧШИЙ блок (snippet+rank согласованы, детерминированно).
             let screenSQL = """
             WITH ranked AS (
                 SELECT c.id AS id, c.ts AS ts, a.bundleId AS bundleId, a.name AS appName,
@@ -36,7 +82,6 @@ actor SearchService {
                     windowTitle: row["windowTitle"], browserURL: row["browserUrl"],
                     snippet: row["snip"] ?? "", relativePath: row["relativePath"]))
             }
-
             let audioSQL = """
             WITH ranked AS (
                 SELECT ac.id AS id, ac.ts AS ts, ac.relativePath AS relativePath,
@@ -55,9 +100,26 @@ actor SearchService {
                     bundleId: nil, appName: "Аудио", windowTitle: nil, browserURL: nil,
                     snippet: row["snip"] ?? "", relativePath: row["relativePath"]))
             }
+            return out
+        }
+    }
 
-            // объединённая сортировка по времени (свежее сверху)
-            return out.sorted { $0.ts > $1.ts }
+    /// Для semantic-only хита (нашёлся по смыслу, без точных слов) — собрать SearchResult из БД.
+    private func fetchScreenResult(_ captureId: Int64) async throws -> SearchResult? {
+        try await db.pool.read { db in
+            guard let row = try Row.fetchOne(db, sql: """
+                SELECT c.id AS id, c.ts AS ts, a.bundleId AS bundleId, a.name AS appName,
+                       c.windowTitle AS windowTitle, c.browserUrl AS browserUrl, c.relativePath AS relativePath
+                FROM screen_captures c LEFT JOIN apps a ON a.id = c.appId WHERE c.id = ?
+                """, arguments: [captureId]) else { return nil }
+            let snip = try String.fetchOne(db, sql:
+                "SELECT substr(text, 1, 140) FROM text_blocks WHERE captureId = ? ORDER BY length(text) DESC LIMIT 1",
+                arguments: [captureId]) ?? ""
+            return SearchResult(
+                id: row["id"], kind: .screen, ts: dateFromMs(row["ts"]),
+                bundleId: row["bundleId"], appName: row["appName"],
+                windowTitle: row["windowTitle"], browserURL: row["browserUrl"],
+                snippet: snip, relativePath: row["relativePath"])
         }
     }
 

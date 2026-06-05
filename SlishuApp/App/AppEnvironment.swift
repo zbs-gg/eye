@@ -30,7 +30,8 @@ final class AppEnvironment {
             let db = try SlishuDatabase(path: SlishuDatabase.defaultURL().path)
             SlishuHTTPServer.log("bootstrap: db ok")
             self.database = db
-            let ingestService = IngestService(db: db, storage: storage)
+            let embedder = EmbeddingService()
+            let ingestService = IngestService(db: db, storage: storage, embedder: embedder)
             self.ingest = ingestService
             let retention = RetentionManager(db: db, storage: storage)
             self.retention = retention
@@ -40,8 +41,8 @@ final class AppEnvironment {
             coordinator.onFrame = { [weak rec = recording] in rec?.noteFrame() }
             recording.coordinator = coordinator
 
-            // Поиск + таймлайн (FTS; vector — шаг 7).
-            let searchSvc = SearchService(db: db)
+            // Поиск (гибрид FTS+vector) + таймлайн.
+            let searchSvc = SearchService(db: db, embedder: embedder)
             let timelineSvc = TimelineService(db: db)
             self.timelineStore = TimelineStore(search: searchSvc, timeline: timelineSvc,
                                                mediaDirectory: storage.mediaDirectory)
