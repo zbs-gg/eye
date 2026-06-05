@@ -21,6 +21,8 @@ packages:
   MCP:
     url: https://github.com/modelcontextprotocol/swift-sdk
     exactVersion: "0.12.1"
+  SlishuVec:
+    path: Packages/SlishuVec
 
 targets:
   Slishu:
@@ -35,6 +37,8 @@ targets:
         product: FlyingFox
       - package: MCP
         product: MCP
+      - package: SlishuVec
+        product: CSqliteVec
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.slishu.app

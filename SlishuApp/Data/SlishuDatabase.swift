@@ -1,10 +1,14 @@
 import Foundation
 import GRDB
+import CSqliteVec
 
 /// Владелец DatabasePool + миграции. Sendable (только `let pool`). Пишут/читают через pool
 /// (он thread-safe). FTS5 external-content + триггеры — БЕЗ декартова бага старой версии.
 final class SlishuDatabase: Sendable {
     let pool: DatabasePool
+
+    /// Размерность эмбеддингов (NLEmbedding sentence = 512). Фиксирована в vec0 DDL.
+    static let embeddingDim = 512
 
     /// `runMigrations: false` — для read-only потребителей (MCP-процесс), чтобы не брать exclusive
     /// write-lock на grdb_migrations и не контендить с пишущим GUI-инстансом. Схемой владеет GUI.
@@ -16,6 +20,11 @@ final class SlishuDatabase: Sendable {
             try db.execute(sql: "PRAGMA synchronous = NORMAL")    // WAL + NORMAL = безопасно+быстро
             try db.execute(sql: "PRAGMA busy_timeout = 5000")
             try db.execute(sql: "PRAGMA mmap_size = 268435456")   // 256 MB
+            // Регистрируем sqlite-vec (static, без loadable-extension) на каждом соединении пула.
+            if let conn = db.sqliteConnection {
+                var err: UnsafeMutablePointer<CChar>?
+                _ = sqlite3_vec_init(conn, &err, nil)
+            }
         }
         pool = try DatabasePool(path: path, configuration: config)
         if runMigrations { try Self.migrator.migrate(pool) }
@@ -126,6 +135,18 @@ final class SlishuDatabase: Sendable {
                     INSERT INTO transcription_fts(transcription_fts, rowid, text) VALUES('delete', old.id, old.text);
                     INSERT INTO transcription_fts(rowid, text) VALUES (new.id, new.text);
                 END;
+                """)
+        }
+
+        // v2: vec0-таблица для семантического поиска. partition key bucket_month = temporal sharding
+        // (план: поиск по текущему месяцу быстрый, brute-force в малом шарде). embedding нормализован L2.
+        m.registerMigration("v2_vector") { db in
+            try db.execute(sql: """
+                CREATE VIRTUAL TABLE vec_screen USING vec0(
+                    capture_id integer,
+                    bucket_month integer partition key,
+                    embedding float[\(embeddingDim)]
+                );
                 """)
         }
         return m
