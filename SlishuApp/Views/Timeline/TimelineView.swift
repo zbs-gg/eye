@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ImageIO
 
 struct TimelineView: View {
     @Environment(AppEnvironment.self) private var env
@@ -23,16 +24,26 @@ private struct TimelineBody: View {
     @Bindable var store: TimelineStore
     @Environment(AppEnvironment.self) private var env
     @State private var seekTask: Task<Void, Never>?
+    @FocusState private var searchFocused: Bool
+
+    private var showResults: Bool { store.isSearching || !store.results.isEmpty }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
-            if !store.results.isEmpty {
-                resultsList
-            } else {
+            // Скруббер — всегда подложка; поиск выпадает Spotlight-оверлеем поверх (не mode-switch).
+            ZStack(alignment: .top) {
                 scrubber
+                if showResults {
+                    // Диммер в потоке (не overlay-окно) → без .ignoresSafeArea; тап вне списка закрывает.
+                    Rectangle().fill(.black.opacity(0.12))
+                        .onTapGesture { store.clearSearch() }
+                    resultsOverlay
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
             }
+            .animation(.easeInOut(duration: 0.18), value: showResults)
         }
     }
 
@@ -44,7 +55,8 @@ private struct TimelineBody: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Поиск по экрану и аудио…", text: $store.searchQuery)
                     .textFieldStyle(.plain)
-                    .onSubmit { Task { await store.runSearch() } }
+                    .focused($searchFocused)
+                    .onSubmit { searchFocused = true; Task { await store.runSearch() } }  // фокус остаётся → набор-уточнение
                 if !store.searchQuery.isEmpty {
                     Button { store.clearSearch() } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.borderless).foregroundStyle(.secondary)
@@ -70,35 +82,55 @@ private struct TimelineBody: View {
         .padding(16)
     }
 
-    // MARK: результаты поиска
+    // MARK: результаты поиска (Spotlight-оверлей)
 
-    private var resultsList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 8) {
-                if store.isSearching { ProgressView().padding() }
-                Text("\(store.results.count) результатов").font(.caption).foregroundStyle(.secondary).padding(.horizontal)
-                ForEach(store.results) { r in
-                    Button { Task { await store.select(r) } } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Image(systemName: r.kind == .audio ? "waveform" : "macwindow")
-                                Text(r.appName ?? r.bundleId ?? "—").font(.subheadline.weight(.medium))
-                                if let w = r.windowTitle { Text("· \(w)").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                                Spacer()
-                                Text(r.ts.formatted(date: .abbreviated, time: .shortened))
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            Text(r.snippet).font(.callout).foregroundStyle(.primary).lineLimit(3)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .padding(10)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-                    }
-                    .buttonStyle(.plain)
-                }
+    private var resultsOverlay: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                if store.isSearching { ProgressView().controlSize(.small) }
+                Text(store.isSearching ? "Поиск…" : "\(store.results.count) результатов")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button { store.clearSearch() } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless).font(.caption).foregroundStyle(.secondary)
             }
-            .padding(16)
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            if !store.results.isEmpty {
+                Divider()
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(store.results, id: \.uniqueKey) { r in resultRow(r) }
+                    }
+                    .padding(8)
+                }
+                .frame(maxHeight: 380)
+            }
         }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.08)))
+        .shadow(color: .black.opacity(0.25), radius: 18, y: 8)
+        .frame(maxWidth: 760)
+        .padding(.horizontal, 16).padding(.top, 8)
+    }
+
+    private func resultRow(_ r: SearchResult) -> some View {
+        Button { Task { await store.select(r) } } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Image(systemName: r.kind == .audio ? "waveform" : "macwindow")
+                    Text(r.appName ?? r.bundleId ?? "—").font(.subheadline.weight(.medium))
+                    if let w = r.windowTitle { Text("· \(w)").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                    Spacer()
+                    Text(r.ts.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text(r.snippet).font(.callout).foregroundStyle(.primary).lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(10)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: скруббер
@@ -113,7 +145,7 @@ private struct TimelineBody: View {
                 }
             } else {
                 HSplitView {
-                    FramePreview(url: store.imageURL(store.current?.relativePath))
+                    FramePreview(frameID: store.current?.id, url: store.imageURL(store.current?.relativePath))
                         .frame(minWidth: 320)
                     detailPanel
                         .frame(minWidth: 260, idealWidth: 320)
@@ -133,6 +165,10 @@ private struct TimelineBody: View {
                     HStack {
                         Text(c.ts.formatted(date: .abbreviated, time: .standard)).font(.caption).foregroundStyle(.secondary)
                         if let q = c.axQuality { StatusPill(text: Self.qualityLabel(q), color: Self.qualityColor(q)) }
+                        if let s = Self.sourcePill(c) {
+                            // Источник ≠ ax_quality: показываем, откуда реально пришёл текст (AX/OCR/смесь).
+                            StatusPill(text: s.text, color: s.color, system: s.icon)
+                        }
                     }
                     Divider()
                     Text(c.text.isEmpty ? "(текст не извлечён)" : c.text)
@@ -147,6 +183,7 @@ private struct TimelineBody: View {
     }
 
     private func scheduleSeek(toEpoch v: Double) {
+        if store.isPlaying { store.pause() }            // ручная перемотка останавливает плеер сразу
         store.cursor = Date(timeIntervalSince1970: v)   // курсор следует мгновенно
         seekTask?.cancel()
         seekTask = Task {
@@ -156,10 +193,12 @@ private struct TimelineBody: View {
         }
     }
 
+    // MARK: транспорт + ось времени
+
     private var controls: some View {
         VStack(spacing: 8) {
             DensityStrip(buckets: store.density, start: store.rangeStart, end: store.rangeEnd,
-                         cursor: store.cursor,
+                         cursor: store.cursor, playing: store.isPlaying,
                          onSeek: { scheduleSeek(toEpoch: $0.timeIntervalSince1970) })
                 .frame(height: 40)
 
@@ -171,10 +210,12 @@ private struct TimelineBody: View {
                 ), in: lo...hi)
             }
 
-            HStack {
+            HStack(spacing: 12) {
+                transport
+                Spacer(minLength: 8)
                 Text(store.cursor.formatted(date: .abbreviated, time: .standard))
                     .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                Spacer()
+                Spacer(minLength: 8)
                 Picker("", selection: Binding(get: { store.zoom },
                                               set: { z in Task { await store.setZoom(z) } })) {
                     ForEach(TimelineStore.Zoom.allCases) { Text($0.label).tag($0) }
@@ -186,12 +227,40 @@ private struct TimelineBody: View {
         .background(.ultraThinMaterial)
     }
 
+    private var transport: some View {
+        HStack(spacing: 8) {
+            Button { Task { await store.stepBackward() } } label: {
+                Image(systemName: "backward.frame.fill")
+            }
+            .buttonStyle(.bordered).help("Предыдущий кадр")
+
+            Button { store.togglePlay() } label: {
+                Image(systemName: store.isPlaying ? "pause.fill" : "play.fill")
+                    .frame(width: 30, height: 22)
+            }
+            .buttonStyle(.borderedProminent)
+            .help(store.isPlaying ? "Пауза" : "Воспроизвести")
+
+            Button { Task { await store.stepForward() } } label: {
+                Image(systemName: "forward.frame.fill")
+            }
+            .buttonStyle(.bordered).help("Следующий кадр")
+
+            Picker("", selection: Binding(get: { store.speed }, set: { store.setSpeed($0) })) {
+                ForEach(TimelineStore.speeds, id: \.self) { s in Text("\(Int(s))×").tag(s) }
+            }
+            .pickerStyle(.segmented).fixedSize()
+            .help("Скорость воспроизведения")
+        }
+    }
+
     static func qualityColor(_ q: String) -> Color {
         switch q {
         case "fullUseful": return .green
         case "partialUseful", "titleOnly": return .yellow
         case "ocr", "timedOut": return .orange
-        default: return .red            // none / sickPID
+        case "sickPID": return .purple   // диагностика: процесс завис/недоступен — это НЕ пустой кадр
+        default: return .red             // none
         }
     }
     static func qualityLabel(_ q: String) -> String {
@@ -201,31 +270,69 @@ private struct TimelineBody: View {
         case "titleOnly": return "заголовок"
         case "ocr": return "OCR"
         case "timedOut": return "таймаут"
+        case "sickPID": return "AX недоступен"
         default: return "пусто"
+        }
+    }
+
+    /// Пилл источника текста (AX / OCR / AX+OCR). nil — если источников нет (context-only кадр).
+    static func sourcePill(_ c: FrameDetail) -> (text: String, color: Color, icon: String)? {
+        switch (c.hasAX, c.hasOCR) {
+        case (true, true):  return ("AX+OCR", .teal, "rectangle.on.rectangle")
+        case (true, false): return ("AX", .green, "macwindow")
+        case (false, true): return ("OCR", .orange, "text.viewfinder")
+        default:            return nil
         }
     }
 }
 
-// MARK: - кадр
+// MARK: - кадр (crossfade при смене)
 
 private struct FramePreview: View {
+    let frameID: Int64?
     let url: URL?
-    @State private var image: NSImage?
+    @State private var loaded: LoadedFrame?     // что на экране — id+image атомарно (нет рассинхрона)
+
+    private struct LoadedFrame { let id: Int64; let image: NSImage }
 
     var body: some View {
         ZStack {
             Color.black.opacity(0.04)
-            if let image {
-                Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
-            } else {
+            if let loaded {
+                // .id(loaded.id)+transition: уходящий кадр держит снимок СТАРОГО struct, входящий — новый.
+                // id и image переключаются ОДНИМ присваиванием → фейд не ломается re-render'ом (фикс ревью).
+                Image(nsImage: loaded.image).resizable().aspectRatio(contentMode: .fit)
+                    .id(loaded.id)
+                    .transition(.opacity)
+            }
+            if frameID != nil, url == nil {
+                // Кадр без снимка (context-only/дедуп) — бейдж ПОВЕРХ прошлого кадра, фейд не рвём.
+                ContentUnavailableView("Кадр без снимка", systemImage: "photo.badge.exclamationmark")
+                    .background(.ultraThinMaterial)
+            } else if loaded == nil {
                 ContentUnavailableView("Нет кадра", systemImage: "photo")
             }
         }
-        .task(id: url) {
-            guard let u = url else { image = nil; return }
-            let img = await Task.detached { NSImage(contentsOf: u) }.value
-            if !Task.isCancelled { image = img }
+        .animation(.easeInOut(duration: 0.15), value: loaded?.id)
+        .task(id: frameID) {
+            guard let u = url, let fid = frameID else { return }   // url==nil: держим прошлый loaded под бейджем
+            let img = await Task.detached(priority: .userInitiated) { FramePreview.thumbnail(u, maxPixel: 2400) }.value
+            if Task.isCancelled { return }
+            if let img { loaded = LoadedFrame(id: fid, image: img) }
         }
+    }
+
+    /// Даунскейл-thumbnail через ImageIO: не декодим полноразмерный HEIC на каждый кадр (память при play).
+    /// nonisolated — чистая функция, зовётся из Task.detached вне MainActor.
+    nonisolated static func thumbnail(_ url: URL, maxPixel: Int) -> NSImage? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
     }
 }
 
@@ -236,6 +343,7 @@ private struct DensityStrip: View {
     let start: Date
     let end: Date
     let cursor: Date
+    let playing: Bool
     let onSeek: (Date) -> Void
 
     var body: some View {
@@ -250,9 +358,11 @@ private struct DensityStrip: View {
                     let rect = CGRect(x: x, y: size.height - h, width: max(1.5, size.width / 240), height: h)
                     ctx.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(.accentColor.opacity(0.7)))
                 }
+                // Playhead: при проигрывании ярче/толще (accent) — сигнал, что идёт автоплей.
                 let cx = (cursor.timeIntervalSince1970 - start.timeIntervalSince1970) / span * size.width
                 ctx.stroke(Path { p in p.move(to: CGPoint(x: cx, y: 0)); p.addLine(to: CGPoint(x: cx, y: size.height)) },
-                           with: .color(.primary.opacity(0.6)), lineWidth: 1.5)
+                           with: .color(playing ? .accentColor : .primary.opacity(0.6)),
+                           lineWidth: playing ? 2.5 : 1.5)
             }
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { v in
