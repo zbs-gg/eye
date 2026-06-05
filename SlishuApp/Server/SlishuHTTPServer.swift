@@ -76,6 +76,13 @@ actor SlishuHTTPServer {
         runTask = nil
         server = nil
         activePort = nil
+        Self.removePortFile()       // не оставлять stale port-файл (MCP мог бы пойти на чужой порт)
+    }
+
+    private static func removePortFile() {
+        guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                     appropriateFor: nil, create: false) else { return }
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent("Slishu/port"))
     }
 
     private static func raceListening(_ srv: HTTPServer) async -> Bool {
