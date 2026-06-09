@@ -51,7 +51,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: SlishuApp/Slishu.entitlements
         CODE_SIGN_IDENTITY: "-"
         # Hardened Runtime БЕЗ App Sandbox — добавится при упаковке (1d). Для dev — ad-hoc.
-        INFOPLIST_KEY_NSScreenCaptureUsageDescription: "Slishu читает экран, чтобы вести историю вашей активности и таймлайн. Всё остаётся на устройстве."
+        INFOPLIST_KEY_NSScreenCaptureUsageDescription: "Slishu читает экран для истории активности и таймлайна, а также (если включено в настройках) записывает системный звук — звонки, встречи, видео — для поиска по разговорам. Всё остаётся на устройстве."
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Slishu записывает и транскрибирует аудио локально, для поиска по разговорам."
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Slishu распознаёт речь на устройстве для поиска по аудио."
         INFOPLIST_KEY_LSUIElement: "NO"

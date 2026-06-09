@@ -61,17 +61,36 @@ struct SettingsView: View {
                 Text("Аудио и транскрипция").font(.headline)
                 Toggle("Записывать и транскрибировать звук", isOn: $settings.transcriptionEnabled)
                     .onChange(of: settings.transcriptionEnabled) { _, _ in env.recording.syncAudio() }
-                Text("Локально, on-device (Apple Speech). VAD отсекает тишину — пишутся только сегменты речи, "
-                     + "затем они ищутся по словам. Звук не уходит в облако.")
+                Text("Локально, on-device (Apple Speech, ru+en auto-detect). VAD отсекает тишину — пишутся "
+                     + "только сегменты речи, затем они ищутся по словам. Звук не уходит в облако.")
                     .font(.caption).foregroundStyle(.secondary)
                 if settings.transcriptionEnabled {
-                    if env.permissions.snapshot.microphone != .granted {
-                        Label("Нет доступа к микрофону — звук не записывается. Выдай доступ выше.",
+                    Toggle("Записывать системный звук (звонки, видео, встречи)", isOn: $settings.recordSystemAudio)
+                        .onChange(of: settings.recordSystemAudio) { _, _ in env.recording.syncAudio() }
+                        .font(.callout)
+                    Text("Системный звук — голоса собеседников и всё, что играет (нужен только доступ к записи "
+                         + "экрана). Микрофон — твой голос. Можно писать одно без другого.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    if settings.recordSystemAudio {
+                        Label("Системный звук НЕ подсвечивается оранжевым индикатором macOS (идёт через запись "
+                              + "экрана, не микрофон). Запись собеседников — под твою ответственность.",
+                              systemImage: "exclamationmark.shield").font(.caption2).foregroundStyle(.secondary)
+                    }
+
+                    if env.permissions.snapshot.speech != .granted {
+                        Label("Нет распознавания речи — звук не записывается (ни микрофон, ни системный).",
+                              systemImage: "exclamationmark.bubble").font(.caption).foregroundStyle(.orange)
+                    } else if env.permissions.snapshot.microphone != .granted {
+                        Label("Нет доступа к микрофону — пишется только системный звук.",
                               systemImage: "mic.slash").font(.caption).foregroundStyle(.orange)
                     }
-                    if env.permissions.snapshot.speech != .granted {
-                        Label("Нет распознавания речи — звук не записывается (пишем только то, что можем расшифровать).",
-                              systemImage: "exclamationmark.bubble").font(.caption).foregroundStyle(.orange)
+                    if settings.micEngineFailed {
+                        Label("Микрофон не запустился (устройство недоступно при последнем старте).",
+                              systemImage: "mic.slash.fill").font(.caption).foregroundStyle(.orange)
+                    }
+                    if settings.systemEngineFailed {
+                        Label("Системный звук не запустился — проверь доступ к Записи экрана.",
+                              systemImage: "speaker.slash.fill").font(.caption).foregroundStyle(.orange)
                     }
                 }
                 if let h = settings.health, h.failed > 0, h.transcribed == 0,

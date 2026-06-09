@@ -50,12 +50,19 @@ final class AppEnvironment {
             let audioCoordinator = AudioCoordinator(storage: storage, ingest: ingestService)
             audioCoordinator.onSegment = { [weak rec = recording] in rec?.noteAudioChunk() }
             recording.audio = audioCoordinator
-            // Гейт: пишем звук только когда сможем его транскрибировать (mic + speech). Иначе копили бы
-            // нерасшифрованный звук без поисковой ценности + лишний приватностный/дисковый риск.
-            recording.audioEnabled = { [weak self] in
+            // Гейты: пишем звук только когда сможем его транскрибировать (нужно speech). Микрофон требует
+            // mic-доступ; системный звук — Screen Recording (уже выдан для экрана) + отдельный тумблер.
+            recording.micEnabled = { [weak self] in
                 guard let self else { return false }
                 return self.audioSettings.transcriptionEnabled
                     && self.permissions.snapshot.microphone == .granted
+                    && self.permissions.snapshot.speech == .granted
+            }
+            recording.systemEnabled = { [weak self] in
+                guard let self else { return false }
+                return self.audioSettings.transcriptionEnabled
+                    && self.audioSettings.recordSystemAudio
+                    && self.permissions.snapshot.screenRecording == .granted
                     && self.permissions.snapshot.speech == .granted
             }
             self.audio = audioCoordinator
