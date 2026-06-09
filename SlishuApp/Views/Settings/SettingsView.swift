@@ -9,13 +9,17 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Настройки").font(.largeTitle.bold())
                 permissionsCard
+                transcriptionCard
                 serverCard
             }
             .padding(28)
             .frame(maxWidth: 680, alignment: .leading)
         }
         .frame(maxWidth: .infinity)
-        .task { await env.permissions.refreshAll() }
+        .task {
+            await env.permissions.refreshAll()
+            await env.audioSettings.refreshHealth(env.audio)
+        }
     }
 
     private var permissionsCard: some View {
@@ -46,6 +50,37 @@ struct SettingsView: View {
                     Task { await env.permissions.refreshAll() }
                 }
                 .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private var transcriptionCard: some View {
+        @Bindable var settings = env.audioSettings
+        return GlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Аудио и транскрипция").font(.headline)
+                Toggle("Записывать и транскрибировать звук", isOn: $settings.transcriptionEnabled)
+                    .onChange(of: settings.transcriptionEnabled) { _, _ in env.recording.syncAudio() }
+                Text("Локально, on-device (Apple Speech). VAD отсекает тишину — пишутся только сегменты речи, "
+                     + "затем они ищутся по словам. Звук не уходит в облако.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if settings.transcriptionEnabled {
+                    if env.permissions.snapshot.microphone != .granted {
+                        Label("Нет доступа к микрофону — звук не записывается. Выдай доступ выше.",
+                              systemImage: "mic.slash").font(.caption).foregroundStyle(.orange)
+                    }
+                    if env.permissions.snapshot.speech != .granted {
+                        Label("Нет распознавания речи — звук не записывается (пишем только то, что можем расшифровать).",
+                              systemImage: "exclamationmark.bubble").font(.caption).foregroundStyle(.orange)
+                    }
+                }
+                if let h = settings.health, h.failed > 0, h.transcribed == 0,
+                   h.lastErrorKind == "onDeviceUnavailable" {
+                    Label("Распознавание не работает: нет on-device модели ru-RU. Включи диктовку в "
+                          + "Системных настройках → Клавиатура → Диктовка. Звук пишется, но без текста.",
+                          systemImage: "waveform.badge.exclamationmark")
+                        .font(.caption).foregroundStyle(.red)
+                }
             }
         }
     }
