@@ -9,6 +9,7 @@ final class AppEnvironment {
     let permissions = PermissionsStore()
     let recording = RecordingStore()
     let server = ServerStore()
+    let connections = ConnectionStore()   // конфиг LLM/назначения persist'ится сам, db не нужна
 
     var selectedSection: SidebarSection = .timeline
 
@@ -18,6 +19,7 @@ final class AppEnvironment {
     private(set) var retention: RetentionManager?
     private(set) var timelineStore: TimelineStore?
     private(set) var httpServer: SlishuHTTPServer?
+    private(set) var pipes: DaySummaryStore?
     private(set) var dataError: String?
 
     /// Порядок запуска фоновых сервисов. Пока — пробы прав + Data-слой; capture/server/pipes добавятся
@@ -47,6 +49,10 @@ final class AppEnvironment {
             let timelineSvc = TimelineService(db: db)
             self.timelineStore = TimelineStore(search: searchSvc, timeline: timelineSvc,
                                                mediaDirectory: storage.mediaDirectory)
+
+            // Pipe v1 «саммари дня»: collect→LLM→write. Свой LocalLLMClient (stateless actor).
+            let summarySvc = DailySummaryService(db: db, client: LocalLLMClient())
+            self.pipes = DaySummaryStore(service: summarySvc, connections: connections)
 
             // Локальный REST /v1 (auth на всё кроме /health).
             let token = KeychainStore.apiToken()
