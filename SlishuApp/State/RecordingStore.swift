@@ -11,8 +11,9 @@ final class RecordingStore {
 
     @ObservationIgnored var coordinator: CaptureCoordinator?
     @ObservationIgnored var audio: AudioCoordinator?
-    /// Гейт аудио-записи: включена транскрипция И есть доступ к микрофону (ставится из AppEnvironment).
-    @ObservationIgnored var audioEnabled: @MainActor () -> Bool = { false }
+    /// Гейты аудио (ставятся из AppEnvironment): микрофон (mic+speech) и системный звук (screen+speech).
+    @ObservationIgnored var micEnabled: @MainActor () -> Bool = { false }
+    @ObservationIgnored var systemEnabled: @MainActor () -> Bool = { false }
 
     func toggle() {
         guard let coordinator else { return }
@@ -22,15 +23,17 @@ final class RecordingStore {
             isCapturing = false
         } else {
             coordinator.start()
-            if audioEnabled() { audio?.start() }
+            audio?.start(mic: micEnabled(), system: systemEnabled())
             isCapturing = true
         }
     }
 
-    /// Применить смену настройки транскрипции на лету (вызывается из Settings, если запись активна).
+    /// Применить смену аудио-настроек на лету (вызывается из Settings, если запись активна).
     func syncAudio() {
         guard isCapturing, let audio else { return }
-        if audioEnabled() { audio.start() } else { audio.stop() }
+        audio.stop()
+        let m = micEnabled(), s = systemEnabled()
+        if m || s { audio.start(mic: m, system: s) }
     }
 
     func noteFrame() { screenFrameCount += 1 }

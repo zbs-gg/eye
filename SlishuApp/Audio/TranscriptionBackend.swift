@@ -8,6 +8,7 @@ enum TranscriptionError: LocalizedError {
     case notAuthorized
     case empty
     case lowConfidence
+    case timedOut
     case failed(String)
     var errorDescription: String? {
         switch self {
@@ -15,7 +16,8 @@ enum TranscriptionError: LocalizedError {
         case .onDeviceUnavailable(let l):   return "Нет on-device модели речи для \(l) — включи диктовку в Системных настройках."
         case .notAuthorized:                return "Нет разрешения на распознавание речи."
         case .empty:                        return "Пустой результат распознавания."
-        case .lowConfidence:                return "Низкая уверенность распознавания (вероятно чужой язык/шум) — пропущено."
+        case .lowConfidence:                return "Низкая уверенность распознавания (вероятно шум) — пропущено."
+        case .timedOut:                     return "Таймаут распознавания."
         case .failed(let m):                return "Ошибка распознавания: \(m)"
         }
     }
@@ -27,6 +29,7 @@ enum TranscriptionError: LocalizedError {
         case .notAuthorized:         return "notAuthorized"
         case .empty:                 return "empty"
         case .lowConfidence:         return "lowConfidence"
+        case .timedOut:              return "timedOut"
         case .failed:                return "failed"
         }
     }
@@ -35,7 +38,10 @@ enum TranscriptionError: LocalizedError {
 /// Сменный backend транскрипции (план: light default + MLX Quality mode позже за этим протоколом).
 protocol TranscriptionBackend: Sendable {
     var engineName: String { get }
-    func transcribe(fileURL: URL, localeIdentifier: String, minConfidence: Float) async throws -> Transcript
+    /// Пробует локали, возвращает результат с лучшим совпадением языка (auto-detect). timeout — потолок
+    /// на распознавание одной локали (защита от зависшего on-device движка).
+    func transcribe(fileURL: URL, localeIdentifiers: [String],
+                    minConfidence: Float, timeout: TimeInterval) async throws -> Transcript
     func unload() async
 }
 
@@ -45,28 +51,81 @@ actor SFSpeechBackend: TranscriptionBackend {
     nonisolated let engineName = "sfspeech"
     private var recognizers: [String: SFSpeechRecognizer] = [:]
 
-    func transcribe(fileURL: URL, localeIdentifier: String, minConfidence: Float) async throws -> Transcript {
+    func transcribe(fileURL: URL, localeIdentifiers: [String],
+                    minConfidence: Float, timeout: TimeInterval) async throws -> Transcript {
         guard SFSpeechRecognizer.authorizationStatus() == .authorized else { throw TranscriptionError.notAuthorized }
-        let rec = try recognizer(localeIdentifier)
-        guard rec.isAvailable else { throw TranscriptionError.recognizerUnavailable(localeIdentifier) }
-        guard rec.supportsOnDeviceRecognition else { throw TranscriptionError.onDeviceUnavailable(localeIdentifier) }
 
-        let req = SFSpeechURLRecognitionRequest(url: fileURL)
-        req.requiresOnDeviceRecognition = true
-        req.shouldReportPartialResults = false
+        // Прогоняем файл через локали и выбираем по СОВПАДЕНИЮ ЯЗЫКА (NLLanguageRecognizer), а НЕ по
+        // confidence: on-device SFSpeech сплошь и рядом отдаёт confidence 0 на верном тексте — по нему
+        // нельзя ни сравнивать локали, ни отсеивать (иначе теряли бы всё). confidence используем только
+        // как вторичный сигнал отсева явного шума, и только когда он реально > 0.
+        var candidates: [Candidate] = []
+        var unavailableCount = 0
+        var lastFail: TranscriptionError?
 
-        let r = try await recognizeOnce(rec, req)
-        let trimmed = r.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw TranscriptionError.empty }
-        // Конфиденс-гейт: на свежей речи чужого языка распознаватель уверенно выдаёт мусор —
-        // отсекаем по средней уверенности сегментов, чтобы не засорять FTS.
-        guard r.confidence >= minConfidence else { throw TranscriptionError.lowConfidence }
-        // Честный язык вместо захардкоженного: что реально распознали.
-        let lang = NLLanguageRecognizer.dominantLanguage(for: trimmed)?.rawValue ?? localeIdentifier
-        return Transcript(text: trimmed, language: lang, engine: engineName)
+        for id in localeIdentifiers {
+            guard let rec = try? recognizer(id), rec.isAvailable else {
+                lastFail = .recognizerUnavailable(id); continue
+            }
+            guard rec.supportsOnDeviceRecognition else {
+                unavailableCount += 1; lastFail = .onDeviceUnavailable(id); continue
+            }
+            let req = SFSpeechURLRecognitionRequest(url: fileURL)
+            req.requiresOnDeviceRecognition = true
+            req.shouldReportPartialResults = false
+            do {
+                let r = try await recognizeOnce(rec, req, timeout: timeout)
+                let trimmed = r.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                let match = Self.languageMatches(trimmed, locale: id)
+                candidates.append(Candidate(text: trimmed, score: r.hasConfidence ? r.confidence : nil,
+                                            locale: id, langMatch: match))
+                // short-circuit: язык совпал и (нет confidence ИЛИ он выше порога) → вторую локаль не гоняем.
+                if match, (r.hasConfidence ? r.confidence : 1) >= minConfidence { break }
+            } catch {
+                lastFail = (error as? TranscriptionError) ?? .failed("\(error)")
+            }
+        }
+
+        guard !candidates.isEmpty else {
+            // onDeviceUnavailable — только если ВСЕ локали реально без on-device модели (честный health).
+            if unavailableCount == localeIdentifiers.count, unavailableCount > 0 {
+                throw TranscriptionError.onDeviceUnavailable(localeIdentifiers.joined(separator: ","))
+            }
+            throw lastFail ?? TranscriptionError.empty
+        }
+
+        let best = Self.pickBest(candidates)
+        // Гейт отсева применяем ТОЛЬКО при реальном confidence (>0); при unknown не дропаем.
+        if let s = best.score, s < minConfidence { throw TranscriptionError.lowConfidence }
+        return Transcript(text: best.text, language: best.locale, engine: engineName)
     }
 
     func unload() { recognizers.removeAll() }
+
+    // MARK: выбор кандидата
+
+    private struct Candidate { let text: String; let score: Float?; let locale: String; let langMatch: Bool }
+
+    /// Совпадает ли распознанный язык с локалью распознавателя («ru-RU» → "ru").
+    static func languageMatches(_ text: String, locale: String) -> Bool {
+        guard let lang = NLLanguageRecognizer.dominantLanguage(for: text)?.rawValue else { return false }
+        return lang.lowercased().hasPrefix(String(locale.prefix(2)).lowercased())
+    }
+
+    /// Среди совпавших по языку (или всех, если ни один не совпал): макс confidence, при unknown — длиннейший.
+    private static func pickBest(_ c: [Candidate]) -> Candidate {
+        let matched = c.filter { $0.langMatch }
+        let pool = matched.isEmpty ? c : matched
+        return pool.max { a, b in
+            switch (a.score, b.score) {
+            case let (sa?, sb?): return sa < sb
+            case (nil, _?):      return true       // у b есть score, у a нет → b лучше
+            case (_?, nil):      return false
+            case (nil, nil):     return a.text.count < b.text.count
+            }
+        }!
+    }
 
     private func recognizer(_ id: String) throws -> SFSpeechRecognizer {
         if let r = recognizers[id] { return r }
@@ -77,40 +136,56 @@ actor SFSpeechBackend: TranscriptionBackend {
         return r
     }
 
-    /// Sendable-результат распознавания (SFTranscription не Sendable — извлекаем данные в handler'е).
-    private struct Recognized: Sendable { let text: String; let confidence: Float }
+    // MARK: распознавание с таймаутом
 
-    /// recognitionTask зовёт handler несколько раз — резолвим континюэйшн ровно один раз (ResumeBox).
-    /// Инстанс-метод актора (не static): non-Sendable rec/req не покидают изоляцию актора.
-    private func recognizeOnce(_ rec: SFSpeechRecognizer,
-                               _ req: SFSpeechURLRecognitionRequest) async throws -> Recognized {
-        let box = ResumeBox()
+    private struct Recognized: Sendable { let text: String; let confidence: Float; let hasConfidence: Bool }
+
+    /// Распознаёт один файл с потолком по времени. Континюэйшн держим в боксе — резолвит ЛИБО handler
+    /// (final/error), ЛИБО timeoutTask (после отмены SFSpeech-task), ровно один раз. Без таймаута зависший
+    /// on-device движок заблокировал бы общую очередь обоих легов навсегда.
+    private func recognizeOnce(_ rec: SFSpeechRecognizer, _ req: SFSpeechURLRecognitionRequest,
+                               timeout: TimeInterval) async throws -> Recognized {
+        let box = ContinuationBox<Recognized>()
+        let taskBox = SpeechTaskBox()
+        let timeoutTask = Task {
+            try? await Task.sleep(for: .seconds(timeout))
+            if !Task.isCancelled {
+                taskBox.cancel()                                   // прерываем SFSpeech (handler с error/cancel)
+                box.resumeThrowing(TranscriptionError.timedOut)    // и сами резолвим — без зависания
+            }
+        }
+        defer { timeoutTask.cancel() }
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Recognized, Error>) in
-            rec.recognitionTask(with: req) { result, error in
+            box.set(cont)
+            let t = rec.recognitionTask(with: req) { result, error in
                 if let error {
-                    if box.claim() { cont.resume(throwing: TranscriptionError.failed(error.localizedDescription)) }
-                    return
+                    box.resumeThrowing(TranscriptionError.failed(error.localizedDescription)); return
                 }
                 guard let result, result.isFinal else { return }
-                if box.claim() {
-                    let t = result.bestTranscription
-                    let confs = t.segments.map(\.confidence)
-                    // нет сегментной уверенности → не штрафуем (1.0), иначе средняя по сегментам
-                    let avg = confs.isEmpty ? 1.0 : confs.reduce(0, +) / Float(confs.count)
-                    cont.resume(returning: Recognized(text: t.formattedString, confidence: avg))
-                }
+                let confs = result.bestTranscription.segments.map(\.confidence)
+                box.resumeReturning(Recognized(
+                    text: result.bestTranscription.formattedString,
+                    confidence: confs.isEmpty ? 0 : confs.reduce(0, +) / Float(confs.count),
+                    hasConfidence: confs.contains { $0 > 0 }))
             }
+            taskBox.set(t)
         }
     }
 }
 
-/// Одноразовый «замок» резолва континюэйшна (handler может прийти повторно после resume).
-private final class ResumeBox: @unchecked Sendable {
-    private var done = false
+/// Одноразовый резолв континюэйшна из нескольких источников (handler / timeout). Потокобезопасен.
+private final class ContinuationBox<T: Sendable>: @unchecked Sendable {
+    private var cont: CheckedContinuation<T, Error>?
     private let lock = NSLock()
-    func claim() -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        if done { return false }
-        done = true; return true
-    }
+    func set(_ c: CheckedContinuation<T, Error>) { lock.lock(); cont = c; lock.unlock() }
+    func resumeReturning(_ v: T) { lock.lock(); let c = cont; cont = nil; lock.unlock(); c?.resume(returning: v) }
+    func resumeThrowing(_ e: Error) { lock.lock(); let c = cont; cont = nil; lock.unlock(); c?.resume(throwing: e) }
+}
+
+/// Держит SFSpeechRecognitionTask, чтобы отменить его по таймауту (non-Sendable → @unchecked).
+private final class SpeechTaskBox: @unchecked Sendable {
+    private var task: SFSpeechRecognitionTask?
+    private let lock = NSLock()
+    func set(_ t: SFSpeechRecognitionTask) { lock.lock(); task = t; lock.unlock() }
+    func cancel() { lock.lock(); let t = task; task = nil; lock.unlock(); t?.cancel() }
 }

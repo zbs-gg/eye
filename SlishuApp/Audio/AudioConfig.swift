@@ -10,6 +10,8 @@ struct AudioConfig: Sendable {
     var maxSegmentSec: Double = 28          // потолок длины сегмента (on-device speech любит короткие)
     var maxQueuedSegments = 240             // backpressure: при переполнении дропаем новые
     var idleUnloadSeconds: Double = 900     // 15 мин без работы → выгрузить распознаватель (RAM)
-    var localeIdentifier = "ru-RU"          // primary (Никита русскоязычный); multi-locale — follow-up
-    var minTranscriptConfidence: Float = 0.3 // ниже → вероятно чужой язык/шум, не засоряем FTS
+    var localeIdentifiers = ["ru-RU", "en-US"] // пробуем обе, берём с лучшей уверенностью (auto-detect)
+    var minTranscriptConfidence: Float = 0.3 // ниже (если confidence реально >0) → шум, не засоряем FTS
+    var targetSampleRate: Double = 16_000   // m4a даунсэмплим до 16к (речь, ×3 легче; SFSpeech и так 16к)
+    var transcribeTimeoutSec: Double = 60   // потолок на распознавание одной локали (зависший on-device движок)
 }

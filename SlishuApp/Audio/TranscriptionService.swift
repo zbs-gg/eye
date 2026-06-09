@@ -31,6 +31,7 @@ actor TranscriptionService {
 
     func enqueue(_ seg: AudioSegment) {
         guard queue.count < config.maxQueuedSegments else { droppedCount += 1; return }
+        unloadRequested = false   // появилась новая работа → отменяем устаревший запрос выгрузки прошлой сессии
         queue.append(seg)
         idleUnloadTask?.cancel(); idleUnloadTask = nil
         if !working { working = true; Task { await self.drain() } }
@@ -41,8 +42,9 @@ actor TranscriptionService {
             let seg = queue.removeFirst()
             do {
                 let t = try await backend.transcribe(fileURL: seg.fileURL,
-                                                     localeIdentifier: config.localeIdentifier,
-                                                     minConfidence: config.minTranscriptConfidence)
+                                                     localeIdentifiers: config.localeIdentifiers,
+                                                     minConfidence: config.minTranscriptConfidence,
+                                                     timeout: config.transcribeTimeoutSec)
                 try await ingest.ingest(TranscriptionRecord(
                     audioId: seg.audioId, text: t.text, language: t.language, engine: t.engine,
                     startOffset: 0, endOffset: seg.durationSec))
