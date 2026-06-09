@@ -97,7 +97,20 @@ actor IngestService {
             try row.insert(dbc)
             return row.id!
         }
-        // TODO(шаг 10): поставить на TranscriptionService
+    }
+
+    /// Транскрипт сегмента → transcriptions (триггер transcriptions_ai наполнит transcription_fts).
+    /// Эмбеддинг речи в vec0 — follow-up (vec_screen сейчас только для кадров; для аудио нужна своя
+    /// vec-таблица или общий индекс с kind-полем). Пока аудио ищется через FTS.
+    @discardableResult
+    func ingest(_ rec: TranscriptionRecord) async throws -> Int64 {
+        try await db.pool.write { dbc -> Int64 in
+            var row = TranscriptionRow(
+                id: nil, audioId: rec.audioId, text: rec.text, language: rec.language,
+                speaker: nil, startOffset: rec.startOffset, endOffset: rec.endOffset, engine: rec.engine)
+            try row.insert(dbc)
+            return row.id!
+        }
     }
 
     /// upsert по уникальному bundleId, возвращает id.

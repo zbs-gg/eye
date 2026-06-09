@@ -10,6 +10,7 @@ final class AppEnvironment {
     let recording = RecordingStore()
     let server = ServerStore()
     let connections = ConnectionStore()   // конфиг LLM/назначения persist'ится сам, db не нужна
+    let audioSettings = AudioSettingsStore()
 
     var selectedSection: SidebarSection = .timeline
 
@@ -20,6 +21,7 @@ final class AppEnvironment {
     private(set) var timelineStore: TimelineStore?
     private(set) var httpServer: SlishuHTTPServer?
     private(set) var pipes: DaySummaryStore?
+    private(set) var audio: AudioCoordinator?
     private(set) var dataError: String?
 
     /// Порядок запуска фоновых сервисов. Пока — пробы прав + Data-слой; capture/server/pipes добавятся
@@ -43,6 +45,20 @@ final class AppEnvironment {
             let coordinator = CaptureCoordinator(ingest: ingestService)
             coordinator.onFrame = { [weak rec = recording] in rec?.noteFrame() }
             recording.coordinator = coordinator
+
+            // Аудио-запись + on-device транскрипция (шаг 10). Гейт — транскрипция вкл + mic granted.
+            let audioCoordinator = AudioCoordinator(storage: storage, ingest: ingestService)
+            audioCoordinator.onSegment = { [weak rec = recording] in rec?.noteAudioChunk() }
+            recording.audio = audioCoordinator
+            // Гейт: пишем звук только когда сможем его транскрибировать (mic + speech). Иначе копили бы
+            // нерасшифрованный звук без поисковой ценности + лишний приватностный/дисковый риск.
+            recording.audioEnabled = { [weak self] in
+                guard let self else { return false }
+                return self.audioSettings.transcriptionEnabled
+                    && self.permissions.snapshot.microphone == .granted
+                    && self.permissions.snapshot.speech == .granted
+            }
+            self.audio = audioCoordinator
 
             // Поиск (гибрид FTS+vector) + таймлайн.
             let searchSvc = SearchService(db: db, embedder: EmbeddingService())
