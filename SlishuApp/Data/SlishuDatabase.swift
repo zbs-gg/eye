@@ -153,12 +153,22 @@ final class SlishuDatabase: Sendable {
                 """)
         }
         // v3: переход на multilingual-e5 (384-dim, cross-lingual). Пересоздаём vec0 — старые 512-векторы
-        // дропаются (новые ingest переиндексируются под e5). bucket_month = temporal sharding.
+        // дропаются (новые ingest переиндексируются под e5; VectorBackfill доиндексирует).
+        // bucket_month = temporal sharding.
         m.registerMigration("v3_vec_e5_384") { db in
             try db.execute(sql: "DROP TABLE IF EXISTS vec_screen")
             try db.execute(sql: """
                 CREATE VIRTUAL TABLE vec_screen USING vec0(
                     capture_id integer, bucket_month integer partition key, embedding float[\(embeddingDim)]
+                );
+                """)
+        }
+        // v4: semantic для аудио-транскриптов — ключевое обещание «ru-запрос находит en-звонок»
+        // работало только для экрана (транскрипты были FTS-only).
+        m.registerMigration("v4_vec_transcripts") { db in
+            try db.execute(sql: """
+                CREATE VIRTUAL TABLE vec_transcripts USING vec0(
+                    transcription_id integer, bucket_month integer partition key, embedding float[\(embeddingDim)]
                 );
                 """)
         }

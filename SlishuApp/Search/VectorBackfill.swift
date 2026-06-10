@@ -49,9 +49,12 @@ actor VectorBackfill {
                 let blob = floatBlob(vec)
                 do {
                     try await db.pool.write { dbc in
-                        try dbc.execute(
-                            sql: "INSERT INTO vec_screen(capture_id, bucket_month, embedding) VALUES (?, ?, ?)",
-                            arguments: [item.id, monthBucket(dateFromMs(item.ts)), blob])
+                        // WHERE EXISTS: кадр могли удалить (retention/privacy) пока мы эмбеддили —
+                        // иначе вектор-сирота удалённого контента жил бы вечно
+                        try dbc.execute(sql: """
+                            INSERT INTO vec_screen(capture_id, bucket_month, embedding)
+                            SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM screen_captures WHERE id = ?)
+                            """, arguments: [item.id, monthBucket(dateFromMs(item.ts)), blob, item.id])
                     }
                     have.insert(item.id)
                     total += 1
@@ -66,6 +69,41 @@ actor VectorBackfill {
             try? await Task.sleep(for: .seconds(2))   // пауза между страницами — фон, не нагрузка
         }
         if total > 0 { Log.app.info("vector backfill: \(total) кадров доиндексировано") }
+
+        // 3) Транскрипты без вектора (миграция v4 / оффлайн-период): объёмы на порядки меньше кадров —
+        //    одним проходом без пейджинга.
+        await backfillTranscripts()
+    }
+
+    private func backfillTranscripts() async {
+        struct TItem: Sendable { let id: Int64; let ts: Int64; let text: String }
+        let items: [TItem] = (try? await db.pool.read { dbc in
+            let have = Set(try Int64.fetchAll(dbc, sql: "SELECT transcription_id FROM vec_transcripts"))
+            return try Row.fetchAll(dbc, sql: """
+                SELECT t.id AS id, a.ts AS ts, t.text AS text
+                FROM transcriptions t JOIN audio_captures a ON a.id = t.audioId
+                """).compactMap { row in
+                let id: Int64 = row["id"]
+                return have.contains(id) ? nil : TItem(id: id, ts: row["ts"], text: row["text"])
+            }
+        }) ?? []
+        guard !items.isEmpty else { return }
+        var total = 0
+        for item in items where !Task.isCancelled {
+            guard !item.text.isEmpty,
+                  let vec = await embedder.embed(passage: item.text),
+                  vec.count == SlishuDatabase.embeddingDim else { continue }
+            let blob = floatBlob(vec)
+            try? await db.pool.write { dbc in
+                // WHERE EXISTS: транскрипт могли удалить, пока шёл многоминутный backfill-инференс
+                try dbc.execute(sql: """
+                    INSERT INTO vec_transcripts(transcription_id, bucket_month, embedding)
+                    SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM transcriptions WHERE id = ?)
+                    """, arguments: [item.id, monthBucket(dateFromMs(item.ts)), blob, item.id])
+            }
+            total += 1
+        }
+        if total > 0 { Log.app.info("transcript backfill: \(total) транскриптов доиндексировано") }
     }
 
     private struct PageItem: Sendable { let id: Int64; let ts: Int64 }

@@ -99,17 +99,25 @@ actor IngestService {
         }
     }
 
-    /// Транскрипт сегмента → transcriptions (триггер transcriptions_ai наполнит transcription_fts).
-    /// Эмбеддинг речи в vec0 — follow-up (vec_screen сейчас только для кадров; для аудио нужна своя
-    /// vec-таблица или общий индекс с kind-полем). Пока аудио ищется через FTS.
+    /// Транскрипт сегмента → transcriptions (триггер transcriptions_ai наполнит transcription_fts)
+    /// + semantic-вектор в vec_transcripts (cross-lingual «ru-запрос находит en-звонок»).
     @discardableResult
     func ingest(_ rec: TranscriptionRecord) async throws -> Int64 {
-        try await db.pool.write { dbc -> Int64 in
+        // эмбеддинг ДО транзакции (async); недоступная модель не блокирует текст (FTS останется)
+        let embedding = await embedder.embed(passage: rec.text)
+        let bucket = monthBucket(rec.ts)
+        return try await db.pool.write { dbc -> Int64 in
             var row = TranscriptionRow(
                 id: nil, audioId: rec.audioId, text: rec.text, language: rec.language,
                 speaker: nil, startOffset: rec.startOffset, endOffset: rec.endOffset, engine: rec.engine)
             try row.insert(dbc)
-            return row.id!
+            let id = row.id!
+            if let embedding, embedding.count == SlishuDatabase.embeddingDim {
+                try dbc.execute(
+                    sql: "INSERT INTO vec_transcripts(transcription_id, bucket_month, embedding) VALUES (?, ?, ?)",
+                    arguments: [id, bucket, floatBlob(embedding)])
+            }
+            return id
         }
     }
 

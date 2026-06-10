@@ -5,6 +5,9 @@ import ServiceManagement
 struct SettingsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var loginItemEnabled = SMAppService.mainApp.status == .enabled
+    @State private var confirmDelete: TimeInterval?   // секунды; -1 = всё
+    @State private var deleting = false
+    @State private var deleteOutcome: String?          // отчёт/ошибка удаления — алертом
 
     var body: some View {
         ScrollView {
@@ -12,6 +15,7 @@ struct SettingsView: View {
                 Text("Настройки").font(.largeTitle.bold())
                 permissionsCard
                 launchCard
+                storageCard
                 transcriptionCard
                 serverCard
             }
@@ -78,6 +82,89 @@ struct SettingsView: View {
         }
     }
 
+    private var storageCard: some View {
+        @Bindable var st = env.storageSettings
+        return GlassCard {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Хранилище").font(.headline)
+                HStack {
+                    Text("Занято")
+                    Spacer()
+                    Text("\(StorageSettingsStore.format(st.mediaBytes)) медиа + \(StorageSettingsStore.format(st.databaseBytes)) индекс")
+                        .foregroundStyle(.secondary).font(.callout)
+                    if let dir = env.storage?.mediaDirectory {
+                        Button { NSWorkspace.shared.activateFileViewerSelecting([dir]) } label: {
+                            Image(systemName: "folder")
+                        }.buttonStyle(.borderless).help("Показать в Finder")
+                    }
+                }
+                Picker("Хранить историю", selection: $st.retentionDays) {
+                    ForEach(StorageSettingsStore.dayOptions, id: \.self) { d in
+                        Text(d == 0 ? "Вечно" : "\(d) дн.").tag(d)
+                    }
+                }
+                Picker("Лимит медиа", selection: $st.maxGB) {
+                    ForEach(StorageSettingsStore.gbOptions, id: \.self) { g in
+                        Text(g == 0 ? "Без лимита" : "\(g) ГБ").tag(g)
+                    }
+                }
+                Text("Старое удаляется автоматически при превышении (раз в 30 минут). Лимит — для кадров и аудио; "
+                     + "поисковый индекс растёт отдельно и чистится вместе с историей. «Вечно» — на свой страх: диск конечен.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Divider()
+                HStack {
+                    Text("Удалить из памяти").font(.callout)
+                    Spacer()
+                    Menu("Удалить…") {
+                        Button("Последние 15 минут") { confirmDelete = 15 * 60 }
+                        Button("Последний час") { confirmDelete = 3600 }
+                        Button("Последние 24 часа") { confirmDelete = 86_400 }
+                        Divider()
+                        Button("Всю историю", role: .destructive) { confirmDelete = -1 }
+                    }
+                    .fixedSize()
+                }
+                Text("Случайно записанный пароль или чувствительный разговор можно стереть навсегда (файлы, текст, индексы).")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .confirmationDialog(deleteTitle, isPresented: deleteBinding, titleVisibility: .visible) {
+            Button("Удалить безвозвратно", role: .destructive) {
+                let seconds = confirmDelete
+                confirmDelete = nil
+                Task {
+                    deleting = true
+                    let r = await env.deleteHistory(lastSeconds: (seconds ?? 0) > 0 ? seconds : nil)
+                    deleting = false
+                    // провал «стереть навсегда» не должен быть неотличим от успеха
+                    deleteOutcome = r.map { "Удалено: кадров \($0.framesDeleted), аудио-сегментов \($0.audioDeleted)." }
+                        ?? "Не удалось удалить — история не тронута или тронута частично. Попробуй ещё раз."
+                }
+            }
+            Button("Отмена", role: .cancel) { confirmDelete = nil }
+        }
+        .alert("Удаление истории", isPresented: Binding(get: { deleteOutcome != nil },
+                                                        set: { if !$0 { deleteOutcome = nil } })) {
+            Button("Ок") { deleteOutcome = nil }
+        } message: {
+            Text(deleteOutcome ?? "")
+        }
+        .overlay(alignment: .topTrailing) {
+            if deleting { ProgressView().controlSize(.small).padding() }
+        }
+        .task { await env.storageSettings.refresh(storage: env.storage) }
+    }
+
+    private var deleteTitle: String {
+        guard let s = confirmDelete else { return "" }
+        if s < 0 { return "Удалить ВСЮ историю? Это безвозвратно." }
+        let label = s >= 86_400 ? "последние 24 часа" : (s >= 3600 ? "последний час" : "последние 15 минут")
+        return "Удалить \(label) истории? Это безвозвратно."
+    }
+    private var deleteBinding: Binding<Bool> {
+        Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })
+    }
+
     private var transcriptionCard: some View {
         @Bindable var settings = env.audioSettings
         return GlassCard {
@@ -102,9 +189,10 @@ struct SettingsView: View {
                     }
 
                     if env.permissions.snapshot.speech != .granted {
-                        Label("Нет распознавания речи — звук не записывается (ни микрофон, ни системный).",
+                        Label("Нет распознавания речи — звук пишется, но без текста для поиска (найдёшь по времени и прослушаешь).",
                               systemImage: "exclamationmark.bubble").font(.caption).foregroundStyle(.orange)
-                    } else if env.permissions.snapshot.microphone != .granted {
+                    }
+                    if env.permissions.snapshot.microphone != .granted {
                         Label("Нет доступа к микрофону — пишется только системный звук.",
                               systemImage: "mic.slash").font(.caption).foregroundStyle(.orange)
                     }

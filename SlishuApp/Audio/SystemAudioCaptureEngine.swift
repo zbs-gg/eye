@@ -7,12 +7,16 @@ import CoreMedia
 /// через ScreenCaptureKit audio-only SCStream. Использует уже выданное право Screen Recording (микрофон
 /// НЕ нужен). Даунмикс в моно + RMS → AsyncStream<AudioFrame> (тот же путь, что и микрофон).
 /// @unchecked Sendable: callback на sampleQueue; `running`-флаг гасит запоздавшие колбэки старого стрима.
-final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, @unchecked Sendable {
+final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let config: AudioConfig
     private var stream: SCStream?
     private var continuation: AsyncStream<AudioFrame>.Continuation?
     private var running = false
     private let sampleQueue = DispatchQueue(label: "com.slishu.systemaudio.samples")
+
+    /// Стрим умер mid-run (ошибка SCK, отзыв права, перестройка дисплеев) — лента закрыта;
+    /// координатор перезапускает лег. Без делегата смерть была молчаливой (лента висела навсегда).
+    var onStreamStopped: (@Sendable () -> Void)?
 
     init(config: AudioConfig) {
         self.config = config
@@ -20,6 +24,7 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, @unchecked Senda
     }
 
     func start() async throws -> AsyncStream<AudioFrame> {
+        guard !running else { throw AudioEngineError.engineStartFailed("already running") }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         guard let display = content.displays.first else { throw AudioEngineError.noInputDevice }
 
@@ -38,7 +43,7 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, @unchecked Senda
         let (s, cont) = AsyncStream.makeStream(of: AudioFrame.self, bufferingPolicy: .bufferingNewest(64))
         self.continuation = cont
 
-        let stream = SCStream(filter: filter, configuration: cfg, delegate: nil)
+        let stream = SCStream(filter: filter, configuration: cfg, delegate: self)
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
         do {
             try await stream.startCapture()
@@ -58,6 +63,23 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, @unchecked Senda
         continuation = nil
         if let stream { Task { try? await stream.stopCapture() } }
         self.stream = nil
+    }
+
+    // MARK: SCStreamDelegate
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        // Мутации полей — только на main: stop()/start() координатора тоже там (без гонки check-then-act).
+        // ObjectIdentifier вместо самого SCStream — non-Sendable объект не тащим в main-замыкание.
+        let stoppedID = ObjectIdentifier(stream)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.running,
+                  self.stream.map(ObjectIdentifier.init) == stoppedID else { return }
+            self.running = false
+            self.continuation?.finish()
+            self.continuation = nil
+            self.stream = nil
+            self.onStreamStopped?()
+        }
     }
 
     // MARK: SCStreamOutput

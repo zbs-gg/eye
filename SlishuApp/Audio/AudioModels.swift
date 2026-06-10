@@ -35,17 +35,19 @@ struct TranscriptionHealth: Sendable, Equatable {
     var lastErrorKind: String?   // "onDeviceUnavailable" | "notAuthorized" | "recognizerUnavailable" | nil
 }
 
-/// Sendable-вход для IngestService (транскрипт привязан к audioId).
+/// Sendable-вход для IngestService (транскрипт привязан к audioId). ts — момент сегмента
+/// (для bucket_month семантического вектора).
 struct TranscriptionRecord: Sendable {
     let audioId: Int64
+    let ts: Date
     let text: String
     let language: String
     let engine: String
     let startOffset: Double?
     let endOffset: Double?
-    init(audioId: Int64, text: String, language: String, engine: String,
+    init(audioId: Int64, ts: Date, text: String, language: String, engine: String,
          startOffset: Double? = nil, endOffset: Double? = nil) {
-        self.audioId = audioId; self.text = text; self.language = language
+        self.audioId = audioId; self.ts = ts; self.text = text; self.language = language
         self.engine = engine; self.startOffset = startOffset; self.endOffset = endOffset
     }
 }

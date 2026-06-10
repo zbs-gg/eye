@@ -23,7 +23,7 @@ set +e
 xcodebuild -project Slishu.xcodeproj -scheme Slishu -configuration Release \
   -derivedDataPath "$DERIVED" \
   CODE_SIGN_IDENTITY="$IDENTITY" \
-  build 2>&1 | grep -E "error:|warning:.*Sendable|BUILD"
+  build 2>&1 | grep -E "error:|warning:|BUILD"
 XC_STATUS=${PIPESTATUS[0]}
 set -e
 [ "$XC_STATUS" -eq 0 ] || { echo "❌ xcodebuild провалился (exit $XC_STATUS)"; exit 1; }

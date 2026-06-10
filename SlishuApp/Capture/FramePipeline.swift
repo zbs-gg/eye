@@ -21,6 +21,7 @@ struct ProcessedFrame: Sendable {
     var width: Int
     var height: Int
     var ocr: [OCRLine]
+    var displayID: UInt32   // какой дисплей реально сняли (monitorId в БД)
 }
 
 enum CaptureError: Error { case noDisplay, encodeFailed }
@@ -52,12 +53,14 @@ actor FramePipeline {
         return c
     }
 
-    /// Захват + дедуп + HEIC + (опц) OCR. Возвращает nil если нет дисплея. При дубле — heicData пустой,
+    /// Захват + дедуп + HEIC + (опц) OCR. displayID — дисплей сфокусированного окна (NSScreen.main);
+    /// nil/не найден → первый. Возвращает nil если нет дисплея. При дубле — heicData пустой,
     /// isDuplicate=true (Coordinator решает писать ли context-only запись).
-    func process(displayIndex: Int, needsOCR: Bool) async throws -> ProcessedFrame? {
+    func process(displayID: CGDirectDisplayID?, needsOCR: Bool) async throws -> ProcessedFrame? {
         let content = try await currentContent()
-        guard displayIndex < content.displays.count else { throw CaptureError.noDisplay }
-        let display = content.displays[displayIndex]
+        guard let display = content.displays.first(where: { displayID == nil || $0.displayID == displayID })
+                ?? content.displays.first else { throw CaptureError.noDisplay }
+        let dedupKey = Int(display.displayID)
 
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let cfg = SCStreamConfiguration()
@@ -69,13 +72,14 @@ actor FramePipeline {
         let ciImage = CIImage(cgImage: cgImage)
 
         let phash = perceptualHash(ciImage)
-        let prev = lastHash[displayIndex]
+        let prev = lastHash[dedupKey]   // дедуп per-display: смена монитора не «дубликат» прошлого
         let isDup = prev != nil && Self.hamming(phash, prev!) <= config.dedupHammingThreshold
-        lastHash[displayIndex] = phash
+        lastHash[dedupKey] = phash
 
         if isDup {
             return ProcessedFrame(heicData: Data(), phash: phash, isDuplicate: true,
-                                  width: display.width, height: display.height, ocr: [])
+                                  width: display.width, height: display.height, ocr: [],
+                                  displayID: display.displayID)
         }
 
         guard let heic = encodeHEIC(ciImage) else { throw CaptureError.encodeFailed }
@@ -86,7 +90,8 @@ actor FramePipeline {
             ocr = await Self.runOCR(SendableCGImage(image: small), languages: config.ocrLanguages)
         }
         return ProcessedFrame(heicData: heic, phash: phash, isDuplicate: false,
-                              width: display.width, height: display.height, ocr: ocr)
+                              width: display.width, height: display.height, ocr: ocr,
+                              displayID: display.displayID)
     }
 
     /// Даунскейл до ocrDownscaleMaxDim (Pro: не OCR-ить полный Retina-кадр). Рендер через Metal.
