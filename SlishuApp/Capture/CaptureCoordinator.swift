@@ -30,6 +30,7 @@ final class CaptureCoordinator {
     private var pendingCycle = false
 
     private var capability: [String: CaptureClass] = [:]
+    private var capabilityCheckedAt: [String: Date] = [:]
     private var emptyStreak: [String: Int] = [:]
     private var lastContentText: [String: String] = [:]
     private var sckFailureStreak = 0
@@ -57,6 +58,37 @@ final class CaptureCoordinator {
         self.config = config
         self.axReader = AXReader(config: config)
         self.pipeline = FramePipeline(config: config)
+        loadCapability()
+    }
+
+    /// Capability-кэш персистится (план: не переучивать после каждого рестарта). ocrOnly-вердикты
+    /// старше 7 дней сбрасываются — приложение могло обновиться и начать отдавать AX (re-probe).
+    private func loadCapability() {
+        let d = UserDefaults.standard
+        guard let raw = d.dictionary(forKey: "slishu.capability") as? [String: String],
+              let stamps = d.dictionary(forKey: "slishu.capabilityAt") as? [String: Double] else { return }
+        let cutoff = Date().addingTimeInterval(-7 * 86_400)
+        for (bundleId, cls) in raw {
+            let at = Date(timeIntervalSince1970: stamps[bundleId] ?? 0)
+            capabilityCheckedAt[bundleId] = at
+            switch cls {
+            case "ax": capability[bundleId] = .axViable
+            case "ocr": if at > cutoff { capability[bundleId] = .ocrOnly }   // протух → re-probe
+            default: break
+            }
+        }
+    }
+
+    private func persistCapability(_ bundleId: String, _ cls: CaptureClass) {
+        capability[bundleId] = cls
+        capabilityCheckedAt[bundleId] = Date()
+        let d = UserDefaults.standard
+        var raw = (d.dictionary(forKey: "slishu.capability") as? [String: String]) ?? [:]
+        var stamps = (d.dictionary(forKey: "slishu.capabilityAt") as? [String: Double]) ?? [:]
+        raw[bundleId] = cls == .axViable ? "ax" : "ocr"
+        stamps[bundleId] = Date().timeIntervalSince1970
+        d.set(raw, forKey: "slishu.capability")
+        d.set(stamps, forKey: "slishu.capabilityAt")
     }
 
     // MARK: lifecycle
@@ -210,18 +242,21 @@ final class CaptureCoordinator {
         var needsOCR: Bool
         if cls == .ocrOnly {
             needsOCR = true
+            // полный AX не зовём (дерево пустое/бесполезное), но заголовок окна — один дешёвый вызов:
+            // иначе записи Zed/Figma оставались вообще без windowTitle
+            ax.windowTitle = await axReader.titleOnly(pid: pid)
         } else {
             ax = await axReader.extract(pid: pid)
             needsOCR = ax.contentChars < config.ocrMinContentChars
                 && (ax.quality == .none || ax.quality == .titleOnly || ax.treeWasEmpty)
-            // обучение capability
+            // обучение capability (персистится; ocrOnly протухает через 7 дней → re-probe)
             if ax.contentChars >= config.usefulThreshold {
-                capability[bundleId] = .axViable
+                if capability[bundleId] != .axViable { persistCapability(bundleId, .axViable) }
                 emptyStreak[bundleId] = 0
             } else if ax.treeWasEmpty {
                 let n = (emptyStreak[bundleId] ?? 0) + 1
                 emptyStreak[bundleId] = n
-                if n >= config.ocrOnlyEmptyStreak { capability[bundleId] = .ocrOnly }
+                if n >= config.ocrOnlyEmptyStreak { persistCapability(bundleId, .ocrOnly) }
             }
         }
 

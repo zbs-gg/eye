@@ -10,6 +10,8 @@ struct SettingsView: View {
     @State private var deleteOutcome: String?          // отчёт/ошибка удаления — алертом
     @State private var exporting = false
     @State private var exportResult: String?
+    @State private var importing = false
+    @State private var importStatus: String?
 
     var body: some View {
         ScrollView {
@@ -19,6 +21,7 @@ struct SettingsView: View {
                 launchCard
                 storageCard
                 privacyCard
+                if ScreenpipeImporter.sourceExists { importCard }
                 transcriptionCard
                 serverCard
             }
@@ -213,6 +216,50 @@ struct SettingsView: View {
     }
     private var deleteBinding: Binding<Bool> {
         Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })
+    }
+
+    private var importCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Импорт из screenpipe").font(.headline)
+                Text("Найдена история screenpipe (~/.screenpipe). Перенесёт текст и метаданные (кадры, "
+                     + "окна, URL, транскрипты со спикерами) в память Slishu — поиск заработает по всей "
+                     + "старой истории. Медиа-файлы остаются у screenpipe. Можно прервать и продолжить позже.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Button {
+                        runImport()
+                    } label: {
+                        Label(importing ? "Импортирую…" : "Импортировать", systemImage: "square.and.arrow.down.on.square")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(importing)
+                    if importing { ProgressView().controlSize(.small) }
+                    if let s = importStatus { Text(s).font(.caption).foregroundStyle(.secondary) }
+                }
+            }
+        }
+    }
+
+    private func runImport() {
+        guard let importer = env.screenpipeImporter else { return }
+        importing = true
+        importStatus = nil
+        Task {
+            do {
+                let report = try await importer.run { f, a in
+                    Task { @MainActor in
+                        importStatus = "кадров \(f), аудио \(a)…"
+                    }
+                }
+                importStatus = "Готово: +\(report.frames) кадров, +\(report.audio) аудио. Семантика доиндексируется фоном."
+                await env.storageSettings.refresh(storage: env.storage)
+                await env.timelineStore?.load()
+            } catch {
+                importStatus = "Импорт прервался: \(error.localizedDescription)"
+            }
+            importing = false
+        }
     }
 
     private var privacyCard: some View {

@@ -34,3 +34,6 @@ workspace/.agents/
 
 # XcodeGen генерит из project.yml
 Slishu.xcodeproj/
+
+# релизные артефакты (большие zip)
+dist/

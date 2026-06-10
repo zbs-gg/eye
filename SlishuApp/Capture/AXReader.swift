@@ -9,27 +9,57 @@ import ApplicationServices
 actor AXReader {
     private let config: CaptureConfig
     private var flaggedPIDs: Set<pid_t> = []
+    /// Per-PID health (план: sick-backoff): подряд тайм-ауты без контента → skip AX на 60с,
+    /// зависшее приложение не съедает бюджет каждого цикла.
+    private var failStreak: [pid_t: Int] = [:]
+    private var sickUntil: [pid_t: Date] = [:]
     private let queue = DispatchQueue(label: "com.slishu.axreader", qos: .userInitiated)
 
     init(config: CaptureConfig) { self.config = config }
 
-    func reset() { flaggedPIDs.removeAll() }
-    func forget(pid: pid_t) { flaggedPIDs.remove(pid) }   // при смерти процесса (pid reuse)
+    func reset() { flaggedPIDs.removeAll(); failStreak.removeAll(); sickUntil.removeAll() }
+    func forget(pid: pid_t) {                              // при смерти процесса (pid reuse)
+        flaggedPIDs.remove(pid); failStreak[pid] = nil; sickUntil[pid] = nil
+    }
 
     func extract(pid: pid_t) async -> AXExtraction {
-        let needFlags = !flaggedPIDs.contains(pid)
-        if needFlags { flaggedPIDs.insert(pid) }
+        // sick-PID: недавно повисал — не дёргаем AX, сразу отдаём пустышку (Coordinator уйдёт в OCR)
+        if let until = sickUntil[pid], until > Date() {
+            var ext = AXExtraction(); ext.quality = .sickPID; return ext
+        }
+        let mayFlag = !flaggedPIDs.contains(pid)
+        if mayFlag { flaggedPIDs.insert(pid) }
         let cfg = config
         let result = await withCheckedContinuation { (cont: CheckedContinuation<AXExtraction, Never>) in
             queue.async {
-                cont.resume(returning: AXCore.perform(pid: pid, setFlags: needFlags, config: cfg))
+                cont.resume(returning: AXCore.perform(pid: pid, maySetFlags: mayFlag, config: cfg))
             }
         }
         // Флаги не «прилипли»? Откатываем — попробуем выставить в следующий раз (Electron поднимается лениво).
-        if needFlags && result.manualResult != "success" && result.enhancedResult != "success" {
+        if mayFlag && result.manualResult != nil
+            && result.manualResult != "success" && result.enhancedResult != "success" {
             flaggedPIDs.remove(pid)
         }
+        // health-учёт: timeout без контента — страйк; 3 подряд → sick на 60с
+        if result.hitBudgetLimit && result.contentChars == 0 {
+            let n = (failStreak[pid] ?? 0) + 1
+            failStreak[pid] = n
+            if n >= 3 { sickUntil[pid] = Date().addingTimeInterval(60); failStreak[pid] = 0 }
+        } else if result.contentChars > 0 {
+            failStreak[pid] = 0
+        }
         return result
+    }
+
+    /// Дешёвый заголовок окна для ocrOnly-приложений (Zed/Figma): один AX-вызов, без обхода дерева —
+    /// иначе их записи оставались без windowTitle вовсе.
+    func titleOnly(pid: pid_t) async -> String? {
+        let cfg = config
+        return await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
+            queue.async {
+                cont.resume(returning: AXCore.focusedWindowTitle(pid: pid, config: cfg))
+            }
+        }
     }
 }
 
@@ -44,19 +74,25 @@ private enum AXCore {
         "AXCheckBox", "AXRadioButton", "AXTab", "AXTabGroup", "AXToolbar", "AXImage",
     ]
 
-    static func perform(pid: pid_t, setFlags: Bool, config: CaptureConfig) -> AXExtraction {
+    static func perform(pid: pid_t, maySetFlags: Bool, config: CaptureConfig) -> AXExtraction {
         var ext = AXExtraction()
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, Float(config.axMessagingTimeout))
 
-        if setFlags {
+        // CONSERVATIVE (план/Pro): сначала пробуем БЕЗ флагов — здоровые нативные приложения отдают
+        // дерево сразу, а AXEnhancedUserInterface им только вредит (ломает анимации/раскладку у части
+        // приложений). Флаги — ТОЛЬКО если дерево пустое (Electron ленится), с retry-лестницей.
+        var result = traverse(app: app, config: config)
+        if result.contentChars == 0 && maySetFlags && !result.hitDeadline {
             ext.manualResult = errString(setAttr(app, "AXManualAccessibility", true))
             ext.enhancedResult = errString(setAttr(app, "AXEnhancedUserInterface", true))
-        }
-
-        var result = traverse(app: app, config: config)
-        // lazy Electron build: нет контента и НЕ упёрлись в бюджет → один ретрай после паузы
-        if result.contentChars == 0 && !result.hitDeadline {
+            for delayMs in [250, 750] {                   // лестница: дерево строится лениво/асинхронно
+                usleep(useconds_t(delayMs * 1000))
+                result = traverse(app: app, config: config)
+                if result.contentChars > 0 { break }
+            }
+        } else if result.contentChars == 0 && !result.hitDeadline {
+            // флаги уже выставлялись ранее — один обычный ретрай
             usleep(useconds_t(config.axEmptyRetryMs * 1000))
             result = traverse(app: app, config: config)
         }
@@ -91,17 +127,21 @@ private enum AXCore {
             r.nodeCount += 1
 
             let role = copyString(node, kAXRoleAttribute) ?? "?"
+            var nodeText = ""
             var len = 0
             for attr in [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute,
                          kAXPlaceholderValueAttribute, kAXSelectedTextAttribute] {
                 if let s = copyString(node, attr), !s.isEmpty {
-                    if r.text.count < 20_000 { r.text += s + " " }
+                    nodeText += s + " "
                     len += s.count
                 }
             }
             if len > 0 {
                 let (c, ch) = contribution(role: role, len: len)
                 r.contentChars += c; r.chromeChars += ch
+                // в текст — только КОНТЕНТ: пункты меню/кнопки/тулбары засоряли FTS мусором
+                // («Файл Правка Вид…» в каждом кадре) и съедали 20k-лимит
+                if c > 0, r.text.count < 20_000 { r.text += nodeText }
             }
             if role == "AXWebArea", r.url == nil { r.url = copyURL(node) }
 
@@ -123,6 +163,15 @@ private enum AXCore {
         if let t = e.windowTitle, !t.isEmpty { return .titleOnly }
         if e.hitBudgetLimit && e.contentChars == 0 { return .timedOut }
         return .none
+    }
+
+    /// Только заголовок focused/main окна — один-два AX-вызова, без обхода.
+    static func focusedWindowTitle(pid: pid_t, config: CaptureConfig) -> String? {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, Float(config.axMessagingTimeout))
+        guard let win = copyElement(app, kAXFocusedWindowAttribute)
+                ?? copyElement(app, kAXMainWindowAttribute) else { return nil }
+        return copyString(win, kAXTitleAttribute)
     }
 
     // ── AX C-обёртки ──

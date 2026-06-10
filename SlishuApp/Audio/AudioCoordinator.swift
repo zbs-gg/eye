@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import GRDB
 
 /// Оркестратор аудио-записи (@MainActor): два независимых лега — микрофон (AVAudioEngine) и системный
 /// звук (ScreenCaptureKit). Разные права (mic vs screen recording), общий TranscriptionService.
@@ -101,6 +102,34 @@ final class AudioCoordinator {
     }
 
     func health() async -> TranscriptionHealth { await transcription.snapshot() }
+
+    /// Backfill: аудио-сегменты БЕЗ транскрипта (краш потерял in-memory очередь / транзиентный фейл) —
+    /// дотранскрибировать. Окно 7 дней (вечные фейлы вроде музыки не молотим бесконечно), файл должен
+    /// существовать. Вызывается из bootstrap с задержкой.
+    func backfillUntranscribed(db: SlishuDatabase, storage: StorageManager) async {
+        struct Item: Sendable { let id: Int64; let ts: Int64; let dur: Double; let rel: String; let channel: String }
+        let weekAgoMs = msFromDate(Date().addingTimeInterval(-7 * 86_400))
+        let items: [Item] = (try? await db.pool.read { dbc in
+            try Row.fetchAll(dbc, sql: """
+                SELECT a.id AS id, a.ts AS ts, a.durationSec AS dur, a.relativePath AS rel, a.channel AS channel
+                FROM audio_captures a LEFT JOIN transcriptions t ON t.audioId = a.id
+                WHERE t.id IS NULL AND a.ts > ? ORDER BY a.ts DESC LIMIT 200
+                """, arguments: [weekAgoMs]).map {
+                Item(id: $0["id"], ts: $0["ts"], dur: $0["dur"], rel: $0["rel"], channel: $0["channel"])
+            }
+        }) ?? []
+        guard !items.isEmpty else { return }
+        var queued = 0
+        for item in items {
+            let url = storage.url(forRelative: item.rel)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            await transcription.enqueue(AudioSegment(
+                audioId: item.id, fileURL: url, ts: dateFromMs(item.ts),
+                durationSec: item.dur, channel: item.channel))
+            queued += 1
+        }
+        if queued > 0 { Log.audio.info("transcription backfill: \(queued) сегментов в очередь") }
+    }
 
     /// Privacy-сброс in-flight аудио: открытый VAD-сегмент живёт в памяти (ни в БД, ни на диске) —
     /// deleteRange его не видит, и «стереть навсегда» иначе переживал бы до 28с речи, захваченной

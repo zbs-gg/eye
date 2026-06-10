@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Observation
 
 /// Корневое состояние приложения. Единственный @Observable, инжектится через .environment.
@@ -41,6 +42,7 @@ final class AppEnvironment {
     private(set) var audio: AudioCoordinator?
     private(set) var storage: StorageManager?   // для Settings-хранилища (занято/удаление/Finder)
     private(set) var export: ExportService?
+    private(set) var screenpipeImporter: ScreenpipeImporter?
     private(set) var dataError: String?
 
     @ObservationIgnored private var retentionTask: Task<Void, Never>?
@@ -54,6 +56,19 @@ final class AppEnvironment {
     /// по мере появления модулей (Фаза 2, шаги 3+).
     func bootstrap() async {
         SlishuHTTPServer.log("bootstrap: begin")
+        // Crash-маркер: при прошлом запуске флаг чистого выхода не выставился → сессия умерла
+        // некорректно (kill/краш/паника ядра). Видно в Console.app при удалённой диагностике.
+        let cleanKey = "slishu.cleanShutdown"
+        if UserDefaults.standard.object(forKey: cleanKey) != nil,
+           !UserDefaults.standard.bool(forKey: cleanKey) {
+            Log.app.error("предыдущая сессия завершилась НЕкорректно (crash/kill) — проверь дыры в истории")
+            SlishuHTTPServer.log("CRASH-MARKER: предыдущая сессия завершилась некорректно (crash/kill)")
+        }
+        UserDefaults.standard.set(false, forKey: cleanKey)
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
+                                               object: nil, queue: .main) { _ in
+            UserDefaults.standard.set(true, forKey: cleanKey)
+        }
         await permissions.refreshAll()
         do {
             let storage = try StorageManager()
@@ -134,6 +149,11 @@ final class AppEnvironment {
                     && self.permissions.snapshot.screenRecording == .granted
             }
             self.audio = audioCoordinator
+            // Дотранскрибировать сегменты, оставшиеся без текста (краш/фейл) — через минуту после старта.
+            Task { [weak audioCoordinator] in
+                try? await Task.sleep(for: .seconds(60))
+                await audioCoordinator?.backfillUntranscribed(db: db, storage: storage)
+            }
 
             // Поиск (гибрид FTS+vector) + таймлайн.
             let searchSvc = SearchService(db: db, embedder: EmbeddingService())
@@ -149,6 +169,7 @@ final class AppEnvironment {
 
             // Экспорт (анти-lock-in): markdown по дням ± медиа.
             self.export = ExportService(db: db, summary: summarySvc, mediaDirectory: storage.mediaDirectory)
+            self.screenpipeImporter = ScreenpipeImporter(db: db)
 
             // Локальный REST /v1 (auth на всё кроме /health).
             let token = KeychainStore.apiToken()

@@ -1,6 +1,7 @@
 import Foundation
 import MCP
 import GRDB
+import CoreImage
 
 /// MCP stdio-сервер (`Slishu --mcp`). Инструменты поверх готовых сервисов: поиск/таймлайн читают БД
 /// напрямую (WAL допускает параллельное чтение с пишущим GUI-инстансом); toggle/status проксируются
@@ -120,6 +121,25 @@ enum SlishuMCPServer {
                 let buckets = (try? await timeline.density(from: from, to: to, bucketMs: 300_000)) ?? []
                 return .init(content: [.text(Self.formatTimeline(from, to, buckets))])
 
+            case "get_frame_image":
+                guard let timeline else {
+                    return .init(content: [.text("БД недоступна.")], isError: true)
+                }
+                guard let id = args["frame_id"]?.intValue
+                        ?? args["frame_id"]?.stringValue.flatMap({ Int($0) }) else {
+                    return .init(content: [.text("Нужен frame_id (из результатов поиска).")], isError: true)
+                }
+                guard let d = try? await timeline.frameDetail(id: Int64(id)), let rel = d.relativePath else {
+                    return .init(content: [.text("Кадр #\(id) не найден или без изображения (context-only).")], isError: true)
+                }
+                guard let jpeg = Self.loadFrameJPEG(relativePath: rel) else {
+                    return .init(content: [.text("Файл кадра #\(id) не читается (мог быть удалён retention).")], isError: true)
+                }
+                return .init(content: [
+                    .text("Кадр #\(d.id) [\(d.ts.formatted(date: .abbreviated, time: .standard))] \(d.appName ?? "—")\(d.windowTitle.map { " · \($0)" } ?? "")"),
+                    .image(data: jpeg.base64EncodedString(), mimeType: "image/jpeg", metadata: nil),
+                ])
+
             case "get_status":
                 return .init(content: [.text(await Self.formatStatus(db: db))])
 
@@ -184,6 +204,13 @@ enum SlishuMCPServer {
                                        "properties": .object(["from": strProp("начало ISO8601/epoch-ms"),
                                                               "to": strProp("конец ISO8601/epoch-ms")]),
                                        "required": .array([.string("from"), .string("to")])])),
+            Tool(name: "get_frame_image",
+                 description: "Скриншот кадра по frame_id из результатов поиска (посмотреть на экран глазами пользователя).",
+                 inputSchema: .object(["type": .string("object"),
+                                       "properties": .object(["frame_id": .object([
+                                           "type": .string("integer"),
+                                           "description": .string("id screen-результата поиска")])]),
+                                       "required": .array([.string("frame_id")])])),
             Tool(name: "get_status",
                  description: "Статус Slishu: число кадров/текстов/аудио, диапазон истории, идёт ли запись.",
                  inputSchema: .object(["type": .string("object"), "properties": .object([:])])),
@@ -290,6 +317,25 @@ enum SlishuMCPServer {
 
     private static func parseTime(_ s: String) -> Date? {
         SlishuHTTPServer.parseTimeParam(s)
+    }
+
+    /// HEIC кадра → даунскейл ≤1280px → JPEG (vision-LLM не декодирует HEIC; полный Retina — токен-жор).
+    /// Traversal-safe: путь из БД + явные проверки, граница media-директории.
+    private static func loadFrameJPEG(relativePath rel: String, maxDim: CGFloat = 1280) -> Data? {
+        guard !rel.contains(".."), !rel.hasPrefix("/"),
+              let support = try? FileManager.default.url(for: .applicationSupportDirectory,
+                                                         in: .userDomainMask, appropriateFor: nil, create: false)
+        else { return nil }
+        let base = support.appendingPathComponent("Slishu/media", isDirectory: true)
+            .standardizedFileURL.resolvingSymlinksInPath()
+        let target = base.appendingPathComponent(rel).standardizedFileURL.resolvingSymlinksInPath()
+        guard Array(target.pathComponents.prefix(base.pathComponents.count)) == base.pathComponents,
+              let data = try? Data(contentsOf: target),
+              let ci = CIImage(data: data) else { return nil }
+        let scale = min(1.0, maxDim / max(ci.extent.width, ci.extent.height))
+        let scaled = scale < 1 ? ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) : ci
+        return CIContext().jpegRepresentation(of: scaled, colorSpace: CGColorSpaceCreateDeviceRGB(),
+                                              options: [:])
     }
 
     /// MCP Value времени: строка или число (epoch-ms) — агенты шлют и так и так.

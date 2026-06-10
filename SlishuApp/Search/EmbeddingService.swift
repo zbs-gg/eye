@@ -29,7 +29,27 @@ actor E5ModelProvider {
         else { return nil }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         migrateLegacyCacheIfNeeded(to: dir)
+        copyBundledModelIfNeeded(to: dir)
         return dir
+    }
+
+    /// Модель, упакованная в .app (scripts/build-release.sh кладёт её в Resources/models) → кеш.
+    /// Закрывает последний egress: first-run работает целиком оффлайн, ничего не качается.
+    private static func copyBundledModelIfNeeded(to base: URL) {
+        let repo = "models/intfloat/multilingual-e5-small"
+        let fm = FileManager.default
+        let target = base.appendingPathComponent(repo, isDirectory: true)
+        guard !fm.fileExists(atPath: target.path),
+              let bundled = Bundle.main.resourceURL?.appendingPathComponent(repo, isDirectory: true),
+              fm.fileExists(atPath: bundled.path) else { return }
+        do {
+            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.copyItem(at: bundled, to: target)
+            Log.app.info("e5: модель скопирована из бандла приложения (оффлайн first-run)")
+        } catch {
+            // не молчим: иначе first-run уйдёт в сеть за 300MB, а лог покажет «оффлайн» (ложь)
+            Log.app.error("e5: не удалось скопировать модель из бандла (\(error.localizedDescription)) — будет сетевой fallback")
+        }
     }
 
     /// Раньше HubApi качал в ~/Documents/huggingface (риск iCloud-синка приватной модели + 300MB
