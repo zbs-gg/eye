@@ -121,6 +121,17 @@ final class RecordingStore {
         }
     }
 
+    /// Остановка ради обслуживания (миграция хранилища): глушим захват, но НЕ трогаем намерение
+    /// (enabledKey) и паузу — после рестарта autostart возобновит. Гарантирует, что во время копии
+    /// данных в новый root никто не пишет в старый.
+    func pauseForMaintenance() {
+        guard isCapturing, let coordinator else { return }
+        coordinator.stop()
+        audio?.stop()
+        isCapturing = false
+        degradedReason = nil
+    }
+
     /// Автостарт из bootstrap (и после выдачи прав): если юзер хотел запись и права есть — включаем.
     /// Временная пауза блокирует автостарт до истечения (resume-задача снимет pausedUntil).
     func startIfWanted() {

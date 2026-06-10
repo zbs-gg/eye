@@ -58,12 +58,10 @@ actor SlishuHTTPServer {
     static func log(_ s: String) {
         Log.server.info("\(s, privacy: .public)")
         let line = "[\(Date())] \(s)\n"
-        guard let data = line.data(using: .utf8),
-              let dir = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                     appropriateFor: nil, create: true)
-                .appendingPathComponent("Slishu", isDirectory: true) else { return }
+        guard let data = line.data(using: .utf8) else { return }
+        let url = StorageLocation.serverLogURL()       // учитывает relocate
+        let dir = url.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("server.log")
         // Ротация: > 5MB → server.log.1 (одно поколение). 24/7-аптайм не должен растить лог бесконечно.
         if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 5_000_000 {
             let rotated = dir.appendingPathComponent("server.log.1")
@@ -87,9 +85,7 @@ actor SlishuHTTPServer {
     }
 
     private static func removePortFile() {
-        guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                     appropriateFor: nil, create: false) else { return }
-        try? FileManager.default.removeItem(at: dir.appendingPathComponent("Slishu/port"))
+        try? FileManager.default.removeItem(at: StorageLocation.portURL())
     }
 
     private static func raceListening(_ srv: HTTPServer) async -> Bool {
@@ -107,11 +103,9 @@ actor SlishuHTTPServer {
     }
 
     private static func writePortFile(_ port: Int) {
-        guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                     appropriateFor: nil, create: true)
-            .appendingPathComponent("Slishu", isDirectory: true) else { return }
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try? "\(port)".write(to: dir.appendingPathComponent("port"), atomically: true, encoding: .utf8)
+        let url = StorageLocation.portURL()
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? "\(port)".write(to: url, atomically: true, encoding: .utf8)
     }
 
     // MARK: routes

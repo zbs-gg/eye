@@ -280,10 +280,7 @@ enum SlishuMCPServer {
     // MARK: проксирование в GUI-инстанс
 
     private static func readPort() -> Int? {
-        guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                     appropriateFor: nil, create: false)
-            .appendingPathComponent("Slishu/port"),
-              let s = try? String(contentsOf: dir, encoding: .utf8) else { return nil }
+        guard let s = try? String(contentsOf: StorageLocation.portURL(), encoding: .utf8) else { return nil }
         return Int(s.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
@@ -322,11 +319,8 @@ enum SlishuMCPServer {
     /// HEIC кадра → даунскейл ≤1280px → JPEG (vision-LLM не декодирует HEIC; полный Retina — токен-жор).
     /// Traversal-safe: путь из БД + явные проверки, граница media-директории.
     private static func loadFrameJPEG(relativePath rel: String, maxDim: CGFloat = 1280) -> Data? {
-        guard !rel.contains(".."), !rel.hasPrefix("/"),
-              let support = try? FileManager.default.url(for: .applicationSupportDirectory,
-                                                         in: .userDomainMask, appropriateFor: nil, create: false)
-        else { return nil }
-        let base = support.appendingPathComponent("Slishu/media", isDirectory: true)
+        guard !rel.contains(".."), !rel.hasPrefix("/") else { return nil }
+        let base = StorageLocation.mediaDirectory()       // учитывает relocate
             .standardizedFileURL.resolvingSymlinksInPath()
         let target = base.appendingPathComponent(rel).standardizedFileURL.resolvingSymlinksInPath()
         guard Array(target.pathComponents.prefix(base.pathComponents.count)) == base.pathComponents,

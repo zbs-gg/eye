@@ -13,6 +13,7 @@ final class AppEnvironment {
     let connections = ConnectionStore()   // конфиг LLM/назначения persist'ится сам, db не нужна
     let audioSettings = AudioSettingsStore()
     let storageSettings = StorageSettingsStore()
+    let backupSettings = BackupSettingsStore()
     let privacy = PrivacyStore()
 
     var selectedSection: SidebarSection = .timeline
@@ -41,16 +42,29 @@ final class AppEnvironment {
     private(set) var pipes: DaySummaryStore?
     private(set) var audio: AudioCoordinator?
     private(set) var storage: StorageManager?   // для Settings-хранилища (занято/удаление/Finder)
+    private(set) var db: SlishuDatabase?         // для Settings-разбивки размера / бэкапа
     private(set) var export: ExportService?
     private(set) var screenpipeImporter: ScreenpipeImporter?
     private(set) var dataError: String?
 
     @ObservationIgnored private var retentionTask: Task<Void, Never>?
+    @ObservationIgnored private var backupTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var backupManager: BackupManager?
     @ObservationIgnored private var autostartTask: Task<Void, Never>?
     @ObservationIgnored private var emergencyPruneInFlight = false
     @ObservationIgnored private var lastEmergencyPruneAt: Date?
     /// Минимум свободного места: ниже — захват приостанавливается + экстренный prune (диск не добиваем).
     private nonisolated static let minFreeBytes: Int64 = 2 * 1024 * 1024 * 1024
+
+    /// Гонка операции против таймаута — чтобы бэкап на выходе не подвесил quit навсегда.
+    nonisolated static func withTimeout(seconds: Double, _ op: @escaping @Sendable () async -> Void) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await op() }
+            group.addTask { try? await Task.sleep(for: .seconds(seconds)) }
+            _ = await group.next()
+            group.cancelAll()
+        }
+    }
 
     /// Порядок запуска фоновых сервисов. Пока — пробы прав + Data-слой; capture/server/pipes добавятся
     /// по мере появления модулей (Фаза 2, шаги 3+).
@@ -70,10 +84,32 @@ final class AppEnvironment {
             UserDefaults.standard.set(true, forKey: cleanKey)
         }
         await permissions.refreshAll()
+        // АНТИ-SPLIT-BRAIN: если данные были перенесены на том, который сейчас недоступен — НЕ стартуем
+        // на legacy «с нуля» (иначе пустая история + раскол новых кадров). Просим подключить и перезапустить.
+        if let missing = StorageLocation.unavailableConfiguredPath() {
+            self.dataError = "Папка данных недоступна: \(missing). Подключи диск/том и перезапусти Slishu — "
+                + "запись выключена, чтобы не раздвоить «вечную память»."
+            SlishuHTTPServer.log("data root unavailable (\(missing)) — bootstrap прерван (анти-split-brain)")
+            return
+        }
         do {
             let storage = try StorageManager()
             self.storage = storage
             let db = try SlishuDatabase(path: SlishuDatabase.defaultURL().path)
+            self.db = db
+            let backupManager = BackupManager(db: db, storage: storage)
+            self.backupManager = backupManager
+            backupSettings.manager = backupManager
+            backupSettings.refresh()
+            // Бэкап на выходе (applicationShouldTerminate → terminateLater): успеть снапшот до смерти
+            // процесса (willTerminate уже не успел бы — там процесс умирает синхронно). С таймаутом 30с.
+            SlishuAppDelegate.onTerminate = { [weak self] in
+                guard let self, self.backupSettings.enabled, BackupManager.iCloudAvailable() else { return }
+                let keep = self.backupSettings.keepN
+                await Self.withTimeout(seconds: 30) {
+                    _ = try? await backupManager.makeBackup(keepN: keep)
+                }
+            }
             SlishuHTTPServer.log("bootstrap: db ok")
             self.database = db
             // Отдельные embedder для ingest и search — иначе тяжёлый embed на захвате блокирует
@@ -212,6 +248,22 @@ final class AppEnvironment {
                     try? await Task.sleep(for: .seconds(1800))
                 }
             }
+
+            // iCloud-бэкап: каждые 6ч (+ ручной в Settings + на выходе). Гейты внутри (enabled && iCloud).
+            backupTask = Task.detached(priority: .background) { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(6 * 3600))
+                    guard !Task.isCancelled else { break }
+                    let cfg = await MainActor.run { () -> (Bool, Int) in
+                        (self?.backupSettings.enabled ?? false, self?.backupSettings.keepN ?? 7)
+                    }
+                    guard cfg.0, BackupManager.iCloudAvailable() else { continue }
+                    if let r = try? await backupManager.makeBackup(keepN: cfg.1) {
+                        await MainActor.run { self?.backupSettings.noteScheduledBackup(r) }
+                        Log.app.info("iCloud backup: \(StorageSettingsStore.format(r.compressedBytes)) (\(r.frames) кадров)")
+                    }
+                }
+            }
         } catch {
             self.dataError = String(describing: error)
             Log.app.error("bootstrap failed: \(String(describing: error), privacy: .public)")
@@ -268,10 +320,50 @@ final class AppEnvironment {
         if let r = report {
             Log.retention.info("manual delete: frames \(r.framesDeleted) audio \(r.audioDeleted)")
         }
-        await storageSettings.refresh(storage: storage)
+        await storageSettings.refresh(storage: storage, db: db)
         // курсор таймлайна мог указывать в стёртое — обновить
         await timelineStore?.load()
         return report
+    }
+
+    /// Перенос всей памяти в выбранную папку (T1): пауза захвата → online backup БД + copy media →
+    /// verify (integrity + COUNT-parity) → flip StorageLocation → relaunch. Источник НЕ трогаем (copy);
+    /// при ошибке возобновляем запись, данные на старом месте целы.
+    func relocate(to chosen: URL) async {
+        guard let db, let storage, !storageSettings.relocationInProgress else { return }
+        storageSettings.relocationInProgress = true
+        storageSettings.relocationError = nil
+        storageSettings.relocationProgress = 0
+        storageSettings.relocationStatus = "Останавливаю запись…"
+        recording.pauseForMaintenance()
+        audio?.stop()
+        // Дренаж: stop()/VAD-сегмент дописывают in-flight кадр/аудио детачнутыми задачами в СТАРЫЙ root.
+        // Ждём ~1.2с, чтобы они закоммитились в БД и записали media ДО online-backup-снапшота и снапшота
+        // списка media — иначе граничный кадр/сегмент осиротел бы (файл вне копии / строка вне бэкапа).
+        try? await Task.sleep(for: .milliseconds(1200))
+
+        let relocator = StorageRelocator()
+        do {
+            let report = try await relocator.migrate(
+                sourcePool: db.pool,
+                sourceDBURL: try SlishuDatabase.defaultURL(),
+                sourceMedia: storage.mediaDirectory,
+                chosen: chosen,
+                progress: { p, msg in
+                    Task { @MainActor in
+                        self.storageSettings.relocationProgress = p
+                        self.storageSettings.relocationStatus = msg
+                    }
+                })
+            StorageLocation.setRoot(report.newDataRoot)
+            storageSettings.relocationStatus = "Перенесено (\(report.mediaFilesCopied) медиа). Перезапуск…"
+            try? await Task.sleep(for: .milliseconds(600))   // дать UI показать статус
+            AppRelauncher.relaunch()
+        } catch {
+            storageSettings.relocationInProgress = false
+            storageSettings.relocationError = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            recording.startIfWanted()   // миграция не удалась — возобновить запись
+        }
     }
 
     /// Экстренный prune при low-disk: таргетирует СВОБОДНОЕ место (×2 порога паузы = гистерезис),
