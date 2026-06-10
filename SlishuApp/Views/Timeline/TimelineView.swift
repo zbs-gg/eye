@@ -171,6 +171,10 @@ private struct TimelineBody: View {
     private var detailPanel: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
+                if let a = store.audioDetail {
+                    audioCard(a)
+                    Divider()
+                }
                 if let c = store.current {
                     Text(c.appName ?? c.bundleId ?? "—").font(.headline)
                     if let w = c.windowTitle { Text(w).font(.subheadline).foregroundStyle(.secondary) }
@@ -195,6 +199,47 @@ private struct TimelineBody: View {
         }
     }
 
+    /// Панель аудио-сегмента: транскрипт + прослушивание m4a (открывается кликом по аудио-хиту).
+    private func audioCard(_ a: AudioDetail) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "waveform").foregroundStyle(.tint)
+                Text(a.channel == "system" ? "Системный звук" : "Микрофон").font(.headline)
+                Text("· \(Int(a.durationSec))с").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button { store.closeAudio() } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.borderless).foregroundStyle(.secondary)
+            }
+            Text(a.ts.formatted(date: .abbreviated, time: .standard))
+                .font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Button {
+                    if let url = store.imageURL(a.relativePath) { store.audioPlayer.toggle(url: url) }
+                } label: {
+                    Image(systemName: playIcon(a)).font(.title3)
+                }
+                .buttonStyle(.borderless)
+                ProgressView(value: isCurrent(a) ? store.audioPlayer.progress : 0)
+                    .progressViewStyle(.linear)
+            }
+            if let t = a.transcript, !t.isEmpty {
+                Text(t).font(.callout).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text("(транскрипта нет — найдено по времени)").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func isCurrent(_ a: AudioDetail) -> Bool {
+        store.imageURL(a.relativePath) == store.audioPlayer.currentURL
+    }
+    private func playIcon(_ a: AudioDetail) -> String {
+        isCurrent(a) && store.audioPlayer.isPlaying ? "pause.circle.fill" : "play.circle.fill"
+    }
+
     private func scheduleSeek(toEpoch v: Double) {
         if store.isPlaying { store.pause() }            // ручная перемотка останавливает плеер сразу
         store.cursor = Date(timeIntervalSince1970: v)   // курсор следует мгновенно
@@ -210,10 +255,11 @@ private struct TimelineBody: View {
 
     private var controls: some View {
         VStack(spacing: 8) {
-            DensityStrip(buckets: store.density, start: store.rangeStart, end: store.rangeEnd,
+            DensityStrip(buckets: store.density, audioBuckets: store.audioDensity,
+                         start: store.rangeStart, end: store.rangeEnd,
                          cursor: store.cursor, playing: store.isPlaying,
                          onSeek: { scheduleSeek(toEpoch: $0.timeIntervalSince1970) })
-                .frame(height: 40)
+                .frame(height: 46)
 
             if let lo = store.bounds.oldest?.timeIntervalSince1970,
                let hi = store.bounds.newest?.timeIntervalSince1970, hi > lo {
@@ -353,6 +399,7 @@ private struct FramePreview: View {
 
 private struct DensityStrip: View {
     let buckets: [DensityBucket]
+    let audioBuckets: [DensityBucket]   // вторая дорожка (внизу): где в истории есть речь
     let start: Date
     let end: Date
     let cursor: Date
@@ -363,13 +410,23 @@ private struct DensityStrip: View {
         GeometryReader { geo in
             Canvas { ctx, size in
                 let span = max(1, end.timeIntervalSince1970 - start.timeIntervalSince1970)
+                // верхняя дорожка — экран; нижние 6pt — аудио-полоска
+                let audioH: CGFloat = audioBuckets.isEmpty ? 0 : 6
+                let screenH = size.height - audioH
                 let maxCount = max(1, buckets.map(\.count).max() ?? 1)
                 for b in buckets {
                     let x = (b.ts.timeIntervalSince1970 - start.timeIntervalSince1970) / span * size.width
                     guard x >= 0, x <= size.width else { continue }
-                    let h = CGFloat(b.count) / CGFloat(maxCount) * size.height
-                    let rect = CGRect(x: x, y: size.height - h, width: max(1.5, size.width / 240), height: h)
+                    let h = CGFloat(b.count) / CGFloat(maxCount) * screenH
+                    let rect = CGRect(x: x, y: screenH - h, width: max(1.5, size.width / 240), height: h)
                     ctx.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(.accentColor.opacity(0.7)))
+                }
+                // аудио: оранжевые сегменты присутствия речи (бинарная полоска, не высота)
+                for b in audioBuckets {
+                    let x = (b.ts.timeIntervalSince1970 - start.timeIntervalSince1970) / span * size.width
+                    guard x >= 0, x <= size.width else { continue }
+                    let rect = CGRect(x: x, y: screenH + 1, width: max(1.5, size.width / 240), height: audioH - 2)
+                    ctx.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(.orange.opacity(0.75)))
                 }
                 // Playhead: при проигрывании ярче/толще (accent) — сигнал, что идёт автоплей.
                 let cx = (cursor.timeIntervalSince1970 - start.timeIntervalSince1970) / span * size.width

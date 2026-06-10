@@ -21,11 +21,17 @@ final class AudioCaptureEngine: @unchecked Sendable {
     private let config: AudioConfig
     private var continuation: AsyncStream<AudioFrame>.Continuation?
     private var running = false
+    private var configObserver: NSObjectProtocol?
+
+    /// Смена аудио-конфигурации (подключили/сняли AirPods, сменился default input) — движок встал,
+    /// лента закрыта. Координатор перезапускает лег; без этого полдня звонков пропадало бы молча.
+    var onConfigurationChange: (@Sendable () -> Void)?
 
     init(config: AudioConfig) { self.config = config }
 
     /// Старт. Возвращает поток кадров. Бросает, если нет устройства/движок не стартанул.
     func start() throws -> AsyncStream<AudioFrame> {
+        guard !running else { throw AudioEngineError.engineStartFailed("already running") }
         let input = engine.inputNode
         let format = input.inputFormat(forBus: 0)
         let sr = format.sampleRate
@@ -70,6 +76,16 @@ final class AudioCaptureEngine: @unchecked Sendable {
             self.continuation = nil
             throw AudioEngineError.engineStartFailed(error.localizedDescription)
         }
+        // Подключение/смена аудио-устройства: останавливаем лег корректно (flushFinal дойдёт через
+        // finish) и сигналим координатору перезапустить с новым форматом устройства.
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            // queue: .main — stop() и start()/stop() координатора сериализуются на главном потоке
+            // (без этого check-then-act на running гонялся бы с MainActor)
+            guard let self, self.running else { return }
+            self.stop()
+            self.onConfigurationChange?()
+        }
         running = true
         return stream
     }
@@ -77,6 +93,7 @@ final class AudioCaptureEngine: @unchecked Sendable {
     func stop() {
         guard running else { return }
         running = false
+        if let o = configObserver { NotificationCenter.default.removeObserver(o); configObserver = nil }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         continuation?.finish()

@@ -33,9 +33,14 @@ final class TimelineStore {
     var zoom: Zoom = .full
     var current: FrameDetail?
     var density: [DensityBucket] = []
+    var audioDensity: [DensityBucket] = []   // вторая дорожка strip: где в истории есть речь
     var searchQuery = ""
     var results: [SearchResult] = []
     var isSearching = false
+    /// Открытый аудио-сегмент (клик по аудио-хиту): транскрипт + прослушивание. Раньше аудио-хит
+    /// был тупиком — показывался ближайший экранный кадр, транскрипт пропадал.
+    var audioDetail: AudioDetail?
+    let audioPlayer = AudioPlayerStore()
 
     // Плеер: воспроизведение по реальной каденции захваченных кадров, масштабируется скоростью.
     var isPlaying = false
@@ -93,6 +98,9 @@ final class TimelineStore {
     private func refreshDensity() async {
         if let d = try? await timeline.density(from: rangeStart, to: rangeEnd, bucketMs: effectiveBucketMs) {
             density = d
+        }
+        if let a = try? await timeline.audioDensity(from: rangeStart, to: rangeEnd, bucketMs: effectiveBucketMs) {
+            audioDensity = a
         }
     }
 
@@ -152,6 +160,11 @@ final class TimelineStore {
         cursor = t
         current = try? await timeline.frameAt(t)   // nil до начала истории → очищаем (см. refresh)
         if reframeWindowIfNeeded() { await refreshDensity() }   // окно сдвинулось (напр. coarse-seek слайдером)
+        // ушли далеко от открытого аудио-сегмента и он не играет → карточка чужого момента закрывается
+        if let a = audioDetail, !audioPlayer.isPlaying,
+           abs(t.timeIntervalSince(a.ts)) > max(60, a.durationSec + 60) {
+            closeAudio()
+        }
     }
 
     // MARK: плеер
@@ -181,14 +194,21 @@ final class TimelineStore {
         if isPlaying { startLoop() }
     }
 
-    /// Шаг по реальным кадрам (ставит на паузу — это ручная навигация).
+    /// Шаг по реальным кадрам (ставит на паузу — это ручная навигация). id текущего кадра —
+    /// тай-брейк для равных ts (мультимонитор): каждый кадр посещается ровно один раз.
     func stepForward() async {
         pause()
-        if let f = try? await timeline.nextFrame(after: cursor) { cursor = f.ts; current = f }
+        let anchor = current?.ts ?? cursor   // якорь — видимый кадр: cursor мог уехать слайдером
+        if let f = try? await timeline.nextFrame(after: anchor, afterId: current?.id) {
+            cursor = f.ts; current = f
+        }
     }
     func stepBackward() async {
         pause()
-        if let f = try? await timeline.prevFrame(before: cursor) { cursor = f.ts; current = f }
+        let anchor = current?.ts ?? cursor   // иначе первый «шаг назад» после seek возвращал тот же кадр
+        if let f = try? await timeline.prevFrame(before: anchor, beforeId: current?.id) {
+            cursor = f.ts; current = f
+        }
     }
 
     private func startLoop() {
@@ -202,7 +222,9 @@ final class TimelineStore {
         // gen == playGen — этот цикл актуальный; pause()/новый startLoop() бампят playGen и вытесняют старый.
         while isPlaying && !Task.isCancelled && gen == playGen {
             // try? уплощает Optional-возврат: и брошенная ошибка БД, и конец истории → nil → стоп.
-            guard let next = try? await timeline.nextFrame(after: cursor) else { pause(); return }
+            let anchor = current?.ts ?? cursor
+            guard let next = try? await timeline.nextFrame(after: anchor, afterId: current?.id)
+            else { pause(); return }
             // Реальный зазор до следующего кадра / скорость; max(0,…) покрывает нулевой/обратный gap
             // (обратная перемотка, кадры с равным ts); cap 1.2с чтобы idle-разрывы не морозили плеер.
             let gap = max(0, next.ts.timeIntervalSince(cursor))
@@ -218,11 +240,13 @@ final class TimelineStore {
     func setZoom(_ z: Zoom) async {
         zoom = z
         _ = reframeWindowIfNeeded()
-        // guard на устаревание при быстром переключении зума
-        if let d = try? await timeline.density(from: rangeStart, to: rangeEnd, bucketMs: effectiveBucketMs),
-           zoom == z {
-            density = d
-        }
+        // guard на устаревание при быстром переключении зума; обновляем ОБЕ дорожки (иначе оранжевая
+        // аудио-полоска оставалась с бакетами прежнего окна — strip врал, где есть звонки)
+        let d = try? await timeline.density(from: rangeStart, to: rangeEnd, bucketMs: effectiveBucketMs)
+        let a = try? await timeline.audioDensity(from: rangeStart, to: rangeEnd, bucketMs: effectiveBucketMs)
+        guard zoom == z else { return }
+        if let d { density = d }
+        if let a { audioDensity = a }
     }
 
     func runSearch() async {
@@ -250,6 +274,18 @@ final class TimelineStore {
         searchQuery = ""
         cursor = r.ts          // сначала курсор — refresh посчитает кадр+плотность для нового момента
         await refresh()
+        // Аудио-хит: открыть панель транскрипта/прослушивания (а не молча терять найденный звонок).
+        if r.kind == .audio {
+            if audioDetail?.id != r.id { audioPlayer.stop() }   // звук звонка A не должен звучать под карточкой B
+            audioDetail = try? await timeline.audioDetail(id: r.id)
+        } else {
+            closeAudio()
+        }
+    }
+
+    func closeAudio() {
+        audioPlayer.stop()
+        audioDetail = nil
     }
 
     func imageURL(_ relativePath: String?) -> URL? {

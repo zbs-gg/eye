@@ -80,6 +80,14 @@ final class CaptureCoordinator {
             Task { @MainActor in await self?.axReader.forget(pid: pid) }
         })
 
+        // Смена конфигурации дисплеев (подключение/отключение монитора, смена разрешения) —
+        // кеш SCShareableContent устаревает мгновенно, иначе захват падает до смены приложения.
+        observers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.pipeline.invalidateContent() }
+        })
+
         let dnc = DistributedNotificationCenter.default()
         distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screenIsLocked"),
                                                     object: nil, queue: .main) { [weak self] _ in
@@ -170,9 +178,14 @@ final class CaptureCoordinator {
             }
         }
 
+        // Дисплей FRONTMOST-окна по ГЕОМЕТРИИ. NSScreen.main здесь не годится: это экран key window
+        // НАШЕГО приложения — когда Slishu в фоне (всегда при записи), он давал бы primary-дисплей,
+        // а не экран чужого активного окна.
+        let focusedDisplayID = Self.displayForFrontmostWindow(pid: pid)
+
         let frame: ProcessedFrame?
         do {
-            frame = try await pipeline.process(displayIndex: 0, needsOCR: needsOCR)
+            frame = try await pipeline.process(displayID: focusedDisplayID, needsOCR: needsOCR)
             if sckFailureStreak > 0 { onCaptureRecovered?() }   // транзиентный сбой прошёл — снять ratchet
             sckFailureStreak = 0
             onCycleOK?()
@@ -189,19 +202,41 @@ final class CaptureCoordinator {
             // картинка та же — но если AX-текст изменился (скролл/новое сообщение), пишем context-only
             if ax.contentChars > 0, ax.contentText != (lastContentText[bundleId] ?? "") {
                 await write(bundleId: bundleId, appName: appName, ax: ax, ocr: [],
-                            image: .none, width: frame.width, height: frame.height)
+                            image: .none, width: frame.width, height: frame.height,
+                            monitorId: String(frame.displayID))
                 lastContentText[bundleId] = ax.contentText
             }
             return
         }
 
         await write(bundleId: bundleId, appName: appName, ax: ax, ocr: frame.ocr,
-                    image: .heicData(frame.heicData), width: frame.width, height: frame.height)
+                    image: .heicData(frame.heicData), width: frame.width, height: frame.height,
+                    monitorId: String(frame.displayID))
         lastContentText[bundleId] = ax.contentText
     }
 
+    /// Дисплей самого верхнего обычного окна (layer 0) процесса — по пересечению bounds с дисплеями.
+    private static func displayForFrontmostWindow(pid: pid_t) -> CGDirectDisplayID? {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                    kCGNullWindowID) as? [[String: Any]] else { return nil }
+        for w in list {
+            guard let owner = w[kCGWindowOwnerPID as String] as? Int, pid_t(owner) == pid,
+                  let layer = w[kCGWindowLayer as String] as? Int, layer == 0,
+                  let boundsDict = w[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: boundsDict), !rect.isEmpty
+            else { continue }
+            var display = CGDirectDisplayID(0)
+            var count: UInt32 = 0
+            if CGGetDisplaysWithRect(rect, 1, &display, &count) == .success, count > 0 {
+                return display
+            }
+        }
+        return nil
+    }
+
     private func write(bundleId: String, appName: String, ax: AXExtraction,
-                       ocr: [OCRLine], image: ImagePayload, width: Int, height: Int) async {
+                       ocr: [OCRLine], image: ImagePayload, width: Int, height: Int,
+                       monitorId: String) async {
         var blocks: [CapturedTextBlock] = []
         if ax.contentChars > 0 {
             blocks.append(CapturedTextBlock(source: .ax, text: ax.contentText, confidence: 1.0))
@@ -218,7 +253,7 @@ final class CaptureCoordinator {
 
         let record = ScreenCaptureRecord(
             timestamp: Date(), bundleId: bundleId, appName: appName,
-            windowTitle: ax.windowTitle, browserURL: ax.browserURL, monitorId: "0",
+            windowTitle: ax.windowTitle, browserURL: ax.browserURL, monitorId: monitorId,
             image: image, pixelWidth: width, pixelHeight: height,
             textBlocks: blocks, axQuality: quality, telemetry: tel)
         do {

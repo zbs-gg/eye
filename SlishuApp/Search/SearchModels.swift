@@ -47,5 +47,17 @@ struct TimeBounds: Sendable {
     let newest: Date?
 }
 
+/// Аудио-сегмент для таймлайна: транскрипт + файл для прослушивания. Раньше клик по аудио-хиту
+/// показывал ближайший ЭКРАННЫЙ кадр и транскрипт пропадал — найденный звонок был тупиком.
+struct AudioDetail: Sendable, Identifiable {
+    let id: Int64
+    let ts: Date
+    let durationSec: Double
+    let channel: String          // "mic" | "system"
+    let relativePath: String
+    let transcript: String?
+    let language: String?
+}
+
 @inline(__always) func dateFromMs(_ ms: Int64) -> Date { Date(timeIntervalSince1970: Double(ms) / 1000) }
 @inline(__always) func msFromDate(_ d: Date) -> Int64 { Int64(d.timeIntervalSince1970 * 1000) }

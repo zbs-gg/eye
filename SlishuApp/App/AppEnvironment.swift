@@ -11,6 +11,7 @@ final class AppEnvironment {
     let server = ServerStore()
     let connections = ConnectionStore()   // конфиг LLM/назначения persist'ится сам, db не нужна
     let audioSettings = AudioSettingsStore()
+    let storageSettings = StorageSettingsStore()
 
     var selectedSection: SidebarSection = .timeline
 
@@ -37,6 +38,7 @@ final class AppEnvironment {
     private(set) var httpServer: SlishuHTTPServer?
     private(set) var pipes: DaySummaryStore?
     private(set) var audio: AudioCoordinator?
+    private(set) var storage: StorageManager?   // для Settings-хранилища (занято/удаление/Finder)
     private(set) var dataError: String?
 
     @ObservationIgnored private var retentionTask: Task<Void, Never>?
@@ -53,6 +55,7 @@ final class AppEnvironment {
         await permissions.refreshAll()
         do {
             let storage = try StorageManager()
+            self.storage = storage
             let db = try SlishuDatabase(path: SlishuDatabase.defaultURL().path)
             SlishuHTTPServer.log("bootstrap: db ok")
             self.database = db
@@ -110,14 +113,14 @@ final class AppEnvironment {
             let audioCoordinator = AudioCoordinator(storage: storage, ingest: ingestService)
             audioCoordinator.onSegment = { [weak rec = recording] in rec?.noteAudioChunk() }
             recording.audio = audioCoordinator
-            // Гейты: пишем звук только когда сможем его транскрибировать (нужно speech). Микрофон требует
+            // Гейты ЗАПИСИ звука (без speech-права: сырой звук ценен сам по себе — найдёшь по времени
+            // и прослушаешь в таймлайне; транскрипция отдельно, при наличии speech). Микрофон требует
             // mic-доступ; системный звук — Screen Recording (уже выдан для экрана) + отдельный тумблер.
             recording.micEnabled = { [weak self] in
                 guard let self else { return false }
                 return self.audioSettings.transcriptionEnabled
                     && !self.recording.lowDiskPaused        // disk-guard гейтит и аудио (не только экран)
                     && self.permissions.snapshot.microphone == .granted
-                    && self.permissions.snapshot.speech == .granted
             }
             recording.systemEnabled = { [weak self] in
                 guard let self else { return false }
@@ -125,7 +128,6 @@ final class AppEnvironment {
                     && self.audioSettings.recordSystemAudio
                     && !self.recording.lowDiskPaused
                     && self.permissions.snapshot.screenRecording == .granted
-                    && self.permissions.snapshot.speech == .granted
             }
             self.audio = audioCoordinator
 
@@ -164,10 +166,16 @@ final class AppEnvironment {
 
             // Retention НЕПРЕРЫВНО (не только на старте): сразу + каждые 30 мин. 24/7-аптайм неделями
             // не должен уводить диск за лимит между перезапусками.
-            retentionTask = Task.detached(priority: .utility) {
+            retentionTask = Task.detached(priority: .utility) { [weak self] in
                 while !Task.isCancelled {
-                    let report = try? await retention.prune(retentionDays: RetentionPolicy.defaultDays,
-                                                            maxBytes: RetentionPolicy.defaultMaxBytes)
+                    // политика юзера из Settings (0 = без лимита → nil)
+                    let policy = await MainActor.run { () -> (Int?, Int64?) in
+                        guard let s = self?.storageSettings else {
+                            return (RetentionPolicy.defaultDays, RetentionPolicy.defaultMaxBytes)
+                        }
+                        return (s.effectiveDays, s.effectiveMaxBytes)
+                    }
+                    let report = try? await retention.prune(retentionDays: policy.0, maxBytes: policy.1)
                     if let r = report, r.framesDeleted + r.audioDeleted + r.orphansDeleted > 0 {
                         Log.retention.info("prune: frames \(r.framesDeleted) audio \(r.audioDeleted) orphans \(r.orphansDeleted)")
                     }
@@ -212,6 +220,28 @@ final class AppEnvironment {
                 }
             }
         }
+    }
+
+    /// Удаление истории (privacy): lastSeconds=nil → всё. Возвращает отчёт для UI.
+    func deleteHistory(lastSeconds: TimeInterval?) async -> PruneReport? {
+        guard let retention else { return nil }
+        // Верхняя граница фиксируется НА МОМЕНТ клика: при идущей записи «удалить 15 минут» не должно
+        // зацепить кадры, записанные во время самого удаления (батчи идут секунды).
+        let now = Date()
+        let toMs: Int64 = lastSeconds == nil ? Int64.max : msFromDate(now)
+        let fromMs: Int64 = lastSeconds.map { msFromDate(now.addingTimeInterval(-$0)) } ?? 0
+        // КРИТИЧНО (privacy): открытый VAD-сегмент живёт в памяти — deleteRange его не видит.
+        // Сбрасываем in-flight аудио ДО удаления, иначе «произнёс пароль → стереть» переживало бы
+        // до 28с речи, захваченной до клика (закрылось бы и легло в БД ПОСЛЕ удаления).
+        await audio?.discardInFlight(from: dateFromMs(fromMs), to: lastSeconds == nil ? now : dateFromMs(toMs))
+        let report = try? await retention.deleteRange(fromMs: fromMs, toMs: toMs)
+        if let r = report {
+            Log.retention.info("manual delete: frames \(r.framesDeleted) audio \(r.audioDeleted)")
+        }
+        await storageSettings.refresh(storage: storage)
+        // курсор таймлайна мог указывать в стёртое — обновить
+        await timelineStore?.load()
+        return report
     }
 
     /// Экстренный prune при low-disk: таргетирует СВОБОДНОЕ место (×2 порога паузы = гистерезис),

@@ -41,11 +41,22 @@ actor RetentionManager {
             report.audioDeleted += a
         }
         report.orphansDeleted = try await sweepOrphans()
+        try? await sweepVectorOrphans()   // vec0 без FK: страховка от сирот (гонки, старые баги)
         try await checkpoint()
         return report
     }
 
-    // ── размер из БД, не из FS ──
+    /// Сироты vec-таблиц (база удалена, вектор остался). Дёшево при PK-подзапросе; раз в prune.
+    private func sweepVectorOrphans() async throws {
+        try await db.pool.write { db in
+            try db.execute(sql: "DELETE FROM vec_screen WHERE capture_id NOT IN (SELECT id FROM screen_captures)")
+            try db.execute(sql: "DELETE FROM vec_transcripts WHERE transcription_id NOT IN (SELECT id FROM transcriptions)")
+        }
+    }
+
+    // ── размер МЕДИА из БД (SUM bytes). Файл индекса НАМЕРЕННО не входит в enforce-цикл:
+    //    sqlite-файл не уменьшается при DELETE (только VACUUM) — включи его в порог, и при индексе,
+    //    превысившем лимит, цикл молча выпилил бы всю историю. UI честно подписывает «лимит медиа». ──
     private func dbBytes() async throws -> Int64 {
         try await db.pool.read { db in
             let f = try Int64.fetchOne(db, sql: "SELECT COALESCE(SUM(bytes), 0) FROM screen_captures") ?? 0
@@ -81,6 +92,17 @@ actor RetentionManager {
         try db.execute(sql: "DELETE FROM vec_screen WHERE capture_id IN (\(list))")
     }
 
+    /// Аналог для аудио: маппинг audioId → transcription_id ДО каскадного удаления transcriptions
+    /// (иначе vec_transcripts копит сирот — vec0 без FK).
+    private static func deleteTranscriptVectors(_ db: Database, audioIds: [Int64]) throws {
+        guard !audioIds.isEmpty else { return }
+        let list = audioIds.map(String.init).joined(separator: ",")
+        let tids = try Int64.fetchAll(db, sql: "SELECT id FROM transcriptions WHERE audioId IN (\(list))")
+        guard !tids.isEmpty else { return }
+        let tlist = tids.map(String.init).joined(separator: ",")
+        try db.execute(sql: "DELETE FROM vec_transcripts WHERE transcription_id IN (\(tlist))")
+    }
+
     private func deleteAudioOlderThan(_ cutoffMs: Int64) async throws -> Int {
         var deleted = 0
         while true {
@@ -89,6 +111,7 @@ actor RetentionManager {
                     .filter(Column("ts") < cutoffMs).order(Column("ts")).limit(500).fetchAll(db)
                 if rows.isEmpty { return (0, []) }
                 let ids = rows.compactMap(\.id)
+                try Self.deleteTranscriptVectors(db, audioIds: ids)   // до каскада (нужен маппинг)
                 try AudioCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
                 return (rows.count, rows.map(\.relativePath))
             }
@@ -125,6 +148,52 @@ actor RetentionManager {
         return report
     }
 
+    /// Удаление ПЕРИОДА (privacy: «случайно записал пароль/разговор — стереть навсегда»).
+    /// Каскад чистит text_blocks/transcriptions → FTS-триггеры; vec-таблицы — явно (vec0 без FK).
+    /// toMs = Int64.max + fromMs = 0 → «удалить всё».
+    func deleteRange(fromMs: Int64, toMs: Int64) async throws -> PruneReport {
+        var report = PruneReport()
+        while true {
+            let (c, paths): (Int, [String]) = try await db.pool.write { db in
+                let rows = try ScreenCaptureRow
+                    .filter(Column("ts") >= fromMs && Column("ts") <= toMs)
+                    .order(Column("ts")).limit(500).fetchAll(db)
+                if rows.isEmpty { return (0, []) }
+                let ids = rows.compactMap(\.id)
+                try ScreenCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
+                try Self.deleteVectors(db, captureIds: ids)
+                return (rows.count, rows.compactMap(\.relativePath))
+            }
+            if c == 0 { break }
+            for p in paths { storage.deleteFile(relativePath: p) }
+            report.framesDeleted += c
+        }
+        while true {
+            let (c, paths): (Int, [String]) = try await db.pool.write { db in
+                let rows = try AudioCaptureRow
+                    .filter(Column("ts") >= fromMs && Column("ts") <= toMs)
+                    .order(Column("ts")).limit(500).fetchAll(db)
+                if rows.isEmpty { return (0, []) }
+                let ids = rows.compactMap(\.id)
+                try Self.deleteTranscriptVectors(db, audioIds: ids)
+                try AudioCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
+                return (rows.count, rows.map(\.relativePath))
+            }
+            if c == 0 { break }
+            for p in paths { storage.deleteFile(relativePath: p) }
+            report.audioDeleted += c
+        }
+        try? await checkpoint()   // best-effort: ошибка checkpoint не должна маскировать успешное удаление
+        // Полное удаление → VACUUM: иначе sqlite переиспользует страницы, файл не уменьшается и юзер
+        // видит «удалил всё, а занято почти столько же» — подрыв доверия к privacy-фиче.
+        if fromMs == 0 && toMs == Int64.max {
+            try? await db.pool.writeWithoutTransaction { db in
+                try db.execute(sql: "VACUUM")
+            }
+        }
+        return report
+    }
+
     /// Старейший батч кадров (500): true = что-то удалили.
     private func deleteOldestFrameBatch(into counter: inout Int) async throws -> Bool {
         let (fc, fp): (Int, [String]) = try await db.pool.write { db in
@@ -147,6 +216,7 @@ actor RetentionManager {
             let rows = try AudioCaptureRow.order(Column("ts")).limit(500).fetchAll(db)
             if rows.isEmpty { return (0, []) }
             let ids = rows.compactMap(\.id)
+            try Self.deleteTranscriptVectors(db, audioIds: ids)   // до каскада (нужен маппинг)
             try AudioCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
             return (rows.count, rows.map(\.relativePath))
         }
@@ -185,7 +255,11 @@ actor RetentionManager {
         try await db.pool.write { db in
             try db.execute(sql: "INSERT INTO text_fts(text_fts) VALUES('optimize')")
             try db.execute(sql: "INSERT INTO transcription_fts(transcription_fts) VALUES('optimize')")
-            _ = try? db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+        }
+        // WAL truncate обязан идти ВНЕ транзакции (внутри write{} он молча no-op). busy при
+        // конкурентной записи — не страшно: следующий prune повторит.
+        try? await db.pool.writeWithoutTransaction { db in
+            try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
         }
     }
 }

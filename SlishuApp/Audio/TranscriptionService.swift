@@ -46,7 +46,7 @@ actor TranscriptionService {
                                                      minConfidence: config.minTranscriptConfidence,
                                                      timeout: config.transcribeTimeoutSec)
                 try await ingest.ingest(TranscriptionRecord(
-                    audioId: seg.audioId, text: t.text, language: t.language, engine: t.engine,
+                    audioId: seg.audioId, ts: seg.ts, text: t.text, language: t.language, engine: t.engine,
                     startOffset: 0, endOffset: seg.durationSec))
                 transcribedCount += 1
             } catch {
@@ -79,6 +79,13 @@ actor TranscriptionService {
     private func unloadIfIdle() async {
         guard !working, queue.isEmpty else { return }
         await backend.unload()
+    }
+
+    /// Privacy-чистка очереди: сегменты с ts в удаляемом диапазоне не должны дотранскрибироваться
+    /// (их строки/файлы уже стёрты deleteRange; без чистки транскрипт мёртвого audioId упал бы по FK,
+    /// но сам факт обработки удалённого контента — лишний).
+    func purgeQueued(from: Date, to: Date) {
+        queue.removeAll { $0.ts >= from && $0.ts <= to }
     }
 
     /// Мягкая остановка: даём очереди дотранскрибировать накопленное, затем выгружаем модель. Если дренаж

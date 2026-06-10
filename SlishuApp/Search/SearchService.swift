@@ -22,7 +22,11 @@ actor SearchService {
         guard let qvec = await qvecTask else {
             return Array(fts.prefix(limit))
         }
-        let semIds = try await semanticSearch(qvec, limit: 80)
+        // Две semantic-ноги параллельно: экран и транскрипты (cross-lingual работает и для звонков).
+        async let semScreenTask = semanticSearch(qvec, limit: 80)
+        async let semAudioTask = semanticTranscripts(qvec, limit: 40)
+        let semIds = (try? await semScreenTask) ?? []
+        let semAudio = (try? await semAudioTask) ?? []
 
         // RRF: ключ = "kind:id"
         var score: [String: Double] = [:]
@@ -41,6 +45,13 @@ actor SearchService {
                 byKey[k] = r
             }
         }
+        for (rank, audioId) in semAudio.enumerated() {
+            let k = "audio:\(audioId)"
+            score[k, default: 0] += 1.0 / (rrfK + Double(rank + 1))
+            if byKey[k] == nil, let r = try? await fetchAudioResult(audioId) {
+                byKey[k] = r
+            }
+        }
 
         let ranked = byKey.values.sorted { (score[key($0)] ?? 0) > (score[key($1)] ?? 0) }
         return Array(ranked.prefix(limit))
@@ -54,6 +65,45 @@ actor SearchService {
             try Int64.fetchAll(db, sql: """
                 SELECT capture_id FROM vec_screen WHERE embedding MATCH ? AND k = ? ORDER BY distance
                 """, arguments: [blob, limit])
+        }
+    }
+
+    /// Semantic по транскриптам: vec_transcripts → transcription_id → audioId (ключ RRF — audio,
+    /// как у FTS-ноги: дедуп по аудио-сегменту, не по строке транскрипта).
+    private func semanticTranscripts(_ qvec: [Float], limit: Int) async throws -> [Int64] {
+        let blob = floatBlob(qvec)
+        return try await db.pool.read { db in
+            let tids = try Int64.fetchAll(db, sql: """
+                SELECT transcription_id FROM vec_transcripts WHERE embedding MATCH ? AND k = ? ORDER BY distance
+                """, arguments: [blob, limit])
+            guard !tids.isEmpty else { return [] }
+            // сохранить порядок ранжирования: маппим по одному (короткий список)
+            var audioIds: [Int64] = []
+            var seen = Set<Int64>()
+            for tid in tids {
+                if let aid = try Int64.fetchOne(db, sql:
+                    "SELECT audioId FROM transcriptions WHERE id = ?", arguments: [tid]),
+                   !seen.contains(aid) {
+                    audioIds.append(aid); seen.insert(aid)
+                }
+            }
+            return audioIds
+        }
+    }
+
+    /// Для semantic-only аудио-хита — собрать SearchResult из БД (как fetchScreenResult для экрана).
+    private func fetchAudioResult(_ audioId: Int64) async throws -> SearchResult? {
+        try await db.pool.read { db in
+            guard let row = try Row.fetchOne(db, sql:
+                "SELECT id, ts, relativePath FROM audio_captures WHERE id = ?", arguments: [audioId])
+            else { return nil }
+            let snip = try String.fetchOne(db, sql:
+                "SELECT substr(text, 1, 140) FROM transcriptions WHERE audioId = ? ORDER BY id DESC LIMIT 1",
+                arguments: [audioId]) ?? ""
+            return SearchResult(
+                id: row["id"], kind: .audio, ts: dateFromMs(row["ts"]),
+                bundleId: nil, appName: "Аудио", windowTitle: nil, browserURL: nil,
+                snippet: snip, relativePath: row["relativePath"])
         }
     }
 
