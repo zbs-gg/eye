@@ -167,6 +167,24 @@ final class TimelineStore {
         }
     }
 
+    // MARK: навигация по датам
+
+    /// «Сегодня» = хвост истории (новейший кадр).
+    func jumpToNewest() async {
+        if let n = bounds.newest { await seek(to: n) }
+    }
+
+    /// Прыжок к дню: полдень выбранной даты, прижатый к границам истории.
+    func jump(to day: Date) async {
+        let cal = Calendar.current
+        let noon = cal.date(byAdding: .hour, value: 12, to: cal.startOfDay(for: day))
+            ?? cal.startOfDay(for: day)
+        var target = noon
+        if let o = bounds.oldest, target < o { target = o }
+        if let n = bounds.newest, target > n { target = n }
+        await seek(to: target)
+    }
+
     // MARK: плеер
 
     func togglePlay() { isPlaying ? pause() : play() }

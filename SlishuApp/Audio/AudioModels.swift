@@ -17,6 +17,7 @@ struct AudioSegment: Sendable {
     let fileURL: URL
     let ts: Date
     let durationSec: Double
+    let channel: String   // "mic" | "system" — для speaker-лейбла транскрипта (я/собеседник)
 }
 
 /// Результат backend-транскрипции.
@@ -43,11 +44,13 @@ struct TranscriptionRecord: Sendable {
     let text: String
     let language: String
     let engine: String
+    let speaker: String?       // «я» (mic) / «собеседник» (system) — дешёвый прокси диаризации
     let startOffset: Double?
     let endOffset: Double?
     init(audioId: Int64, ts: Date, text: String, language: String, engine: String,
-         startOffset: Double? = nil, endOffset: Double? = nil) {
+         speaker: String? = nil, startOffset: Double? = nil, endOffset: Double? = nil) {
         self.audioId = audioId; self.ts = ts; self.text = text; self.language = language
-        self.engine = engine; self.startOffset = startOffset; self.endOffset = endOffset
+        self.engine = engine; self.speaker = speaker
+        self.startOffset = startOffset; self.endOffset = endOffset
     }
 }

@@ -109,7 +109,7 @@ actor IngestService {
         return try await db.pool.write { dbc -> Int64 in
             var row = TranscriptionRow(
                 id: nil, audioId: rec.audioId, text: rec.text, language: rec.language,
-                speaker: nil, startOffset: rec.startOffset, endOffset: rec.endOffset, engine: rec.engine)
+                speaker: rec.speaker, startOffset: rec.startOffset, endOffset: rec.endOffset, engine: rec.engine)
             try row.insert(dbc)
             let id = row.id!
             if let embedding, embedding.count == SlishuDatabase.embeddingDim {

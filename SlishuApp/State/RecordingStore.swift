@@ -23,6 +23,35 @@ final class RecordingStore {
     private(set) var blockedReason: String?
     /// Запись идёт, но деградировала (права отозваны mid-run и т.п.) — показывается ПРИ isCapturing.
     private(set) var degradedReason: String?
+    /// Временная privacy-пауза («не пиши 15 минут»): желание записи СОХРАНЯЕТСЯ, автостарт-watcher
+    /// не возобновляет до истечения. nil = пауза не активна.
+    private(set) var pausedUntil: Date?
+    @ObservationIgnored private var resumeTask: Task<Void, Never>?
+    @ObservationIgnored private static let pausedKey = "slishu.recording.pausedUntil"
+
+    init() {
+        // Пауза переживает перезапуск/краш: иначе релонч молча возобновлял бы запись посреди
+        // «не записывать 15 минут» — privacy-обещание сломано.
+        if let saved = UserDefaults.standard.object(forKey: Self.pausedKey) as? Date {
+            if saved > Date() {
+                pausedUntil = saved
+                let remain = saved.timeIntervalSinceNow
+                resumeTask = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(remain))
+                    guard !Task.isCancelled, let self else { return }
+                    self.clearPause()
+                    self.startIfWanted()
+                }
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.pausedKey)
+            }
+        }
+    }
+
+    private func clearPause() {
+        pausedUntil = nil
+        UserDefaults.standard.removeObject(forKey: Self.pausedKey)
+    }
 
     @ObservationIgnored var coordinator: CaptureCoordinator?
     @ObservationIgnored var audio: AudioCoordinator?
@@ -60,6 +89,9 @@ final class RecordingStore {
             degradedReason = nil
             UserDefaults.standard.set(false, forKey: Self.enabledKey)
         } else {
+            // ручное включение снимает временную паузу (юзер передумал ждать)
+            resumeTask?.cancel(); resumeTask = nil
+            clearPause()
             guard canCapture() else {
                 // Честный toggle НАМЕРЕНИЯ: первый клик взводит (запись стартанёт сама после выдачи
                 // прав — говорим об этом), повторный клик СНИМАЕТ взвод (иначе отменить невозможно).
@@ -90,9 +122,38 @@ final class RecordingStore {
     }
 
     /// Автостарт из bootstrap (и после выдачи прав): если юзер хотел запись и права есть — включаем.
+    /// Временная пауза блокирует автостарт до истечения (resume-задача снимет pausedUntil).
     func startIfWanted() {
+        guard pausedUntil == nil else { return }
         guard wantsRecording, !isCapturing, canCapture() else { return }
         toggle()
+    }
+
+    /// Privacy-пауза из menubar: остановить запись на N минут, потом возобновить самой.
+    /// Желание записи (enabledKey) не трогаем — это пауза, не выключение.
+    func pauseFor(minutes: Int) {
+        guard isCapturing, let coordinator else { return }
+        coordinator.stop()
+        audio?.stop()
+        isCapturing = false
+        degradedReason = nil
+        let until = Date().addingTimeInterval(Double(minutes) * 60)
+        pausedUntil = until
+        UserDefaults.standard.set(until, forKey: Self.pausedKey)
+        resumeTask?.cancel()
+        resumeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Double(minutes) * 60))
+            guard !Task.isCancelled, let self else { return }
+            self.clearPause()
+            self.startIfWanted()
+        }
+    }
+
+    /// Снять паузу досрочно (кнопка «Возобновить сейчас»).
+    func resumeNow() {
+        resumeTask?.cancel(); resumeTask = nil
+        clearPause()
+        startIfWanted()
     }
 
     /// Применить смену аудио-настроек на лету (вызывается из Settings, если запись активна).

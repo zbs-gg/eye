@@ -139,6 +139,14 @@ actor SlishuHTTPServer {
             guard await authorized(req) else { return Self.unauthorized() }
             return await handleImage(req)
         }
+        await srv.appendRoute("GET /v1/transcript") { [self] req in
+            guard await authorized(req) else { return Self.unauthorized() }
+            return await handleTranscript(req)
+        }
+        await srv.appendRoute("GET /v1/audio/file") { [self] req in
+            guard await authorized(req) else { return Self.unauthorized() }
+            return await handleAudioFile(req)
+        }
         await srv.appendRoute("GET /v1/stats") { [self] req in
             guard await authorized(req) else { return Self.unauthorized() }
             return await handleStats()
@@ -172,17 +180,97 @@ actor SlishuHTTPServer {
     // MARK: handlers
 
     private func handleSearch(_ req: HTTPRequest) async -> HTTPResponse {
-        let q = Self.query(req)["q"] ?? ""
+        let p = Self.query(req)
+        let q = p["q"] ?? ""
         guard !q.isEmpty else { return Self.badRequest("missing q") }
-        let results = (try? await deps.search.search(query: q)) ?? []
-        let hits = results.map { r in
-            APIDTO.SearchHit(
-                id: r.id, kind: r.kind.rawValue, ts: msFromDate(r.ts), tsISO: isoFromMs(msFromDate(r.ts)),
-                app: .init(bundleId: r.bundleId, name: r.appName),
-                windowTitle: r.windowTitle, browserUrl: r.browserURL, snippet: r.snippet,
-                media: .init(frameUrl: r.kind == .screen ? "/v1/frame/image?id=\(r.id)" : nil))
+        var kind: SearchKind? = nil
+        if let k = p["kind"] {
+            guard let parsed = SearchKind(rawValue: k) else { return Self.badRequest("kind: screen|audio") }
+            kind = parsed
         }
-        return Self.json(APIDTO.SearchResponse(query: q, total: hits.count, results: hits))
+        // Присутствующий, но нераспарсенный from/to — это 400, а НЕ молчаливый сброс фильтра:
+        // иначе «что я делал вчера» вернуло бы всю историю под видом «вчера» (ложь агенту).
+        var from: Date? = nil
+        if let s = p["from"] {
+            guard let d = Self.parseTimeParam(s) else { return Self.badRequest("from: epoch-ms или ISO8601") }
+            from = d
+        }
+        var to: Date? = nil
+        if let s = p["to"] {
+            guard let d = Self.parseTimeParam(s) else { return Self.badRequest("to: epoch-ms или ISO8601") }
+            to = d
+        }
+        let filters = SearchFilters(
+            from: from, to: to,
+            app: p["app"],
+            kind: kind,
+            limit: p["limit"].flatMap { Int($0) } ?? 60,
+            offset: p["offset"].flatMap { Int($0) } ?? 0)
+        do {
+            // честная ошибка вместо 200-пустышки: LAM обязан отличать «не нашлось» от «БД сломана»
+            let results = try await deps.search.search(query: q, filters: filters)
+            let hits = results.map { r in
+                APIDTO.SearchHit(
+                    id: r.id, kind: r.kind.rawValue, ts: msFromDate(r.ts), tsISO: isoFromMs(msFromDate(r.ts)),
+                    app: .init(bundleId: r.bundleId, name: r.appName),
+                    windowTitle: r.windowTitle, browserUrl: r.browserURL, snippet: r.snippet,
+                    media: .init(
+                        frameUrl: r.kind == .screen ? "/v1/frame/image?id=\(r.id)" : nil,
+                        audioUrl: r.kind == .audio ? "/v1/audio/file?id=\(r.id)" : nil,
+                        transcriptUrl: r.kind == .audio ? "/v1/transcript?audio_id=\(r.id)" : nil))
+            }
+            return Self.json(APIDTO.SearchResponse(query: q, total: hits.count,
+                                                   limit: filters.limit, offset: filters.offset,
+                                                   results: hits))
+        } catch {
+            Self.log("search error: \(error)")
+            return Self.error(.internalServerError, "search failed", code: "search_failed")
+        }
+    }
+
+    /// from/to: epoch-ms (целое) или ISO8601 (с/без долей секунды — JS Date.toISOString() даёт доли;
+    /// один ISO8601DateFormatter оба варианта не парсит) или просто дата.
+    static func parseTimeParam(_ s: String) -> Date? {
+        if let ms = Int64(s) { return dateFromMs(ms) }
+        let plain = ISO8601DateFormatter()
+        if let d = plain.date(from: s) { return d }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = fractional.date(from: s) { return d }
+        let dateOnly = ISO8601DateFormatter()
+        dateOnly.formatOptions = [.withFullDate]
+        return dateOnly.date(from: s)
+    }
+
+    /// Транскрипт аудио-сегмента (для LAM: «что обсуждали на звонке»).
+    private func handleTranscript(_ req: HTTPRequest) async -> HTTPResponse {
+        guard let id = Self.query(req)["audio_id"].flatMap({ Int64($0) }) else {
+            return Self.badRequest("audio_id required")
+        }
+        do {
+            guard let d = try await deps.timeline.audioDetail(id: id) else { return Self.notFound("audio") }
+            return Self.json(APIDTO.Transcript(
+                audioId: d.id, ts: msFromDate(d.ts), tsISO: isoFromMs(msFromDate(d.ts)),
+                durationSec: d.durationSec, channel: d.channel, speaker: d.speaker,
+                language: d.language, text: d.transcript,
+                audioUrl: "/v1/audio/file?id=\(d.id)"))
+        } catch {
+            Self.log("transcript error: \(error)")
+            return Self.error(.internalServerError, "transcript failed", code: "transcript_failed")
+        }
+    }
+
+    /// m4a-файл сегмента (тот же traversal-hardening, что и у кадров).
+    private func handleAudioFile(_ req: HTTPRequest) async -> HTTPResponse {
+        guard let id = Self.query(req)["id"].flatMap({ Int64($0) }),
+              let d = try? await deps.timeline.audioDetail(id: id) else { return Self.notFound("audio") }
+        let rel = d.relativePath
+        guard !rel.contains(".."), !rel.hasPrefix("/") else { return Self.notFound("audio") }
+        let base = deps.mediaDir.standardizedFileURL.resolvingSymlinksInPath()
+        let target = base.appendingPathComponent(rel).standardizedFileURL.resolvingSymlinksInPath()
+        guard Array(target.pathComponents.prefix(base.pathComponents.count)) == base.pathComponents,
+              let data = try? Data(contentsOf: target) else { return Self.notFound("audio") }
+        return HTTPResponse(statusCode: .ok, headers: [HTTPHeader.contentType: "audio/mp4"], body: data)
     }
 
     private func handleTimeline(_ req: HTTPRequest) async -> HTTPResponse {
@@ -191,9 +279,14 @@ actor SlishuHTTPServer {
             return Self.badRequest("from/to required (epoch ms)")
         }
         let bucket = p["bucket"].flatMap { Int64($0) } ?? 60_000
-        let buckets = (try? await deps.timeline.density(from: dateFromMs(from), to: dateFromMs(to), bucketMs: bucket)) ?? []
-        let dto = buckets.map { APIDTO.DensityBucketDTO(ts: msFromDate($0.ts), count: $0.count) }
-        return Self.json(APIDTO.TimelineResponse(from: from, to: to, bucketMs: bucket, buckets: dto))
+        do {
+            let buckets = try await deps.timeline.density(from: dateFromMs(from), to: dateFromMs(to), bucketMs: bucket)
+            let dto = buckets.map { APIDTO.DensityBucketDTO(ts: msFromDate($0.ts), count: $0.count) }
+            return Self.json(APIDTO.TimelineResponse(from: from, to: to, bucketMs: bucket, buckets: dto))
+        } catch {
+            Self.log("timeline error: \(error)")
+            return Self.error(.internalServerError, "timeline failed", code: "timeline_failed")
+        }
     }
 
     private func handleFrame(_ req: HTTPRequest) async -> HTTPResponse {

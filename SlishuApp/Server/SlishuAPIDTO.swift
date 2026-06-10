@@ -9,7 +9,11 @@ enum APIDTO {
         let port: Int
     }
     struct AppRef: Encodable { let bundleId: String?; let name: String? }
-    struct Media: Encodable { let frameUrl: String? }
+    struct Media: Encodable {
+        let frameUrl: String?
+        var audioUrl: String? = nil        // kind=audio: m4a сегмент
+        var transcriptUrl: String? = nil   // kind=audio: текст транскрипта
+    }
     struct SearchHit: Encodable {
         let id: Int64
         let kind: String          // screen | audio
@@ -24,7 +28,20 @@ enum APIDTO {
     struct SearchResponse: Encodable {
         let query: String
         let total: Int
+        let limit: Int
+        let offset: Int
         let results: [SearchHit]
+    }
+    struct Transcript: Encodable {
+        let audioId: Int64
+        let ts: Int64
+        let tsISO: String
+        let durationSec: Double
+        let channel: String       // mic | system
+        let speaker: String?      // я | собеседник
+        let language: String?
+        let text: String?         // nil = транскрипта (ещё) нет
+        let audioUrl: String
     }
     struct DensityBucketDTO: Encodable { let ts: Int64; let count: Int }
     struct TimelineResponse: Encodable {

@@ -56,13 +56,19 @@ actor FramePipeline {
     /// Захват + дедуп + HEIC + (опц) OCR. displayID — дисплей сфокусированного окна (NSScreen.main);
     /// nil/не найден → первый. Возвращает nil если нет дисплея. При дубле — heicData пустой,
     /// isDuplicate=true (Coordinator решает писать ли context-only запись).
-    func process(displayID: CGDirectDisplayID?, needsOCR: Bool) async throws -> ProcessedFrame? {
+    func process(displayID: CGDirectDisplayID?, needsOCR: Bool,
+                 excludedBundleIds: Set<String> = []) async throws -> ProcessedFrame? {
         let content = try await currentContent()
         guard let display = content.displays.first(where: { displayID == nil || $0.displayID == displayID })
                 ?? content.displays.first else { throw CaptureError.noDisplay }
         let dedupKey = Int(display.displayID)
 
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        // Privacy-исключения нативно через SCK: пиксели окон исключённых приложений не попадают
+        // в кадр ВООБЩЕ (и в OCR физически нечему утекать) — даже когда окно видно в фоне за другим.
+        let excludedApps = excludedBundleIds.isEmpty ? [] :
+            content.applications.filter { excludedBundleIds.contains($0.bundleIdentifier) }
+        let filter = SCContentFilter(display: display, excludingApplications: excludedApps,
+                                     exceptingWindows: [])
         let cfg = SCStreamConfiguration()
         cfg.width = display.width
         cfg.height = display.height
