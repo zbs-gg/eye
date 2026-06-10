@@ -24,16 +24,13 @@ private struct StatusFooter: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !env.permissions.allCriticalGranted {
-                StatusPill(text: "Нужны разрешения", color: .orange, system: "lock.shield")
+                // Кликабельный пилл → сразу в Настройки (раньше был тупиковым лейблом).
+                Button { env.selectedSection = .settings } label: {
+                    StatusPill(text: "Нужны разрешения", color: .orange, system: "lock.shield")
+                }
+                .buttonStyle(.plain)
             }
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(env.recording.isCapturing ? Color.green : Color.secondary)
-                    .frame(width: 8, height: 8)
-                Text(env.recording.isCapturing ? "Запись идёт" : "На паузе")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            RecordingStatusView(compact: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)

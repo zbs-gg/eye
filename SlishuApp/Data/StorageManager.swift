@@ -32,6 +32,12 @@ final class StorageManager: Sendable {
         try? url(forRelative: relativePath).resourceValues(forKeys: [.fileSizeKey]).fileSize
     }
 
+    /// Свободно на томе с медиа (для disk-guard: не добивать диск записью 24/7).
+    func freeBytes() -> Int64 {
+        let vals = try? mediaDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return Int64(vals?.volumeAvailableCapacityForImportantUsage ?? .max)
+    }
+
     func totalBytes() -> Int64 {
         guard let en = FileManager.default.enumerator(at: mediaDirectory,
                   includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }

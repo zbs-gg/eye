@@ -9,16 +9,18 @@ struct MenuBarContent: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Slishu").font(.headline)
 
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(env.recording.isCapturing ? Color.green : Color.secondary)
-                    .frame(width: 8, height: 8)
-                Text(env.recording.isCapturing ? "Запись идёт" : "На паузе")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            RecordingStatusView()
 
             if !env.permissions.allCriticalGranted {
-                StatusPill(text: "Нужны разрешения", color: .orange, system: "lock.shield")
+                // Кликабельный пилл: из menubar сразу в настройку прав, не тупик.
+                Button {
+                    env.selectedSection = .settings
+                    openWindow(id: "main")
+                    NSApp.activate(ignoringOtherApps: true)
+                } label: {
+                    StatusPill(text: "Нужны разрешения — настроить", color: .orange, system: "lock.shield")
+                }
+                .buttonStyle(.plain)
             }
 
             Divider()
@@ -33,6 +35,6 @@ struct MenuBarContent: View {
             Button("Выйти из Slishu") { NSApplication.shared.terminate(nil) }
         }
         .padding(12)
-        .frame(width: 240)
+        .frame(width: 260)
     }
 }

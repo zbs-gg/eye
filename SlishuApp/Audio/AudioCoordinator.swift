@@ -1,22 +1,27 @@
 import Foundation
+import Observation
 
 /// Оркестратор аудио-записи (@MainActor): два независимых лега — микрофон (AVAudioEngine) и системный
 /// звук (ScreenCaptureKit). Разные права (mic vs screen recording), общий TranscriptionService.
-/// Гейты (что включать) — снаружи (RecordingStore/AppEnvironment).
+/// Гейты (что включать) — снаружи (RecordingStore/AppEnvironment). @Observable — per-source флаги
+/// (micRunning/systemRunning) питают честный индикатор записи в menubar/sidebar.
 @MainActor
+@Observable
 final class AudioCoordinator {
-    private let micEngine: AudioCaptureEngine
-    private let systemEngine: SystemAudioCaptureEngine
-    private let micPipeline: AudioPipeline
-    private let systemPipeline: AudioPipeline
-    private let transcription: TranscriptionService
-    private var micTask: Task<Void, Never>?
-    private var systemTask: Task<Void, Never>?
+    @ObservationIgnored private let micEngine: AudioCaptureEngine
+    @ObservationIgnored private let systemEngine: SystemAudioCaptureEngine
+    @ObservationIgnored private let micPipeline: AudioPipeline
+    @ObservationIgnored private let systemPipeline: AudioPipeline
+    @ObservationIgnored private let transcription: TranscriptionService
+    @ObservationIgnored private var micTask: Task<Void, Never>?
+    @ObservationIgnored private var systemTask: Task<Void, Never>?
 
     private(set) var isRunning = false
     private(set) var micStartFailed = false      // движок не стартанул (нет mic/устройства) — для health/UI
     private(set) var systemStartFailed = false   // SCStream не стартанул (нет screen-доступа/дисплея)
-    var onSegment: (@MainActor () -> Void)?
+    private(set) var micRunning = false          // per-source индикатор: что реально пишется
+    private(set) var systemRunning = false
+    @ObservationIgnored var onSegment: (@MainActor () -> Void)?
 
     init(storage: StorageManager, ingest: IngestService, config: AudioConfig = AudioConfig()) {
         let backend = SFSpeechBackend()
@@ -40,6 +45,8 @@ final class AudioCoordinator {
     func stop() {
         guard isRunning else { return }
         isRunning = false
+        micRunning = false
+        systemRunning = false
         micEngine.stop()
         systemEngine.stop()   // finish() закроет stream → for-await завершится → flushFinal внутри лега
         // Дождаться обоих легов (их flushFinal), затем выгрузить модель — в фоне (мы @MainActor, не await'им).
@@ -56,7 +63,12 @@ final class AudioCoordinator {
         micStartFailed = false
         let stream: AsyncStream<AudioFrame>
         do { stream = try micEngine.start() }
-        catch { micStartFailed = true; return }   // нет mic/устройства — surface в health, не молча
+        catch {
+            micStartFailed = true
+            Log.audio.error("mic engine start failed: \(String(describing: error), privacy: .public)")
+            return
+        }
+        micRunning = true
         micTask = runLeg(stream: stream, pipeline: micPipeline, previous: micTask)
     }
 
@@ -70,13 +82,19 @@ final class AudioCoordinator {
             await previous?.value
             let stream: AsyncStream<AudioFrame>
             do { stream = try await engine.start() }
-            catch { await MainActor.run { self?.systemStartFailed = true }; return }
+            catch {
+                Log.audio.error("system audio start failed: \(String(describing: error), privacy: .public)")
+                await MainActor.run { self?.systemStartFailed = true }
+                return
+            }
+            await MainActor.run { self?.systemRunning = true }
             await pipeline.reset()
             for await frame in stream {
                 let closed = await pipeline.feed(frame)
                 if closed { Task { @MainActor in self?.onSegment?() } }
             }
             await pipeline.flushFinal()
+            await MainActor.run { self?.systemRunning = false }
         }
     }
 

@@ -10,7 +10,7 @@ struct TimelineView: View {
             if let store = env.timelineStore {
                 TimelineBody(store: store)
                     .environment(env)
-                    .task { await store.load() }
+                    .task { await store.load(); store.startLive() }
             } else if let err = env.dataError {
                 ContentUnavailableView("Ошибка БД", systemImage: "exclamationmark.triangle", description: Text(err))
             } else {
@@ -60,6 +60,19 @@ private struct TimelineBody: View {
                 if !store.searchQuery.isEmpty {
                     Button { store.clearSearch() } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.borderless).foregroundStyle(.secondary)
+                }
+                // Семантика не готова (качается ~300MB / нет сети) — честно говорим, что поиск пока FTS-only.
+                switch EmbeddingStatusStore.shared.status {
+                case .loading:
+                    Label("семантика качается", systemImage: "arrow.down.circle")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .help("Модель multilingual-e5 скачивается (~300 МБ, один раз). Пока — поиск по точным словам.")
+                case .failed:
+                    Label("поиск по словам", systemImage: "wifi.slash")
+                        .font(.caption2).foregroundStyle(.orange)
+                        .help("Семантическая модель не загрузилась (нет сети?). Поиск работает по точным словам; повторим автоматически.")
+                case .idle, .ready:
+                    EmptyView()
                 }
             }
             .padding(8)

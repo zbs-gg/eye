@@ -14,6 +14,21 @@ final class AppEnvironment {
 
     var selectedSection: SidebarSection = .timeline
 
+    /// Первый запуск → онбординг (consent «пишется всё» + права). Persist: показывается до завершения.
+    var showOnboarding = !UserDefaults.standard.bool(forKey: "slishu.onboarding.done")
+
+    func completeOnboarding(startRecording: Bool) {
+        UserDefaults.standard.set(true, forKey: "slishu.onboarding.done")
+        showOnboarding = false
+        if startRecording {
+            if !recording.isCapturing { recording.toggle() }
+        } else {
+            // «Позже» — явный отказ в consent-точке: остановить возможный автостарт из-под шторки
+            // и снять взведённое намерение (иначе запись стартанула бы сама вопреки отказу).
+            recording.disarm()
+        }
+    }
+
     // Data-слой (создаётся в bootstrap; nil до инициализации / при ошибке).
     private(set) var database: SlishuDatabase?
     private(set) var ingest: IngestService?
@@ -23,6 +38,13 @@ final class AppEnvironment {
     private(set) var pipes: DaySummaryStore?
     private(set) var audio: AudioCoordinator?
     private(set) var dataError: String?
+
+    @ObservationIgnored private var retentionTask: Task<Void, Never>?
+    @ObservationIgnored private var autostartTask: Task<Void, Never>?
+    @ObservationIgnored private var emergencyPruneInFlight = false
+    @ObservationIgnored private var lastEmergencyPruneAt: Date?
+    /// Минимум свободного места: ниже — захват приостанавливается + экстренный prune (диск не добиваем).
+    private nonisolated static let minFreeBytes: Int64 = 2 * 1024 * 1024 * 1024
 
     /// Порядок запуска фоновых сервисов. Пока — пробы прав + Data-слой; capture/server/pipes добавятся
     /// по мере появления модулей (Фаза 2, шаги 3+).
@@ -35,16 +57,54 @@ final class AppEnvironment {
             SlishuHTTPServer.log("bootstrap: db ok")
             self.database = db
             // Отдельные embedder для ingest и search — иначе тяжёлый embed на захвате блокирует
-            // эмбеддинг поискового запроса (head-of-line, по ревью).
-            let ingestService = IngestService(db: db, storage: storage, embedder: EmbeddingService())
+            // эмбеддинг поискового запроса (head-of-line, по ревью). Скачивание модели при этом
+            // ОДНО на процесс (E5ModelProvider сериализует; кеш в Application Support).
+            let ingestEmbedder = EmbeddingService()
+            let ingestService = IngestService(db: db, storage: storage, embedder: ingestEmbedder)
             self.ingest = ingestService
+
+            // Backfill semantic-индекса (кадры без вектора: дроп миграции v3 / оффлайн first-run).
+            // Тот же embedder, что у ingest — третью копию модели в RAM не грузим. Старт с задержкой,
+            // чтобы не конкурировать с запуском.
+            let backfill = VectorBackfill(db: db, embedder: ingestEmbedder)
+            Task.detached(priority: .utility) {
+                try? await Task.sleep(for: .seconds(30))
+                await backfill.run()
+            }
             let retention = RetentionManager(db: db, storage: storage)
             self.retention = retention
 
             // Capture loop (сердце). Стартует по toggle в RecordingStore.
             let coordinator = CaptureCoordinator(ingest: ingestService)
             coordinator.onFrame = { [weak rec = recording] in rec?.noteFrame() }
+            // SCK мёртв при выданном праве (-3801 и пр.) → честный needsRestart вместо ложной записи.
+            coordinator.onCaptureBroken = { [weak self] in
+                Log.capture.error("capture broken at granted permission -> needsRestart")
+                self?.permissions.flagScreenNeedsRestart()
+            }
+            // Транзиентный сбой (wake/смена мониторов) прошёл — снять ratchet, не блокировать запись.
+            coordinator.onCaptureRecovered = { [weak self] in
+                Log.capture.info("capture recovered -> clear needsRestart")
+                self?.permissions.clearScreenNeedsRestart()
+            }
+            coordinator.onCycleOK = { [weak rec = recording] in rec?.noteCycleOK() }
+            // Disk-guard: при < minFree пропускаем захват, поднимаем статус и запускаем экстренный prune.
+            coordinator.diskOK = { [weak self] in
+                guard let self else { return false }
+                let ok = storage.freeBytes() > Self.minFreeBytes
+                if self.recording.lowDiskPaused != !ok { self.recording.setLowDisk(!ok) }
+                if !ok { self.emergencyPrune() }
+                return ok
+            }
             recording.coordinator = coordinator
+            // Запись честная: без критичных прав не стартует (вместо ложной зелёной точки).
+            recording.canCapture = { [weak self] in self?.permissions.allCriticalGranted ?? false }
+            recording.blockedHint = { [weak self] in
+                if self?.permissions.screenNeedsRestart == true {
+                    return "Право выдано — перезапусти Slishu (Настройки → Перезапустить). Запись включится автоматически"
+                }
+                return "Нет прав (Запись экрана + Универсальный доступ). Запись включится автоматически после выдачи; повторный клик — отмена"
+            }
 
             // Аудио-запись + on-device транскрипция (шаг 10). Гейт — транскрипция вкл + mic granted.
             let audioCoordinator = AudioCoordinator(storage: storage, ingest: ingestService)
@@ -55,6 +115,7 @@ final class AppEnvironment {
             recording.micEnabled = { [weak self] in
                 guard let self else { return false }
                 return self.audioSettings.transcriptionEnabled
+                    && !self.recording.lowDiskPaused        // disk-guard гейтит и аудио (не только экран)
                     && self.permissions.snapshot.microphone == .granted
                     && self.permissions.snapshot.speech == .granted
             }
@@ -62,6 +123,7 @@ final class AppEnvironment {
                 guard let self else { return false }
                 return self.audioSettings.transcriptionEnabled
                     && self.audioSettings.recordSystemAudio
+                    && !self.recording.lowDiskPaused
                     && self.permissions.snapshot.screenRecording == .granted
                     && self.permissions.snapshot.speech == .granted
             }
@@ -100,16 +162,74 @@ final class AppEnvironment {
                 if let port { await MainActor.run { self?.server.setActive(port: port, token: token) } }
             }
 
-            // Прунинг по дефолтам (7д/20GB) фоном при старте. Позже (шаг 11) — таймер + size-trigger.
-            Task.detached(priority: .utility) {
-                _ = try? await retention.prune(retentionDays: RetentionPolicy.defaultDays,
-                                               maxBytes: RetentionPolicy.defaultMaxBytes)
+            // Retention НЕПРЕРЫВНО (не только на старте): сразу + каждые 30 мин. 24/7-аптайм неделями
+            // не должен уводить диск за лимит между перезапусками.
+            retentionTask = Task.detached(priority: .utility) {
+                while !Task.isCancelled {
+                    let report = try? await retention.prune(retentionDays: RetentionPolicy.defaultDays,
+                                                            maxBytes: RetentionPolicy.defaultMaxBytes)
+                    if let r = report, r.framesDeleted + r.audioDeleted + r.orphansDeleted > 0 {
+                        Log.retention.info("prune: frames \(r.framesDeleted) audio \(r.audioDeleted) orphans \(r.orphansDeleted)")
+                    }
+                    try? await Task.sleep(for: .seconds(1800))
+                }
             }
         } catch {
             self.dataError = String(describing: error)
+            Log.app.error("bootstrap failed: \(String(describing: error), privacy: .public)")
             SlishuHTTPServer.log("bootstrap: dataError \(error)")
         }
-        // TODO(Фаза 2): server.start(); recording.startIfPermittedAndEnabled(); pipes.resume()
+
+        // Поллинг прав (юзер выдаёт в Системных настройках — UI и автостарт подхватывают сами).
+        permissions.startPolling()
+        // Автостарт: «вечная память» возобновляется после ребута/краша, если юзер её включал.
+        recording.startIfWanted()
+        // Watcher (4с): (1) автостарт при поздней выдаче прав; (2) деградация при отзыве прав mid-run
+        // (isCapturing висел бы true при мёртвом захвате); (3) дрейф аудио-гейтов — выдали mic/speech
+        // ПОСЛЕ старта записи / сменился lowDisk → пере-синк легов (раньше требовало рестарта записи).
+        autostartTask = Task { [weak self] in
+            var prevGates: (mic: Bool, system: Bool)? = nil
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(4))
+                guard let self else { return }
+                self.recording.startIfWanted()
+                // отзыв прав mid-run → честная деградация в UI (вместо вечной зелёной точки)
+                if self.recording.isCapturing {
+                    if !self.permissions.allCriticalGranted {
+                        self.recording.setDegraded(
+                            self.permissions.screenNeedsRestart
+                                ? "Захват сломался — перезапусти Slishu"
+                                : "Права отозваны — захват не работает")
+                    } else {
+                        self.recording.setDegraded(nil)
+                    }
+                    // дрейф аудио-гейтов (новые права/настройки/lowDisk) → пересинк легов
+                    let gates = (self.recording.micEnabled(), self.recording.systemEnabled())
+                    if let prev = prevGates, prev != gates { self.recording.syncAudio() }
+                    prevGates = gates
+                } else {
+                    prevGates = nil
+                }
+            }
+        }
+    }
+
+    /// Экстренный prune при low-disk: таргетирует СВОБОДНОЕ место (×2 порога паузы = гистерезис),
+    /// а не политику 7д/20GB — иначе при диске, забитом не нами, prune ничего не удалял бы и пауза
+    /// записи никогда не самоизлечивалась. Cooldown 10 мин — без чёрна каждый capture-тик.
+    private func emergencyPrune() {
+        guard !emergencyPruneInFlight, let retention else { return }
+        if let last = lastEmergencyPruneAt, Date().timeIntervalSince(last) < 600 { return }
+        emergencyPruneInFlight = true
+        lastEmergencyPruneAt = Date()
+        Task.detached(priority: .utility) { [weak self] in
+            Log.retention.warning("low disk -> emergency prune (target free \(Self.minFreeBytes * 2))")
+            let r = try? await retention.pruneUntilFree(targetFreeBytes: Self.minFreeBytes * 2)
+            if let r, r.framesDeleted + r.audioDeleted == 0 {
+                Log.retention.warning("emergency prune freed nothing — disk full by other data")
+            }
+            await MainActor.run { self?.emergencyPruneInFlight = false }
+        }
     }
 }
 

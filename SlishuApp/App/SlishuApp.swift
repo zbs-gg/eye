@@ -3,6 +3,16 @@ import SwiftUI
 struct SlishuApp: App {
     @State private var env = AppEnvironment()
 
+    /// Иконка честная: предупреждение, если запись «идёт», но фактически деградировала
+    /// (мало места / SCK мёртв и нужен перезапуск) — а не вечная зелёная точка.
+    private var menuBarIcon: String {
+        if env.recording.isCapturing {
+            let degraded = env.recording.lowDiskPaused || env.permissions.screenNeedsRestart
+            return degraded ? "exclamationmark.triangle.fill" : "record.circle.fill"
+        }
+        return "waveform"
+    }
+
     var body: some Scene {
         Window("Slishu", id: "main") {
             RootWindow()
@@ -16,7 +26,7 @@ struct SlishuApp: App {
         MenuBarExtra {
             MenuBarContent().environment(env)
         } label: {
-            Image(systemName: env.recording.isCapturing ? "record.circle.fill" : "waveform")
+            Image(systemName: menuBarIcon)
         }
         .menuBarExtraStyle(.window)
     }

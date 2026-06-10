@@ -20,11 +20,19 @@ struct PermissionSnapshot: Sendable {
 /// `screenRecording` отличает `.needsRestart` (право выдано, но SCStream вернул -3801) на стороне
 /// capture-слоя; здесь — базовая проба `CGPreflightScreenCaptureAccess`.
 enum PermissionChecker {
+    /// CGPreflight/AXIsProcessTrusted не различают denied и notDetermined (оба false). Различаем сами:
+    /// пока мы ни разу не запрашивали право — это notDetermined (кнопка «Запросить» осмыслена);
+    /// после запроса false = denied (осмыслена кнопка «Настройки»).
+    private static let requestedScreenKey = "slishu.requested.screenRecording"
+    private static let requestedAXKey = "slishu.requested.accessibility"
+
     static func screenRecording() -> PermissionStatus {
-        CGPreflightScreenCaptureAccess() ? .granted : .denied
+        if CGPreflightScreenCaptureAccess() { return .granted }
+        return UserDefaults.standard.bool(forKey: requestedScreenKey) ? .denied : .notDetermined
     }
     static func accessibility() -> PermissionStatus {
-        AXIsProcessTrusted() ? .granted : .denied
+        if AXIsProcessTrusted() { return .granted }
+        return UserDefaults.standard.bool(forKey: requestedAXKey) ? .denied : .notDetermined
     }
     static func microphone() -> PermissionStatus {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -51,9 +59,13 @@ enum PermissionChecker {
     }
 
     // ── запросы (показывают системный промпт) ──
-    static func requestScreenRecording() { CGRequestScreenCaptureAccess() }
+    static func requestScreenRecording() {
+        UserDefaults.standard.set(true, forKey: requestedScreenKey)
+        CGRequestScreenCaptureAccess()
+    }
 
     static func requestAccessibility() {
+        UserDefaults.standard.set(true, forKey: requestedAXKey)
         // kAXTrustedCheckOptionPrompt — глобальная var (не Sendable в Swift 6); значение стабильно.
         _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
