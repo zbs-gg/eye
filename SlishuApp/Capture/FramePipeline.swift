@@ -33,7 +33,7 @@ actor FramePipeline {
     private let config: CaptureConfig
     private let ciContext: CIContext
     private var cachedContent: SCShareableContent?
-    private var lastHash: [Int: UInt64] = [:]
+    private var lastHashes: [Int: [UInt64]] = [:]   // [full, 4 квадранта] per display
 
     init(config: CaptureConfig) {
         self.config = config
@@ -77,10 +77,15 @@ actor FramePipeline {
         let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: cfg)
         let ciImage = CIImage(cgImage: cgImage)
 
-        let phash = perceptualHash(ciImage)
-        let prev = lastHash[dedupKey]   // дедуп per-display: смена монитора не «дубликат» прошлого
-        let isDup = prev != nil && Self.hamming(phash, prev!) <= config.dedupHammingThreshold
-        lastHash[dedupKey] = phash
+        // Per-tile дедуп: aHash целого экрана слеп к малым изменениям (новое сообщение в углу 4K
+        // меняет ≤3 бита из 64 → «дубликат»). Хэшируем целое + 4 квадранта: локальное изменение
+        // двигает хэш своего квадранта сильно — кадр больше не теряется.
+        let hashes = tileHashes(ciImage)
+        let phash = hashes[0]
+        let prev = lastHashes[dedupKey]   // дедуп per-display: смена монитора не «дубликат» прошлого
+        let isDup = prev != nil && prev!.count == hashes.count &&
+            zip(prev!, hashes).allSatisfy { Self.hamming($0, $1) <= config.dedupHammingThreshold }
+        lastHashes[dedupKey] = hashes
 
         if isDup {
             return ProcessedFrame(heicData: Data(), phash: phash, isDuplicate: true,
@@ -113,6 +118,19 @@ actor FramePipeline {
     private func encodeHEIC(_ image: CIImage) -> Data? {
         let cs = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         return ciContext.heifRepresentation(of: image, format: .RGBA8, colorSpace: cs, options: [:])
+    }
+
+    /// Хэши: [целый кадр, верх-лево, верх-право, низ-лево, низ-право].
+    private func tileHashes(_ image: CIImage) -> [UInt64] {
+        var out = [perceptualHash(image)]
+        let e = image.extent
+        guard e.width >= 64, e.height >= 64 else { return out }   // мелкий кадр — квадранты бессмысленны
+        let w = e.width / 2, h = e.height / 2
+        for (ox, oy) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+            let rect = CGRect(x: e.minX + ox * w, y: e.minY + oy * h, width: w, height: h)
+            out.append(perceptualHash(image.cropped(to: rect)))
+        }
+        return out
     }
 
     // ── perceptual hash (aHash 8×8) — хранит UInt64, не буфер ──

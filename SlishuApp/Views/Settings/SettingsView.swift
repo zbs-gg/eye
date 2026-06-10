@@ -10,6 +10,8 @@ struct SettingsView: View {
     @State private var deleteOutcome: String?          // отчёт/ошибка удаления — алертом
     @State private var exporting = false
     @State private var exportResult: String?
+    @State private var importing = false
+    @State private var importStatus: String?
 
     var body: some View {
         ScrollView {
@@ -18,7 +20,9 @@ struct SettingsView: View {
                 permissionsCard
                 launchCard
                 storageCard
+                backupCard
                 privacyCard
+                if ScreenpipeImporter.sourceExists { importCard }
                 transcriptionCard
                 serverCard
             }
@@ -101,6 +105,63 @@ struct SettingsView: View {
                         }.buttonStyle(.borderless).help("Показать в Finder")
                     }
                 }
+                Divider()
+                HStack {
+                    Text("Папка данных")
+                    Spacer()
+                    Text(st.dataRootDisplay)
+                        .foregroundStyle(.secondary).font(.callout)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                if st.relocationInProgress {
+                    HStack(spacing: 10) {
+                        ProgressView(value: st.relocationProgress).frame(maxWidth: 180)
+                        Text(st.relocationStatus).font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    HStack {
+                        Button("Переместить…") { chooseRelocateFolder() }
+                        if st.isRelocated {
+                            Button("Вернуть в стандартную папку") { relocateToLegacy() }
+                                .buttonStyle(.link)
+                        }
+                        Spacer()
+                    }
+                    Text("Перенесёт всю память (база + медиа) в выбранную папку, например на внешний SSD. "
+                         + "Старое место не удаляется до подтверждения. Приложение перезапустится.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if let err = st.relocationError {
+                    Text(err).font(.caption).foregroundStyle(.red)
+                }
+                if let bd = st.breakdown {
+                    Divider()
+                    Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
+                        GridRow {
+                            Text("Кадры").foregroundStyle(.secondary)
+                            Text("\(bd.framesTotal)  ·  живых \(bd.framesLive), импорт \(bd.framesImport)")
+                        }
+                        GridRow {
+                            Text("Аудио").foregroundStyle(.secondary)
+                            Text("\(bd.audioTotal)")
+                        }
+                        if let o = bd.oldestTs, let n = bd.newestTs {
+                            GridRow {
+                                Text("Период").foregroundStyle(.secondary)
+                                Text("\(Date(timeIntervalSince1970: Double(o)/1000).formatted(date: .abbreviated, time: .omitted)) — \(Date(timeIntervalSince1970: Double(n)/1000).formatted(date: .abbreviated, time: .omitted))")
+                            }
+                        }
+                        GridRow {
+                            Text("Свободно на диске").foregroundStyle(.secondary)
+                            Text(StorageSettingsStore.format(st.freeBytes))
+                        }
+                    }
+                    .font(.callout)
+                    if !bd.topApps.isEmpty {
+                        Text("Больше всего: " + bd.topApps.prefix(4).map { "\($0.name) (\($0.frames))" }.joined(separator: ", "))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 Picker("Хранить историю", selection: $st.retentionDays) {
                     ForEach(StorageSettingsStore.dayOptions, id: \.self) { d in
                         Text(d == 0 ? "Вечно" : "\(d) дн.").tag(d)
@@ -175,7 +236,10 @@ struct SettingsView: View {
         .overlay(alignment: .topTrailing) {
             if deleting { ProgressView().controlSize(.small).padding() }
         }
-        .task { await env.storageSettings.refresh(storage: env.storage) }
+        .task {
+            env.backupSettings.refresh()
+            await env.storageSettings.refresh(storage: env.storage, db: env.db)
+        }
     }
 
     /// Экспорт: выбор папки → ExportService. days=nil → вся история.
@@ -213,6 +277,110 @@ struct SettingsView: View {
     }
     private var deleteBinding: Binding<Bool> {
         Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })
+    }
+
+    private func chooseRelocateFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Перенести сюда"
+        panel.message = "Выбери папку для «вечной памяти» (создастся подпапка Slishu). Приложение перезапустится."
+        if panel.runModal() == .OK, let url = panel.url {
+            Task { await env.relocate(to: url) }
+        }
+    }
+
+    private func relocateToLegacy() {
+        Task { await env.relocate(to: StorageLocation.legacyRoot().deletingLastPathComponent()) }
+    }
+
+    private var backupCard: some View {
+        @Bindable var bk = env.backupSettings
+        return GlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Бэкап в iCloud").font(.headline)
+                    Spacer()
+                    if bk.busy { ProgressView().controlSize(.small) }
+                }
+                if bk.iCloudAvailable {
+                    Toggle("Автобэкап в iCloud Drive", isOn: $bk.enabled)
+                    Text("Сжатый снимок памяти (база, текст, поисковый индекс — без HEIC-медиа) уезжает в "
+                         + "iCloud Drive каждые 6 часов и при выходе. Живая база остаётся локальной — в iCloud "
+                         + "Drive её класть нельзя (corruption).")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Picker("Хранить копий", selection: $bk.keepN) {
+                        ForEach(BackupSettingsStore.keepOptions, id: \.self) { Text("\($0)").tag($0) }
+                    }
+                    HStack {
+                        Button("Сделать бэкап сейчас") { Task { await bk.backupNow() } }
+                            .disabled(bk.busy || !bk.enabled)
+                        Spacer()
+                        Button {
+                            NSWorkspace.shared.activateFileViewerSelecting([BackupManager.backupsDirectory()])
+                        } label: { Image(systemName: "folder") }
+                            .buttonStyle(.borderless).help("Папка бэкапов в Finder")
+                    }
+                    if let last = bk.lastBackupAt {
+                        Text("Последний: \(last.formatted(date: .abbreviated, time: .shortened))"
+                             + (bk.lastResult.map { " · \($0)" } ?? "") + " · копий: \(bk.backupCount)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let err = bk.error {
+                        Text(err).font(.caption).foregroundStyle(.red)
+                    }
+                } else {
+                    Text("iCloud Drive выключен или не залогинен. Включи iCloud Drive в Системных настройках — "
+                         + "и память начнёт автоматически бэкапиться в облако (сжатой, без выгрузки живой базы).")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var importCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Импорт из screenpipe").font(.headline)
+                Text("Найдена история screenpipe (~/.screenpipe). Перенесёт текст и метаданные (кадры, "
+                     + "окна, URL, транскрипты со спикерами) в память Slishu — поиск заработает по всей "
+                     + "старой истории. Медиа-файлы остаются у screenpipe. Можно прервать и продолжить позже.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Button {
+                        runImport()
+                    } label: {
+                        Label(importing ? "Импортирую…" : "Импортировать", systemImage: "square.and.arrow.down.on.square")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(importing)
+                    if importing { ProgressView().controlSize(.small) }
+                    if let s = importStatus { Text(s).font(.caption).foregroundStyle(.secondary) }
+                }
+            }
+        }
+    }
+
+    private func runImport() {
+        guard let importer = env.screenpipeImporter else { return }
+        importing = true
+        importStatus = nil
+        Task {
+            do {
+                let report = try await importer.run { f, a in
+                    Task { @MainActor in
+                        importStatus = "кадров \(f), аудио \(a)…"
+                    }
+                }
+                importStatus = "Готово: +\(report.frames) кадров, +\(report.audio) аудио. Семантика доиндексируется фоном."
+                await env.storageSettings.refresh(storage: env.storage, db: env.db)
+                await env.timelineStore?.load()
+            } catch {
+                importStatus = "Импорт прервался: \(error.localizedDescription)"
+            }
+            importing = false
+        }
     }
 
     private var privacyCard: some View {

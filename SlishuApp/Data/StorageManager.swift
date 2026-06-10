@@ -6,11 +6,7 @@ final class StorageManager: Sendable {
     let mediaDirectory: URL
 
     init() throws {
-        let support = try FileManager.default.url(for: .applicationSupportDirectory,
-                                                  in: .userDomainMask, appropriateFor: nil, create: true)
-        let dir = support.appendingPathComponent("Slishu/media", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        self.mediaDirectory = dir
+        self.mediaDirectory = StorageLocation.mediaDirectory()   // учитывает relocate
     }
 
     func url(forRelative relativePath: String) -> URL {
