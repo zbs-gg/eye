@@ -6,7 +6,8 @@ enum APIDTO {
         let status: String
         let version: String
         let capturing: Bool
-        let port: Int
+        // `port` НЕ светим: он уже в port-файле для своих, а в неавторизованном /health это лишний
+        // информационный сигнал атакующему (не нужно сканировать). `capturing` оставлен — его читает MCP.
     }
     struct AppRef: Encodable { let bundleId: String?; let name: String? }
     struct Media: Encodable {

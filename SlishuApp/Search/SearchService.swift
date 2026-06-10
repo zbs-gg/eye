@@ -23,8 +23,8 @@ actor SearchService {
     func search(query: String, filters: SearchFilters) async throws -> [SearchResult] {
         // окно кандидатов: с запасом над offset+limit; app-фильтр режется ПОСТ-фильтром (Unicode),
         // поэтому при нём окно шире — иначе редкое приложение утонет в чужих кандидатах
-        var window = min(filters.offset + filters.limit + 40, 400)
-        if filters.app != nil { window = min(window * 3, 600) }
+        let baseWindow = min(filters.offset + filters.limit + 40, 400)
+        let window = filters.app != nil ? min(baseWindow * 3, 600) : baseWindow
 
         // FTS и эмбеддинг запроса — параллельно (не зависят друг от друга). query-префикс для e5.
         async let ftsTask = ftsSearch(query, filters: filters, limit: window)
@@ -49,12 +49,17 @@ actor SearchService {
         }
 
         if let qvec = await qvecTask {
-            // Две semantic-ноги параллельно: экран и транскрипты (cross-lingual и для звонков).
-            // kind-фильтр гасит ненужную ногу целиком.
-            async let semScreenTask = filters.kind == .audio ? [] : semanticSearch(qvec, filters: filters, limit: window)
-            async let semAudioTask = filters.kind == .screen ? [] : semanticTranscripts(qvec, filters: filters, limit: min(window, 80))
-            let semIds = (try? await semScreenTask) ?? []
-            let semAudio = (try? await semAudioTask) ?? []
+            // Две semantic-ноги ПАРАЛЛЕЛЬНО (async let → DB-чтения перекрываются через pool): экран и
+            // транскрипты (cross-lingual, для звонков). kind-фильтр И app-фильтр гасят ненужную ногу
+            // целиком (у аудио нет appId — при app-фильтре оно всё равно отсеется в matches(), не жжём KNN).
+            // Recency-first: без time-фильтра KNN сначала по горячим шардам — на большой истории 37 vs 370мс.
+            let appFiltered = !(filters.app?.isEmpty ?? true)
+            async let semIdsTask: [Int64] = filters.kind == .audio ? [] :
+                recencyFirst(window) { try await self.semanticSearch(qvec, filters: filters, limit: window, buckets: $0) }
+            async let semAudioTask: [Int64] = (filters.kind == .screen || appFiltered) ? [] :
+                recencyFirst(min(window, 80)) { try await self.semanticTranscripts(qvec, filters: filters, limit: min(window, 80), buckets: $0) }
+            let semIds = await semIdsTask
+            let semAudio = await semAudioTask
 
             for (rank, captureId) in semIds.enumerated() {
                 let k = "screen:\(captureId)"
@@ -103,10 +108,12 @@ actor SearchService {
 
     // MARK: legs
 
-    private func semanticSearch(_ qvec: [Float], filters: SearchFilters, limit: Int) async throws -> [Int64] {
+    private func semanticSearch(_ qvec: [Float], filters: SearchFilters, limit: Int,
+                                buckets: (Int, Int)? = nil) async throws -> [Int64] {
         let blob = floatBlob(qvec)
-        // temporal shard: месячные партиции vec0 режут KNN-скан при заданном времени
-        let (b0, b1) = Self.bucketRange(filters)
+        // temporal shard: месячные партиции vec0 режут KNN-скан. Явный time-фильтр главнее recency-окна.
+        let (b0, b1) = (filters.from != nil || filters.to != nil) ? Self.bucketRange(filters)
+                       : (buckets ?? Self.bucketRange(filters))
         return try await db.pool.read { db in
             try Int64.fetchAll(db, sql: """
                 SELECT capture_id FROM vec_screen
@@ -117,9 +124,11 @@ actor SearchService {
 
     /// Semantic по транскриптам: vec_transcripts → transcription_id → audioId (ключ RRF — audio,
     /// как у FTS-ноги: дедуп по аудио-сегменту, не по строке транскрипта).
-    private func semanticTranscripts(_ qvec: [Float], filters: SearchFilters, limit: Int) async throws -> [Int64] {
+    private func semanticTranscripts(_ qvec: [Float], filters: SearchFilters, limit: Int,
+                                     buckets: (Int, Int)? = nil) async throws -> [Int64] {
         let blob = floatBlob(qvec)
-        let (b0, b1) = Self.bucketRange(filters)
+        let (b0, b1) = (filters.from != nil || filters.to != nil) ? Self.bucketRange(filters)
+                       : (buckets ?? Self.bucketRange(filters))
         return try await db.pool.read { db in
             let tids = try Int64.fetchAll(db, sql: """
                 SELECT transcription_id FROM vec_transcripts
@@ -147,8 +156,20 @@ actor SearchService {
         return (lo, hi)
     }
 
-    /// Две независимые FTS-ноги. app-фильтра в SQL НЕТ намеренно: SQLite lower() — ASCII-only,
-    /// кириллические имена («Заметки») молча теряли все точные матчи; фильтрует Swift-пост-фильтр.
+    /// Recency-first: прогон ноги по последним ~2 месяцам; мало кандидатов → добор по всей истории
+    /// (свежие ids идут первыми — recency-boost через порядок ранжирования RRF).
+    private func recencyFirst(_ want: Int, _ leg: ((Int, Int)?) async throws -> [Int64]) async -> [Int64] {
+        let recentLo = monthBucket(Date().addingTimeInterval(-60 * 86_400))
+        let recent = (try? await leg((recentLo, 999_912))) ?? []
+        if recent.count >= max(10, want / 3) { return recent }
+        let full = (try? await leg(nil)) ?? []
+        var seen = Set(recent)
+        return recent + full.filter { seen.insert($0).inserted }
+    }
+
+    /// Две независимые FTS-ноги. app-фильтр: needle резолвится в appId-список В SWIFT (Unicode-корректно;
+    /// SQLite lower() — ASCII-only и ломал кириллицу) и уходит в SQL как `appId IN (…)` — без потерь
+    /// (пост-фильтр поверх topN терял редкие приложения, тонущие за частыми словами).
     private func ftsSearch(_ query: String, filters: SearchFilters,
                            limit: Int) async throws -> (screen: [SearchResult], audio: [SearchResult]) {
         let match = Self.ftsQuery(query)
@@ -156,22 +177,47 @@ actor SearchService {
         let fromMs = filters.from.map(msFromDate) ?? 0
         let toMs = filters.to.map(msFromDate) ?? Int64.max
         let wantScreen = filters.kind != .audio
-        let wantAudio = filters.kind != .screen
+        // у аудио нет appId → при app-фильтре аудио-нога заведомо пуста, не делаем лишний FTS-скан
+        let wantAudio = filters.kind != .screen && (filters.app?.isEmpty ?? true)
+        // app-needle → ids (таблица apps маленькая; contains по Unicode-lowercased)
+        let appIdsClause: String
+        if let app = filters.app?.lowercased(), !app.isEmpty {
+            let ids: [Int64] = try await db.pool.read { db in
+                try Row.fetchAll(db, sql: "SELECT id, bundleId, name FROM apps").compactMap { row in
+                    let b = ((row["bundleId"] as String?) ?? "").lowercased()
+                    let n = ((row["name"] as String?) ?? "").lowercased()
+                    return (b.contains(app) || n.contains(app)) ? row["id"] : nil
+                }
+            }
+            guard !ids.isEmpty else { return ([], []) }   // такого приложения нет — честный ноль
+            appIdsClause = "AND c.appId IN (\(ids.map(String.init).joined(separator: ",")))"
+        } else {
+            appIdsClause = ""
+        }
         return try await db.pool.read { db in
             var screen: [SearchResult] = []
             var audio: [SearchResult] = []
             if wantScreen {
+                // snippet()/bm25() считаются в подзапросе ЧИСТО по FTS-таблице (hits): доп-условия по
+                // joined-таблицам (ts BETWEEN) меняют план и SQLite теряет FTS-контекст —
+                // «unable to use function snippet» (пойман живым прогоном на 50k импортированных блоков).
                 let screenSQL = """
-                WITH ranked AS (
+                WITH hits AS (
+                    SELECT rowid AS tbid, snippet(text_fts, 0, '⟦', '⟧', '…', 12) AS snip,
+                           bm25(text_fts) AS rank
+                    FROM text_fts WHERE text_fts MATCH ?
+                    ORDER BY rank LIMIT 5000
+                ),
+                ranked AS (
                     SELECT c.id AS id, c.ts AS ts, a.bundleId AS bundleId, a.name AS appName,
                            c.windowTitle AS windowTitle, c.browserUrl AS browserUrl, c.relativePath AS relativePath,
-                           snippet(text_fts, 0, '⟦', '⟧', '…', 12) AS snip, bm25(text_fts) AS rank,
-                           ROW_NUMBER() OVER (PARTITION BY c.id ORDER BY bm25(text_fts)) AS rn
-                    FROM text_fts
-                    JOIN text_blocks tb ON tb.id = text_fts.rowid
+                           h.snip AS snip, h.rank AS rank,
+                           ROW_NUMBER() OVER (PARTITION BY c.id ORDER BY h.rank) AS rn
+                    FROM hits h
+                    JOIN text_blocks tb ON tb.id = h.tbid
                     JOIN screen_captures c ON c.id = tb.captureId
                     LEFT JOIN apps a ON a.id = c.appId
-                    WHERE text_fts MATCH ? AND c.ts BETWEEN ? AND ?
+                    WHERE c.ts BETWEEN ? AND ? \(appIdsClause)
                 )
                 SELECT id, ts, bundleId, appName, windowTitle, browserUrl, relativePath, snip, rank
                 FROM ranked WHERE rn = 1 ORDER BY rank LIMIT ?
@@ -186,15 +232,22 @@ actor SearchService {
                 }
             }
             if wantAudio {
+                // та же hits-схема, что и для экрана (см. комментарий выше)
                 let audioSQL = """
-                WITH ranked AS (
+                WITH hits AS (
+                    SELECT rowid AS trid, snippet(transcription_fts, 0, '⟦', '⟧', '…', 12) AS snip,
+                           bm25(transcription_fts) AS rank
+                    FROM transcription_fts WHERE transcription_fts MATCH ?
+                    ORDER BY rank LIMIT 5000
+                ),
+                ranked AS (
                     SELECT ac.id AS id, ac.ts AS ts, ac.relativePath AS relativePath, ac.channel AS channel,
-                           snippet(transcription_fts, 0, '⟦', '⟧', '…', 12) AS snip, bm25(transcription_fts) AS rank,
-                           ROW_NUMBER() OVER (PARTITION BY ac.id ORDER BY bm25(transcription_fts)) AS rn
-                    FROM transcription_fts
-                    JOIN transcriptions tr ON tr.id = transcription_fts.rowid
+                           h.snip AS snip, h.rank AS rank,
+                           ROW_NUMBER() OVER (PARTITION BY ac.id ORDER BY h.rank) AS rn
+                    FROM hits h
+                    JOIN transcriptions tr ON tr.id = h.trid
                     JOIN audio_captures ac ON ac.id = tr.audioId
-                    WHERE transcription_fts MATCH ? AND ac.ts BETWEEN ? AND ?
+                    WHERE ac.ts BETWEEN ? AND ?
                 )
                 SELECT id, ts, relativePath, channel, snip, rank FROM ranked WHERE rn = 1 ORDER BY rank LIMIT ?
                 """
