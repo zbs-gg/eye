@@ -2,6 +2,22 @@ import Foundation
 
 enum SearchKind: String, Sendable { case screen, audio }
 
+/// Фильтры поиска (UI, REST, MCP — один контракт): «что я видел про X на прошлой неделе в Safari».
+struct SearchFilters: Sendable {
+    var from: Date?
+    var to: Date?
+    var app: String?          // подстрока bundleId или имени приложения (case-insensitive), только screen
+    var kind: SearchKind?     // nil = оба
+    var limit: Int = 60
+    var offset: Int = 0       // пагинация поверх RRF-ранжирования
+
+    init(from: Date? = nil, to: Date? = nil, app: String? = nil, kind: SearchKind? = nil,
+         limit: Int = 60, offset: Int = 0) {
+        self.from = from; self.to = to; self.app = app; self.kind = kind
+        self.limit = max(1, min(limit, 200)); self.offset = max(0, offset)
+    }
+}
+
 struct SearchResult: Sendable, Identifiable {
     let id: Int64
     let kind: SearchKind
@@ -57,6 +73,7 @@ struct AudioDetail: Sendable, Identifiable {
     let relativePath: String
     let transcript: String?
     let language: String?
+    let speaker: String?      // «я» / «собеседник» (channel-прокси диаризации)
 }
 
 @inline(__always) func dateFromMs(_ ms: Int64) -> Date { Date(timeIntervalSince1970: Double(ms) / 1000) }

@@ -28,6 +28,15 @@ struct MenuBarContent: View {
             Button(env.recording.isCapturing ? "Поставить на паузу" : "Начать запись") {
                 env.recording.toggle()
             }
+            if env.recording.isCapturing {
+                // privacy-микропауза: «сейчас будет чувствительное — не пиши 15 минут»
+                Button("Не записывать 15 минут") { env.recording.pauseFor(minutes: 15) }
+            }
+            if let until = env.recording.pausedUntil {
+                Text("Возобновится в \(until.formatted(date: .omitted, time: .shortened))")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Возобновить сейчас") { env.recording.resumeNow() }
+            }
             Button("Открыть Slishu") { openWindow(id: "main") }
 
             Divider()

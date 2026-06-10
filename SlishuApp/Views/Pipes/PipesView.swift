@@ -28,6 +28,7 @@ private struct PipeBody: View {
                     notReadyCard
                 } else {
                     controls
+                    scheduleCard
                     if let p = store.preview { previewCard(p) }
                     if let w = store.lastWrite { writeSuccess(w) }
                     if let e = store.errorText, store.phase == .failed { errorCard(e) }
@@ -91,6 +92,30 @@ private struct PipeBody: View {
                         Button("Отмена") { store.cancelPreview() }
                             .buttonStyle(.bordered)
                     }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(6)
+        }
+    }
+
+    private var scheduleCard: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle("Собирать конспект автоматически", isOn: $store.scheduleEnabled)
+                if store.scheduleEnabled {
+                    Picker("Время", selection: $store.scheduleHour) {
+                        ForEach([17, 18, 19, 20, 21, 22, 23], id: \.self) { h in
+                            Text(String(format: "%02d:00", h)).tag(h)
+                        }
+                    }
+                    .fixedSize()
+                    Toggle("Сразу записывать без превью", isOn: $store.autoWriteEnabled)
+                        .disabled(!store.hasWrittenManually)
+                    Text(store.hasWrittenManually
+                         ? "Готовый конспект придёт уведомлением. Авто-запись кладёт его в папку без подтверждения."
+                         : "Авто-запись откроется после первой ручной записи — сначала проверь формат глазами (защита от мусора и инъекций из истории).")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

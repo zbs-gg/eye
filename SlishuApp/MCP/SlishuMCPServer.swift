@@ -45,8 +45,63 @@ enum SlishuMCPServer {
                 guard let search, !q.isEmpty else {
                     return .init(content: [.text("Нет запроса или БД недоступна.")], isError: true)
                 }
-                let results = (try? await search.search(query: q, limit: 25)) ?? []
-                return .init(content: [.text(Self.formatResults(q, results))])
+                var kind: SearchKind? = nil
+                if let k = args["kind"]?.stringValue {
+                    guard let parsed = SearchKind(rawValue: k) else {
+                        return .init(content: [.text("kind: screen | audio")], isError: true)
+                    }
+                    kind = parsed
+                }
+                // Присутствующий, но нераспарсенный from/to — honest error, не молчаливый сброс фильтра
+                var from: Date? = nil
+                if let s = args["from"], let str = Self.timeString(s) {
+                    guard let d = Self.parseTime(str) else {
+                        return .init(content: [.text("from не распарсился: нужен ISO8601 или epoch-ms")], isError: true)
+                    }
+                    from = d
+                }
+                var to: Date? = nil
+                if let s = args["to"], let str = Self.timeString(s) {
+                    guard let d = Self.parseTime(str) else {
+                        return .init(content: [.text("to не распарсился: нужен ISO8601 или epoch-ms")], isError: true)
+                    }
+                    to = d
+                }
+                let limit = args["limit"]?.intValue
+                    ?? args["limit"]?.stringValue.flatMap { Int($0) }   // limit строкой — частый кейс агентов
+                let filters = SearchFilters(
+                    from: from, to: to,
+                    app: args["app"]?.stringValue,
+                    kind: kind,
+                    limit: limit ?? 25)
+                do {
+                    let results = try await search.search(query: q, filters: filters)
+                    return .init(content: [.text(Self.formatResults(q, results))])
+                } catch {
+                    // честная ошибка: агент должен отличать «не нашлось» от «БД сломана»
+                    return .init(content: [.text("Поиск упал: \(error)")], isError: true)
+                }
+
+            case "get_transcript":
+                guard let timeline else {
+                    return .init(content: [.text("БД недоступна.")], isError: true)
+                }
+                guard let id = args["audio_id"]?.intValue
+                        ?? args["audio_id"]?.stringValue.flatMap({ Int($0) }) else {
+                    return .init(content: [.text("Нужен audio_id (из результатов поиска).")], isError: true)
+                }
+                let detail: AudioDetail?
+                do { detail = try await timeline.audioDetail(id: Int64(id)) }
+                catch {
+                    return .init(content: [.text("Чтение БД упало: \(error)")], isError: true)
+                }
+                guard let d = detail else {
+                    return .init(content: [.text("Аудио-сегмент #\(id) не найден.")], isError: true)
+                }
+                var out = "Аудио #\(d.id) [\(d.ts.formatted(date: .abbreviated, time: .standard))] "
+                out += "\(d.speaker ?? (d.channel == "mic" ? "я" : "собеседник")) · \(Int(d.durationSec))с"
+                out += "\n\n" + (d.transcript ?? "(транскрипта нет — аудио записано, текст не распознан)")
+                return .init(content: [.text(out)])
 
             case "get_context_at":
                 let timeStr = args["time"]?.stringValue ?? ""
@@ -99,10 +154,25 @@ enum SlishuMCPServer {
         }
         return [
             Tool(name: "search_history",
-                 description: "Полнотекстовый поиск по истории экрана и аудио пользователя (что он видел/делал).",
+                 description: "Гибридный поиск (точные слова + по смыслу, ru/en) по истории экрана и аудио пользователя.",
                  inputSchema: .object(["type": .string("object"),
-                                       "properties": .object(["query": strProp("поисковый запрос")]),
+                                       "properties": .object([
+                                           "query": strProp("поисковый запрос"),
+                                           "from": strProp("необязательно: начало диапазона, ISO8601 или epoch-ms"),
+                                           "to": strProp("необязательно: конец диапазона, ISO8601 или epoch-ms"),
+                                           "app": strProp("необязательно: подстрока bundleId/имени приложения (только экран)"),
+                                           "kind": strProp("необязательно: screen | audio"),
+                                           "limit": .object(["type": .string("integer"),
+                                                             "description": .string("максимум результатов (default 25)")]),
+                                       ]),
                                        "required": .array([.string("query")])])),
+            Tool(name: "get_transcript",
+                 description: "Транскрипт аудио-сегмента по audio_id из результатов поиска (что говорили в звонке).",
+                 inputSchema: .object(["type": .string("object"),
+                                       "properties": .object(["audio_id": .object([
+                                           "type": .string("integer"),
+                                           "description": .string("id аудио-результата поиска")])]),
+                                       "required": .array([.string("audio_id")])])),
             Tool(name: "get_context_at",
                  description: "Что было на экране в указанный момент: приложение, окно, URL, текст.",
                  inputSchema: .object(["type": .string("object"),
@@ -129,11 +199,16 @@ enum SlishuMCPServer {
     private static func formatResults(_ q: String, _ results: [SearchResult]) -> String {
         guard !results.isEmpty else { return "По запросу «\(q)» ничего не найдено." }
         var out = "Найдено \(results.count) по «\(q)»:\n"
-        for r in results.prefix(25) {
+        for r in results {
             let app = r.appName ?? r.bundleId ?? "—"
             let when = r.ts.formatted(date: .abbreviated, time: .shortened)
             let snip = r.snippet.replacingOccurrences(of: "\n", with: " ")
-            out += "\n• [\(when)] \(app)\(r.windowTitle.map { " · \($0)" } ?? ""): \(snip)"
+            // id в ответе: агент может сослаться на конкретный кадр/аудио в follow-up
+            let ref = r.kind == .audio ? "audio_id=\(r.id)" : "frame_id=\(r.id)"
+            out += "\n• [\(when)] \(app)\(r.windowTitle.map { " · \($0)" } ?? "") (\(ref)): \(snip)"
+        }
+        if !results.isEmpty {
+            out += "\n\nДля аудио: get_transcript(audio_id). Для момента экрана: get_context_at(time)."
         }
         return out
     }
@@ -214,7 +289,14 @@ enum SlishuMCPServer {
     }
 
     private static func parseTime(_ s: String) -> Date? {
-        if let ms = Int64(s) { return dateFromMs(ms) }
-        return ISO8601DateFormatter().date(from: s)
+        SlishuHTTPServer.parseTimeParam(s)
+    }
+
+    /// MCP Value времени: строка или число (epoch-ms) — агенты шлют и так и так.
+    private static func timeString(_ v: Value) -> String? {
+        if let s = v.stringValue { return s }
+        if let i = v.intValue { return String(i) }
+        if let d = v.doubleValue { return String(Int64(d)) }
+        return nil
     }
 }

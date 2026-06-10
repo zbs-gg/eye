@@ -33,6 +33,8 @@ final class CaptureCoordinator {
     private var emptyStreak: [String: Int] = [:]
     private var lastContentText: [String: String] = [:]
     private var sckFailureStreak = 0
+    private var lastIdleCaptureAt = Date.distantPast
+    private var burstTask: Task<Void, Never>?
 
     var onFrame: (@MainActor () -> Void)?
     /// N SCK-отказов подряд при выданном праве (классика -3801: TCC требует перезапуск процесса) —
@@ -45,6 +47,10 @@ final class CaptureCoordinator {
     var onCycleOK: (@MainActor () -> Void)?
     /// Возвращает false при критично малом свободном месте — цикл пропускает захват (диск не добиваем).
     var diskOK: @MainActor () -> Bool = { true }
+    /// Privacy-исключения (1Password/банк): true → приложение не записываем. Дефолт — пишем всё.
+    var isIgnoredApp: @MainActor (String) -> Bool = { _ in false }
+    /// Полный список исключённых (для SCContentFilter: вырезать их окна из ЛЮБОГО кадра, не только фокус).
+    var ignoredBundleIds: @MainActor () -> Set<String> = { [] }
 
     init(ingest: IngestService, config: CaptureConfig = CaptureConfig()) {
         self.ingest = ingest
@@ -73,6 +79,16 @@ final class CaptureCoordinator {
                                          object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.suspended = false }
         })
+        // Сон ДИСПЛЕЯ (без сна системы) — иначе idle-захват всю ночь писал бы чёрные кадры,
+        // а SCK-ошибки взводили бы ложный «нужен перезапуск».
+        observers.append(wsc.addObserver(forName: NSWorkspace.screensDidSleepNotification,
+                                         object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.suspended = true }
+        })
+        observers.append(wsc.addObserver(forName: NSWorkspace.screensDidWakeNotification,
+                                         object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.suspended = false }
+        })
         observers.append(wsc.addObserver(forName: NSWorkspace.didTerminateApplicationNotification,
                                          object: nil, queue: .main) { [weak self] note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
@@ -97,6 +113,14 @@ final class CaptureCoordinator {
                                                     object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.suspended = false }
         })
+        distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screensaver.didstart"),
+                                                    object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.suspended = true }
+        })
+        distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screensaver.didstop"),
+                                                    object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.suspended = false }
+        })
 
         tickTimer = Timer.scheduledTimer(withTimeInterval: config.activeTickSeconds, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tickFired() }
@@ -114,6 +138,7 @@ final class CaptureCoordinator {
         distributedObservers.removeAll()
         tickTimer?.invalidate(); tickTimer = nil
         cycleTask?.cancel(); cycleTask = nil
+        burstTask?.cancel(); burstTask = nil
         pendingCycle = false
         emptyStreak.removeAll(); lastContentText.removeAll()
         Task { await axReader.reset() }
@@ -123,10 +148,19 @@ final class CaptureCoordinator {
 
     private func tickFired() {
         guard isRunning, !suspended else { return }
-        // idle: нет ввода дольше порога → не захватываем по тику (smart-pause). Это ЗДОРОВЬЕ, не сбой —
-        // heartbeat отбиваем, иначе UI после обеда кричал бы «захват умер».
+        // idle: нет ввода дольше порога → РЕДКИЙ режим (кадр раз в idleCaptureInterval), не полный стоп:
+        // «записывать всё» включает входящее без ввода — чтение, видео, прилетающие сообщения.
+        // Это ЗДОРОВЬЕ, не сбой — heartbeat отбиваем, иначе UI после обеда кричал бы «захват умер».
         let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
-        if idle > config.idleThresholdSec { onCycleOK?(); return }
+        if idle > config.idleThresholdSec {
+            onCycleOK?()
+            let now = Date()
+            if now.timeIntervalSince(lastIdleCaptureAt) >= config.idleCaptureIntervalSec {
+                lastIdleCaptureAt = now
+                trigger()
+            }
+            return
+        }
         trigger()
     }
 
@@ -134,6 +168,17 @@ final class CaptureCoordinator {
         guard !suspended else { return }
         Task { await pipeline.invalidateContent() }
         trigger()
+        // burst trio: немедленный кадр выше + кадры на 700мс/2с — Electron/web часто ещё не дорисованы
+        // к первому захвату (план: «недорисованный кадр уходит в историю, а его phash гасит дорисованный»)
+        burstTask?.cancel()
+        let delays = config.burstTrioDelays
+        burstTask = Task { @MainActor [weak self] in
+            for d in delays {
+                try? await Task.sleep(for: .seconds(d))
+                guard !Task.isCancelled, let self, self.isRunning, !self.suspended else { return }
+                self.trigger()
+            }
+        }
     }
 
     private func trigger() {
@@ -153,6 +198,8 @@ final class CaptureCoordinator {
         guard diskOK() else { return }   // диск почти полон — не пишем (статус поднимает AppEnvironment)
         guard let app = NSWorkspace.shared.frontmostApplication,
               let bundleId = app.bundleIdentifier else { return }
+        // privacy-исключение: осознанный skip = здоровье цикла (heartbeat), а не сбой
+        if isIgnoredApp(bundleId) { onCycleOK?(); return }
         let pid = app.processIdentifier
         let appName = app.localizedName ?? bundleId
 
@@ -185,7 +232,8 @@ final class CaptureCoordinator {
 
         let frame: ProcessedFrame?
         do {
-            frame = try await pipeline.process(displayID: focusedDisplayID, needsOCR: needsOCR)
+            frame = try await pipeline.process(displayID: focusedDisplayID, needsOCR: needsOCR,
+                                               excludedBundleIds: ignoredBundleIds())
             if sckFailureStreak > 0 { onCaptureRecovered?() }   // транзиентный сбой прошёл — снять ratchet
             sckFailureStreak = 0
             onCycleOK?()

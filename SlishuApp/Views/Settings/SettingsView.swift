@@ -8,6 +8,8 @@ struct SettingsView: View {
     @State private var confirmDelete: TimeInterval?   // секунды; -1 = всё
     @State private var deleting = false
     @State private var deleteOutcome: String?          // отчёт/ошибка удаления — алертом
+    @State private var exporting = false
+    @State private var exportResult: String?
 
     var body: some View {
         ScrollView {
@@ -16,6 +18,7 @@ struct SettingsView: View {
                 permissionsCard
                 launchCard
                 storageCard
+                privacyCard
                 transcriptionCard
                 serverCard
             }
@@ -126,6 +129,26 @@ struct SettingsView: View {
                 }
                 Text("Случайно записанный пароль или чувствительный разговор можно стереть навсегда (файлы, текст, индексы).")
                     .font(.caption).foregroundStyle(.secondary)
+                Divider()
+                HStack {
+                    Text("Экспорт").font(.callout)
+                    Spacer()
+                    if exporting { ProgressView().controlSize(.small) }
+                    Menu("Экспортировать…") {
+                        Button("Сегодня (markdown)") { runExport(days: 1, media: false) }
+                        Button("Сегодня (markdown + медиа)") { runExport(days: 1, media: true) }
+                        Divider()
+                        Button("Вся история (markdown)") { runExport(days: nil, media: false) }
+                        Button("Вся история (markdown + медиа)") { runExport(days: nil, media: true) }
+                    }
+                    .fixedSize()
+                    .disabled(exporting)
+                }
+                Text("Забрать память с собой: markdown по дням (активность + разговоры), опционально кадры и аудио.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let r = exportResult {
+                    Label(r, systemImage: "checkmark.circle").font(.caption).foregroundStyle(.green)
+                }
             }
         }
         .confirmationDialog(deleteTitle, isPresented: deleteBinding, titleVisibility: .visible) {
@@ -155,6 +178,33 @@ struct SettingsView: View {
         .task { await env.storageSettings.refresh(storage: env.storage) }
     }
 
+    /// Экспорт: выбор папки → ExportService. days=nil → вся история.
+    private func runExport(days: Int?, media: Bool) {
+        guard let export = env.export else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.prompt = "Экспортировать сюда"
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        exporting = true
+        exportResult = nil
+        let from: Date
+        if let days {
+            from = Calendar.current.startOfDay(for: Date().addingTimeInterval(-Double(days - 1) * 86_400))
+        } else {
+            from = Date(timeIntervalSince1970: 0)
+        }
+        Task {
+            let report = try? await export.export(from: from, to: Date(), into: dest, includeMedia: media)
+            exporting = false
+            exportResult = report.map {
+                var s = "Готово: \($0.days) дн." + (media ? ", \($0.mediaFiles) медиа-файлов" : "")
+                if $0.mediaErrors > 0 { s += ", ошибок копирования: \($0.mediaErrors)" }
+                return s + " → \($0.path)"
+            } ?? "Экспорт не удался"
+        }
+    }
+
     private var deleteTitle: String {
         guard let s = confirmDelete else { return "" }
         if s < 0 { return "Удалить ВСЮ историю? Это безвозвратно." }
@@ -163,6 +213,39 @@ struct SettingsView: View {
     }
     private var deleteBinding: Binding<Bool> {
         Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })
+    }
+
+    private var privacyCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Приватность").font(.headline)
+                Text("По умолчанию Slishu записывает всё. Исключи приложения, которые не должны попадать "
+                     + "в память (менеджер паролей, банк) — их окна вырезаются из кадров и текста. "
+                     + "ЗВУК исключение не гасит (он не привязан к окнам): для чувствительного разговора "
+                     + "используй «Не записывать 15 минут» в меню-баре.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if env.privacy.ignoredBundleIds.isEmpty {
+                    Text("Исключений нет.").font(.callout).foregroundStyle(.secondary)
+                } else {
+                    ForEach(env.privacy.ignoredBundleIds, id: \.self) { id in
+                        HStack {
+                            Image(systemName: "eye.slash").foregroundStyle(.secondary)
+                            Text(env.privacy.displayNames[id] ?? id)
+                            Text(id).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            Spacer()
+                            Button { env.privacy.remove(id) } label: { Image(systemName: "minus.circle") }
+                                .buttonStyle(.borderless)
+                        }
+                    }
+                }
+                Button {
+                    env.privacy.addAppViaPanel()
+                } label: {
+                    Label("Исключить приложение…", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+            }
+        }
     }
 
     private var transcriptionCard: some View {

@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import AppKit
+import UserNotifications
 
 /// UI-состояние pipe «саммари дня». Поток жёстко preview-then-write (план: firstRunRequiresPreview):
 /// сначала «Собрать превью» (collect+LLM, без записи) → пользователь видит результат → «Записать».
@@ -17,6 +18,32 @@ final class DaySummaryStore {
 
     /// Превью валидно только для дня, под который собрано. Смена дня в DatePicker обнуляет превью и
     /// карточку записи — иначе кнопка «Записать» обещала бы новый день, а записала бы старое превью.
+    // ── расписание: «конспект сам в конце дня» (US-33). Auto-write только после ≥1 ручной записи —
+    //    first-run preview обязателен (prompt-injection гейт из дизайна pipes). ──
+    var scheduleEnabled: Bool = UserDefaults.standard.bool(forKey: "slishu.pipe.scheduleEnabled") {
+        didSet {
+            UserDefaults.standard.set(scheduleEnabled, forKey: "slishu.pipe.scheduleEnabled")
+            if scheduleEnabled {
+                Self.requestNotificationAuth()
+                // точка отсчёта = вчера: включение расписания не должно тут же генерить catch-up
+                if UserDefaults.standard.string(forKey: "slishu.pipe.lastAutoDone") == nil {
+                    let y = Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
+                    UserDefaults.standard.set(DailySummaryService.ymd(y), forKey: "slishu.pipe.lastAutoDone")
+                }
+            }
+        }
+    }
+    var scheduleHour: Int = UserDefaults.standard.object(forKey: "slishu.pipe.scheduleHour") == nil
+        ? 21 : UserDefaults.standard.integer(forKey: "slishu.pipe.scheduleHour") {
+        didSet { UserDefaults.standard.set(scheduleHour, forKey: "slishu.pipe.scheduleHour") }
+    }
+    var autoWriteEnabled: Bool = UserDefaults.standard.bool(forKey: "slishu.pipe.autoWrite") {
+        didSet { UserDefaults.standard.set(autoWriteEnabled, forKey: "slishu.pipe.autoWrite") }
+    }
+    /// Была ли хоть одна РУЧНАЯ запись (юзер видел и одобрил формат) — гейт для auto-write.
+    private(set) var hasWrittenManually = UserDefaults.standard.bool(forKey: "slishu.pipe.manualWriteDone")
+    @ObservationIgnored private var schedulerTask: Task<Void, Never>?
+
     var selectedDay: Date = Calendar.current.startOfDay(for: Date()) {
         didSet {
             guard Calendar.current.startOfDay(for: selectedDay) != Calendar.current.startOfDay(for: oldValue)
@@ -82,6 +109,10 @@ final class DaySummaryStore {
             lastWrite = try await service.write(preview: p, destinationURL: url,
                                                 subfolder: connections.destination.subfolder)
             phase = .done
+            if !hasWrittenManually {
+                hasWrittenManually = true
+                UserDefaults.standard.set(true, forKey: "slishu.pipe.manualWriteDone")
+            }
         } catch {
             errorText = (error as? PipeError)?.errorDescription ?? error.localizedDescription
             phase = .failed
@@ -90,6 +121,94 @@ final class DaySummaryStore {
     }
 
     func refreshAudit() async { audit = await service.recentAudit() }
+
+    // MARK: расписание
+
+    /// Тик раз в 5 минут: после scheduleHour, один раз в день. Запуск из bootstrap.
+    func startScheduler() {
+        guard schedulerTask == nil else { return }
+        schedulerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(300))
+                await self?.scheduledTick()
+            }
+        }
+    }
+
+    private func scheduledTick() async {
+        guard scheduleEnabled, isReady, !isBusy else { return }
+        let now = Date()
+        let cal = Calendar.current
+        let todayYmd = DailySummaryService.ymd(now)
+        let yesterday = cal.date(byAdding: .day, value: -1, to: now) ?? now
+        let yesterdayYmd = DailySummaryService.ymd(yesterday)
+        let done = UserDefaults.standard.string(forKey: "slishu.pipe.lastAutoDone") ?? yesterdayYmd
+
+        // Цель прогона: catch-up за ВЧЕРА (Mac спал в scheduleHour — день не должен выпасть; история
+        // вчера уже полная, hour-гейт не нужен), иначе сегодня после scheduleHour.
+        let targetDay: Date
+        let targetYmd: String
+        if done < yesterdayYmd {
+            targetDay = cal.startOfDay(for: yesterday); targetYmd = yesterdayYmd
+        } else if done < todayYmd && cal.component(.hour, from: now) >= scheduleHour {
+            targetDay = cal.startOfDay(for: now); targetYmd = todayYmd
+        } else {
+            return
+        }
+
+        // Ретраи: transient-фейл (Ollama ещё не поднят в 21:00) не должен убивать день — до 3 попыток
+        // с шагом ≥15 минут. Успех фиксирует день окончательно.
+        let attemptDay = UserDefaults.standard.string(forKey: "slishu.pipe.attemptDay")
+        var attempts = attemptDay == targetYmd ? UserDefaults.standard.integer(forKey: "slishu.pipe.attemptCount") : 0
+        let lastAttempt = UserDefaults.standard.object(forKey: "slishu.pipe.lastAttemptAt") as? Date ?? .distantPast
+        guard attempts < 3, now.timeIntervalSince(lastAttempt) >= 900 || attempts == 0 else { return }
+        attempts += 1
+        UserDefaults.standard.set(targetYmd, forKey: "slishu.pipe.attemptDay")
+        UserDefaults.standard.set(attempts, forKey: "slishu.pipe.attemptCount")
+        UserDefaults.standard.set(now, forKey: "slishu.pipe.lastAttemptAt")
+
+        // Не перетираем работу юзера: если он смотрит ДРУГОЙ день с собранным превью — не трогаем
+        // его выбор (didSet снёс бы превью), просто зовём уведомлением.
+        if preview != nil && cal.startOfDay(for: selectedDay) != targetDay {
+            UserDefaults.standard.set(targetYmd, forKey: "slishu.pipe.lastAutoDone")
+            Self.notify(title: "Slishu", body: "Пора собрать конспект (\(targetYmd)) — открой Плагины.")
+            return
+        }
+
+        selectedDay = targetDay
+        // через previewTask — кнопка «Отмена» действует и на scheduled-прогон
+        previewTask?.cancel()
+        previewTask = Task { [weak self] in await self?.buildPreview() }
+        await previewTask?.value
+        guard preview != nil, phase == .done else {
+            if attempts >= 3 {
+                Self.notify(title: "Slishu", body: "Конспект (\(targetYmd)) не собрался после 3 попыток — открой Плагины (\(errorText ?? "ошибка")).")
+                UserDefaults.standard.set(targetYmd, forKey: "slishu.pipe.lastAutoDone")
+            }
+            return   // attempts < 3 → следующая попытка через ≥15 мин
+        }
+        UserDefaults.standard.set(targetYmd, forKey: "slishu.pipe.lastAutoDone")
+        if autoWriteEnabled && hasWrittenManually {
+            await writeApproved()
+            Self.notify(title: "Slishu", body: lastWrite != nil
+                ? "Конспект (\(targetYmd)) записан в \(connections.destination.subfolder.isEmpty ? "папку" : connections.destination.subfolder)."
+                : "Конспект собран, но запись не удалась — открой Плагины.")
+        } else {
+            Self.notify(title: "Slishu", body: "Конспект (\(targetYmd)) готов — открой Плагины, проверь и запиши.")
+        }
+    }
+
+    private static func requestNotificationAuth() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    private static func notify(title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req)
+    }
 
     func revealLastWrite() {
         guard let path = lastWrite?.path else { return }
