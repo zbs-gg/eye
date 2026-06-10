@@ -7,11 +7,11 @@ import Observation
 @MainActor
 @Observable
 final class StorageSettingsStore {
-    /// 0 = хранить вечно. Дефолт 7 (план v2: НЕ «forever» по умолчанию).
+    /// 0 = хранить вечно. Дефолт 0 («вечная память» — НЕ удаляем по умолчанию).
     var retentionDays: Int {
         didSet { if retentionDays != oldValue { UserDefaults.standard.set(retentionDays, forKey: Self.daysKey) } }
     }
-    /// Лимит в ГБ; 0 = без лимита. Дефолт 20.
+    /// Лимит в ГБ; 0 = без лимита. Дефолт 0.
     var maxGB: Int {
         didSet { if maxGB != oldValue { UserDefaults.standard.set(maxGB, forKey: Self.gbKey) } }
     }
@@ -23,8 +23,8 @@ final class StorageSettingsStore {
     @ObservationIgnored private static let daysKey = "slishu.retention.days"
     @ObservationIgnored private static let gbKey = "slishu.retention.maxGB"
 
-    static let dayOptions = [7, 14, 30, 90, 0]
-    static let gbOptions = [10, 20, 50, 100, 0]
+    static let dayOptions = [0, 7, 14, 30, 90]   // 0 = «Вечно» первым: дефолт и суть продукта
+    static let gbOptions = [0, 10, 20, 50, 100]   // 0 = «Без лимита» первым
 
     var effectiveDays: Int? { retentionDays <= 0 ? nil : retentionDays }
     var effectiveMaxBytes: Int64? { maxGB <= 0 ? nil : Int64(maxGB) * 1024 * 1024 * 1024 }
@@ -33,7 +33,7 @@ final class StorageSettingsStore {
         let d = UserDefaults.standard
         retentionDays = (d.object(forKey: Self.daysKey) == nil) ? RetentionPolicy.defaultDays
                                                                 : d.integer(forKey: Self.daysKey)
-        maxGB = (d.object(forKey: Self.gbKey) == nil) ? 20 : d.integer(forKey: Self.gbKey)
+        maxGB = (d.object(forKey: Self.gbKey) == nil) ? 0 : d.integer(forKey: Self.gbKey)
     }
 
     /// Пересчёт занятого места (медиа — обход папки, БД — размер sqlite+wal). Вызывается при открытии

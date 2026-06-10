@@ -1,10 +1,12 @@
 import Foundation
 import GRDB
 
-/// Дефолты retention (план v2 — НЕ «forever»). Пользователь может расширить в Settings.
+/// Дефолты retention. Slishu = «вечная память»: по умолчанию НИЧЕГО не удаляем (0 = вечно). Юзер
+/// может включить лимит по дням/объёму в Settings. Раньше дефолт 7д/20GB МОЛЧА срезал историю —
+/// для «вечной памяти» это противоречие сути продукта (и съело импорт из screenpipe вживую).
 enum RetentionPolicy: Sendable {
-    static let defaultDays = 7
-    static let defaultMaxBytes: Int64 = 20 * 1024 * 1024 * 1024   // 20 GB
+    static let defaultDays = 0                  // 0 = вечно
+    static let defaultMaxBytes: Int64 = 0       // 0 = без лимита
 }
 
 struct PruneReport: Sendable {
@@ -30,12 +32,14 @@ actor RetentionManager {
 
     func prune(retentionDays: Int?, maxBytes: Int64?) async throws -> PruneReport {
         var report = PruneReport()
-        if let days = retentionDays {
+        // FOOTGUN-ГВАРД: days/maxBytes ≤ 0 = «вечно» (НЕ «удалить всё старше 0 дней» / «ужать до 0 байт»).
+        // Без этого дефолт-вечность, случайно прилетевшая как 0, стёрла бы всю историю.
+        if let days = retentionDays, days > 0 {
             let cutoff = Int64(Date().addingTimeInterval(-Double(days) * 86400).timeIntervalSince1970 * 1000)
             report.framesDeleted += try await deleteFramesOlderThan(cutoff)
             report.audioDeleted += try await deleteAudioOlderThan(cutoff)
         }
-        if let maxBytes {
+        if let maxBytes, maxBytes > 0 {
             let (f, a) = try await enforceSizeLimit(maxBytes)
             report.framesDeleted += f
             report.audioDeleted += a
