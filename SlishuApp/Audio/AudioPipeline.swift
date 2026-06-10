@@ -78,7 +78,7 @@ actor AudioPipeline {
                 timestamp: ts, relativePath: rel, durationSec: durationSec, channel: channel,
                 bytes: bytes > 0 ? bytes : nil))
             await transcription.enqueue(AudioSegment(audioId: audioId, fileURL: url,
-                                                     ts: ts, durationSec: durationSec))
+                                                     ts: ts, durationSec: durationSec, channel: channel))
         } catch {
             Log.audio.error("segment write/ingest failed (\(self.channel, privacy: .public)): \(String(describing: error), privacy: .public)")
             try? FileManager.default.removeItem(at: url)   // файл-сирота не оставляем

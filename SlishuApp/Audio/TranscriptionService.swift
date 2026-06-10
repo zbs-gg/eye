@@ -47,6 +47,7 @@ actor TranscriptionService {
                                                      timeout: config.transcribeTimeoutSec)
                 try await ingest.ingest(TranscriptionRecord(
                     audioId: seg.audioId, ts: seg.ts, text: t.text, language: t.language, engine: t.engine,
+                    speaker: seg.channel == "mic" ? "я" : "собеседник",
                     startOffset: 0, endOffset: seg.durationSec))
                 transcribedCount += 1
             } catch {

@@ -24,6 +24,7 @@ private struct TimelineBody: View {
     @Bindable var store: TimelineStore
     @Environment(AppEnvironment.self) private var env
     @State private var seekTask: Task<Void, Never>?
+    @State private var jumpDate = Date()
     @FocusState private var searchFocused: Bool
 
     private var showResults: Bool { store.isSearching || !store.results.isEmpty }
@@ -45,6 +46,32 @@ private struct TimelineBody: View {
             }
             .animation(.easeInOut(duration: 0.18), value: showResults)
         }
+        .background { shortcuts }
+    }
+
+    /// Горячие клавиши: Space (плеер), ←/→ (шаг по кадрам), Cmd+F (поиск), Esc (закрыть поиск).
+    /// Невидимые кнопки — стандартный способ повесить шорткаты на вью. Space/стрелки отключены,
+    /// пока фокус в поисковом поле (иначе печатать невозможно).
+    @ViewBuilder private var shortcuts: some View {
+        Group {
+            if !searchFocused {
+                Button("") { store.togglePlay() }
+                    .keyboardShortcut(.space, modifiers: [])
+                Button("") { Task { await store.stepBackward() } }
+                    .keyboardShortcut(.leftArrow, modifiers: [])
+                Button("") { Task { await store.stepForward() } }
+                    .keyboardShortcut(.rightArrow, modifiers: [])
+            }
+            Button("") { searchFocused = true }
+                .keyboardShortcut("f", modifiers: .command)
+            if showResults {
+                Button("") { store.clearSearch(); searchFocused = false }
+                    .keyboardShortcut(.escape, modifiers: [])
+            }
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
     }
 
     // MARK: header (поиск + запись)
@@ -275,6 +302,18 @@ private struct TimelineBody: View {
                 Text(store.cursor.formatted(date: .abbreviated, time: .standard))
                     .font(.caption).monospacedDigit().foregroundStyle(.secondary)
                 Spacer(minLength: 8)
+                // быстрые прыжки: «прошлый вторник 15:00» больше не требует возни со слайдером
+                Button("Сегодня") { Task { await store.jumpToNewest() } }
+                    .controlSize(.small)
+                Button("Вчера") {
+                    let y = Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
+                    Task { await store.jump(to: y) }
+                }
+                .controlSize(.small)
+                DatePicker("", selection: $jumpDate, displayedComponents: .date)
+                    .labelsHidden().datePickerStyle(.compact).controlSize(.small)
+                    .onChange(of: jumpDate) { _, d in Task { await store.jump(to: d) } }
+                    .help("Перейти к дате")
                 Picker("", selection: Binding(get: { store.zoom },
                                               set: { z in Task { await store.setZoom(z) } })) {
                     ForEach(TimelineStore.Zoom.allCases) { Text($0.label).tag($0) }
