@@ -49,8 +49,12 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.slishu.app
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_ENTITLEMENTS: SlishuApp/Slishu.entitlements
+        # Дефолт — ad-hoc. Стабильная self-signed идентичность «Slishu Dev» (без $99-аккаунта):
+        # scripts/make-signing-cert.sh один раз, затем сборка с CODE_SIGN_IDENTITY="Slishu Dev"
+        # (scripts/build-release.sh делает это сам). Стабильная подпись = TCC-права и Keychain ACL
+        # переживают ребилды. Developer ID/нотаризация — когда появится платный аккаунт.
         CODE_SIGN_IDENTITY: "-"
-        # Hardened Runtime БЕЗ App Sandbox — добавится при упаковке (1d). Для dev — ad-hoc.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_NSScreenCaptureUsageDescription: "Slishu читает экран для истории активности и таймлайна, а также (если включено в настройках) записывает системный звук — звонки, встречи, видео — для поиска по разговорам. Всё остаётся на устройстве."
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Slishu записывает и транскрибирует аудио локально, для поиска по разговорам."
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Slishu распознаёт речь на устройстве для поиска по аудио."

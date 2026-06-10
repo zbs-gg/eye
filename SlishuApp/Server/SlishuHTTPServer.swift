@@ -56,6 +56,7 @@ actor SlishuHTTPServer {
     }
 
     static func log(_ s: String) {
+        Log.server.info("\(s, privacy: .public)")
         let line = "[\(Date())] \(s)\n"
         guard let data = line.data(using: .utf8),
               let dir = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
@@ -63,6 +64,12 @@ actor SlishuHTTPServer {
                 .appendingPathComponent("Slishu", isDirectory: true) else { return }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("server.log")
+        // Ротация: > 5MB → server.log.1 (одно поколение). 24/7-аптайм не должен растить лог бесконечно.
+        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 5_000_000 {
+            let rotated = dir.appendingPathComponent("server.log.1")
+            try? FileManager.default.removeItem(at: rotated)
+            try? FileManager.default.moveItem(at: url, to: rotated)
+        }
         if let h = try? FileHandle(forWritingTo: url) {
             h.seekToEndOfFile(); h.write(data); try? h.close()
         } else {

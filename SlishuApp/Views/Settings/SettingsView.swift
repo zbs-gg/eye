@@ -1,14 +1,17 @@
 import SwiftUI
 import AppKit
+import ServiceManagement
 
 struct SettingsView: View {
     @Environment(AppEnvironment.self) private var env
+    @State private var loginItemEnabled = SMAppService.mainApp.status == .enabled
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Настройки").font(.largeTitle.bold())
                 permissionsCard
+                launchCard
                 transcriptionCard
                 serverCard
             }
@@ -50,6 +53,27 @@ struct SettingsView: View {
                     Task { await env.permissions.refreshAll() }
                 }
                 .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private var launchCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Запуск").font(.headline)
+                Toggle("Запускать Slishu при входе в систему", isOn: $loginItemEnabled)
+                    .onChange(of: loginItemEnabled) { _, on in
+                        do {
+                            if on { try SMAppService.mainApp.register() }
+                            else { try SMAppService.mainApp.unregister() }
+                        } catch {
+                            // регистрация не удалась (например, выключено в Системных настройках) — откат UI
+                            loginItemEnabled = SMAppService.mainApp.status == .enabled
+                        }
+                    }
+                Text("Вечная память живёт, пока Slishu запущен: вместе с автостартом записи это закрывает "
+                     + "ребуты и краши. Управляется и в Системных настройках → Основные → Объекты входа.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -153,8 +177,13 @@ private struct PermissionRow: View {
             switch status {
             case .granted:
                 StatusPill(text: "Выдано", color: .green)
-            case .denied, .needsRestart:
-                StatusPill(text: status == .needsRestart ? "Перезапуск" : "Нет доступа", color: .red)
+            case .needsRestart:
+                // право выдано, но TCC применит его только к новому процессу (-3801)
+                StatusPill(text: "Нужен перезапуск", color: .orange)
+                Button("Перезапустить Slishu") { AppRelauncher.relaunch() }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+            case .denied:
+                StatusPill(text: "Нет доступа", color: .red)
                 Button("Настройки", action: openSettings).buttonStyle(.borderless)
             case .notDetermined:
                 Button("Запросить", action: request)

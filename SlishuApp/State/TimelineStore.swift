@@ -26,6 +26,7 @@ final class TimelineStore {
     @ObservationIgnored private var playTask: Task<Void, Never>?
     @ObservationIgnored private var playGen = 0   // как searchGen: инвалидирует устаревший цикл плеера
     @ObservationIgnored private var windowStart: Date?   // левый край окна strip; nil = вся история (.full)
+    @ObservationIgnored private var liveTask: Task<Void, Never>?
 
     var bounds = TimeBounds(oldest: nil, newest: nil)
     var cursor = Date()
@@ -107,6 +108,35 @@ final class TimelineStore {
             if let newest = b.newest { cursor = newest }
         }
         await refresh()
+    }
+
+    /// Живой таймлайн: во время записи bounds/density обновляются сами (раньше «История пуста» висела,
+    /// пока не переключишь раздел — первый опыт «нажал Запись и ничего» был тихим провалом).
+    /// Если playhead «приклеен к хвосту» (стоит на новейшем кадре) — следует за новыми кадрами.
+    func startLive() {
+        guard liveTask == nil else { return }
+        liveTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(4))
+                await self?.liveTick()
+            }
+        }
+    }
+
+    private func liveTick() async {
+        guard !isPlaying else { return }                       // плеер сам двигает время
+        guard let b = try? await timeline.bounds() else { return }
+        guard b.newest != bounds.newest || b.oldest != bounds.oldest else { return }
+        let wasEmpty = bounds.oldest == nil
+        // «у хвоста» = курсор на/после прежнего newest (допуск 5с) — тогда следуем за записью
+        let atTail = wasEmpty || (bounds.newest.map { cursor >= $0.addingTimeInterval(-5) } ?? true)
+        bounds = b
+        if atTail, let n = b.newest {
+            cursor = n
+            current = try? await timeline.frameAt(n)
+        }
+        _ = reframeWindowIfNeeded()
+        await refreshDensity()
     }
 
     func refresh() async {

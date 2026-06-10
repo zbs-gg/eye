@@ -20,5 +20,10 @@ struct RootWindow: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 900, minHeight: 600)
+        .sheet(isPresented: $env.showOnboarding) {
+            OnboardingView()
+                .environment(env)
+                .interactiveDismissDisabled()   // закрытие — только кнопками (внутри есть «Позже»)
+        }
     }
 }

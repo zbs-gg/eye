@@ -1,32 +1,92 @@
 import Foundation
 import CoreML
+import Observation
 import Embeddings
 
-/// Cross-lingual эмбеддинги (ru↔en) через multilingual-e5-small (384-dim) поверх swift-embeddings
-/// (Apple MLTensor, без MLX/Python). Модель качается с HuggingFace Hub при первом запуске (~250-470МБ),
-/// потом из кеша. e5 требует префиксы "query: " / "passage: ". Векторы L2-нормализованы.
-actor EmbeddingService {
-    private var bundle: XLMRoberta.ModelBundle?
-    private var loadTask: Task<XLMRoberta.ModelBundle?, Never>?
-    private(set) var loadFailed = false
+/// Статус семантической модели для UI (качается / готова / нет сети). @MainActor-синглтон:
+/// пишут акторы загрузки, читает SwiftUI («поиск пока по словам — семантика качается»).
+@MainActor
+@Observable
+final class EmbeddingStatusStore {
+    static let shared = EmbeddingStatusStore()
+    enum Status: Equatable { case idle, loading, ready, failed }
+    private(set) var status: Status = .idle
+    fileprivate func set(_ s: Status) { if status != s { status = s } }
+}
 
-    init() {
-        loadTask = Task {
-            do {
-                return try await XLMRoberta.loadModelBundle(from: "intfloat/multilingual-e5-small")
-            } catch {
-                FileHandle.standardError.write("[embed] e5 load failed: \(error)\n".data(using: .utf8)!)
-                return nil
+/// Координатор загрузки e5 — ОДИН на процесс. GUI держит два EmbeddingService (ingest и search,
+/// анти head-of-line) — без координатора оба параллельно тянули бы ~300MB с HuggingFace. Здесь
+/// загрузки сериализованы актором: первая качает снапшот, вторая берёт из дискового кеша.
+/// Кеш — Application Support/Slishu/models (НЕ ~/Documents: тот синкается iCloud → утечка «ноль egress»).
+actor E5ModelProvider {
+    static let shared = E5ModelProvider()
+    private var lastFailureAt: Date?
+    /// После провала (оффлайн first-run) не долбим сеть на каждый embed — ретрай не чаще раза в минуту.
+    private let retryInterval: TimeInterval = 60
+
+    static func modelsDirectory() -> URL? {
+        guard let dir = try? SlishuSupport.directory().appendingPathComponent("models", isDirectory: true)
+        else { return nil }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        migrateLegacyCacheIfNeeded(to: dir)
+        return dir
+    }
+
+    /// Раньше HubApi качал в ~/Documents/huggingface (риск iCloud-синка приватной модели + 300MB
+    /// перекачки при смене base). Разово переносим ТОЛЬКО НАШ репозиторий модели — общий HF-кеш
+    /// могут использовать другие приложения, конфисковывать его целиком нельзя.
+    private static func migrateLegacyCacheIfNeeded(to base: URL) {
+        let fm = FileManager.default
+        let repo = "models/intfloat/multilingual-e5-small"
+        let legacy = fm.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/huggingface/\(repo)", isDirectory: true)
+        let target = base.appendingPathComponent(repo, isDirectory: true)
+        guard fm.fileExists(atPath: legacy.path), !fm.fileExists(atPath: target.path) else { return }
+        try? fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? fm.moveItem(at: legacy, to: target)
+    }
+
+    /// Загрузить bundle (download при первом обращении, далее — из кеша). nil = провал (ретрай позже).
+    func loadBundle() async -> XLMRoberta.ModelBundle? {
+        if let last = lastFailureAt, Date().timeIntervalSince(last) < retryInterval { return nil }
+        await EmbeddingStatusStore.shared.set(.loading)
+        do {
+            let bundle: XLMRoberta.ModelBundle
+            if let base = Self.modelsDirectory() {
+                bundle = try await XLMRoberta.loadModelBundle(from: "intfloat/multilingual-e5-small",
+                                                              downloadBase: base)
+            } else {
+                bundle = try await XLMRoberta.loadModelBundle(from: "intfloat/multilingual-e5-small")
             }
+            lastFailureAt = nil
+            await EmbeddingStatusStore.shared.set(.ready)
+            return bundle
+        } catch {
+            Log.app.error("e5 load failed: \(String(describing: error), privacy: .public)")
+            lastFailureAt = Date()
+            await EmbeddingStatusStore.shared.set(.failed)
+            return nil
         }
     }
+}
+
+/// Cross-lingual эмбеддинги (ru↔en) через multilingual-e5-small (384-dim) поверх swift-embeddings
+/// (Apple MLTensor, без MLX/Python). Загрузка/кеш — через E5ModelProvider (общий на процесс).
+/// e5 требует префиксы "query: " / "passage: ". Векторы L2-нормализованы.
+/// Провал загрузки НЕ вечный: повторная попытка при следующем embed (с минутным backoff в провайдере).
+actor EmbeddingService {
+    private var bundle: XLMRoberta.ModelBundle?
+    private var loading = false
+
+    var isReady: Bool { bundle != nil }
 
     private func ready() async -> XLMRoberta.ModelBundle? {
         if let bundle { return bundle }
-        let b = await loadTask?.value
-        bundle = b
-        loadFailed = (b == nil)
-        return b
+        if loading { return nil }   // параллельный embed во время загрузки — не дублируем
+        loading = true
+        defer { loading = false }
+        bundle = await E5ModelProvider.shared.loadBundle()
+        return bundle
     }
 
     /// Эмбеддинг поискового запроса (префикс "query: ").

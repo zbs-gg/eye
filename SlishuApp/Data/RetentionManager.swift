@@ -103,33 +103,57 @@ actor RetentionManager {
     private func enforceSizeLimit(_ maxBytes: Int64) async throws -> (frames: Int, audio: Int) {
         var frames = 0, audio = 0
         while try await dbBytes() > maxBytes {
-            // сначала кадры (основной объём)
-            let (fc, fp): (Int, [String]) = try await db.pool.write { db in
-                let rows = try ScreenCaptureRow.order(Column("ts")).limit(500).fetchAll(db)
-                if rows.isEmpty { return (0, []) }
-                let ids = rows.compactMap(\.id)
-                try ScreenCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
-                try Self.deleteVectors(db, captureIds: ids)
-                return (rows.count, rows.compactMap(\.relativePath))
-            }
-            if fc > 0 {
-                for p in fp { storage.deleteFile(relativePath: p) }
-                frames += fc
-                continue
-            }
-            // кадры кончились — старейшее аудио
-            let (ac, ap): (Int, [String]) = try await db.pool.write { db in
-                let rows = try AudioCaptureRow.order(Column("ts")).limit(500).fetchAll(db)
-                if rows.isEmpty { return (0, []) }
-                let ids = rows.compactMap(\.id)
-                try AudioCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
-                return (rows.count, rows.map(\.relativePath))
-            }
-            if ac == 0 { break }   // нечего удалять — не зацикливаемся
-            for p in ap { storage.deleteFile(relativePath: p) }
-            audio += ac
+            if try await deleteOldestFrameBatch(into: &frames) { continue }
+            if try await deleteOldestAudioBatch(into: &audio) { continue }
+            break   // нечего удалять — не зацикливаемся
         }
         return (frames, audio)
+    }
+
+    /// Экстренное освобождение МЕСТА НА ДИСКЕ (low-disk пауза записи): удаляет старейшее, пока свободно
+    /// меньше target. Отличие от prune(): диск мог забить кто-то другой — политика 7д/20GB при этом
+    /// ничего бы не удалила, и пауза записи никогда бы не самоизлечилась. Если данных Slishu больше нет,
+    /// а места всё ещё мало — диск занят не нами (вернёт сколько удалено; вызывающий покажет статус).
+    func pruneUntilFree(targetFreeBytes: Int64) async throws -> PruneReport {
+        var report = PruneReport()
+        while storage.freeBytes() < targetFreeBytes {
+            if try await deleteOldestFrameBatch(into: &report.framesDeleted) { continue }
+            if try await deleteOldestAudioBatch(into: &report.audioDeleted) { continue }
+            break   // данных Slishu не осталось — дальше не наша зона
+        }
+        try await checkpoint()   // вернуть место ОС: FTS optimize + WAL truncate
+        return report
+    }
+
+    /// Старейший батч кадров (500): true = что-то удалили.
+    private func deleteOldestFrameBatch(into counter: inout Int) async throws -> Bool {
+        let (fc, fp): (Int, [String]) = try await db.pool.write { db in
+            let rows = try ScreenCaptureRow.order(Column("ts")).limit(500).fetchAll(db)
+            if rows.isEmpty { return (0, []) }
+            let ids = rows.compactMap(\.id)
+            try ScreenCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
+            try Self.deleteVectors(db, captureIds: ids)
+            return (rows.count, rows.compactMap(\.relativePath))
+        }
+        guard fc > 0 else { return false }
+        for p in fp { storage.deleteFile(relativePath: p) }
+        counter += fc
+        return true
+    }
+
+    /// Старейший батч аудио (500): true = что-то удалили.
+    private func deleteOldestAudioBatch(into counter: inout Int) async throws -> Bool {
+        let (ac, ap): (Int, [String]) = try await db.pool.write { db in
+            let rows = try AudioCaptureRow.order(Column("ts")).limit(500).fetchAll(db)
+            if rows.isEmpty { return (0, []) }
+            let ids = rows.compactMap(\.id)
+            try AudioCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
+            return (rows.count, rows.map(\.relativePath))
+        }
+        guard ac > 0 else { return false }
+        for p in ap { storage.deleteFile(relativePath: p) }
+        counter += ac
+        return true
     }
 
     // ── orphan-sweep с grace-window (фикс race с in-flight ingest) ──

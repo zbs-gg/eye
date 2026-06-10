@@ -32,8 +32,19 @@ final class CaptureCoordinator {
     private var capability: [String: CaptureClass] = [:]
     private var emptyStreak: [String: Int] = [:]
     private var lastContentText: [String: String] = [:]
+    private var sckFailureStreak = 0
 
     var onFrame: (@MainActor () -> Void)?
+    /// N SCK-отказов подряд при выданном праве (классика -3801: TCC требует перезапуск процесса) —
+    /// поднять наверх, иначе горит «Запись идёт» при нуле кадров.
+    var onCaptureBroken: (@MainActor () -> Void)?
+    /// Захват восстановился после отказов (транзиентный noDisplay при wake/смене мониторов) — снять
+    /// needsRestart, иначе односторонний ratchet навсегда блокирует запись ложным «Нет прав».
+    var onCaptureRecovered: (@MainActor () -> Void)?
+    /// Heartbeat: цикл прошёл штатно (включая дедуп и idle-skip) — для «захват жив» в UI.
+    var onCycleOK: (@MainActor () -> Void)?
+    /// Возвращает false при критично малом свободном месте — цикл пропускает захват (диск не добиваем).
+    var diskOK: @MainActor () -> Bool = { true }
 
     init(ingest: IngestService, config: CaptureConfig = CaptureConfig()) {
         self.ingest = ingest
@@ -104,9 +115,10 @@ final class CaptureCoordinator {
 
     private func tickFired() {
         guard isRunning, !suspended else { return }
-        // idle: нет ввода дольше порога → не захватываем по тику (smart-pause)
+        // idle: нет ввода дольше порога → не захватываем по тику (smart-pause). Это ЗДОРОВЬЕ, не сбой —
+        // heartbeat отбиваем, иначе UI после обеда кричал бы «захват умер».
         let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
-        if idle > config.idleThresholdSec { return }
+        if idle > config.idleThresholdSec { onCycleOK?(); return }
         trigger()
     }
 
@@ -130,6 +142,7 @@ final class CaptureCoordinator {
     // MARK: cycle
 
     private func runCycle() async {
+        guard diskOK() else { return }   // диск почти полон — не пишем (статус поднимает AppEnvironment)
         guard let app = NSWorkspace.shared.frontmostApplication,
               let bundleId = app.bundleIdentifier else { return }
         let pid = app.processIdentifier
@@ -158,8 +171,18 @@ final class CaptureCoordinator {
         }
 
         let frame: ProcessedFrame?
-        do { frame = try await pipeline.process(displayIndex: 0, needsOCR: needsOCR) }
-        catch { return }   // -3801 / нет дисплея
+        do {
+            frame = try await pipeline.process(displayIndex: 0, needsOCR: needsOCR)
+            if sckFailureStreak > 0 { onCaptureRecovered?() }   // транзиентный сбой прошёл — снять ratchet
+            sckFailureStreak = 0
+            onCycleOK?()
+        } catch {
+            // -3801 после выдачи права / нет дисплея. Подряд идущие отказы = захват фактически мёртв.
+            sckFailureStreak += 1
+            Log.capture.error("SCK capture failed (streak \(self.sckFailureStreak)): \(String(describing: error), privacy: .public)")
+            if sckFailureStreak == 3 { onCaptureBroken?() }
+            return
+        }
         guard let frame else { return }
 
         if frame.isDuplicate {
@@ -201,6 +224,8 @@ final class CaptureCoordinator {
         do {
             _ = try await ingest.ingest(record)
             onFrame?()
-        } catch { /* logged later */ }
+        } catch {
+            Log.ingest.error("frame ingest failed: \(String(describing: error), privacy: .public)")
+        }
     }
 }
