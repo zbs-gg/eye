@@ -35,6 +35,12 @@ struct RecordingStatusView: View {
                     Label(degraded, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption2).foregroundStyle(.orange).lineLimit(2)
                 }
+            } else if let until = env.recording.pausedUntil {
+                HStack(spacing: 6) {
+                    Circle().fill(Color.orange).frame(width: 8, height: 8)
+                    Text("Пауза до \(until.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption).foregroundStyle(.orange)
+                }
             } else {
                 HStack(spacing: 6) {
                     Circle().fill(Color.secondary).frame(width: 8, height: 8)

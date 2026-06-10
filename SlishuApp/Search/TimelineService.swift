@@ -93,12 +93,12 @@ actor TimelineService {
                 "SELECT id, ts, durationSec, channel, relativePath FROM audio_captures WHERE id = ?",
                 arguments: [id]) else { return nil }
             let tr = try Row.fetchOne(db, sql:
-                "SELECT text, language FROM transcriptions WHERE audioId = ? ORDER BY id DESC LIMIT 1",
+                "SELECT text, language, speaker FROM transcriptions WHERE audioId = ? ORDER BY id DESC LIMIT 1",
                 arguments: [id])
             return AudioDetail(
                 id: row["id"], ts: dateFromMs(row["ts"]), durationSec: row["durationSec"],
                 channel: row["channel"], relativePath: row["relativePath"],
-                transcript: tr?["text"], language: tr?["language"])
+                transcript: tr?["text"], language: tr?["language"], speaker: tr?["speaker"])
         }
     }
 

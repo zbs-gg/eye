@@ -12,6 +12,7 @@ final class AppEnvironment {
     let connections = ConnectionStore()   // конфиг LLM/назначения persist'ится сам, db не нужна
     let audioSettings = AudioSettingsStore()
     let storageSettings = StorageSettingsStore()
+    let privacy = PrivacyStore()
 
     var selectedSection: SidebarSection = .timeline
 
@@ -39,6 +40,7 @@ final class AppEnvironment {
     private(set) var pipes: DaySummaryStore?
     private(set) var audio: AudioCoordinator?
     private(set) var storage: StorageManager?   // для Settings-хранилища (занято/удаление/Finder)
+    private(set) var export: ExportService?
     private(set) var dataError: String?
 
     @ObservationIgnored private var retentionTask: Task<Void, Never>?
@@ -99,6 +101,8 @@ final class AppEnvironment {
                 if !ok { self.emergencyPrune() }
                 return ok
             }
+            coordinator.isIgnoredApp = { [weak self] in self?.privacy.isIgnored($0) ?? false }
+            coordinator.ignoredBundleIds = { [weak self] in Set(self?.privacy.ignoredBundleIds ?? []) }
             recording.coordinator = coordinator
             // Запись честная: без критичных прав не стартует (вместо ложной зелёной точки).
             recording.canCapture = { [weak self] in self?.permissions.allCriticalGranted ?? false }
@@ -139,7 +143,12 @@ final class AppEnvironment {
 
             // Pipe v1 «саммари дня»: collect→LLM→write. Свой LocalLLMClient (stateless actor).
             let summarySvc = DailySummaryService(db: db, client: LocalLLMClient())
-            self.pipes = DaySummaryStore(service: summarySvc, connections: connections)
+            let pipesStore = DaySummaryStore(service: summarySvc, connections: connections)
+            pipesStore.startScheduler()   // «конспект сам в конце дня» (тик 5 мин, гейты внутри)
+            self.pipes = pipesStore
+
+            // Экспорт (анти-lock-in): markdown по дням ± медиа.
+            self.export = ExportService(db: db, summary: summarySvc, mediaDirectory: storage.mediaDirectory)
 
             // Локальный REST /v1 (auth на всё кроме /health).
             let token = KeychainStore.apiToken()

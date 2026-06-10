@@ -14,7 +14,9 @@ struct CaptureConfig: Sendable {
     var ocrLanguages = ["ru-RU", "en-US"]
     var ocrDownscaleMaxDim: CGFloat = 1800 // даунскейл перед OCR (Pro: не OCR-ить полный Retina)
     var activeTickSeconds = 3.0            // active-text fallback тик (single-flight+dedup защищают)
-    var idleThresholdSec = 180.0           // нет ввода дольше → не захватывать по тику
+    var idleThresholdSec = 180.0           // нет ввода дольше → редкий idle-режим (не полный стоп)
+    var idleCaptureIntervalSec = 60.0      // в idle: один кадр в минуту — «входящее без ввода» не теряется
+    var burstTrioDelays: [Double] = [0.7, 2.0]  // доп. кадры после смены приложения (Electron дорисовывается)
     var ocrOnlyEmptyStreak = 2             // подряд пустых AX → пометить bundleId как ocrOnly
 }
 
