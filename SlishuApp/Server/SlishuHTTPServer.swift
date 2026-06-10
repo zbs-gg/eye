@@ -58,12 +58,10 @@ actor SlishuHTTPServer {
     static func log(_ s: String) {
         Log.server.info("\(s, privacy: .public)")
         let line = "[\(Date())] \(s)\n"
-        guard let data = line.data(using: .utf8),
-              let dir = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                     appropriateFor: nil, create: true)
-                .appendingPathComponent("Slishu", isDirectory: true) else { return }
+        guard let data = line.data(using: .utf8) else { return }
+        let url = StorageLocation.serverLogURL()       // учитывает relocate
+        let dir = url.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("server.log")
         // Ротация: > 5MB → server.log.1 (одно поколение). 24/7-аптайм не должен растить лог бесконечно.
         if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 5_000_000 {
             let rotated = dir.appendingPathComponent("server.log.1")
@@ -87,9 +85,7 @@ actor SlishuHTTPServer {
     }
 
     private static func removePortFile() {
-        guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                     appropriateFor: nil, create: false) else { return }
-        try? FileManager.default.removeItem(at: dir.appendingPathComponent("Slishu/port"))
+        try? FileManager.default.removeItem(at: StorageLocation.portURL())
     }
 
     private static func raceListening(_ srv: HTTPServer) async -> Bool {
@@ -107,11 +103,9 @@ actor SlishuHTTPServer {
     }
 
     private static func writePortFile(_ port: Int) {
-        guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                     appropriateFor: nil, create: true)
-            .appendingPathComponent("Slishu", isDirectory: true) else { return }
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try? "\(port)".write(to: dir.appendingPathComponent("port"), atomically: true, encoding: .utf8)
+        let url = StorageLocation.portURL()
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? "\(port)".write(to: url, atomically: true, encoding: .utf8)
     }
 
     // MARK: routes
@@ -119,9 +113,7 @@ actor SlishuHTTPServer {
     private func registerRoutes(_ srv: HTTPServer) async {
         await srv.appendRoute("GET /health") { [self] _ in
             let cap = await deps.isCapturing()
-            let port = await activePort ?? 0
-            return Self.json(APIDTO.Health(status: "ok", version: deps.version,
-                                           capturing: cap, port: port))
+            return Self.json(APIDTO.Health(status: "ok", version: deps.version, capturing: cap))
         }
         await srv.appendRoute("GET /v1/search") { [self] req in
             guard await authorized(req) else { return Self.unauthorized() }
@@ -146,6 +138,12 @@ actor SlishuHTTPServer {
         await srv.appendRoute("GET /v1/audio/file") { [self] req in
             guard await authorized(req) else { return Self.unauthorized() }
             return await handleAudioFile(req)
+        }
+        await srv.appendRoute("GET /v1/openapi.json") { [self] req in
+            guard await authorized(req) else { return Self.unauthorized() }
+            return HTTPResponse(statusCode: .ok,
+                                headers: [HTTPHeader.contentType: "application/json; charset=utf-8"],
+                                body: Data(Self.openAPISpec.utf8))
         }
         await srv.appendRoute("GET /v1/stats") { [self] req in
             guard await authorized(req) else { return Self.unauthorized() }
@@ -324,9 +322,16 @@ actor SlishuHTTPServer {
         return HTTPResponse(statusCode: .ok, headers: [HTTPHeader.contentType: "image/heic"], body: data)
     }
 
-    private static func heicToJPEG(_ heic: Data) -> Data? {
+    /// HEIC→JPEG с даунскейлом до 1280px (как в MCP loadFrameJPEG): без него полноразмерный Retina/5K
+    /// кадр даёт 5-15MB ответ и ~100MB несжатого битмапа в RAM на КАЖДЫЙ запрос — агент в цикле копит
+    /// давление на память GUI-процесса.
+    private static func heicToJPEG(_ heic: Data, maxDim: CGFloat = 1280) -> Data? {
         guard let ci = CIImage(data: heic) else { return nil }
-        return CIContext().jpegRepresentation(of: ci, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [:])
+        let ext = ci.extent
+        let longest = max(ext.width, ext.height)
+        let scale = longest > maxDim ? maxDim / longest : 1.0
+        let scaled = scale < 1.0 ? ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) : ci
+        return CIContext().jpegRepresentation(of: scaled, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [:])
     }
 
     private func handleStats() async -> HTTPResponse {
@@ -363,6 +368,45 @@ actor SlishuHTTPServer {
     private static func error(_ status: HTTPStatusCode, _ msg: String, code: String = "error") -> HTTPResponse {
         json(APIDTO.ErrorResponse(error: .init(code: code, message: msg)), status: status)
     }
+    /// Компактная OpenAPI-спека (машинный контракт для LAM; раньше контракт жил только в коде).
+    static let openAPISpec = #"""
+    {"openapi":"3.0.3","info":{"title":"Slishu Local API","version":"0.2.0",
+     "description":"Локальная память экрана/аудио. Auth: Bearer-токен на всё кроме /health. Время: epoch-ms или ISO8601."},
+     "paths":{
+      "/health":{"get":{"summary":"Статус без auth","responses":{"200":{"description":"ok"}}}},
+      "/v1/search":{"get":{"summary":"Гибридный поиск (FTS+semantic, ru/en cross-lingual)",
+        "parameters":[{"name":"q","in":"query","required":true,"schema":{"type":"string"}},
+          {"name":"from","in":"query","schema":{"type":"string"},"description":"epoch-ms | ISO8601"},
+          {"name":"to","in":"query","schema":{"type":"string"}},
+          {"name":"app","in":"query","schema":{"type":"string"},"description":"подстрока bundleId/имени (screen)"},
+          {"name":"kind","in":"query","schema":{"type":"string","enum":["screen","audio"]}},
+          {"name":"limit","in":"query","schema":{"type":"integer","maximum":200}},
+          {"name":"offset","in":"query","schema":{"type":"integer"}}],
+        "responses":{"200":{"description":"hits: id, kind, ts, app, snippet, media{frameUrl,audioUrl,transcriptUrl}"},
+                     "400":{"description":"невалидный параметр (нераспарсенное время и т.п.)"},"500":{"description":"сбой"}}}},
+      "/v1/frame":{"get":{"summary":"Кадр по id или ближайший к моменту (at)","parameters":[
+          {"name":"id","in":"query","schema":{"type":"integer"}},{"name":"at","in":"query","schema":{"type":"integer"},"description":"epoch-ms"}],
+        "responses":{"200":{"description":"app, windowTitle, browserUrl, text, media.frameUrl"}}}},
+      "/v1/frame/image":{"get":{"summary":"Изображение кадра","parameters":[
+          {"name":"id","in":"query","required":true,"schema":{"type":"integer"}},
+          {"name":"format","in":"query","schema":{"type":"string","enum":["jpeg"]},"description":"для LLM-вьюеров"}],
+        "responses":{"200":{"description":"image/heic | image/jpeg"}}}},
+      "/v1/transcript":{"get":{"summary":"Транскрипт аудио-сегмента","parameters":[
+          {"name":"audio_id","in":"query","required":true,"schema":{"type":"integer"}}],
+        "responses":{"200":{"description":"text, speaker(я|собеседник), language, audioUrl"}}}},
+      "/v1/audio/file":{"get":{"summary":"m4a сегмента","parameters":[
+          {"name":"id","in":"query","required":true,"schema":{"type":"integer"}}],
+        "responses":{"200":{"description":"audio/mp4"}}}},
+      "/v1/timeline":{"get":{"summary":"Плотность активности по бакетам","parameters":[
+          {"name":"from","in":"query","required":true,"schema":{"type":"integer"}},
+          {"name":"to","in":"query","required":true,"schema":{"type":"integer"}},
+          {"name":"bucket","in":"query","schema":{"type":"integer"},"description":"мс, default 60000"}],
+        "responses":{"200":{"description":"buckets[{ts,count}]"}}}},
+      "/v1/stats":{"get":{"summary":"Счётчики и диапазон истории","responses":{"200":{"description":"frames, audioChunks, mediaBytes…"}}}},
+      "/v1/capture/toggle":{"post":{"summary":"Вкл/выкл запись","parameters":[
+          {"name":"enable","in":"query","schema":{"type":"boolean"}}],"responses":{"200":{"description":"capturing"}}}}}}
+    """#
+
     private static func unauthorized() -> HTTPResponse { error(.unauthorized, "Требуется Bearer-токен, доступ только с localhost", code: "unauthorized") }
     private static func badRequest(_ m: String) -> HTTPResponse { error(.badRequest, m, code: "bad_request") }
     private static func notFound(_ m: String) -> HTTPResponse { error(.notFound, "not found: \(m)", code: "not_found") }

@@ -154,13 +154,9 @@ enum PipeError: LocalizedError {
 // MARK: расположение конфигов/лога
 
 enum SlishuSupport {
-    /// Application Support/Slishu (та же папка, где slishu.sqlite и media/).
+    /// Корень данных (та же папка, где slishu.sqlite и media/) — через StorageLocation (учитывает relocate).
     static func directory() throws -> URL {
-        let support = try FileManager.default.url(for: .applicationSupportDirectory,
-                                                  in: .userDomainMask, appropriateFor: nil, create: true)
-        let dir = support.appendingPathComponent("Slishu", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        StorageLocation.dataRoot()
     }
 
     static func auditLogURL() throws -> URL {

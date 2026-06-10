@@ -36,13 +36,9 @@ final class SlishuDatabase: Sendable {
         if runMigrations { try Self.migrator.migrate(pool) }
     }
 
-    /// Стандартное расположение БД (медиа — отдельно, через StorageManager).
+    /// Стандартное расположение БД — через единый StorageLocation (учитывает relocate). Медиа — отдельно.
     static func defaultURL() throws -> URL {
-        let support = try FileManager.default.url(for: .applicationSupportDirectory,
-                                                  in: .userDomainMask, appropriateFor: nil, create: true)
-        let dir = support.appendingPathComponent("Slishu", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("slishu.sqlite")
+        StorageLocation.databaseURL()
     }
 
     static var migrator: DatabaseMigrator {
