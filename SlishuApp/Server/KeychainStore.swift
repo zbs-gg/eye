@@ -6,6 +6,13 @@ import Security
 enum KeychainStore {
     static let service = "com.slishu.app"
 
+    /// КРИТИЧНО: используем СОВРЕМЕННЫЙ data-protection keychain (как на iOS), а НЕ legacy file-keychain.
+    /// Legacy login.keychain гейтит доступ ACL'ом и при чтении item'а, созданного другой подписью
+    /// (ad-hoc Debug → «Slishu Dev» Release после переустановки), ВЕШАЕТ main-thread на securityd-диалоге
+    /// → bootstrap зависает навечно (поймано sample: SecKeychainItemCopyContent → mach_msg). В data-
+    /// protection keychain item привязан к подписи приложения и читается СВОИМ приложением без промпта.
+    private static let useDataProtection = kSecUseDataProtectionKeychain as String
+
     static func get(_ account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -13,6 +20,7 @@ enum KeychainStore {
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
+            useDataProtection: true,
         ]
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
@@ -27,6 +35,7 @@ enum KeychainStore {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
+            useDataProtection: true,
         ]
         SecItemDelete(base as CFDictionary)
         var add = base
