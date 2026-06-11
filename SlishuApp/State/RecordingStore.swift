@@ -78,7 +78,7 @@ final class RecordingStore {
                 blockedReason = nil
             } else {
                 UserDefaults.standard.set(true, forKey: Self.enabledKey)
-                blockedReason = "Slishu ещё запускается — запись включится автоматически"
+                blockedReason = "ZBS Eye ещё запускается — запись включится автоматически"
             }
             return
         }

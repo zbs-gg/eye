@@ -55,7 +55,7 @@ struct ConnectionsView: View {
                 if let path = conn.destination.displayPath {
                     Text(path).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                 }
-                TextField("Подпапка", text: $conn.destination.subfolder, prompt: Text("Slishu"))
+                TextField("Подпапка", text: $conn.destination.subfolder, prompt: Text("ZBS Eye"))
                     .autocorrectionDisabled()
             } header: {
                 Text("Назначение")

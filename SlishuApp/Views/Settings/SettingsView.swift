@@ -40,7 +40,7 @@ struct SettingsView: View {
         GlassCard {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Разрешения и диагностика").font(.headline)
-                Text("Slishu читает экран через Accessibility (точно и легко для батареи), OCR — только где AX недоступен.")
+                Text("ZBS Eye читает экран через Accessibility (точно и легко для батареи), OCR — только где AX недоступен.")
                     .font(.caption).foregroundStyle(.secondary)
 
                 PermissionRow(title: "Запись экрана",
@@ -72,7 +72,7 @@ struct SettingsView: View {
         GlassCard {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Запуск").font(.headline)
-                Toggle("Запускать Slishu при входе в систему", isOn: $loginItemEnabled)
+                Toggle("Запускать ZBS Eye при входе в систему", isOn: $loginItemEnabled)
                     .onChange(of: loginItemEnabled) { _, on in
                         do {
                             if on { try SMAppService.mainApp.register() }
@@ -82,7 +82,7 @@ struct SettingsView: View {
                             loginItemEnabled = SMAppService.mainApp.status == .enabled
                         }
                     }
-                Text("Вечная память живёт, пока Slishu запущен: вместе с автостартом записи это закрывает "
+                Text("Вечная память живёт, пока ZBS Eye запущен: вместе с автостартом записи это закрывает "
                      + "ребуты и краши. Управляется и в Системных настройках → Основные → Объекты входа.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -285,7 +285,7 @@ struct SettingsView: View {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Перенести сюда"
-        panel.message = "Выбери папку для «вечной памяти» (создастся подпапка Slishu). Приложение перезапустится."
+        panel.message = "Выбери папку для «вечной памяти» (создастся подпапка ZBS Eye). Приложение перезапустится."
         if panel.runModal() == .OK, let url = panel.url {
             Task { await env.relocate(to: url) }
         }
@@ -344,7 +344,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Импорт из screenpipe").font(.headline)
                 Text("Найдена история screenpipe (~/.screenpipe). Перенесёт текст и метаданные (кадры, "
-                     + "окна, URL, транскрипты со спикерами) в память Slishu — поиск заработает по всей "
+                     + "окна, URL, транскрипты со спикерами) в память ZBS Eye — поиск заработает по всей "
                      + "старой истории. Медиа-файлы остаются у screenpipe. Можно прервать и продолжить позже.")
                     .font(.caption).foregroundStyle(.secondary)
                 HStack(spacing: 12) {
@@ -387,7 +387,7 @@ struct SettingsView: View {
         GlassCard {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Приватность").font(.headline)
-                Text("По умолчанию Slishu записывает всё. Исключи приложения, которые не должны попадать "
+                Text("По умолчанию ZBS Eye записывает всё. Исключи приложения, которые не должны попадать "
                      + "в память (менеджер паролей, банк) — их окна вырезаются из кадров и текста. "
                      + "ЗВУК исключение не гасит (он не привязан к окнам): для чувствительного разговора "
                      + "используй «Не записывать 15 минут» в меню-баре.")
@@ -519,7 +519,7 @@ private struct PermissionRow: View {
             case .needsRestart:
                 // право выдано, но TCC применит его только к новому процессу (-3801)
                 StatusPill(text: "Нужен перезапуск", color: .orange)
-                Button("Перезапустить Slishu") { AppRelauncher.relaunch() }
+                Button("Перезапустить ZBS Eye") { AppRelauncher.relaunch() }
                     .buttonStyle(.borderedProminent).controlSize(.small)
             case .denied:
                 StatusPill(text: "Нет доступа", color: .red)

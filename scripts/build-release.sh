@@ -33,7 +33,7 @@ set -e
 [ -d "$APP" ] || { echo "❌ Slishu.app не собрался"; exit 1; }
 
 # Упаковка e5-модели в бандл (если уже скачана): first-run без сети и без 300MB-загрузки.
-MODEL_CACHE="$HOME/Library/Application Support/Slishu/models/models/intfloat/multilingual-e5-small"
+MODEL_CACHE="$HOME/Library/Application Support/ZBS Eye/models/models/intfloat/multilingual-e5-small"
 if [ -d "$MODEL_CACHE" ]; then
   # Путь в бандле = Bundle.resourceURL + "models/intfloat/multilingual-e5-small" (EmbeddingService.repo).
   # БЕЗ двойного models/ (это структура кеша HubApi, не бандла) — иначе copyBundledModelIfNeeded не найдёт

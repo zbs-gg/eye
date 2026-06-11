@@ -17,7 +17,7 @@ final class EmbeddingStatusStore {
 /// Координатор загрузки e5 — ОДИН на процесс. GUI держит два EmbeddingService (ingest и search,
 /// анти head-of-line) — без координатора оба параллельно тянули бы ~300MB с HuggingFace. Здесь
 /// загрузки сериализованы актором: первая качает снапшот, вторая берёт из дискового кеша.
-/// Кеш — Application Support/Slishu/models (НЕ ~/Documents: тот синкается iCloud → утечка «ноль egress»).
+/// Кеш — Application Support/ZBS Eye/models (НЕ ~/Documents: тот синкается iCloud → утечка «ноль egress»).
 actor E5ModelProvider {
     static let shared = E5ModelProvider()
     private var lastFailureAt: Date?
