@@ -171,7 +171,7 @@ final class DaySummaryStore {
         // его выбор (didSet снёс бы превью), просто зовём уведомлением.
         if preview != nil && cal.startOfDay(for: selectedDay) != targetDay {
             UserDefaults.standard.set(targetYmd, forKey: "slishu.pipe.lastAutoDone")
-            Self.notify(title: "Slishu", body: "Пора собрать конспект (\(targetYmd)) — открой Плагины.")
+            Self.notify(title: "ZBS Eye", body: "Пора собрать конспект (\(targetYmd)) — открой Плагины.")
             return
         }
 
@@ -182,7 +182,7 @@ final class DaySummaryStore {
         await previewTask?.value
         guard preview != nil, phase == .done else {
             if attempts >= 3 {
-                Self.notify(title: "Slishu", body: "Конспект (\(targetYmd)) не собрался после 3 попыток — открой Плагины (\(errorText ?? "ошибка")).")
+                Self.notify(title: "ZBS Eye", body: "Конспект (\(targetYmd)) не собрался после 3 попыток — открой Плагины (\(errorText ?? "ошибка")).")
                 UserDefaults.standard.set(targetYmd, forKey: "slishu.pipe.lastAutoDone")
             }
             return   // attempts < 3 → следующая попытка через ≥15 мин
@@ -190,11 +190,11 @@ final class DaySummaryStore {
         UserDefaults.standard.set(targetYmd, forKey: "slishu.pipe.lastAutoDone")
         if autoWriteEnabled && hasWrittenManually {
             await writeApproved()
-            Self.notify(title: "Slishu", body: lastWrite != nil
+            Self.notify(title: "ZBS Eye", body: lastWrite != nil
                 ? "Конспект (\(targetYmd)) записан в \(connections.destination.subfolder.isEmpty ? "папку" : connections.destination.subfolder)."
                 : "Конспект собран, но запись не удалась — открой Плагины.")
         } else {
-            Self.notify(title: "Slishu", body: "Конспект (\(targetYmd)) готов — открой Плагины, проверь и запиши.")
+            Self.notify(title: "ZBS Eye", body: "Конспект (\(targetYmd)) готов — открой Плагины, проверь и запиши.")
         }
     }
 

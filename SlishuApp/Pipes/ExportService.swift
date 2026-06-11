@@ -25,7 +25,7 @@ actor ExportService {
     func export(from: Date, to: Date, into destination: URL, includeMedia: Bool) async throws -> Report {
         var report = Report()
         let cal = Calendar.current
-        let exportRoot = destination.appendingPathComponent("Slishu Export", isDirectory: true)
+        let exportRoot = destination.appendingPathComponent("ZBS Eye Export", isDirectory: true)
         try FileManager.default.createDirectory(at: exportRoot, withIntermediateDirectories: true)
         report.path = exportRoot.path
 
@@ -74,7 +74,7 @@ actor ExportService {
         let dayF = DateFormatter(); dayF.locale = Locale(identifier: "ru_RU"); dayF.dateFormat = "EEEE, d MMMM yyyy"
 
         var md = "# \(dayF.string(from: collected.day))\n\n"
-        md += "_Экспорт Slishu · \(collected.totalCaptures) кадров, \(collected.totalSlices) сессий_\n\n"
+        md += "_Экспорт ZBS Eye · \(collected.totalCaptures) кадров, \(collected.totalSlices) сессий_\n\n"
         md += "## Активность\n\n"
         for s in collected.slices {
             md += "### \(tf.string(from: s.start))–\(tf.string(from: s.end)) · \(s.app)"

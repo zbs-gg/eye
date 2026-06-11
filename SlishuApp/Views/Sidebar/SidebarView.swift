@@ -11,7 +11,7 @@ struct SidebarView: View {
                     .tag(section)
             }
         }
-        .navigationTitle("Slishu")
+        .navigationTitle("ZBS Eye")
         .safeAreaInset(edge: .bottom) {
             StatusFooter()
         }

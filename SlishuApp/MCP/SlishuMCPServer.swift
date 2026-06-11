@@ -3,7 +3,7 @@ import MCP
 import GRDB
 import CoreImage
 
-/// MCP stdio-сервер (`Slishu --mcp`). Инструменты поверх готовых сервисов: поиск/таймлайн читают БД
+/// MCP stdio-сервер (`ZBS Eye --mcp`). Инструменты поверх готовых сервисов: поиск/таймлайн читают БД
 /// напрямую (WAL допускает параллельное чтение с пишущим GUI-инстансом); toggle/status проксируются
 /// в запущенный GUI-инстанс через локальный REST (порт из port-файла, токен из Keychain).
 enum SlishuMCPServer {
@@ -148,7 +148,7 @@ enum SlishuMCPServer {
                 if let now = await Self.proxyToggle(enable: enable) {
                     return .init(content: [.text("Запись \(now ? "включена" : "выключена").")])
                 }
-                return .init(content: [.text("GUI-инстанс Slishu не запущен — нечем управлять записью.")], isError: true)
+                return .init(content: [.text("GUI-инстанс ZBS Eye не запущен — нечем управлять записью.")], isError: true)
 
             default:
                 return .init(content: [.text("Неизвестный инструмент: \(params.name)")], isError: true)
@@ -212,10 +212,10 @@ enum SlishuMCPServer {
                                            "description": .string("id screen-результата поиска")])]),
                                        "required": .array([.string("frame_id")])])),
             Tool(name: "get_status",
-                 description: "Статус Slishu: число кадров/текстов/аудио, диапазон истории, идёт ли запись.",
+                 description: "Статус ZBS Eye: число кадров/текстов/аудио, диапазон истории, идёт ли запись.",
                  inputSchema: .object(["type": .string("object"), "properties": .object([:])])),
             Tool(name: "toggle_recording",
-                 description: "Включить/выключить запись в запущенном GUI-инстансе Slishu.",
+                 description: "Включить/выключить запись в запущенном GUI-инстансе ZBS Eye.",
                  inputSchema: .object(["type": .string("object"),
                                        "properties": .object(["enable": .object(["type": .string("boolean")])])])),
         ]
@@ -269,7 +269,7 @@ enum SlishuMCPServer {
         }
         let cap = await mainInstanceCapturing()
         guard let (frames, texts, audio, oldest, newest) = counts else { return "Ошибка чтения БД." }
-        var out = "Slishu: кадров \(frames), текст-блоков \(texts), аудио \(audio)."
+        var out = "ZBS Eye: кадров \(frames), текст-блоков \(texts), аудио \(audio)."
         if let o = oldest, let n = newest {
             out += "\nИстория: \(dateFromMs(o).formatted()) — \(dateFromMs(n).formatted())."
         }
@@ -284,7 +284,7 @@ enum SlishuMCPServer {
         return Int(s.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// Проверяет, что на порту реально Slishu (а не чужой переиспользованный порт из stale port-файла).
+    /// Проверяет, что на порту реально ZBS Eye (а не чужой переиспользованный порт из stale port-файла).
     private static func healthOK(port: Int) async -> [String: Any]? {
         guard let url = URL(string: "http://127.0.0.1:\(port)/health"),
               let (data, _) = try? await localSession.data(from: url),
@@ -299,7 +299,7 @@ enum SlishuMCPServer {
     }
 
     private static func proxyToggle(enable: Bool?) async -> Bool? {
-        // Проверяем identity (это Slishu) ПЕРЕД отправкой токена — защита от stale/переиспользованного порта.
+        // Проверяем identity (это ZBS Eye) ПЕРЕД отправкой токена — защита от stale/переиспользованного порта.
         guard let port = readPort(), await healthOK(port: port) != nil else { return nil }
         var comps = URLComponents(string: "http://127.0.0.1:\(port)/v1/capture/toggle")!
         if let enable { comps.queryItems = [URLQueryItem(name: "enable", value: enable ? "true" : "false")] }

@@ -370,7 +370,7 @@ actor SlishuHTTPServer {
     }
     /// Компактная OpenAPI-спека (машинный контракт для LAM; раньше контракт жил только в коде).
     static let openAPISpec = #"""
-    {"openapi":"3.0.3","info":{"title":"Slishu Local API","version":"0.2.0",
+    {"openapi":"3.0.3","info":{"title":"ZBS Eye Local API","version":"0.2.0",
      "description":"Локальная память экрана/аудио. Auth: Bearer-токен на всё кроме /health. Время: epoch-ms или ISO8601."},
      "paths":{
       "/health":{"get":{"summary":"Статус без auth","responses":{"200":{"description":"ok"}}}},

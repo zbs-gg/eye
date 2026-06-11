@@ -35,7 +35,7 @@ struct SlishuApp: App {
     }
 
     var body: some Scene {
-        Window("Slishu", id: "main") {
+        Window("ZBS Eye", id: "main") {
             RootWindow()
                 .environment(env)
                 .task { await env.bootstrap() }

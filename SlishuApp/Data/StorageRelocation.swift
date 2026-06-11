@@ -16,7 +16,7 @@ enum RelocationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .sameLocation: return "Это уже текущая папка данных"
-        case let .destinationOccupied(p): return "В выбранной папке уже есть данные Slishu (\(p)) — выбери другую"
+        case let .destinationOccupied(p): return "В выбранной папке уже есть данные ZBS Eye (\(p)) — выбери другую"
         case let .insufficientSpace(n, f):
             return "Недостаточно места: нужно ~\(n / 1_000_000) МБ, свободно \(f / 1_000_000) МБ"
         case let .verifyFailed(m): return "Перенос не подтверждён: \(m). Данные на старом месте целы."
@@ -30,11 +30,11 @@ enum RelocationError: LocalizedError {
 /// делает StorageLocation.setRoot + relaunch (репоинт через рестарт — единственный способ перецепить и
 /// вспомогательные процессы --mcp/--backup-now, которые читают путь независимо).
 actor StorageRelocator {
-    /// chosen — папка, выбранная пользователем; данные лягут в chosen/Slishu. Захват ДОЛЖЕН быть на
+    /// chosen — папка, выбранная пользователем; данные лягут в chosen/ZBS Eye. Захват ДОЛЖЕН быть на
     /// паузе (recording.pauseForMaintenance) до вызова, иначе пара граничных кадров осядет в старом root.
     func migrate(sourcePool: DatabasePool, sourceDBURL: URL, sourceMedia: URL, chosen: URL,
                  progress: @Sendable @escaping (Double, String) -> Void) async throws -> RelocationReport {
-        let newRoot = chosen.appendingPathComponent("Slishu", isDirectory: true)
+        let newRoot = chosen.appendingPathComponent("ZBS Eye", isDirectory: true)
         let currentRoot = StorageLocation.dataRoot().standardizedFileURL
         guard newRoot.standardizedFileURL.path != currentRoot.path else { throw RelocationError.sameLocation }
 
@@ -43,10 +43,10 @@ actor StorageRelocator {
             let destDB = newRoot.appendingPathComponent("slishu.sqlite")
             let destMedia = newRoot.appendingPathComponent("media", isDirectory: true)
             // Занятый dest (напр. возврат в legacy, где осталась устаревшая копия) — НЕ клобберим и НЕ
-            // блокируем: отодвигаем в сторону Slishu.replaced-<ts> (без потерь, юзер удалит сам).
+            // блокируем: отодвигаем в сторону ZBS Eye.replaced-<ts> (без потерь, юзер удалит сам).
             if fm.fileExists(atPath: destDB.path) {
                 let aside = newRoot.deletingLastPathComponent()
-                    .appendingPathComponent("Slishu.replaced-\(BackupManager.timestamp())", isDirectory: true)
+                    .appendingPathComponent("ZBS Eye.replaced-\(BackupManager.timestamp())", isDirectory: true)
                 try fm.moveItem(at: newRoot, to: aside)
             }
 
