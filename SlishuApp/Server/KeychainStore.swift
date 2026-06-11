@@ -4,11 +4,11 @@ import Security
 /// Минимальный Keychain-доступ (секреты — НЕ UserDefaults, по плану). Используется для API-токена и
 /// позже для секретов коннекторов.
 enum KeychainStore {
-    static let service = "com.slishu.app"
+    static let service = "gg.zbs.eye"
 
     /// КРИТИЧНО: используем СОВРЕМЕННЫЙ data-protection keychain (как на iOS), а НЕ legacy file-keychain.
     /// Legacy login.keychain гейтит доступ ACL'ом и при чтении item'а, созданного другой подписью
-    /// (ad-hoc Debug → «Slishu Dev» Release после переустановки), ВЕШАЕТ main-thread на securityd-диалоге
+    /// (ad-hoc Debug → «ZBS Eye Dev» Release после переустановки), ВЕШАЕТ main-thread на securityd-диалоге
     /// → bootstrap зависает навечно (поймано sample: SecKeychainItemCopyContent → mach_msg). В data-
     /// protection keychain item привязан к подписи приложения и читается СВОИМ приложением без промпта.
     private static let useDataProtection = kSecUseDataProtectionKeychain as String

@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// Дефолты retention. Slishu = «вечная память»: по умолчанию НИЧЕГО не удаляем (0 = вечно). Юзер
+/// Дефолты retention. ZBS Eye = «вечная память»: по умолчанию НИЧЕГО не удаляем (0 = вечно). Юзер
 /// может включить лимит по дням/объёму в Settings. Раньше дефолт 7д/20GB МОЛЧА срезал историю —
 /// для «вечной памяти» это противоречие сути продукта (и съело импорт из screenpipe вживую).
 enum RetentionPolicy: Sendable {
@@ -139,14 +139,14 @@ actor RetentionManager {
 
     /// Экстренное освобождение МЕСТА НА ДИСКЕ (low-disk пауза записи): удаляет старейшее, пока свободно
     /// меньше target. Отличие от prune(): диск мог забить кто-то другой — политика 7д/20GB при этом
-    /// ничего бы не удалила, и пауза записи никогда бы не самоизлечилась. Если данных Slishu больше нет,
+    /// ничего бы не удалила, и пауза записи никогда бы не самоизлечилась. Если данных ZBS Eye больше нет,
     /// а места всё ещё мало — диск занят не нами (вернёт сколько удалено; вызывающий покажет статус).
     func pruneUntilFree(targetFreeBytes: Int64) async throws -> PruneReport {
         var report = PruneReport()
         while storage.freeBytes() < targetFreeBytes {
             if try await deleteOldestFrameBatch(into: &report.framesDeleted) { continue }
             if try await deleteOldestAudioBatch(into: &report.audioDeleted) { continue }
-            break   // данных Slishu не осталось — дальше не наша зона
+            break   // данных ZBS Eye не осталось — дальше не наша зона
         }
         try await checkpoint()   // вернуть место ОС: FTS optimize + WAL truncate
         return report

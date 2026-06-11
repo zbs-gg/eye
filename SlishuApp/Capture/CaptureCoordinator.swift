@@ -261,7 +261,7 @@ final class CaptureCoordinator {
         }
 
         // Дисплей FRONTMOST-окна по ГЕОМЕТРИИ. NSScreen.main здесь не годится: это экран key window
-        // НАШЕГО приложения — когда Slishu в фоне (всегда при записи), он давал бы primary-дисплей,
+        // НАШЕГО приложения — когда ZBS Eye в фоне (всегда при записи), он давал бы primary-дисплей,
         // а не экран чужого активного окна.
         let focusedDisplayID = Self.displayForFrontmostWindow(pid: pid)
 

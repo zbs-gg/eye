@@ -1,10 +1,13 @@
 import Foundation
 
 /// Entry-point. По умолчанию — SwiftUI-приложение. С флагом `--mcp` — MCP stdio-сервер (для запуска из
-/// Claude Desktop / Cursor: `Slishu.app/Contents/MacOS/Slishu --mcp`), без GUI.
+/// Claude Desktop / Cursor: `ZBS Eye.app/Contents/MacOS/ZBS Eye --mcp`), без GUI.
 @main
 struct SlishuMain {
     static func main() {
+        // ПЕРВЫМ делом (до открытия БД любым режимом): одноразовый перенос данных со старого имени
+        // «Slishu» на «ZBS Eye» после ребрендинга (смена bundle id → новый дефолтный root).
+        StorageLocation.migrateFromLegacyNameIfNeeded()
         if CommandLine.arguments.contains("--mcp") {
             // MCP stdio: dispatchMain() держит процесс и даёт concurrency-пулу работать
             // (DispatchSemaphore.wait мёртво блокировал бы main-thread и Task не запускался бы).
@@ -34,7 +37,7 @@ struct SlishuMain {
             dispatchMain()
         } else if let i = CommandLine.arguments.firstIndex(of: "--relocate"),
                   i + 1 < CommandLine.arguments.count {
-            // Headless-перенос хранилища в <path>/Slishu (тот же мигратор, что в UI; без relaunch).
+            // Headless-перенос хранилища в <path>/ZBS Eye (тот же мигратор, что в UI; без relaunch).
             // GUI должен быть закрыт (иначе COUNT-parity дрогнет от конкурентной записи).
             let chosen = URL(fileURLWithPath: CommandLine.arguments[i + 1], isDirectory: true)
             Task.detached {

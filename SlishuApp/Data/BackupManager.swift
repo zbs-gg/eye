@@ -53,7 +53,7 @@ actor BackupManager {
     }
 
     static func backupsDirectory() -> URL {
-        iCloudBase().appendingPathComponent("Slishu/Backups", isDirectory: true)
+        iCloudBase().appendingPathComponent("ZBS Eye/Backups", isDirectory: true)
     }
 
     /// Снапшоты, новейшие первыми. Имя slishu-YYYYMMDD-HHmmss-SSS.sqlite.lzfse сортируется

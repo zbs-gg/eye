@@ -87,7 +87,7 @@ final class AppEnvironment {
         // АНТИ-SPLIT-BRAIN: если данные были перенесены на том, который сейчас недоступен — НЕ стартуем
         // на legacy «с нуля» (иначе пустая история + раскол новых кадров). Просим подключить и перезапустить.
         if let missing = StorageLocation.unavailableConfiguredPath() {
-            self.dataError = "Папка данных недоступна: \(missing). Подключи диск/том и перезапусти Slishu — "
+            self.dataError = "Папка данных недоступна: \(missing). Подключи диск/том и перезапусти ZBS Eye — "
                 + "запись выключена, чтобы не раздвоить «вечную память»."
             SlishuHTTPServer.log("data root unavailable (\(missing)) — bootstrap прерван (анти-split-brain)")
             return
@@ -159,7 +159,7 @@ final class AppEnvironment {
             recording.canCapture = { [weak self] in self?.permissions.allCriticalGranted ?? false }
             recording.blockedHint = { [weak self] in
                 if self?.permissions.screenNeedsRestart == true {
-                    return "Право выдано — перезапусти Slishu (Настройки → Перезапустить). Запись включится автоматически"
+                    return "Право выдано — перезапусти ZBS Eye (Настройки → Перезапустить). Запись включится автоматически"
                 }
                 return "Нет прав (Запись экрана + Универсальный доступ). Запись включится автоматически после выдачи; повторный клик — отмена"
             }
@@ -288,7 +288,7 @@ final class AppEnvironment {
                     if !self.permissions.allCriticalGranted {
                         self.recording.setDegraded(
                             self.permissions.screenNeedsRestart
-                                ? "Захват сломался — перезапусти Slishu"
+                                ? "Захват сломался — перезапусти ZBS Eye"
                                 : "Права отозваны — захват не работает")
                     } else {
                         self.recording.setDegraded(nil)

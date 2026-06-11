@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Первый запуск: consent («Slishu записывает всё — локально») + выдача прав с live-статусом.
+/// Первый запуск: consent («ZBS Eye записывает всё — локально») + выдача прав с live-статусом.
 /// Без онбординга юзер падал в пустой Timeline, жал «Запись», получал ложную зелёную точку и ноль
 /// кадров — первый опыт был тихим провалом. Права обновляются фоновым поллингом PermissionsStore.
 struct OnboardingView: View {
@@ -30,9 +30,9 @@ struct OnboardingView: View {
             HStack(spacing: 12) {
                 Image(systemName: "clock.arrow.circlepath")
                     .font(.system(size: 40)).foregroundStyle(.tint)
-                Text("Slishu — вечная память твоего Mac").font(.title2.bold())
+                Text("ZBS Eye — вечная память твоего Mac").font(.title2.bold())
             }
-            Text("Slishu непрерывно записывает работу за компьютером, чтобы любой момент можно было найти и пересмотреть:")
+            Text("ZBS Eye непрерывно записывает работу за компьютером, чтобы любой момент можно было найти и пересмотреть:")
                 .font(.callout)
             VStack(alignment: .leading, spacing: 10) {
                 bullet("display", "Экран и текст с него — каждое приложение, окно, вкладка")
@@ -74,9 +74,9 @@ struct OnboardingView: View {
                 request: { PermissionChecker.requestScreenRecording() },
                 settingsPane: "Privacy_ScreenCapture")
             if env.permissions.snapshot.screenRecording == .needsRestart {
-                Label("Право выдано — нужен перезапуск Slishu (так устроен macOS).",
+                Label("Право выдано — нужен перезапуск ZBS Eye (так устроен macOS).",
                       systemImage: "arrow.clockwise").font(.caption).foregroundStyle(.orange)
-                Button("Перезапустить Slishu") { AppRelauncher.relaunch() }
+                Button("Перезапустить ZBS Eye") { AppRelauncher.relaunch() }
                     .buttonStyle(.borderedProminent).controlSize(.small)
             }
             permissionStep(
