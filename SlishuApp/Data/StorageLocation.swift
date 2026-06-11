@@ -1,6 +1,6 @@
 import Foundation
 
-/// Единый источник пути к данным Slishu для ВСЕХ процессов (GUI, --mcp, --import-screenpipe,
+/// Единый источник пути к данным ZBS Eye для ВСЕХ процессов (GUI, --mcp, --import-screenpipe,
 /// --backup-now) и всех модулей. Раньше путь выводился НЕЗАВИСИМО в 6 местах — relocate был бы
 /// невозможен (вспомогательные процессы читали бы старое место). Теперь relocate меняет ТОЛЬКО
 /// UserDefaults, и при следующем старте все процессы читают новый root.
@@ -12,7 +12,7 @@ enum StorageLocation {
     private static let bookmarkKey = "slishu.dataRoot.bookmark"
     private static let pathKey = "slishu.dataRoot.path"
 
-    /// Корень данных. Приоритет: bookmark → path → legacy ~/Library/Application Support/Slishu.
+    /// Корень данных. Приоритет: bookmark → path → legacy ~/Library/Application Support/ZBS Eye.
     static func dataRoot() -> URL {
         let url = resolveConfiguredRoot() ?? legacyRoot()
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -35,7 +35,30 @@ enum StorageLocation {
         let support = (try? FileManager.default.url(for: .applicationSupportDirectory,
                                                     in: .userDomainMask, appropriateFor: nil, create: true))
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return support.appendingPathComponent("Slishu", isDirectory: true)
+        return support.appendingPathComponent("ZBS Eye", isDirectory: true)
+    }
+
+    /// ОДНОРАЗОВАЯ миграция при ребрендинге Slishu → ZBS Eye. Bundle id сменился (gg.zbs.eye) → новый
+    /// дефолтный root «ZBS Eye» пуст, а 50k кадров лежат в старой «Slishu». Если новая папка ещё без
+    /// базы, а старая — с базой, переносим (move в пределах тома — атомарно/мгновенно). Вызывать ПЕРВЫМ
+    /// в SlishuMain (до открытия БД любым процессом: GUI/--mcp/--backup-now). Relocate (bookmark) не трогаем.
+    static func migrateFromLegacyNameIfNeeded() {
+        let fm = FileManager.default
+        guard UserDefaults.standard.data(forKey: bookmarkKey) == nil,
+              UserDefaults.standard.string(forKey: pathKey) == nil else { return }   // relocated → данные не в legacy
+        let support = (try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))
+            ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        let newRoot = support.appendingPathComponent("ZBS Eye", isDirectory: true)
+        let oldRoot = support.appendingPathComponent("Slishu", isDirectory: true)
+        guard !fm.fileExists(atPath: newRoot.appendingPathComponent("slishu.sqlite").path),
+              fm.fileExists(atPath: oldRoot.appendingPathComponent("slishu.sqlite").path) else { return }
+        if !fm.fileExists(atPath: newRoot.path) {
+            try? fm.moveItem(at: oldRoot, to: newRoot)            // атомарный rename всей папки
+        } else {
+            for item in (try? fm.contentsOfDirectory(at: oldRoot, includingPropertiesForKeys: nil)) ?? [] {
+                try? fm.moveItem(at: item, to: newRoot.appendingPathComponent(item.lastPathComponent))
+            }
+        }
     }
 
     /// Сконфигурирован ли НЕ-дефолтный root (для UI «перенести обратно»).

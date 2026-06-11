@@ -33,7 +33,7 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
         cfg.capturesAudio = true
         cfg.sampleRate = 48_000
         cfg.channelCount = 2
-        cfg.excludesCurrentProcessAudio = true   // не записывать собственный звук Slishu (эхо/петля)
+        cfg.excludesCurrentProcessAudio = true   // не записывать собственный звук ZBS Eye (эхо/петля)
         // Видео нам не нужно — минимизируем: крошечный кадр, редкий тик (audio-only стрим всё равно
         // требует валидной video-части в конфиге).
         cfg.width = 2

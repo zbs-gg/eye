@@ -7,7 +7,7 @@ struct MenuBarContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Slishu").font(.headline)
+            Text("ZBS Eye").font(.headline)
 
             RecordingStatusView()
 
@@ -37,11 +37,11 @@ struct MenuBarContent: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Возобновить сейчас") { env.recording.resumeNow() }
             }
-            Button("Открыть Slishu") { openWindow(id: "main") }
+            Button("Открыть ZBS Eye") { openWindow(id: "main") }
 
             Divider()
 
-            Button("Выйти из Slishu") { NSApplication.shared.terminate(nil) }
+            Button("Выйти из ZBS Eye") { NSApplication.shared.terminate(nil) }
         }
         .padding(12)
         .frame(width: 260)

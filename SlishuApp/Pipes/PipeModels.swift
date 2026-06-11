@@ -43,7 +43,7 @@ struct DestinationConfig: Codable, Sendable, Equatable {
     var displayPath: String?
     var subfolder: String
 
-    static let `default` = DestinationConfig(bookmark: nil, displayPath: nil, subfolder: "Slishu")
+    static let `default` = DestinationConfig(bookmark: nil, displayPath: nil, subfolder: "ZBS Eye")
 
     var isConfigured: Bool { bookmark != nil || displayPath != nil }
 }
@@ -105,7 +105,7 @@ struct WriteResult: Sendable {
 
 // MARK: audit
 
-/// Строка audit-лога (JSONL в Application Support/Slishu/pipe-audit.jsonl). Доказуемая история того,
+/// Строка audit-лога (JSONL в Application Support/ZBS Eye/pipe-audit.jsonl). Доказуемая история того,
 /// что pipe читал/писал — требование плана (pipe касается приватных данных).
 struct AuditEntry: Codable, Sendable, Identifiable {
     var id: String { "\(at.timeIntervalSince1970)-\(action)" }
