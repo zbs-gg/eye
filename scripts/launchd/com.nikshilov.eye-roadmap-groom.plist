@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ZBS Eye roadmap auto-groom — каждые ~2 дня (StartInterval 172800s).
+  Запускает scripts/groom-roadmap.sh: headless claude грумит бэклог, ЛОГИРУЕТ в ledger.jsonl,
+  доставляет дайджест в Telegram через elle-outbox, коммитит. Это unattended-spend (осознанно).
+
+  Активировать:
+    cp scripts/launchd/com.nikshilov.eye-roadmap-groom.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.nikshilov.eye-roadmap-groom.plist
+  Проверить:   launchctl list | grep eye-roadmap   ·   launchctl kickstart -k gui/$UID/com.nikshilov.eye-roadmap-groom
+  Снять:       launchctl bootout gui/$UID ~/Library/LaunchAgents/com.nikshilov.eye-roadmap-groom.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.nikshilov.eye-roadmap-groom</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/nikshilov/ai/slishu/scripts/groom-roadmap.sh</string>
+    </array>
+    <key>StartInterval</key><integer>172800</integer>
+    <key>RunAtLoad</key><false/>
+    <key>ProcessType</key><string>Background</string>
+    <key>StandardOutPath</key><string>/Users/nikshilov/ai/slishu/workspace/groom/launchd.out.log</string>
+    <key>StandardErrorPath</key><string>/Users/nikshilov/ai/slishu/workspace/groom/launchd.err.log</string>
+</dict>
+</plist>
