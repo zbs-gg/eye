@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// Движок единственного pipe v1: «саммари дня». Три стадии — collect (история из БД → компактные
+/// Движок единственной автоматизации v1: «саммари дня». Три стадии — collect (история из БД → компактные
 /// сессии) → summarize (локальная LLM) → write (Markdown в папку/Obsidian). Actor: вся работа с БД,
 /// сетью и файлами изолирована; наружу только Sendable. Egress строго локальный (файл), preview
 /// обязателен до записи (см. DaySummaryStore) — защита от prompt-injection из приватной истории.
@@ -18,10 +18,10 @@ actor DailySummaryService {
 
     /// Кадры дня → сессии (подряд идущие кадры одного app/окна, допуск на паузу 5 мин). Отбираем самые
     /// длинные maxInputSlices, для каждой берём самый длинный текстовый блок как репрезентативный сэмпл.
-    func collect(day: Date, safety: PipeSafety) async throws -> CollectedDay {
+    func collect(day: Date, safety: AutomationSafety) async throws -> CollectedDay {
         let cal = Calendar.current
         let start = cal.startOfDay(for: day)
-        guard let end = cal.date(byAdding: .day, value: 1, to: start) else { throw PipeError.noData(day: day) }
+        guard let end = cal.date(byAdding: .day, value: 1, to: start) else { throw AutomationError.noData(day: day) }
         let startMs = msFromDate(start), endMs = msFromDate(end) - 1
         let maxSlices = safety.maxInputSlices
         let maxSample = safety.maxSampleChars
@@ -78,16 +78,16 @@ actor DailySummaryService {
             return (slices, total, totalSlices)
         }
 
-        guard result.1 > 0 else { throw PipeError.noData(day: day) }
+        guard result.1 > 0 else { throw AutomationError.noData(day: day) }
         return CollectedDay(day: start, slices: result.0, totalCaptures: result.1, totalSlices: result.2)
     }
 
     // MARK: стадия 2 — summarize (= preview)
 
     /// collect + LLM. Запись НЕ делает — это превью. Пишет audit("preview").
-    func preview(day: Date, llm: LLMConfig, safety: PipeSafety) async throws -> SummaryPreview {
-        guard llm.isConfigured else { throw PipeError.noLLM }
-        guard llm.isLocalOnly else { throw PipeError.nonLocalLLM(URL(string: llm.baseURL)?.host ?? llm.baseURL) }
+    func preview(day: Date, llm: LLMConfig, safety: AutomationSafety) async throws -> SummaryPreview {
+        guard llm.isConfigured else { throw AutomationError.noLLM }
+        guard llm.isLocalOnly else { throw AutomationError.nonLocalLLM(URL(string: llm.baseURL)?.host ?? llm.baseURL) }
 
         let collected = try await collect(day: day, safety: safety)
         let (system, user) = Self.buildPrompt(collected)
@@ -100,16 +100,16 @@ actor DailySummaryService {
                 totalCaptures: collected.totalCaptures, model: llm.model,
                 promptChars: system.count + user.count, truncated: collected.truncated,
                 outputTruncated: out.truncated)
-            await audit(AuditEntry(at: Date(), pipe: "daily-summary", day: Self.ymd(collected.day),
+            await audit(AuditEntry(at: Date(), automation: "daily-summary", day: Self.ymd(collected.day),
                                    action: "preview", model: llm.model, sessions: preview.sessions,
                                    captures: preview.totalCaptures, outputChars: trimmed.count,
                                    destPath: nil, ok: true, error: nil))
             return preview
         } catch {
-            await audit(AuditEntry(at: Date(), pipe: "daily-summary", day: Self.ymd(collected.day),
+            await audit(AuditEntry(at: Date(), automation: "daily-summary", day: Self.ymd(collected.day),
                                    action: "preview", model: llm.model, sessions: collected.slices.count,
                                    captures: collected.totalCaptures, outputChars: 0, destPath: nil,
-                                   ok: false, error: (error as? PipeError)?.errorDescription ?? error.localizedDescription))
+                                   ok: false, error: (error as? AutomationError)?.errorDescription ?? error.localizedDescription))
             throw error
         }
     }
@@ -122,7 +122,7 @@ actor DailySummaryService {
         // Санитизация подпапки: свободный TextField мог бы содержать «../../» и записать приватный
         // конспект ВНЕ выбранной папки. Собираем папку только из чистых сегментов, «..» запрещаем.
         let segments = subfolder.split(separator: "/").map(String.init).filter { !$0.isEmpty && $0 != "." }
-        guard !segments.contains("..") else { throw PipeError.write("Подпапка содержит недопустимый путь («..»).") }
+        guard !segments.contains("..") else { throw AutomationError.write("Подпапка содержит недопустимый путь («..»).") }
         var folder = destinationURL
         for seg in segments { folder.appendPathComponent(seg, isDirectory: true) }
 
@@ -133,7 +133,7 @@ actor DailySummaryService {
         let base = destinationURL.standardizedFileURL.path
         let basePrefix = base.hasSuffix("/") ? base : base + "/"
         guard fileURL.standardizedFileURL.path.hasPrefix(basePrefix) else {
-            throw PipeError.write("Целевой путь вне выбранной папки.")
+            throw AutomationError.write("Целевой путь вне выбранной папки.")
         }
 
         // Экранируем image-embed «![...](...)» в выводе модели — иначе Obsidian при открытии файла авто-
@@ -146,17 +146,17 @@ actor DailySummaryService {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let existed = FileManager.default.fileExists(atPath: fileURL.path)
             try Data(content.utf8).write(to: fileURL, options: .atomic)
-            await audit(AuditEntry(at: Date(), pipe: "daily-summary", day: Self.ymd(preview.day),
+            await audit(AuditEntry(at: Date(), automation: "daily-summary", day: Self.ymd(preview.day),
                                    action: "write", model: preview.model, sessions: preview.sessions,
                                    captures: preview.totalCaptures, outputChars: preview.markdown.count,
                                    destPath: fileURL.path, ok: true, error: nil))
             return WriteResult(path: fileURL.path, bytes: content.utf8.count, overwritten: existed)
         } catch {
-            await audit(AuditEntry(at: Date(), pipe: "daily-summary", day: Self.ymd(preview.day),
+            await audit(AuditEntry(at: Date(), automation: "daily-summary", day: Self.ymd(preview.day),
                                    action: "write", model: preview.model, sessions: preview.sessions,
                                    captures: preview.totalCaptures, outputChars: preview.markdown.count,
                                    destPath: fileURL.path, ok: false, error: error.localizedDescription))
-            throw PipeError.write(error.localizedDescription)
+            throw AutomationError.write(error.localizedDescription)
         }
     }
 

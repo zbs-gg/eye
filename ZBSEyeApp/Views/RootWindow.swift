@@ -12,7 +12,7 @@ struct RootWindow: View {
             Group {
                 switch env.selectedSection {
                 case .timeline:    TimelineView()
-                case .pipes:       PipesView()
+                case .automations:       AutomationsView()
                 case .connections: ConnectionsView()
                 case .settings:    SettingsView()
                 }

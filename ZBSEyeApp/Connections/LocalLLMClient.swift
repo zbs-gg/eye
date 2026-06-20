@@ -50,12 +50,12 @@ actor LocalLLMClient {
 
     // MARK: генерация
 
-    /// `POST {base}/chat/completions` без стрима. maxTokens cap'ает выход (PipeSafety).
+    /// `POST {base}/chat/completions` без стрима. maxTokens cap'ает выход (AutomationSafety).
     func chat(_ cfg: LLMConfig, system: String, user: String,
               maxTokens: Int, timeout: TimeInterval) async throws -> ChatOutput {
-        guard cfg.isLocalOnly else { throw PipeError.nonLocalLLM(URL(string: cfg.normalizedBaseURL)?.host ?? cfg.baseURL) }
+        guard cfg.isLocalOnly else { throw AutomationError.nonLocalLLM(URL(string: cfg.normalizedBaseURL)?.host ?? cfg.baseURL) }
         guard let url = Self.endpoint(cfg.normalizedBaseURL, "chat/completions") else {
-            throw PipeError.llm("некорректный baseURL")
+            throw AutomationError.llm("некорректный baseURL")
         }
         let body = ChatRequest(
             model: cfg.model,
@@ -70,20 +70,20 @@ actor LocalLLMClient {
 
         do {
             let (data, resp) = try await Self.session(timeout: timeout).data(for: req)
-            guard let http = resp as? HTTPURLResponse else { throw PipeError.llm("нет HTTP-ответа") }
+            guard let http = resp as? HTTPURLResponse else { throw AutomationError.llm("нет HTTP-ответа") }
             guard (200..<300).contains(http.statusCode) else {
-                throw PipeError.llm("HTTP \(http.statusCode): \(Self.snippet(data))")
+                throw AutomationError.llm("HTTP \(http.statusCode): \(Self.snippet(data))")
             }
             let decoded = try JSONDecoder().decode(ChatResponse.self, from: data)
             guard let choice = decoded.choices.first,
                   !choice.message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                throw PipeError.llm("пустой ответ модели")
+                throw AutomationError.llm("пустой ответ модели")
             }
             return ChatOutput(content: choice.message.content, truncated: choice.finish_reason == "length")
-        } catch let e as PipeError {
+        } catch let e as AutomationError {
             throw e
         } catch {
-            throw PipeError.llm(Self.humanError(error))
+            throw AutomationError.llm(Self.humanError(error))
         }
     }
 

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Общие типы automation-слоя (Шаг 9): конфиг подключений, ограничения безопасности pipe,
+/// Общие типы automation-слоя (Шаг 9): конфиг подключений, ограничения безопасности автоматизации,
 /// промежуточные данные daily-summary, audit-запись. Всё Sendable — ходит между @MainActor-store,
 /// actor-сервисом и сетью без шаринга мутабельного состояния.
 
@@ -48,18 +48,18 @@ struct DestinationConfig: Codable, Sendable, Equatable {
     var isConfigured: Bool { bookmark != nil || displayPath != nil }
 }
 
-// MARK: ограничения безопасности pipe
+// MARK: ограничения безопасности автоматизации
 
-/// Жёсткие caps: pipe читает приватную историю → LLM → запись. Ограничиваем вход (сколько сессий),
+/// Жёсткие caps: автоматизация читает приватную историю → LLM → запись. Ограничиваем вход (сколько сессий),
 /// длину сэмпла, выход и таймаут. Защита от prompt-injection — delimiters + локальный-only egress +
 /// обязательный preview перед первой записью (см. DaySummaryStore).
-struct PipeSafety: Sendable, Equatable {
+struct AutomationSafety: Sendable, Equatable {
     var maxInputSlices = 80
     var maxSampleChars = 360
     var maxOutputTokens = 800
     var requestTimeout: TimeInterval = 300   // локальная модель может холодно грузиться; stream:false = молчит до конца
 
-    static let `default` = PipeSafety()
+    static let `default` = AutomationSafety()
 }
 
 // MARK: данные daily-summary
@@ -105,12 +105,12 @@ struct WriteResult: Sendable {
 
 // MARK: audit
 
-/// Строка audit-лога (JSONL в Application Support/ZBS Eye/pipe-audit.jsonl). Доказуемая история того,
-/// что pipe читал/писал — требование плана (pipe касается приватных данных).
+/// Строка audit-лога (JSONL в Application Support/ZBS Eye/automation-audit.jsonl). Доказуемая история того,
+/// что автоматизация читала/писала — требование плана (автоматизация касается приватных данных).
 struct AuditEntry: Codable, Sendable, Identifiable {
     var id: String { "\(at.timeIntervalSince1970)-\(action)" }
     let at: Date
-    let pipe: String
+    let automation: String
     let day: String           // YYYY-MM-DD
     let action: String        // "preview" | "write"
     let model: String
@@ -124,7 +124,7 @@ struct AuditEntry: Codable, Sendable, Identifiable {
 
 // MARK: ошибки
 
-enum PipeError: LocalizedError {
+enum AutomationError: LocalizedError {
     case noLLM
     case nonLocalLLM(String)
     case noDestination
@@ -160,6 +160,6 @@ enum ZBSEyeSupport {
     }
 
     static func auditLogURL() throws -> URL {
-        try directory().appendingPathComponent("pipe-audit.jsonl")
+        try directory().appendingPathComponent("automation-audit.jsonl")
     }
 }

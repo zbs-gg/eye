@@ -28,7 +28,7 @@ final class ConnectionStore {
         self.destination = Self.loadCodable(DestinationConfig.self, key: Self.destKey) ?? .default
     }
 
-    /// Готовность к запуску pipe: настроена LLM (локальная) И выбрано назначение.
+    /// Готовность к запуску automation: настроена LLM (локальная) И выбрано назначение.
     var isReady: Bool { llm.isConfigured && llm.isLocalOnly && destination.isConfigured }
 
     // MARK: проверка LLM
