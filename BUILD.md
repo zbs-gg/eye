@@ -21,14 +21,14 @@ ZBSEyeApp/
   App/        ZBSEyeApp (@main), AppEnvironment (@Observable корень)
   State/      *Store.swift — @Observable @MainActor (Permissions, Recording, Server)
   Services/   Permissions/PermissionChecker (реальные TCC-пробы)
-  Views/      Sidebar, Timeline, Pipes, Connections, Settings, MenuBar, Components
+  Views/      Sidebar, Timeline, Automations, Connections, Settings, MenuBar, Components
   ZBSEye.entitlements  — Hardened Runtime БЕЗ App Sandbox
 ```
 Swift 6 strict concurrency = `complete`. Deployment target macOS 15.0.
 
 Дальше (по `workspace/PLAN.md`): FramePipelineActor (capture+encode+hash) · DB/FTS/retention ·
 authenticated localhost REST · AX/OCR capture loop с telemetry · vector (sqlite-vec + shards) ·
-Timeline/scrubber · Pipes · audio/transcription.
+Timeline/scrubber · Automations · audio/transcription.
 
 Harness-инструменты (отдельные SPM-пакеты, не часть app): `harness/electron-ax-smoke`,
 `harness/sqlite-vec-bench`, `harness/sck-burst-bench`.

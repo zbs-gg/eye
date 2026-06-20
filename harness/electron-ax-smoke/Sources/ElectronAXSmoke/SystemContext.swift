@@ -63,7 +63,7 @@ enum SystemContext {
             let name = (app.localizedName ?? "").lowercased()
             if let n = knownBundles[bid] { found.insert(n) }
             // по имени — ловим то, что не угадали по bundleId
-            for needle in ["screenpipe", "krisp", "limitless", "superwhisper", "rewind", "hammerspoon", "voiceover", "shortcat", "homerow", "vimac"] {
+            for needle in ["krisp", "limitless", "superwhisper", "rewind", "hammerspoon", "voiceover", "shortcat", "homerow", "vimac"] {
                 if name.contains(needle) || bid.lowercased().contains(needle) { found.insert(needle) }
             }
         }

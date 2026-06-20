@@ -1,12 +1,12 @@
 import Foundation
 import GRDB
 
-/// Импорт истории из screenpipe (~/.screenpipe/db.sqlite): их юзеры уходят с подписки — забрать
-/// накопленную память без потерь. Переносится ТЕКСТ + метаданные (кадры: app/окно/URL/AX/OCR-текст;
-/// аудио: транскрипты со спикером). Медиа НЕ копируется (50k+ jpg/чанки — остаются у screenpipe,
+/// Импорт прежней истории (~/.screenpipe/db.sqlite): забрать накопленную память без потерь, не
+/// привязывая себя к чужому продукту. Переносится ТЕКСТ + метаданные (кадры: app/окно/URL/AX/OCR-текст;
+/// аудио: транскрипты со спикером). Медиа НЕ копируется (50k+ jpg/чанки остаются на месте,
 /// наша «вечная память» — про поиск и контекст). Векторы доиндексирует VectorBackfill фоном.
 /// Идемпотентен: курсоры по id персистятся — повторный запуск продолжает, не дублирует.
-actor ScreenpipeImporter {
+actor HistoryImporter {
     private let db: ZBSEyeDatabase
     private var running = false
 
@@ -24,13 +24,13 @@ actor ScreenpipeImporter {
     init(db: ZBSEyeDatabase) { self.db = db }
 
     /// Прогресс — колбэк (frames, audio) каждые ~500 строк.
-    func run(sourcePath: String = ScreenpipeImporter.defaultSourcePath,
+    func run(sourcePath: String = HistoryImporter.defaultSourcePath,
              progress: (@Sendable (Int, Int) -> Void)? = nil) async throws -> Report {
         guard !running else { return Report() }
         running = true
         defer { running = false }
 
-        // Источник строго read-only (чужая БД, может быть открыта самим screenpipe).
+        // Источник строго read-only (чужая БД, может быть открыта своим приложением).
         var cfg = Configuration()
         cfg.readonly = true
         let source = try DatabaseQueue(path: sourcePath, configuration: cfg)
@@ -41,7 +41,7 @@ actor ScreenpipeImporter {
         report.frames = frames
         report.audio = audio
         report.skipped = fSkip + aSkip
-        Log.app.info("screenpipe import: +\(report.frames) кадров, +\(report.audio) аудио, пропущено(битый ts/пусто) \(report.skipped)")
+        Log.app.info("импорт истории: +\(report.frames) кадров, +\(report.audio) аудио, пропущено(битый ts/пусто) \(report.skipped)")
         return report
     }
 
@@ -76,7 +76,7 @@ actor ScreenpipeImporter {
                     let text = [ax, full, ocr].compactMap { $0 }.first { !$0.isEmpty }
                     let isAX = (ax?.isEmpty == false) || (row["src"] as String?) == "accessibility"
                     return SPFrame(id: row["id"], tsMs: tsMs,
-                                   app: (row["app"] as String?) ?? "screenpipe",
+                                   app: (row["app"] as String?) ?? "imported",
                                    window: row["win"], url: row["url"],
                                    text: text, source: isAX ? "ax" : "ocr")
                 }
@@ -96,7 +96,7 @@ actor ScreenpipeImporter {
                     // Идемпотентность: повторный прогон (после reset курсора / частичной потери от
                     // retention) не должен дублировать уже импортированное. Ключ — (ts, appId, sp).
                     // ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ: ключ без device_name схлопывает кадры одного приложения с
-                    // одинаковым ts на РАЗНЫХ мониторах (~0.15% в реальной screenpipe-БД). Корректный
+                    // одинаковым ts на РАЗНЫХ мониторах (~0.15% в реальной исходной БД). Корректный
                     // фикс — source_id колонка; делается в storage-rework (нельзя менять ключ сейчас:
                     // сломает идемпотентность против уже импортированных monitorId='sp' строк).
                     if try Int.fetchOne(dbc, sql:
@@ -110,7 +110,7 @@ actor ScreenpipeImporter {
                         axQuality: f.source == "ax" ? "fullUseful" : "ocr",
                         usefulTextChars: f.text?.count, nodeCount: nil,
                         treeWasEmpty: nil, hitBudgetLimit: nil,
-                        ocrFallbackReason: "screenpipe-import",
+                        ocrFallbackReason: "imported",
                         manualAccessibilityResult: nil, enhancedUiResult: nil)
                     try cap.insert(dbc)
                     if let text = f.text, !text.isEmpty {
@@ -157,7 +157,7 @@ actor ScreenpipeImporter {
                     return SPAudio(id: row["id"], tsMs: tsMs, text: text,
                                    isInput: (row["inp"] as Bool?) ?? true,
                                    dur: max(0, (end ?? 0) - (start ?? 0)),
-                                   engine: (row["engine"] as String?) ?? "screenpipe")
+                                   engine: (row["engine"] as String?) ?? "imported")
                 }
                 return (mapped, rows.count)
             }
@@ -171,16 +171,16 @@ actor ScreenpipeImporter {
             try await db.pool.write { dbc in
                 for a in page {
                     // Идемпотентность: не дублировать при повторном прогоне. Ключ — (ts, channel,
-                    // text): в screenpipe несколько РАЗНЫХ реплик легитимно делят один ts, поэтому
+                    // text): в источнике несколько РАЗНЫХ реплик легитимно делят один ts, поэтому
                     // только (ts,channel) их ошибочно схлопывает — нужен ещё текст транскрипта.
                     if try Int.fetchOne(dbc, sql: """
                         SELECT 1 FROM audio_captures ac JOIN transcriptions t ON t.audioId = ac.id
-                        WHERE ac.ts = ? AND ac.channel = ? AND ac.relativePath = 'screenpipe-import'
+                        WHERE ac.ts = ? AND ac.channel = ? AND ac.relativePath = 'imported'
                               AND t.text = ? LIMIT 1
                         """,
                         arguments: [a.tsMs, a.isInput ? "mic" : "system", a.text]) != nil { continue }
                     var row = AudioCaptureRow(id: nil, ts: a.tsMs,
-                                              relativePath: "screenpipe-import",   // медиа не переносим
+                                              relativePath: "imported",   // медиа не переносим
                                               durationSec: a.dur,
                                               channel: a.isInput ? "mic" : "system", bytes: nil)
                     try row.insert(dbc)
@@ -188,7 +188,7 @@ actor ScreenpipeImporter {
                                               language: "auto",
                                               speaker: a.isInput ? "я" : "собеседник",
                                               startOffset: 0, endOffset: a.dur,
-                                              engine: "screenpipe/\(a.engine)")
+                                              engine: "imported/(a.engine)")
                     try tr.insert(dbc)
                 }
             }
@@ -220,7 +220,7 @@ actor ScreenpipeImporter {
 
     /// Их app_name без bundleId — синтезируем стабильный уникальный ключ.
     private static func upsertApp(_ db: Database, name: String) throws -> Int64 {
-        let bundleId = "screenpipe." + name.lowercased()
+        let bundleId = "imported." + name.lowercased()
             .replacingOccurrences(of: " ", with: "-")
             .filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "." }
         if let existing = try AppRow.filter(Column("bundleId") == bundleId).fetchOne(db) {

@@ -12,8 +12,8 @@
 
 **ZBS Eye** (коднейм `ZBSEye`) — нативный macOS-рекордер «вечной памяти»: непрерывно пишет, что происходит на компьютере
 (экран + accessibility-текст/OCR + аудио с транскрипцией), индексирует и отдаёт через локальный REST
-+ MCP. **100% локально, без облака, без аккаунта.** Лёгкая нативная альтернатива screenpipe (который
-ушёл на подписку + облако).
++ MCP. **100% локально, без облака, без аккаунта.** Лёгкая нативная альтернатива проприетарным
+аналогам (которые ушли на подписку + облако).
 
 - Swift 6 (strict concurrency = `complete`), SwiftUI, target macOS 15+.
 - Хранилище: GRDB (`DatabasePool` + WAL) + FTS5 (external-content) + sqlite-vec (статически слинкован).
@@ -30,7 +30,7 @@ bash scripts/make-signing-cert.sh                 # ОДИН раз: self-signed
 bash scripts/build-release.sh                     # Release + подпись + e5-модель в бандл + zip
 ```
 
-CLI-режимы (один бинарь): `--mcp` (MCP stdio), `--import-screenpipe`, `--relocate <path>`,
+CLI-режимы (один бинарь): `--mcp` (MCP stdio), `--import-history`, `--relocate <path>`,
 `--backup-now`, `--backup-verify <file>`.
 
 ## Карта архитектуры (`ZBSEyeApp/`)
@@ -44,15 +44,15 @@ CLI-режимы (один бинарь): `--mcp` (MCP stdio), `--import-screenp
 | `Search/` | `SearchService` (FTS+vector RRF), `EmbeddingService` (e5), `TimelineService`, `VectorBackfill` |
 | `Server/` | `ZBSEyeHTTPServer` (FlyingFox REST, 127.0.0.1, Bearer), `KeychainStore`, DTO |
 | `MCP/` | `ZBSEyeMCPServer` (stdio, проксирует в GUI-инстанс) |
-| `Pipes/` | `ScreenpipeImporter` (импорт истории), `DailySummaryService`, `ExportService` |
+| `Automations/` | `HistoryImporter` (импорт истории), `DailySummaryService`, `ExportService` |
 | `State/` | `@MainActor @Observable` сторы (Recording/Permissions/Storage/Backup/…) |
 | `Views/` | SwiftUI (Timeline, Settings, онбординг) |
 
 ## Инварианты (нарушишь — сломаешь)
 
-1. **Один источник пути к данным — `StorageLocation`.** БД, media, port-файл, server.log, pipes — ВСЁ
+1. **Один источник пути к данным — `StorageLocation`.** БД, media, port-файл, server.log, автоматизации — ВСЁ
    резолвится через `StorageLocation.dataRoot()/databaseURL()/mediaDirectory()/portURL()`. НЕ хардкодь
-   `Application Support/ZBSEye`. Это нужно, чтобы relocate (перенос на внешний SSD) и вспомогательные
+   `Application Support/ZBS Eye`. Это нужно, чтобы relocate (перенос на внешний SSD) и вспомогательные
    процессы (`--mcp`, `--backup-now`) видели одно место. Исключения: iCloud-бэкап и пользовательский
    экспорт — намеренно отдельные пути.
 2. **Один writer — `IngestService`.** Не-Sendable (`CVPixelBuffer`/`CMSampleBuffer`/`AXUIElement`/`VNRequest`)
@@ -82,7 +82,7 @@ CLI-режимы (один бинарь): `--mcp` (MCP stdio), `--import-screenp
   битая база). media — copy-not-move (старое место цело до verify+flip).
 - **Захват на паузе во время relocate** (`pauseForMaintenance` + дренаж in-flight), иначе граничный
   кадр/аудио-сегмент осиротеет (вне backup-снапшота / вне копии media).
-- **screenpipe AX-дерево часто пустое на Electron** — отсюда adaptive AX-first + OCR-fallback per-app,
+- **AX-дерево часто пустое на Electron-приложениях** — отсюда adaptive AX-first + OCR-fallback per-app,
   не «победили Electron». OCR — равноправный путь, не редкий fallback.
 
 ## Как ревьюить (где живёт риск)
@@ -102,8 +102,8 @@ live: REST-батарея, MCP, sqlite-сверка; см. историю ком
 ## Статус (что работает)
 
 Работает и проверено вживую: захват экрана (HEIC + AX/OCR), аудио + транскрипция, гибрид-поиск
-(cross-lingual), таймлайн, REST + MCP, импорт из screenpipe, retention, **relocatable хранилище**,
-**iCloud-бэкап** (сжатый, keep-N, на выходе), трекинг размера, daily-summary pipe, экспорт.
+(cross-lingual), таймлайн, REST + MCP, импорт прежней истории, retention, **relocatable хранилище**,
+**iCloud-бэкап** (сжатый, keep-N, на выходе), трекинг размера, daily-summary автоматизация, экспорт.
 
 Отложено: тест-таргет (XCTest); source_id для мультимонитор-дедупа (~0.15% кадров, задокументировано
-в `ScreenpipeImporter`); нотаризация (нет платного аккаунта — установка через «Open Anyway»).
+в `HistoryImporter`); нотаризация (нет платного аккаунта — установка через «Open Anyway»).

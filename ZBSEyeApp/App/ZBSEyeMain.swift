@@ -19,14 +19,14 @@ struct ZBSEyeMain {
                 exit(0)
             }
             dispatchMain()
-        } else if CommandLine.arguments.contains("--import-screenpipe") {
-            // Headless-импорт из ~/.screenpipe (то же, что кнопка в Настройках; удобно для
+        } else if CommandLine.arguments.contains("--import-history") {
+            // Headless-импорт прежней истории из ~/.screenpipe (то же, что кнопка в Настройках; удобно для
             // скриптов/проверки). Идемпотентен — можно прерывать и продолжать.
             Task.detached {
                 do {
                     let db = try ZBSEyeDatabase(path: ZBSEyeDatabase.defaultURL().path)
-                    let importer = ScreenpipeImporter(db: db)
-                    print("Импорт из \(ScreenpipeImporter.defaultSourcePath)…")
+                    let importer = HistoryImporter(db: db)
+                    print("Импорт из \(HistoryImporter.defaultSourcePath)…")
                     let report = try await importer.run { f, a in
                         print("  кадров: \(f), аудио: \(a)")
                     }
