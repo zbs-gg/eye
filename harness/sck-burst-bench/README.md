@@ -1,4 +1,4 @@
-# SCK burst benchmark (Slishu — blocking harness 1b)
+# SCK burst benchmark (ZBSEye — blocking harness 1b)
 
 **Зачем.** В плане выбран event-driven захват через `SCScreenshotManager.captureSampleBuffer`
 (on-demand single frame) вместо persistent `SCStream`. Pro предупредил: при burst (печать/скролл/
@@ -18,7 +18,7 @@
 ```
 cd harness/sck-burst-bench
 swift build -c release
-./.build/release/SckBurstBench > ~/ai/slishu/workspace/sck-bench.json
+./.build/release/SckBurstBench > ~/ai/zbseye/workspace/sck-bench.json
 ```
 Первый запуск попросит **Screen Recording** (System Settings → Privacy → Screen Recording → разреши
 Терминалу), затем перезапусти. Прогон ~40–50с.

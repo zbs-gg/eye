@@ -1,4 +1,4 @@
-# sqlite-vec scale benchmark (Slishu — blocking harness 1c)
+# sqlite-vec scale benchmark (ZBSEye — blocking harness 1c)
 
 **Зачем.** Pro усомнился в «sqlite-vec даёт 1M за десятки мс» (его данные: 1M×128D ≈33мс, но 192D
 ≈192мс, не проходит 100мс smoke). Этот harness меряет на **нашей размерности (384)** и **нашем

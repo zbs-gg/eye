@@ -3,14 +3,14 @@
 Этот файл — для AI-агентов и людей, которые впервые открывают репозиторий, чтобы понять/проверить/
 доработать код. Читается за 5 минут и экономит часы. Build-детали — в [`BUILD.md`](BUILD.md).
 
-> **Бренд продукта — «ZBS Eye».** Внутренний коднейм в коде — `Slishu`: Xcode-таргет/схема `Slishu`,
-> типы `SlishuDatabase`/`SlishuHTTPServer`/…, бинарь `Slishu.app`, подпись «Slishu Dev». Это норма
+> **Бренд продукта — «ZBS Eye».** Внутренний коднейм в коде — `ZBSEye`: Xcode-таргет/схема `ZBSEye`,
+> типы `ZBSEyeDatabase`/`ZBSEyeHTTPServer`/…, бинарь `ZBS Eye.app`, подпись «ZBS Eye Dev». Это норма
 > (бренд ≠ кодовое имя) — НЕ переименовывай идентификаторы. Снаружи (bundle id `gg.zbs.eye`, display
 > name, пути данных `~/…/ZBS Eye`, тексты) — везде «ZBS Eye».
 
 ## Что это
 
-**ZBS Eye** (коднейм `Slishu`) — нативный macOS-рекордер «вечной памяти»: непрерывно пишет, что происходит на компьютере
+**ZBS Eye** (коднейм `ZBSEye`) — нативный macOS-рекордер «вечной памяти»: непрерывно пишет, что происходит на компьютере
 (экран + accessibility-текст/OCR + аудио с транскрипцией), индексирует и отдаёт через локальный REST
 + MCP. **100% локально, без облака, без аккаунта.** Лёгкая нативная альтернатива screenpipe (который
 ушёл на подписку + облако).
@@ -19,13 +19,13 @@
 - Хранилище: GRDB (`DatabasePool` + WAL) + FTS5 (external-content) + sqlite-vec (статически слинкован).
 - Поиск: гибрид FTS + семантика (multilingual-e5-small, 384-dim) через RRF.
 - ~9 300 строк Swift. Без App Sandbox (Hardened Runtime) — иначе SCK + cross-app AX + локальный сервер
-  невозможны. Self-signed подпись «Slishu Dev» (без платного Apple Developer аккаунта).
+  невозможны. Self-signed подпись «ZBS Eye Dev» (без платного Apple Developer аккаунта).
 
 ## Сборка и запуск
 
 ```bash
-xcodegen generate                                 # project.yml → Slishu.xcodeproj (исходники — глоб папки SlishuApp/)
-xcodebuild -project Slishu.xcodeproj -scheme Slishu -configuration Debug build
+xcodegen generate                                 # project.yml → ZBSEye.xcodeproj (исходники — глоб папки ZBSEyeApp/)
+xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Debug build
 bash scripts/make-signing-cert.sh                 # ОДИН раз: self-signed cert → стабильный TCC (см. грабли)
 bash scripts/build-release.sh                     # Release + подпись + e5-модель в бандл + zip
 ```
@@ -33,17 +33,17 @@ bash scripts/build-release.sh                     # Release + подпись + e
 CLI-режимы (один бинарь): `--mcp` (MCP stdio), `--import-screenpipe`, `--relocate <path>`,
 `--backup-now`, `--backup-verify <file>`.
 
-## Карта архитектуры (`SlishuApp/`)
+## Карта архитектуры (`ZBSEyeApp/`)
 
 | Папка | Что |
 |---|---|
-| `App/` | `SlishuMain` (@main, диспатч CLI/GUI), `SlishuApp` (Scene + AppDelegate), `AppEnvironment` (владелец графа сервисов, `bootstrap()`) |
+| `App/` | `ZBSEyeMain` (@main, диспатч CLI/GUI), `ZBSEyeApp` (Scene + AppDelegate), `AppEnvironment` (владелец графа сервисов, `bootstrap()`) |
 | `Capture/` | `CaptureCoordinator` (цикл захвата, режимы idle/active/burst), `FramePipeline` (capture+HEIC+phash, ОДИН actor), `AXReader` (accessibility-извлечение, dedicated thread, per-PID health) |
 | `Audio/` | `AudioCoordinator`, mic/system engines, `VADSegmenter`, `TranscriptionService` (SFSpeech on-device) |
-| `Data/` | `SlishuDatabase` (pool + миграции), `StorageManager` (media), **`StorageLocation`** (единый резолвер пути — см. инварианты), `StorageRelocation` (перенос), `BackupManager` (iCloud), `RetentionManager`, `IngestService` (единственный writer) |
+| `Data/` | `ZBSEyeDatabase` (pool + миграции), `StorageManager` (media), **`StorageLocation`** (единый резолвер пути — см. инварианты), `StorageRelocation` (перенос), `BackupManager` (iCloud), `RetentionManager`, `IngestService` (единственный writer) |
 | `Search/` | `SearchService` (FTS+vector RRF), `EmbeddingService` (e5), `TimelineService`, `VectorBackfill` |
-| `Server/` | `SlishuHTTPServer` (FlyingFox REST, 127.0.0.1, Bearer), `KeychainStore`, DTO |
-| `MCP/` | `SlishuMCPServer` (stdio, проксирует в GUI-инстанс) |
+| `Server/` | `ZBSEyeHTTPServer` (FlyingFox REST, 127.0.0.1, Bearer), `KeychainStore`, DTO |
+| `MCP/` | `ZBSEyeMCPServer` (stdio, проксирует в GUI-инстанс) |
 | `Pipes/` | `ScreenpipeImporter` (импорт истории), `DailySummaryService`, `ExportService` |
 | `State/` | `@MainActor @Observable` сторы (Recording/Permissions/Storage/Backup/…) |
 | `Views/` | SwiftUI (Timeline, Settings, онбординг) |
@@ -52,7 +52,7 @@ CLI-режимы (один бинарь): `--mcp` (MCP stdio), `--import-screenp
 
 1. **Один источник пути к данным — `StorageLocation`.** БД, media, port-файл, server.log, pipes — ВСЁ
    резолвится через `StorageLocation.dataRoot()/databaseURL()/mediaDirectory()/portURL()`. НЕ хардкодь
-   `Application Support/Slishu`. Это нужно, чтобы relocate (перенос на внешний SSD) и вспомогательные
+   `Application Support/ZBSEye`. Это нужно, чтобы relocate (перенос на внешний SSD) и вспомогательные
    процессы (`--mcp`, `--backup-now`) видели одно место. Исключения: iCloud-бэкап и пользовательский
    экспорт — намеренно отдельные пути.
 2. **Один writer — `IngestService`.** Не-Sendable (`CVPixelBuffer`/`CMSampleBuffer`/`AXUIElement`/`VNRequest`)
@@ -71,7 +71,7 @@ CLI-режимы (один бинарь): `--mcp` (MCP stdio), `--import-screenp
 - **Keychain — data-protection, НЕ legacy.** `KeychainStore` использует `kSecUseDataProtectionKeychain`.
   Legacy file-keychain ВЕШАЕТ main-thread на ACL-промпте при чтении токена, созданного другой подписью
   (после переустановки ре-подписанного app) → bootstrap зависает навечно.
-- **Стабильный TCC = стабильная подпись.** Self-signed «Slishu Dev» + установка в `/Applications`
+- **Стабильный TCC = стабильная подпись.** Self-signed «ZBS Eye Dev» + установка в `/Applications`
   (не DerivedData). `designated requirement` пинит leaf-cert → права переживают ребилды. Ловушки:
   `bash set -u` ест первый байт многобайтового символа рядом с `«$VAR»` (фикс — `${VAR}`); p12-импорт
   требует системного `/usr/bin/openssl` (LibreSSL), не Homebrew OpenSSL 3.x; доверие в user-домене без

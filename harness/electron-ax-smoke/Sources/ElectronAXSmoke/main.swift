@@ -112,7 +112,7 @@ let host = HostInfo(
     mode: mode.rawValue
 )
 
-eprint("Slishu Electron AX Smoke — macOS \(host.macOS), mode=\(mode.rawValue), VoiceOver=\(host.voiceOverRunning), WM=\(host.windowManagers.joined(separator: ",").isEmpty ? "none" : host.windowManagers.joined(separator: ","))")
+eprint("ZBSEye Electron AX Smoke — macOS \(host.macOS), mode=\(mode.rawValue), VoiceOver=\(host.voiceOverRunning), WM=\(host.windowManagers.joined(separator: ",").isEmpty ? "none" : host.windowManagers.joined(separator: ","))")
 if host.voiceOverRunning {
     eprint("⚠️  VoiceOver активен — не перетягиваем режим; результаты могут отличаться от обычного использования.")
 }
