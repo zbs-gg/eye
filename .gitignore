@@ -33,7 +33,7 @@ workspace/.agents/
 *.m4a
 
 # XcodeGen генерит из project.yml
-Slishu.xcodeproj/
+ZBSEye.xcodeproj/
 
 # релизные артефакты (большие zip)
 dist/

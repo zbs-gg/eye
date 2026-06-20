@@ -4,7 +4,7 @@ import CoreMedia
 import CoreGraphics
 import AppKit
 
-// SCScreenshotManager (on-demand) vs SCStream (warmed) burst benchmark — Slishu harness 1b.
+// SCScreenshotManager (on-demand) vs SCStream (warmed) burst benchmark — ZBSEye harness 1b.
 // Отвечает на вопрос Pro: где persistent warmed-stream бьёт on-demand single-frame,
 // и какова цена on-demand по латентности/энергии/throughput.
 
@@ -91,7 +91,7 @@ struct Report: Codable {
 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
 guard let display = content.displays.first else { eprint("нет дисплеев"); exit(1) }
 let filter = SCContentFilter(display: display, excludingWindows: [])
-eprint("=== Slishu SCK burst benchmark ===")
+eprint("=== ZBSEye SCK burst benchmark ===")
 eprint("дисплей \(display.width)×\(display.height), fps=\(fps), energy=\(energySec)с, burst=\(burstSec)с\n")
 
 // 1) on-demand cold + warm

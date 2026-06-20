@@ -1,5 +1,5 @@
 #!/bin/bash
-# Создаёт self-signed code-signing сертификат «Slishu Dev» в login-keychain (БЕЗ платного
+# Создаёт self-signed code-signing сертификат «ZBS Eye Dev» в login-keychain (БЕЗ платного
 # Apple Developer аккаунта). Стабильная идентичность подписи = TCC-права (Screen Recording,
 # Accessibility, Microphone) и Keychain ACL переживают ребилды — главная dev-боль уходит.
 #
@@ -7,10 +7,10 @@
 # покажет GUI-диалог «вносятся изменения в настройки доверия», подтверди Touch ID/паролем.
 #
 # NB: первый билд с новой подписью ОДИН РАЗ сбросит уже выданные TCC-права (перевыдать в System
-# Settings: выключить и снова включить Slishu в Screen Recording, затем Microphone).
+# Settings: выключить и снова включить ZBSEye в Screen Recording, затем Microphone).
 set -euo pipefail
 
-NAME="Slishu Dev"
+NAME="ZBS Eye Dev"
 LOGIN_KC="$HOME/Library/Keychains/login.keychain-db"
 
 # Уже есть рабочая идентичность для подписи кода? — повторно не пересоздаём (новый keypair = снова
@@ -51,10 +51,10 @@ OPENSSL=/usr/bin/openssl
   -days 3650 -nodes -config "$TMP/cert.cnf" 2>/dev/null
 
 "$OPENSSL" pkcs12 -export -inkey "$TMP/key.pem" -in "$TMP/cert.pem" \
-  -out "$TMP/cert.p12" -passout pass:slishu -name "$NAME"
+  -out "$TMP/cert.p12" -passout pass:zbseye -name "$NAME"
 
 # Импорт ключа+серта в login-keychain. -T codesign/security — добавить их в ACL ключа.
-security import "$TMP/cert.p12" -k "$LOGIN_KC" -P slishu \
+security import "$TMP/cert.p12" -k "$LOGIN_KC" -P zbseye \
   -T /usr/bin/codesign -T /usr/bin/security
 
 # Доверие в ПОЛЬЗОВАТЕЛЬСКОМ trust-домене (без -d/sudo): появится GUI-диалог, подтверди Touch ID.
@@ -72,6 +72,6 @@ echo ""
 echo "✅ Готово:"
 security find-identity -v -p codesigning | grep "$NAME"
 echo ""
-echo "Дальше: bash scripts/build-release.sh → установка в /Applications/Slishu.app"
+echo "Дальше: bash scripts/build-release.sh → установка в /Applications/ZBS Eye.app"
 echo "⚠️  Первый билд с этой подписью один раз сбросит TCC-права — перевыдай Screen Recording"
 echo "   (выключить/включить в System Settings) и Microphone."

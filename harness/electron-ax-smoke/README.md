@@ -1,9 +1,9 @@
-# Electron AX Smoke Harness (Slishu — blocking harness 1a)
+# Electron AX Smoke Harness (ZBSEye — blocking harness 1a)
 
 **Зачем.** Это самый важный из 4 blocking-harness'ов из ревью Pro. Он проверяет на **твоей реальной
 машине** (macOS 26 Tahoe, твои VS Code/Obsidian/Slack/Telegram/Chrome), действительно ли установка
 флагов `AXManualAccessibility` + `AXEnhancedUserInterface` даёт **useful** accessibility-дерево, а не
-пустое/только-тулбар. От этого зависит вся продуктовая ставка Slishu: если на Electron AX честно
+пустое/только-тулбар. От этого зависит вся продуктовая ставка ZBSEye: если на Electron AX честно
 работает — мы легче screenpipe; если нет — придётся падать в OCR и переосмыслить дифференциатор.
 
 Harness НЕ записывает ничего и НЕ часть приложения — это отдельная диагностическая программа.
@@ -15,7 +15,7 @@ Harness НЕ записывает ничего и НЕ часть приложе
   набрало полезный текст (ретраи 250/750/1500/3000мс).
 - `nodeCount`, `textCharCount`, `focusedTextChars`, `webAreaFound`, `url`, `windowTitle`.
 - `cpuDeltaTargetApp` — насколько вырос CPU **самого** приложения от того, что мы заставили его строить
-  AX-дерево (грубо, через `proc_pid_rusage`). Если +X% большой — юзер обвинит Slishu в разряде батареи.
+  AX-дерево (грубо, через `proc_pid_rusage`). Если +X% большой — юзер обвинит ZBSEye в разряде батареи.
 - `quality`: `none | titleOnly | partialUseful | fullUseful | timedOut | sickPID`.
 - Контекст хоста: macOS, активен ли VoiceOver, какие оконные менеджеры запущены (Rectangle и т.п.).
 
@@ -26,13 +26,13 @@ Harness НЕ записывает ничего и НЕ часть приложе
 
 2. Собери release-версию:
    ```
-   cd ~/ai/slishu/harness/electron-ax-smoke
+   cd ~/ai/zbseye/harness/electron-ax-smoke
    swift build -c release
    ```
 
 3. Запусти (первый раз попросит Accessibility-права):
    ```
-   ./.build/release/ElectronAXSmoke --out ~/ai/slishu/workspace/ax-smoke-conservative.json
+   ./.build/release/ElectronAXSmoke --out ~/ai/zbseye/workspace/ax-smoke-conservative.json
    ```
    Появится системный диалог **Privacy & Security → Accessibility** — выдай доступ **Терминалу**
    (или iTerm), затем перезапусти команду. Права нужны процессу, который запускает бинарь.
@@ -43,14 +43,14 @@ Harness НЕ записывает ничего и НЕ часть приложе
 ### Рекомендуемые прогоны (покрыть матрицу Pro)
 ```
 # базовый — все запущенные приложения, conservative
-./.build/release/ElectronAXSmoke --out ~/ai/slishu/workspace/ax-smoke-conservative.json
+./.build/release/ElectronAXSmoke --out ~/ai/zbseye/workspace/ax-smoke-conservative.json
 
 # агрессивный — оба флага сразу, для сравнения
-./.build/release/ElectronAXSmoke --mode aggressive --out ~/ai/slishu/workspace/ax-smoke-aggressive.json
+./.build/release/ElectronAXSmoke --mode aggressive --out ~/ai/zbseye/workspace/ax-smoke-aggressive.json
 
 # focused-editor: сделай конкретное окно активным и прогони только его
 #   (лучший замер текста из главного редактора/веб-области)
-./.build/release/ElectronAXSmoke --frontmost --out ~/ai/slishu/workspace/ax-smoke-vscode-frontmost.json
+./.build/release/ElectronAXSmoke --frontmost --out ~/ai/zbseye/workspace/ax-smoke-vscode-frontmost.json
 ```
 Для `--frontmost` переключайся на нужное приложение перед запуском (у тебя ~2с до начала пробы — или
 запускай из второго окна терминала). Прогони по очереди для VS Code (с открытым большим файлом и
@@ -82,9 +82,9 @@ krisp/Hammerspoon) и перепрогони. Сравни два прогона
 ```
 # 1) «грязный» (как есть, со всеми инструментами) — уже сделан
 # 2) «чистый»: закрой screenpipe/Limitless/superwhisper/krisp/Hammerspoon, потом:
-./.build/release/ElectronAXSmoke --out ~/ai/slishu/workspace/ax-smoke-clean.json
+./.build/release/ElectronAXSmoke --out ~/ai/zbseye/workspace/ax-smoke-clean.json
 # 3) focused-editor: открой VS Code с большим файлом + ВЫДЕЛИ кусок текста, сделай активным:
-./.build/release/ElectronAXSmoke --frontmost --out ~/ai/slishu/workspace/ax-smoke-vscode.json
+./.build/release/ElectronAXSmoke --frontmost --out ~/ai/zbseye/workspace/ax-smoke-vscode.json
 # (повтори --frontmost для Obsidian с заметкой, Slack с каналом, Chrome на статье)
 ```
 
