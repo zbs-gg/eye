@@ -3,7 +3,7 @@ import Observation
 import AppKit
 import UserNotifications
 
-/// UI-состояние pipe «саммари дня». Поток жёстко preview-then-write (план: firstRunRequiresPreview):
+/// UI-состояние автоматизации «саммари дня». Поток жёстко preview-then-write (план: firstRunRequiresPreview):
 /// сначала «Собрать превью» (collect+LLM, без записи) → пользователь видит результат → «Записать».
 /// Так приватная история и возможный prompt-injection не уходят в файл без явного подтверждения.
 @MainActor
@@ -13,35 +13,35 @@ final class DaySummaryStore {
 
     @ObservationIgnored private let service: DailySummaryService
     @ObservationIgnored let connections: ConnectionStore
-    @ObservationIgnored private let safety: PipeSafety = .default
+    @ObservationIgnored private let safety: AutomationSafety = .default
     @ObservationIgnored private var previewTask: Task<Void, Never>?
 
     /// Превью валидно только для дня, под который собрано. Смена дня в DatePicker обнуляет превью и
     /// карточку записи — иначе кнопка «Записать» обещала бы новый день, а записала бы старое превью.
     // ── расписание: «конспект сам в конце дня» (US-33). Auto-write только после ≥1 ручной записи —
-    //    first-run preview обязателен (prompt-injection гейт из дизайна pipes). ──
-    var scheduleEnabled: Bool = UserDefaults.standard.bool(forKey: "zbseye.pipe.scheduleEnabled") {
+    //    first-run preview обязателен (prompt-injection гейт из дизайна automations). ──
+    var scheduleEnabled: Bool = UserDefaults.standard.bool(forKey: "zbseye.automation.scheduleEnabled") {
         didSet {
-            UserDefaults.standard.set(scheduleEnabled, forKey: "zbseye.pipe.scheduleEnabled")
+            UserDefaults.standard.set(scheduleEnabled, forKey: "zbseye.automation.scheduleEnabled")
             if scheduleEnabled {
                 Self.requestNotificationAuth()
                 // точка отсчёта = вчера: включение расписания не должно тут же генерить catch-up
-                if UserDefaults.standard.string(forKey: "zbseye.pipe.lastAutoDone") == nil {
+                if UserDefaults.standard.string(forKey: "zbseye.automation.lastAutoDone") == nil {
                     let y = Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
-                    UserDefaults.standard.set(DailySummaryService.ymd(y), forKey: "zbseye.pipe.lastAutoDone")
+                    UserDefaults.standard.set(DailySummaryService.ymd(y), forKey: "zbseye.automation.lastAutoDone")
                 }
             }
         }
     }
-    var scheduleHour: Int = UserDefaults.standard.object(forKey: "zbseye.pipe.scheduleHour") == nil
-        ? 21 : UserDefaults.standard.integer(forKey: "zbseye.pipe.scheduleHour") {
-        didSet { UserDefaults.standard.set(scheduleHour, forKey: "zbseye.pipe.scheduleHour") }
+    var scheduleHour: Int = UserDefaults.standard.object(forKey: "zbseye.automation.scheduleHour") == nil
+        ? 21 : UserDefaults.standard.integer(forKey: "zbseye.automation.scheduleHour") {
+        didSet { UserDefaults.standard.set(scheduleHour, forKey: "zbseye.automation.scheduleHour") }
     }
-    var autoWriteEnabled: Bool = UserDefaults.standard.bool(forKey: "zbseye.pipe.autoWrite") {
-        didSet { UserDefaults.standard.set(autoWriteEnabled, forKey: "zbseye.pipe.autoWrite") }
+    var autoWriteEnabled: Bool = UserDefaults.standard.bool(forKey: "zbseye.automation.autoWrite") {
+        didSet { UserDefaults.standard.set(autoWriteEnabled, forKey: "zbseye.automation.autoWrite") }
     }
     /// Была ли хоть одна РУЧНАЯ запись (юзер видел и одобрил формат) — гейт для auto-write.
-    private(set) var hasWrittenManually = UserDefaults.standard.bool(forKey: "zbseye.pipe.manualWriteDone")
+    private(set) var hasWrittenManually = UserDefaults.standard.bool(forKey: "zbseye.automation.manualWriteDone")
     @ObservationIgnored private var schedulerTask: Task<Void, Never>?
 
     var selectedDay: Date = Calendar.current.startOfDay(for: Date()) {
@@ -80,7 +80,7 @@ final class DaySummaryStore {
         guard !isBusy else { return }
         errorText = nil; lastWrite = nil; preview = nil
         guard connections.llm.isConfigured, connections.llm.isLocalOnly else {
-            errorText = PipeError.noLLM.errorDescription; phase = .failed; return
+            errorText = AutomationError.noLLM.errorDescription; phase = .failed; return
         }
         phase = .summarizing
         do {
@@ -92,7 +92,7 @@ final class DaySummaryStore {
         } catch let urlErr as URLError where urlErr.code == .cancelled {
             phase = .idle
         } catch {
-            errorText = (error as? PipeError)?.errorDescription ?? error.localizedDescription
+            errorText = (error as? AutomationError)?.errorDescription ?? error.localizedDescription
             phase = .failed
         }
         await refreshAudit()
@@ -102,7 +102,7 @@ final class DaySummaryStore {
     func writeApproved() async {
         guard let p = preview, !isBusy else { return }
         guard let url = connections.resolveDestinationURL() else {
-            errorText = PipeError.noDestination.errorDescription; phase = .failed; return
+            errorText = AutomationError.noDestination.errorDescription; phase = .failed; return
         }
         phase = .writing
         do {
@@ -111,10 +111,10 @@ final class DaySummaryStore {
             phase = .done
             if !hasWrittenManually {
                 hasWrittenManually = true
-                UserDefaults.standard.set(true, forKey: "zbseye.pipe.manualWriteDone")
+                UserDefaults.standard.set(true, forKey: "zbseye.automation.manualWriteDone")
             }
         } catch {
-            errorText = (error as? PipeError)?.errorDescription ?? error.localizedDescription
+            errorText = (error as? AutomationError)?.errorDescription ?? error.localizedDescription
             phase = .failed
         }
         await refreshAudit()
@@ -142,7 +142,7 @@ final class DaySummaryStore {
         let todayYmd = DailySummaryService.ymd(now)
         let yesterday = cal.date(byAdding: .day, value: -1, to: now) ?? now
         let yesterdayYmd = DailySummaryService.ymd(yesterday)
-        let done = UserDefaults.standard.string(forKey: "zbseye.pipe.lastAutoDone") ?? yesterdayYmd
+        let done = UserDefaults.standard.string(forKey: "zbseye.automation.lastAutoDone") ?? yesterdayYmd
 
         // Цель прогона: catch-up за ВЧЕРА (Mac спал в scheduleHour — день не должен выпасть; история
         // вчера уже полная, hour-гейт не нужен), иначе сегодня после scheduleHour.
@@ -158,20 +158,20 @@ final class DaySummaryStore {
 
         // Ретраи: transient-фейл (Ollama ещё не поднят в 21:00) не должен убивать день — до 3 попыток
         // с шагом ≥15 минут. Успех фиксирует день окончательно.
-        let attemptDay = UserDefaults.standard.string(forKey: "zbseye.pipe.attemptDay")
-        var attempts = attemptDay == targetYmd ? UserDefaults.standard.integer(forKey: "zbseye.pipe.attemptCount") : 0
-        let lastAttempt = UserDefaults.standard.object(forKey: "zbseye.pipe.lastAttemptAt") as? Date ?? .distantPast
+        let attemptDay = UserDefaults.standard.string(forKey: "zbseye.automation.attemptDay")
+        var attempts = attemptDay == targetYmd ? UserDefaults.standard.integer(forKey: "zbseye.automation.attemptCount") : 0
+        let lastAttempt = UserDefaults.standard.object(forKey: "zbseye.automation.lastAttemptAt") as? Date ?? .distantPast
         guard attempts < 3, now.timeIntervalSince(lastAttempt) >= 900 || attempts == 0 else { return }
         attempts += 1
-        UserDefaults.standard.set(targetYmd, forKey: "zbseye.pipe.attemptDay")
-        UserDefaults.standard.set(attempts, forKey: "zbseye.pipe.attemptCount")
-        UserDefaults.standard.set(now, forKey: "zbseye.pipe.lastAttemptAt")
+        UserDefaults.standard.set(targetYmd, forKey: "zbseye.automation.attemptDay")
+        UserDefaults.standard.set(attempts, forKey: "zbseye.automation.attemptCount")
+        UserDefaults.standard.set(now, forKey: "zbseye.automation.lastAttemptAt")
 
         // Не перетираем работу юзера: если он смотрит ДРУГОЙ день с собранным превью — не трогаем
         // его выбор (didSet снёс бы превью), просто зовём уведомлением.
         if preview != nil && cal.startOfDay(for: selectedDay) != targetDay {
-            UserDefaults.standard.set(targetYmd, forKey: "zbseye.pipe.lastAutoDone")
-            Self.notify(title: "ZBS Eye", body: "Пора собрать конспект (\(targetYmd)) — открой Плагины.")
+            UserDefaults.standard.set(targetYmd, forKey: "zbseye.automation.lastAutoDone")
+            Self.notify(title: "ZBS Eye", body: "Пора собрать конспект (\(targetYmd)) — открой Автоматизации.")
             return
         }
 
@@ -182,19 +182,19 @@ final class DaySummaryStore {
         await previewTask?.value
         guard preview != nil, phase == .done else {
             if attempts >= 3 {
-                Self.notify(title: "ZBS Eye", body: "Конспект (\(targetYmd)) не собрался после 3 попыток — открой Плагины (\(errorText ?? "ошибка")).")
-                UserDefaults.standard.set(targetYmd, forKey: "zbseye.pipe.lastAutoDone")
+                Self.notify(title: "ZBS Eye", body: "Конспект (\(targetYmd)) не собрался после 3 попыток — открой Автоматизации (\(errorText ?? "ошибка")).")
+                UserDefaults.standard.set(targetYmd, forKey: "zbseye.automation.lastAutoDone")
             }
             return   // attempts < 3 → следующая попытка через ≥15 мин
         }
-        UserDefaults.standard.set(targetYmd, forKey: "zbseye.pipe.lastAutoDone")
+        UserDefaults.standard.set(targetYmd, forKey: "zbseye.automation.lastAutoDone")
         if autoWriteEnabled && hasWrittenManually {
             await writeApproved()
             Self.notify(title: "ZBS Eye", body: lastWrite != nil
                 ? "Конспект (\(targetYmd)) записан в \(connections.destination.subfolder.isEmpty ? "папку" : connections.destination.subfolder)."
-                : "Конспект собран, но запись не удалась — открой Плагины.")
+                : "Конспект собран, но запись не удалась — открой Автоматизации.")
         } else {
-            Self.notify(title: "ZBS Eye", body: "Конспект (\(targetYmd)) готов — открой Плагины, проверь и запиши.")
+            Self.notify(title: "ZBS Eye", body: "Конспект (\(targetYmd)) готов — открой Автоматизации, проверь и запиши.")
         }
     }
 

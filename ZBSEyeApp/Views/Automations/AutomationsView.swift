@@ -1,22 +1,22 @@
 import SwiftUI
 
-/// Pipe v1: «Саммари дня». collect → локальная LLM → запись в файл/Obsidian. Поток preview-then-write.
-struct PipesView: View {
+/// Автоматизация v1: «Саммари дня». collect → локальная LLM → запись в файл/Obsidian. Поток preview-then-write.
+struct AutomationsView: View {
     @Environment(AppEnvironment.self) private var env
 
     var body: some View {
         Group {
-            if let store = env.pipes {
-                PipeBody(store: store)
+            if let store = env.automations {
+                AutomationBody(store: store)
             } else {
                 ContentUnavailableView("Инициализация…", systemImage: "powerplug")
             }
         }
-        .navigationTitle("Плагины")
+        .navigationTitle("Автоматизации")
     }
 }
 
-private struct PipeBody: View {
+private struct AutomationBody: View {
     @Bindable var store: DaySummaryStore
     @Environment(AppEnvironment.self) private var env
 
@@ -59,7 +59,7 @@ private struct PipeBody: View {
             VStack(alignment: .leading, spacing: 12) {
                 Label("Нужно настроить подключения", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange).font(.headline)
-                Text("Укажи локальную LLM и папку-назначение — без них pipe не запустится.")
+                Text("Укажи локальную LLM и папку-назначение — без них автоматизация не запустится.")
                     .foregroundStyle(.secondary)
                 Button("Открыть «Подключения»") { env.selectedSection = .connections }
                     .buttonStyle(.borderedProminent)

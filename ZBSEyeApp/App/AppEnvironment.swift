@@ -39,7 +39,7 @@ final class AppEnvironment {
     private(set) var retention: RetentionManager?
     private(set) var timelineStore: TimelineStore?
     private(set) var httpServer: ZBSEyeHTTPServer?
-    private(set) var pipes: DaySummaryStore?
+    private(set) var automations: DaySummaryStore?
     private(set) var audio: AudioCoordinator?
     private(set) var storage: StorageManager?   // для Settings-хранилища (занято/удаление/Finder)
     private(set) var db: ZBSEyeDatabase?         // для Settings-разбивки размера / бэкапа
@@ -66,7 +66,7 @@ final class AppEnvironment {
         }
     }
 
-    /// Порядок запуска фоновых сервисов. Пока — пробы прав + Data-слой; capture/server/pipes добавятся
+    /// Порядок запуска фоновых сервисов. Пока — пробы прав + Data-слой; capture/server/automations добавятся
     /// по мере появления модулей (Фаза 2, шаги 3+).
     func bootstrap() async {
         ZBSEyeHTTPServer.log("bootstrap: begin")
@@ -197,11 +197,11 @@ final class AppEnvironment {
             self.timelineStore = TimelineStore(search: searchSvc, timeline: timelineSvc,
                                                mediaDirectory: storage.mediaDirectory)
 
-            // Pipe v1 «саммари дня»: collect→LLM→write. Свой LocalLLMClient (stateless actor).
+            // Автоматизация v1 «саммари дня»: collect→LLM→write. Свой LocalLLMClient (stateless actor).
             let summarySvc = DailySummaryService(db: db, client: LocalLLMClient())
-            let pipesStore = DaySummaryStore(service: summarySvc, connections: connections)
-            pipesStore.startScheduler()   // «конспект сам в конце дня» (тик 5 мин, гейты внутри)
-            self.pipes = pipesStore
+            let automationsStore = DaySummaryStore(service: summarySvc, connections: connections)
+            automationsStore.startScheduler()   // «конспект сам в конце дня» (тик 5 мин, гейты внутри)
+            self.automations = automationsStore
 
             // Экспорт (анти-lock-in): markdown по дням ± медиа.
             self.export = ExportService(db: db, summary: summarySvc, mediaDirectory: storage.mediaDirectory)
@@ -387,7 +387,7 @@ final class AppEnvironment {
 
 enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case timeline = "Таймлайн"
-    case pipes = "Плагины"
+    case automations = "Автоматизации"
     case connections = "Подключения"
     case settings = "Настройки"
 
@@ -396,7 +396,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     var systemImage: String {
         switch self {
         case .timeline:    return "clock.arrow.circlepath"
-        case .pipes:       return "powerplug"
+        case .automations:       return "powerplug"
         case .connections: return "app.connected.to.app.below.fill"
         case .settings:    return "gearshape"
         }

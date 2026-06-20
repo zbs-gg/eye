@@ -65,7 +65,7 @@ actor ExportService {
     private func markdownForDay(_ day: Date) async throws -> String? {
         let collected: CollectedDay
         do { collected = try await summary.collect(day: day, safety: .default) }
-        catch let e as PipeError {
+        catch let e as AutomationError {
             if case .noData = e { return nil }   // пустой день — файла нет; остальное — реальная ошибка
             throw e
         }
