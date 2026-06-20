@@ -4,7 +4,7 @@
 машине** (macOS 26 Tahoe, твои VS Code/Obsidian/Slack/Telegram/Chrome), действительно ли установка
 флагов `AXManualAccessibility` + `AXEnhancedUserInterface` даёт **useful** accessibility-дерево, а не
 пустое/только-тулбар. От этого зависит вся продуктовая ставка ZBSEye: если на Electron AX честно
-работает — мы легче screenpipe; если нет — придётся падать в OCR и переосмыслить дифференциатор.
+работает — мы легче конкурентов; если нет — придётся падать в OCR и переосмыслить дифференциатор.
 
 Harness НЕ записывает ничего и НЕ часть приложения — это отдельная диагностическая программа.
 
@@ -70,18 +70,18 @@ v1 маркировал почти всё `fullUseful`, считая ВЕСЬ т
 `textSample` — это реально контент, а не chrome?
 
 ### ⚠️ Загрязнение эксперимента (критично)
-Если на машине запущены **screenpipe, Limitless, superwhisper, krisp, Hammerspoon, VoiceOver, Raycast**
+Если на машине запущены **Limitless, superwhisper, krisp, Hammerspoon, VoiceOver, Raycast**
 и т.п. — они глобально держат accessibility включённой, и «дерево доступно без флага» может быть НЕ
 нашей заслугой. Harness печатает их в `otherAXConsumers` и предупреждает.
 
-**Для честного «холодного» замера:** закрой эти инструменты (особенно screenpipe/Limitless/superwhisper/
+**Для честного «холодного» замера:** закрой эти инструменты (особенно Limitless/superwhisper/
 krisp/Hammerspoon) и перепрогони. Сравни два прогона — если без них Electron-деревья просели → значит на
 чистой машине нам придётся самим поднимать accessibility (и тут проверяется, реально ли помогает флаг).
 
 ### Идеальный набор прогонов
 ```
 # 1) «грязный» (как есть, со всеми инструментами) — уже сделан
-# 2) «чистый»: закрой screenpipe/Limitless/superwhisper/krisp/Hammerspoon, потом:
+# 2) «чистый»: закрой Limitless/superwhisper/krisp/Hammerspoon, потом:
 ./.build/release/ElectronAXSmoke --out ~/ai/zbseye/workspace/ax-smoke-clean.json
 # 3) focused-editor: открой VS Code с большим файлом + ВЫДЕЛИ кусок текста, сделай активным:
 ./.build/release/ElectronAXSmoke --frontmost --out ~/ai/zbseye/workspace/ax-smoke-vscode.json

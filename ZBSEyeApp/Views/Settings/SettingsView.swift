@@ -22,7 +22,7 @@ struct SettingsView: View {
                 storageCard
                 backupCard
                 privacyCard
-                if ScreenpipeImporter.sourceExists { importCard }
+                if HistoryImporter.sourceExists { importCard }
                 transcriptionCard
                 serverCard
             }
@@ -342,10 +342,10 @@ struct SettingsView: View {
     private var importCard: some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Импорт из screenpipe").font(.headline)
-                Text("Найдена история screenpipe (~/.screenpipe). Перенесёт текст и метаданные (кадры, "
+                Text("Импорт прежней истории").font(.headline)
+                Text("Найдена прежняя история (~/.screenpipe). Перенесёт текст и метаданные (кадры, "
                      + "окна, URL, транскрипты со спикерами) в память ZBS Eye — поиск заработает по всей "
-                     + "старой истории. Медиа-файлы остаются у screenpipe. Можно прервать и продолжить позже.")
+                     + "старой истории. Медиа-файлы остаются на месте. Можно прервать и продолжить позже.")
                     .font(.caption).foregroundStyle(.secondary)
                 HStack(spacing: 12) {
                     Button {
@@ -363,7 +363,7 @@ struct SettingsView: View {
     }
 
     private func runImport() {
-        guard let importer = env.screenpipeImporter else { return }
+        guard let importer = env.historyImporter else { return }
         importing = true
         importStatus = nil
         Task {

@@ -44,7 +44,7 @@ final class AppEnvironment {
     private(set) var storage: StorageManager?   // для Settings-хранилища (занято/удаление/Finder)
     private(set) var db: ZBSEyeDatabase?         // для Settings-разбивки размера / бэкапа
     private(set) var export: ExportService?
-    private(set) var screenpipeImporter: ScreenpipeImporter?
+    private(set) var historyImporter: HistoryImporter?
     private(set) var dataError: String?
 
     @ObservationIgnored private var retentionTask: Task<Void, Never>?
@@ -205,7 +205,7 @@ final class AppEnvironment {
 
             // Экспорт (анти-lock-in): markdown по дням ± медиа.
             self.export = ExportService(db: db, summary: summarySvc, mediaDirectory: storage.mediaDirectory)
-            self.screenpipeImporter = ScreenpipeImporter(db: db)
+            self.historyImporter = HistoryImporter(db: db)
 
             // Локальный REST /v1 (auth на всё кроме /health).
             let token = KeychainStore.apiToken()
