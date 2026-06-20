@@ -38,6 +38,7 @@ final class AppEnvironment {
     private(set) var ingest: IngestService?
     private(set) var retention: RetentionManager?
     private(set) var timelineStore: TimelineStore?
+    private(set) var ask: AskStore?
     private(set) var httpServer: ZBSEyeHTTPServer?
     private(set) var automations: DaySummaryStore?
     private(set) var audio: AudioCoordinator?
@@ -196,6 +197,11 @@ final class AppEnvironment {
             let timelineSvc = TimelineService(db: db)
             self.timelineStore = TimelineStore(search: searchSvc, timeline: timelineSvc,
                                                mediaDirectory: storage.mediaDirectory)
+
+            // «Спроси свою память»: RAG-ответ через тот же гибрид-поиск + локальная LLM (свой
+            // LocalLLMClient, stateless actor). Гейт localhost-only внутри — приватная история не уходит.
+            let askService = AskService(search: searchSvc, client: LocalLLMClient(), db: db)
+            self.ask = AskStore(service: askService, connections: connections)
 
             // Автоматизация v1 «саммари дня»: collect→LLM→write. Свой LocalLLMClient (stateless actor).
             let summarySvc = DailySummaryService(db: db, client: LocalLLMClient())
@@ -387,6 +393,7 @@ final class AppEnvironment {
 
 enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case timeline = "Таймлайн"
+    case ask = "Спроси"
     case automations = "Автоматизации"
     case connections = "Подключения"
     case settings = "Настройки"
@@ -396,6 +403,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     var systemImage: String {
         switch self {
         case .timeline:    return "clock.arrow.circlepath"
+        case .ask:         return "questionmark.bubble"
         case .automations:       return "powerplug"
         case .connections: return "app.connected.to.app.below.fill"
         case .settings:    return "gearshape"
