@@ -1,4 +1,4 @@
-name: Slishu                 # внутренний коднейм таргета/схемы. Бренд продукта — «ZBS Eye» (display name + bundle id ниже)
+name: ZBSEye                 # внутренний коднейм таргета/схемы. Бренд продукта — «ZBS Eye» (display name + bundle id ниже)
 options:
   bundleIdPrefix: gg.zbs
   developmentLanguage: ru
@@ -21,18 +21,18 @@ packages:
   MCP:
     url: https://github.com/modelcontextprotocol/swift-sdk
     exactVersion: "0.12.1"
-  SlishuVec:
-    path: Packages/SlishuVec
+  ZBSEyeVec:
+    path: Packages/ZBSEyeVec
   Embeddings:
     url: https://github.com/jkrukowski/swift-embeddings
     from: "0.0.16"
 
 targets:
-  Slishu:
+  ZBSEye:
     type: application
     platform: macOS
     sources:
-      - path: SlishuApp
+      - path: ZBSEyeApp
     dependencies:
       - package: GRDB
         product: GRDB
@@ -40,19 +40,20 @@ targets:
         product: FlyingFox
       - package: MCP
         product: MCP
-      - package: SlishuVec
+      - package: ZBSEyeVec
         product: CSqliteVec
       - package: Embeddings
         product: Embeddings
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye
+        PRODUCT_NAME: "ZBS Eye"          # бандл = «ZBS Eye.app» (таргет/схема — ZBSEye, без пробела)
         INFOPLIST_KEY_CFBundleDisplayName: "ZBS Eye"
         INFOPLIST_KEY_CFBundleName: "ZBS Eye"
         GENERATE_INFOPLIST_FILE: YES
-        CODE_SIGN_ENTITLEMENTS: SlishuApp/Slishu.entitlements
-        # Дефолт — ad-hoc. Стабильная self-signed идентичность «Slishu Dev» (внутреннее имя серта; без
-        # $99-аккаунта): scripts/make-signing-cert.sh один раз, затем сборка с CODE_SIGN_IDENTITY="Slishu Dev"
+        CODE_SIGN_ENTITLEMENTS: ZBSEyeApp/ZBSEye.entitlements
+        # Дефолт — ad-hoc. Стабильная self-signed идентичность «ZBS Eye Dev» (внутреннее имя серта; без
+        # $99-аккаунта): scripts/make-signing-cert.sh один раз, затем сборка с CODE_SIGN_IDENTITY="ZBS Eye Dev"
         # (scripts/build-release.sh делает это сам). Стабильная подпись = TCC-права и Keychain ACL
         # переживают ребилды. Developer ID/нотаризация — когда появится платный аккаунт.
         CODE_SIGN_IDENTITY: "-"

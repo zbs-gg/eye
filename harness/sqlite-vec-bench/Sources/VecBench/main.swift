@@ -1,7 +1,7 @@
 import Foundation
 import CSqliteVec
 
-// SQLite-vec scale benchmark (Slishu blocking harness 1c).
+// SQLite-vec scale benchmark (ZBSEye blocking harness 1c).
 // Проверяет: (1) статическую линковку sqlite-vec в Swift toolchain,
 //            (2) реальную латентность KNN на 100k–1M × 384 (plain + filtered),
 //            (3) размер БД на диске.
@@ -59,7 +59,7 @@ func percentile(_ sorted: [Double], _ p: Double) -> Double {
 }
 
 // ── проверка статической линковки ──
-eprint("=== Slishu sqlite-vec scale benchmark ===")
+eprint("=== ZBSEye sqlite-vec scale benchmark ===")
 do {
     var probe: OpaquePointer?
     guard sqlite3_open(":memory:", &probe) == SQLITE_OK, let pdb = probe else { die("open :memory: failed") }
@@ -85,7 +85,7 @@ struct Result: Codable {
 var results: [Result] = []
 
 for n in sizes {
-    let dbPath = NSTemporaryDirectory() + "slishu-vecbench-\(n).sqlite"
+    let dbPath = NSTemporaryDirectory() + "zbseye-vecbench-\(n).sqlite"
     try? FileManager.default.removeItem(atPath: dbPath)
 
     var dbOpt: OpaquePointer?
