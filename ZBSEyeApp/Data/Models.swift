@@ -43,6 +43,8 @@ struct TextBlockRow: Codable, FetchableRecord, MutablePersistableRecord {
     var source: String            // "ax" | "ocr"
     var text: String
     var confidence: Double
+    // bbox: НОРМАЛИЗОВАННЫЕ [0..1], origin СНИЗУ-СЛЕВА (Vision/CoreGraphics; пишет только source='ocr').
+    // Для отрисовки на SwiftUI/AppKit-слое (origin сверху-слева) инвертировать Y: screenY = 1 - bboxY - bboxH.
     var bboxX: Double?
     var bboxY: Double?
     var bboxW: Double?

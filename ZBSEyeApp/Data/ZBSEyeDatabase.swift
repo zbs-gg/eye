@@ -16,7 +16,10 @@ final class ZBSEyeDatabase: Sendable {
         // mmap+WAL особенно склонны к порче БД на ВНЕШНИХ/сетевых томах (наш relocate на SSD!) — SQLite
         // docs прямо предупреждают, screenpipe отключил mmap как топ-фикс corruption. «Вечная память» =
         // целостность > скорость. На внутреннем APFS оставляем умеренный mmap; на внешнем/неизвестном — 0.
-        let isInternal = (try? URL(fileURLWithPath: path)
+        // Запрашиваем том по РОДИТЕЛЬСКОЙ папке: сам файл БД на первом старте ещё не создан
+        // (DatabasePool создаёт его ниже) → resourceValues по несуществующему пути вернул бы nil → mmap=0
+        // на всю первую сессию даже на внутреннем диске. Папка data-root уже создана StorageManager'ом.
+        let isInternal = (try? URL(fileURLWithPath: path).deletingLastPathComponent()
             .resourceValues(forKeys: [.volumeIsInternalKey]).volumeIsInternal) ?? false
         let mmapBytes = isInternal ? 134_217_728 : 0   // 128 MB внутри, 0 на внешнем/неизвестном
         var config = Configuration()

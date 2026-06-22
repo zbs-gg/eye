@@ -103,7 +103,7 @@ private struct AskBody: View {
                 .textFieldStyle(.plain)
                 .lineLimit(1...4)
                 .onSubmit { store.send() }
-                .disabled(!store.llmReady || store.busy)
+                .disabled(store.busy)   // ввод доступен и без LLM: реальный вопрос → подсказка, а пасхалки работают всегда 🥚
             if !store.messages.isEmpty {
                 Button { store.clear() } label: { Image(systemName: "trash") }
                     .buttonStyle(.borderless).help("Очистить диалог")

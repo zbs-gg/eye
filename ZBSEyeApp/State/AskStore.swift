@@ -37,8 +37,13 @@ final class AskStore {
         guard !busy, !q.isEmpty else { return }
         input = ""
         messages.append(Message(role: .user, text: q))
-        if let egg = Self.easterEgg(q) {                    // 🥚 пасхалка: личность Глаза, без LLM
+        if let egg = Self.easterEgg(q) {                    // 🥚 пасхалка: личность Глаза, работает и без LLM
             messages.append(Message(role: .assistant, text: egg))
+            return
+        }
+        guard llmReady else {                               // реальный вопрос без LLM → дружелюбная подсказка
+            messages.append(Message(role: .assistant, text: "Чтобы отвечать по твоей истории, нужна локальная "
+                + "LLM (Ollama / LM Studio / mlx_lm.server) — укажи endpoint в «Подключениях». Всё на устройстве, без облака. 👁"))
             return
         }
         busy = true

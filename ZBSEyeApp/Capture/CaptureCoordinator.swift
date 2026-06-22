@@ -23,6 +23,7 @@ final class CaptureCoordinator {
 
     private(set) var isRunning = false
     private var suspended = false              // lock/sleep
+    private var screenLocked = false           // экран заблокирован — гейтит resume-kick screensaver.didstop
     private var tickTimer: Timer?
     private var observers: [NSObjectProtocol] = []
     private var distributedObservers: [NSObjectProtocol] = []
@@ -139,11 +140,12 @@ final class CaptureCoordinator {
         let dnc = DistributedNotificationCenter.default()
         distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screenIsLocked"),
                                                     object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.suspended = true }
+            Task { @MainActor in self?.suspended = true; self?.screenLocked = true }
         })
         distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screenIsUnlocked"),
                                                     object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.suspended = false; self?.invalidateAndTrigger() }   // активный resume-kick: не ждём app-switch, восстанавливаемся из возможного stuck (старт-под-локом)
+            // активный resume-kick: не ждём app-switch, восстанавливаемся из возможного stuck (старт-под-локом)
+            Task { @MainActor in self?.screenLocked = false; self?.suspended = false; self?.invalidateAndTrigger() }
         })
         distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screensaver.didstart"),
                                                     object: nil, queue: .main) { [weak self] _ in
@@ -151,7 +153,12 @@ final class CaptureCoordinator {
         })
         distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screensaver.didstop"),
                                                     object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.suspended = false; self?.invalidateAndTrigger() }   // активный resume-kick: не ждём app-switch, восстанавливаемся из возможного stuck (старт-под-локом)
+            // скринсейвер кончился: снимаем suspend, НО под локом НЕ триггерим захват — ждём screenIsUnlocked
+            // (иначе спустим лишний цикл на login-сессию). На разлоченном экране resume-kick корректен.
+            Task { @MainActor in
+                self?.suspended = false
+                if self?.screenLocked == false { self?.invalidateAndTrigger() }
+            }
         })
 
         tickTimer = Timer.scheduledTimer(withTimeInterval: config.activeTickSeconds, repeats: true) { [weak self] _ in
