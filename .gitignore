@@ -37,3 +37,5 @@ Slishu.xcodeproj/
 
 # релизные артефакты (большие zip)
 dist/
+workspace/groom/runs/
+workspace/groom/launchd.*.log
