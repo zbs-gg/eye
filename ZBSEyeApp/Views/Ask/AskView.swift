@@ -160,17 +160,30 @@ private struct MessageRow: View {
 }
 
 private struct SourceChip: View {
+    @Environment(AppEnvironment.self) private var env
     let index: Int
     let result: SearchResult
 
     var body: some View {
-        HStack(alignment: .top, spacing: 6) {
-            Text("[\(index)]").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(label).font(.caption).foregroundStyle(.secondary)
-                Text(result.snippet).font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
+        // Клик по цитате → точный кадр в таймлайне («не верь мне — вот пруф»). Это и отличает
+        // «память, которой доверяешь» от RAG-демки, и страхует слабую локальную LLM.
+        Button {
+            env.selectedSection = .timeline
+            Task { await env.timelineStore?.select(result) }
+        } label: {
+            HStack(alignment: .top, spacing: 6) {
+                Text("[\(index)]").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(label).font(.caption).foregroundStyle(.secondary)
+                    Text(result.snippet).font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "arrow.up.forward.square").font(.caption2).foregroundStyle(.tertiary)
             }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .help("Открыть этот момент в таймлайне")
     }
 
     private var label: String {

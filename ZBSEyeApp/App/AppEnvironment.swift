@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Observation
+import UserNotifications
 
 /// Корневое состояние приложения. Единственный @Observable, инжектится через .environment.
 /// Владеет всеми store'ами (по плану v2 — вместо разрозненных @State и 14-биндингового антипаттерна).
@@ -65,6 +66,23 @@ final class AppEnvironment {
             _ = await group.next()
             group.cancelAll()
         }
+    }
+
+    /// 👁 Делайтер: раз за пройденную «круглую» веху памяти — дружелюбное локальное уведомление.
+    /// Отмечает все пройденные сразу (не бэкафиллит старые по одной), празднует только верхнюю новую.
+    nonisolated static func celebrateMilestoneIfNeeded(frames: Int) {
+        let milestones = [1_000, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000]
+        let key = "zbseye.milestones.celebrated"
+        let done = Set(UserDefaults.standard.array(forKey: key) as? [Int] ?? [])
+        let crossed = milestones.filter { $0 <= frames }
+        guard let top = crossed.filter({ !done.contains($0) }).max() else { return }
+        UserDefaults.standard.set(crossed, forKey: key)   // отметить ВСЕ пройденные — без спама старыми
+        let pretty = NumberFormatter.localizedString(from: NSNumber(value: top), number: .decimal)
+        let content = UNMutableNotificationContent()
+        content.title = "👁 ZBS Eye"
+        content.body = "\(pretty) моментов в твоей памяти. Всё — на этом Mac, только для тебя."
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "zbseye.milestone.\(top)", content: content, trigger: nil))
     }
 
     /// Порядок запуска фоновых сервисов. Пока — пробы прав + Data-слой; capture/server/automations добавятся
@@ -250,6 +268,10 @@ final class AppEnvironment {
                     let report = try? await retention.prune(retentionDays: policy.0, maxBytes: policy.1)
                     if let r = report, r.framesDeleted + r.audioDeleted + r.orphansDeleted > 0 {
                         Log.retention.info("prune: frames \(r.framesDeleted) audio \(r.audioDeleted) orphans \(r.orphansDeleted)")
+                    }
+                    // 👁 делайтер: дружелюбно отметить пройденную «круглую» веху памяти (раз каждую)
+                    if let frames = try? await db.pool.read({ try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM screen_captures") ?? 0 }) {
+                        Self.celebrateMilestoneIfNeeded(frames: frames)
                     }
                     try? await Task.sleep(for: .seconds(1800))
                 }

@@ -13,13 +13,19 @@ final class ZBSEyeDatabase: Sendable {
     /// `runMigrations: false` — для read-only потребителей (MCP-процесс), чтобы не брать exclusive
     /// write-lock на grdb_migrations и не контендить с пишущим GUI-инстансом. Схемой владеет GUI.
     init(path: String, runMigrations: Bool = true) throws {
+        // mmap+WAL особенно склонны к порче БД на ВНЕШНИХ/сетевых томах (наш relocate на SSD!) — SQLite
+        // docs прямо предупреждают, screenpipe отключил mmap как топ-фикс corruption. «Вечная память» =
+        // целостность > скорость. На внутреннем APFS оставляем умеренный mmap; на внешнем/неизвестном — 0.
+        let isInternal = (try? URL(fileURLWithPath: path)
+            .resourceValues(forKeys: [.volumeIsInternalKey]).volumeIsInternal) ?? false
+        let mmapBytes = isInternal ? 134_217_728 : 0   // 128 MB внутри, 0 на внешнем/неизвестном
         var config = Configuration()
         config.prepareDatabase { db in
             try db.execute(sql: "PRAGMA foreign_keys = ON")
             try db.execute(sql: "PRAGMA recursive_triggers = ON")  // FK-каскад → DELETE на text_blocks → FTS-триггер
             try db.execute(sql: "PRAGMA synchronous = NORMAL")    // WAL + NORMAL = безопасно+быстро
             try db.execute(sql: "PRAGMA busy_timeout = 5000")
-            try db.execute(sql: "PRAGMA mmap_size = 268435456")   // 256 MB
+            try db.execute(sql: "PRAGMA mmap_size = \(mmapBytes)")   // 0 на внешнем томе — анти-corruption
             // Регистрируем sqlite-vec (static, без loadable-extension) на каждом соединении пула.
             // rc проверяем — иначе ошибка всплыла бы позже как «no such module: vec0».
             if let conn = db.sqliteConnection {

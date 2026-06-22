@@ -37,6 +37,10 @@ final class AskStore {
         guard !busy, !q.isEmpty else { return }
         input = ""
         messages.append(Message(role: .user, text: q))
+        if let egg = Self.easterEgg(q) {                    // 🥚 пасхалка: личность Глаза, без LLM
+            messages.append(Message(role: .assistant, text: egg))
+            return
+        }
         busy = true
         let llm = connections.llm
         Task {
@@ -53,4 +57,26 @@ final class AskStore {
     }
 
     func clear() { messages.removeAll() }
+
+    /// 🥚 Пасхалки — УЗКИЕ триггеры, чтобы не перехватывать реальные вопросы. Глаз с характером, и
+    /// каждый ответ тихо напоминает суть продукта: «вижу только для тебя, никуда не отправляю».
+    private static func easterEgg(_ q: String) -> String? {
+        let s = q.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: " ?!.,…"))
+        switch s {
+        case "кукареку", "ко-ко-ко":
+            return "Ко-ко-ко 🥚 Пасхалку нашёл. Я всё вижу — но только для тебя. 👁"
+        case "кто ты", "ты кто", "who are you":
+            return "Я — Глаз. Твоя память на этом Mac. У меня нет рук, нет облака и некуда что-то отправить — поэтому всё, что я вижу, остаётся только у тебя. 👁"
+        case "ты следишь за мной", "ты за мной следишь", "ты шпион", "ты шпионишь":
+            return "Слежка — это когда смотрят ЗА тебя для кого-то ещё. Я смотрю ТОЛЬКО для тебя и никому не докладываю: ноль исходящих, проверь в Little Snitch. 👁"
+        case "42", "смысл жизни", "в чём смысл жизни":
+            return "Ответ — где-то в твоей истории. Спроси конкретнее 👁"
+        case "👁", "глаз", "моргни":
+            return "👁 … 👁 (моргнул)"
+        case "люблю тебя", "i love you":
+            return "И я тебя помню. Каждый момент. 👁"
+        default:
+            return nil
+        }
+    }
 }

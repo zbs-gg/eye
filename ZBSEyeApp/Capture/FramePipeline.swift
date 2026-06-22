@@ -9,6 +9,7 @@ import Metal
 struct OCRLine: Sendable {
     var text: String
     var confidence: Double
+    var bbox: CGRect?     // нормализованный bbox из Vision (0..1, origin снизу-слева) — для «кликни на найденное» / будущей redaction
 }
 
 /// CGImage иммутабелен и thread-safe — безопасно гонять вне актора для OCR.
@@ -175,7 +176,7 @@ actor FramePipeline {
                     let handler = VNImageRequestHandler(cgImage: img.image, options: [:])
                     try? handler.perform([request])
                     lines = (request.results ?? []).compactMap { obs in
-                        obs.topCandidates(1).first.map { OCRLine(text: $0.string, confidence: Double($0.confidence)) }
+                        obs.topCandidates(1).first.map { OCRLine(text: $0.string, confidence: Double($0.confidence), bbox: obs.boundingBox) }
                     }
                 }
                 cont.resume(returning: lines)

@@ -109,7 +109,7 @@ final class CaptureCoordinator {
         })
         observers.append(wsc.addObserver(forName: NSWorkspace.didWakeNotification,
                                          object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.suspended = false }
+            Task { @MainActor in self?.suspended = false; self?.invalidateAndTrigger() }   // активный resume-kick: не ждём app-switch, восстанавливаемся из возможного stuck (старт-под-локом)
         })
         // Сон ДИСПЛЕЯ (без сна системы) — иначе idle-захват всю ночь писал бы чёрные кадры,
         // а SCK-ошибки взводили бы ложный «нужен перезапуск».
@@ -119,7 +119,7 @@ final class CaptureCoordinator {
         })
         observers.append(wsc.addObserver(forName: NSWorkspace.screensDidWakeNotification,
                                          object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.suspended = false }
+            Task { @MainActor in self?.suspended = false; self?.invalidateAndTrigger() }   // активный resume-kick: не ждём app-switch, восстанавливаемся из возможного stuck (старт-под-локом)
         })
         observers.append(wsc.addObserver(forName: NSWorkspace.didTerminateApplicationNotification,
                                          object: nil, queue: .main) { [weak self] note in
@@ -143,7 +143,7 @@ final class CaptureCoordinator {
         })
         distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screenIsUnlocked"),
                                                     object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.suspended = false }
+            Task { @MainActor in self?.suspended = false; self?.invalidateAndTrigger() }   // активный resume-kick: не ждём app-switch, восстанавливаемся из возможного stuck (старт-под-локом)
         })
         distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screensaver.didstart"),
                                                     object: nil, queue: .main) { [weak self] _ in
@@ -151,7 +151,7 @@ final class CaptureCoordinator {
         })
         distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screensaver.didstop"),
                                                     object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.suspended = false }
+            Task { @MainActor in self?.suspended = false; self?.invalidateAndTrigger() }   // активный resume-kick: не ждём app-switch, восстанавливаемся из возможного stuck (старт-под-локом)
         })
 
         tickTimer = Timer.scheduledTimer(withTimeInterval: config.activeTickSeconds, repeats: true) { [weak self] _ in
@@ -325,7 +325,7 @@ final class CaptureCoordinator {
             blocks.append(CapturedTextBlock(source: .ax, text: ax.contentText, confidence: 1.0))
         }
         for line in ocr where !line.text.isEmpty {
-            blocks.append(CapturedTextBlock(source: .ocr, text: line.text, confidence: line.confidence))
+            blocks.append(CapturedTextBlock(source: .ocr, text: line.text, confidence: line.confidence, bbox: line.bbox))
         }
         let quality: AXQuality = ocr.isEmpty ? ax.quality : (ax.contentChars > 0 ? .partialUseful : .ocr)
         let tel = CaptureTelemetry(
