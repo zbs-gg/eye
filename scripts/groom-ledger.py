@@ -24,6 +24,10 @@ def main() -> int:
         r = json.loads(raw)
         entry["cost_usd"] = r.get("total_cost_usd")
         entry["num_turns"] = r.get("num_turns")
+        if r.get("is_error"):                       # видеть фейлы в ledger (а не «cost 0»)
+            entry["is_error"] = True
+            entry["api_error_status"] = r.get("api_error_status")
+            entry["error_result"] = (r.get("result") or "")[:200]
         u = r.get("usage") or {}
         entry["tokens_in"] = u.get("input_tokens")
         entry["tokens_out"] = u.get("output_tokens")

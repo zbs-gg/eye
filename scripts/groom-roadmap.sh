@@ -16,6 +16,18 @@ mkdir -p workspace/groom/runs
 LOG="workspace/groom/runs/$RUN.log"
 rm -f workspace/groom/last-run.json
 
+# AUTH-фикс: под launchd `claude -p` не видит live OAuth-токен → 401. Тянем свежий токен из login-
+# keychain каждый прогон (в ~/.claude/.credentials.json он протухает за часы; keychain канонический).
+# Два service-name: новый билд мигрировал на per-install «…-11775413» рядом со старым. Берём первый.
+if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+  for _svc in "Claude Code-credentials" "Claude Code-credentials-11775413"; do
+    _tok=$(security find-generic-password -s "$_svc" -w 2>/dev/null \
+      | python3 -c "import sys,json;print(json.load(sys.stdin)['claudeAiOauth']['accessToken'])" 2>/dev/null)
+    [ -n "$_tok" ] && { export CLAUDE_CODE_OAUTH_TOKEN="$_tok"; break; }
+  done
+fi
+[ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && echo "[$TS] WARN: keychain OAuth token not resolved — claude -p likely 401" >>"$LOG"
+
 OUTBOX="/Users/nikshilov/.openclaw/persistent/scripts/elle-outbox-enqueue.py"
 PROMPT=$(cat <<PROMPT_EOF
 $(cat workspace/groom/INSTRUCTIONS.md)
