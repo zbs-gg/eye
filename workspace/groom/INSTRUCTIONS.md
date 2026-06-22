@@ -15,7 +15,7 @@ ZBS Eye (коднейм Slishu) — локальная «вечная памят
 2. **Что сделано с прошлого раза** — `git -C /Users/nikshilov/ai/slishu log --since="3 days ago" --oneline`
    + project claude-mem (observation_search по «Eye/Slishu»). Закрытые items → пометить done.
 3. **Как Ник реально юзает Eye** (read-only, не мутировать БД):
-   `sqlite3 "$HOME/Library/Application Support/ZBS Eye/slishu.sqlite"` —
+   `sqlite3 "$HOME/Library/Application Support/ZBS Eye/zbseye.sqlite"` —
    топ-приложения за 2 дня (`SELECT a.name, COUNT(*) FROM screen_captures c JOIN apps a ON a.id=c.appId
    WHERE c.ts > <epoch_ms_2d_ago> AND c.monitorId<>'sp' GROUP BY a.name ORDER BY 2 DESC LIMIT 10`),
    объём живого захвата, есть ли аудио. Сигнал: что он делает = что приоритезировать (напр. много
