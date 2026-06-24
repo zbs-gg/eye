@@ -240,6 +240,10 @@ final class CaptureCoordinator {
         // privacy-исключение: осознанный skip = здоровье цикла (heartbeat), а не сбой
         if isIgnoredApp(bundleId) { onCycleOK?(); return }
         let pid = app.processIdentifier
+        // ГЛАВНЫЙ ФИКС (диагноз Pro): НИКОГДА не захватываем собственный процесс. При клике «Запись» ZBS Eye
+        // остаётся frontmost → AXReader читал бы НАШЕ AX-дерево → kAXValue у нашего SwiftUI-Slider синхронно
+        // зовёт его @MainActor Binding.get (TimelineView) прямо на axreader-очереди → dispatch_assert_queue → краш.
+        guard pid != ProcessInfo.processInfo.processIdentifier else { onCycleOK?(); return }
         let appName = app.localizedName ?? bundleId
 
         // per-app capability: GPU/canvas → сразу OCR, не тратим AX
@@ -266,6 +270,9 @@ final class CaptureCoordinator {
                 if n >= config.ocrOnlyEmptyStreak { persistCapability(bundleId, .ocrOnly) }
             }
         }
+        // Pro action 3: после await actor'а AXReader мы обязаны снова быть на main. После self-PID фикса это
+        // стабильно проходит для внешних app; падение здесь означало бы РЕАЛЬНЫЙ runtime mis-hop (тогда — repro).
+        MainActor.preconditionIsolated()
 
         // Дисплей FRONTMOST-окна по ГЕОМЕТРИИ. NSScreen.main здесь не годится: это экран key window
         // НАШЕГО приложения — когда ZBS Eye в фоне (всегда при записи), он давал бы primary-дисплей,
@@ -274,8 +281,10 @@ final class CaptureCoordinator {
 
         let frame: ProcessedFrame?
         do {
+            var excludes = ignoredBundleIds()
+            if let own = Bundle.main.bundleIdentifier { excludes.insert(own) }   // Pro: таймлайн не пишет сам себя
             frame = try await pipeline.process(displayID: focusedDisplayID, needsOCR: needsOCR,
-                                               excludedBundleIds: ignoredBundleIds())
+                                               excludedBundleIds: excludes)
             if sckFailureStreak > 0 { onCaptureRecovered?() }   // транзиентный сбой прошёл — снять ratchet
             sckFailureStreak = 0
             onCycleOK?()
