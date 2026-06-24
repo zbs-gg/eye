@@ -6,6 +6,23 @@ import ApplicationServices
 /// «флаги уже выставлены». AXUIElement создаётся и умирает на очереди — наружу только Sendable AXExtraction.
 /// Логика портирована из отлаженного harness `electron-ax-smoke` (production-вариант: один обход + один
 /// ретрай при пустом дереве вместо серии замеров).
+/// Серийный executor поверх выделенной DispatchQueue. КРИТИЧНО для Swift 6: без ЯВНОГО executor рантайм
+/// не знает, что очередь «com.zbseye.axreader» принадлежит AXReader. При старой схеме (raw queue.async +
+/// withCheckedContinuation) рантайм путал executor-identity и после захвата ОШИБОЧНО запускал
+/// @MainActor-код SwiftUI (геттер биндинга таймлайна) на этой очереди → dispatch_assert_queue(main) →
+/// crash (Release-only, EXC_BREAKPOINT). С явным executor рантайм знает identity очереди и КОРРЕКТНО
+/// хопает с AXReader-актора на MainActor. checkIsolated подтверждает «мы на своей очереди».
+final class AXSerialExecutor: SerialExecutor {
+    let queue = DispatchQueue(label: "com.zbseye.axreader", qos: .userInitiated)
+    func enqueue(_ job: consuming ExecutorJob) {
+        let unowned = UnownedJob(job)
+        let exec = asUnownedSerialExecutor()
+        queue.async { unowned.runSynchronously(on: exec) }
+    }
+    func asUnownedSerialExecutor() -> UnownedSerialExecutor { UnownedSerialExecutor(ordinary: self) }
+    func checkIsolated() { dispatchPrecondition(condition: .onQueue(queue)) }
+}
+
 actor AXReader {
     private let config: CaptureConfig
     private var flaggedPIDs: Set<pid_t> = []
@@ -13,7 +30,10 @@ actor AXReader {
     /// зависшее приложение не съедает бюджет каждого цикла.
     private var failStreak: [pid_t: Int] = [:]
     private var sickUntil: [pid_t: Date] = [:]
-    private let queue = DispatchQueue(label: "com.zbseye.axreader", qos: .userInitiated)
+    /// Актор живёт на своей serial-очереди (executor). Блокирующие AX C-вызовы (AXCore) исполняются прямо
+    /// на ней — НЕ на cooperative-пуле — а наружу уходит только Sendable AXExtraction.
+    private let _executor = AXSerialExecutor()
+    nonisolated var unownedExecutor: UnownedSerialExecutor { _executor.asUnownedSerialExecutor() }
 
     init(config: CaptureConfig) { self.config = config }
 
@@ -22,6 +42,8 @@ actor AXReader {
         flaggedPIDs.remove(pid); failStreak[pid] = nil; sickUntil[pid] = nil
     }
 
+    /// Исполняется НА executor-очереди — синхронный AX-обход прямо здесь (без continuation: мы уже на нужном
+    /// потоке). AXUIElement создаётся и умирает внутри AXCore, наружу — только Sendable AXExtraction.
     func extract(pid: pid_t) async -> AXExtraction {
         // sick-PID: недавно повисал — не дёргаем AX, сразу отдаём пустышку (Coordinator уйдёт в OCR)
         if let until = sickUntil[pid], until > Date() {
@@ -29,12 +51,7 @@ actor AXReader {
         }
         let mayFlag = !flaggedPIDs.contains(pid)
         if mayFlag { flaggedPIDs.insert(pid) }
-        let cfg = config
-        let result = await withCheckedContinuation { (cont: CheckedContinuation<AXExtraction, Never>) in
-            queue.async {
-                cont.resume(returning: AXCore.perform(pid: pid, maySetFlags: mayFlag, config: cfg))
-            }
-        }
+        let result = AXCore.perform(pid: pid, maySetFlags: mayFlag, config: config)
         // Флаги не «прилипли»? Откатываем — попробуем выставить в следующий раз (Electron поднимается лениво).
         if mayFlag && result.manualResult != nil
             && result.manualResult != "success" && result.enhancedResult != "success" {
@@ -54,12 +71,7 @@ actor AXReader {
     /// Дешёвый заголовок окна для ocrOnly-приложений (Zed/Figma): один AX-вызов, без обхода дерева —
     /// иначе их записи оставались без windowTitle вовсе.
     func titleOnly(pid: pid_t) async -> String? {
-        let cfg = config
-        return await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
-            queue.async {
-                cont.resume(returning: AXCore.focusedWindowTitle(pid: pid, config: cfg))
-            }
-        }
+        AXCore.focusedWindowTitle(pid: pid, config: config)
     }
 }
 
