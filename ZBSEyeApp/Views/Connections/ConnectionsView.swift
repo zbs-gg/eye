@@ -9,11 +9,24 @@ struct ConnectionsView: View {
         @Bindable var conn = env.connections
         Form {
             Section {
-                TextField("Endpoint", text: $conn.llm.baseURL, prompt: Text("http://127.0.0.1:11434/v1"))
+                TextField("Endpoint", text: $conn.llm.baseURL, prompt: Text("http://127.0.0.1:1234/v1 (LM Studio)"))
                     .textContentType(.URL)
                     .autocorrectionDisabled()
-                TextField("Модель", text: $conn.llm.model, prompt: Text("llama3.2 / qwen2.5 / …"))
-                    .autocorrectionDisabled()
+
+                // Модель выбирается ИЗ реально загруженных в LM Studio (/v1/models). Пока список не пришёл
+                // (сервер не запущен / endpoint не тот) — ручной ввод как fallback.
+                if conn.availableModels.isEmpty {
+                    HStack {
+                        TextField("Модель", text: $conn.llm.model, prompt: Text("llama3.2 / qwen2.5 / …"))
+                            .autocorrectionDisabled()
+                        Button { Task { await conn.loadModels() } } label: { Image(systemName: "arrow.clockwise") }
+                            .buttonStyle(.borderless).help("Подтянуть список моделей с сервера")
+                    }
+                } else {
+                    Picker("Модель", selection: $conn.llm.model) {
+                        ForEach(conn.modelOptions, id: \.self) { Text($0).tag($0) }
+                    }
+                }
 
                 HStack {
                     Button {
@@ -66,6 +79,7 @@ struct ConnectionsView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Подключения")
+        .task { await conn.loadModels() }   // подтянуть модели сразу при открытии (если сервер на связи)
     }
 
     @ViewBuilder

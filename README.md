@@ -50,13 +50,18 @@ ZBS Eye тихо ведёт «вечную память» работы за ко
 
 ## Установка
 
-Нет платного Apple Developer аккаунта → приложение self-signed (без нотаризации):
+**Релиз — нотаризован Developer ID (запуск двойным кликом, без «Open Anyway»):**
 
-1. Собери: `bash scripts/make-signing-cert.sh` (один раз) → `bash scripts/build-release.sh`.
-2. Распакуй `dist/*.zip` в `/Applications`.
-3. Запусти → macOS откажет → **System Settings → Privacy & Security → «Open Anyway»**.
-4. Выдай **Screen Recording** + **Accessibility** (и опц. Microphone). Стабильная подпись → права
-   переживают ребилды.
+1. Собери: `bash scripts/build-notarized.sh` (нужны серт «Developer ID Application» + notarytool-профиль —
+   разовый сетап в [`docs/NOTARIZE.md`](docs/NOTARIZE.md)).
+2. Распакуй `dist/ZBSEye-notarized-*.zip` в `/Applications`, запусти **двойным кликом** (Gatekeeper
+   пропускает, в т.ч. оффлайн — тикет stapled).
+3. Выдай **Screen Recording** + **Accessibility** (опц. Microphone) — один раз. Нотаризованная подпись
+   стабильна: ребилды права НЕ сбрасывают.
+
+**Dev-сборка без платного аккаунта (self-signed):** `bash scripts/make-signing-cert.sh` (один раз) →
+`bash scripts/build-release.sh` → распаковать в `/Applications` → запуск → **System Settings → Privacy &
+Security → «Open Anyway»**. Минус: смена подписи иногда сбрасывает TCC-права (нотаризация это убирает).
 
 Детали сборки — [`BUILD.md`](BUILD.md). Архитектура и гид для контрибьюторов/агентов — [`AGENTS.md`](AGENTS.md).
 
@@ -78,7 +83,8 @@ FlyingFox (REST) · MCP swift-sdk · Hardened Runtime без App Sandbox.
 
 Работает: захват (экран + аудио), гибрид-поиск, таймлайн, REST + MCP, импорт прежней истории,
 retention (вечно по умолчанию), relocatable хранилище, iCloud-бэкап, трекинг размера, daily-summary,
-экспорт. Отложено: нотаризация (нет платного аккаунта), тест-таргет.
+экспорт, «Спроси» (RAG по локальной LLM — выбор модели из LM Studio/Ollama). Раздача — **нотаризованный
+Developer ID** (`scripts/build-notarized.sh`). Отложено: тест-таргет (XCTest).
 
 ## Лицензия
 

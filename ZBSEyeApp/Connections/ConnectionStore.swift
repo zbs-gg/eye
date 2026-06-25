@@ -17,6 +17,16 @@ final class ConnectionStore {
     var llm: LLMConfig { didSet { if llm != oldValue { persist() } } }
     var destination: DestinationConfig { didSet { if destination != oldValue { persist() } } }
     var llmStatus: LLMTestStatus = .idle
+    /// Модели, отданные сервером (`GET /v1/models` — LM Studio/Ollama/…). Источник Picker'а в «Подключениях»:
+    /// список выбора берётся ИЗ реально загруженных в LM Studio моделей, а не вводится руками.
+    var availableModels: [String] = []
+
+    /// Опции Picker'а: модели с сервера + текущая выбранная (если её вдруг нет в списке — не теряем выбор).
+    var modelOptions: [String] {
+        var opts = availableModels
+        if !llm.model.isEmpty, !opts.contains(llm.model) { opts.insert(llm.model, at: 0) }
+        return opts
+    }
 
     @ObservationIgnored private let client = LocalLLMClient()
     @ObservationIgnored private let defaults = UserDefaults.standard
@@ -37,8 +47,25 @@ final class ConnectionStore {
         llmStatus = .testing
         let cfg = llm
         switch await client.listModels(cfg) {
-        case .ok(let models):   llmStatus = .ok(models: models)
-        case .failed(let msg):  llmStatus = .failed(msg)
+        case .ok(let models):
+            llmStatus = .ok(models: models)
+            availableModels = models
+            // авто-выбор: если модель не задана ИЛИ прежняя больше не загружена в LM Studio — берём первую
+            // доступную, чтобы «Спроси» сразу работал с реально поднятой моделью.
+            if !models.isEmpty, !models.contains(llm.model) { llm.model = models[0] }
+        case .failed(let msg):
+            llmStatus = .failed(msg)
+            availableModels = []
+        }
+    }
+
+    /// Тихая подгрузка моделей при открытии «Подключений» (без шумного статуса, если сервер молчит —
+    /// просто остаётся ручной ввод). Не трогает llmStatus, чтобы не мигать «ошибкой» до явной проверки.
+    func loadModels() async {
+        guard llm.isConfigured, llm.isLocalOnly else { return }
+        if case .ok(let models) = await client.listModels(llm) {
+            availableModels = models
+            if !models.isEmpty, !models.contains(llm.model) { llm.model = models[0] }
         }
     }
 

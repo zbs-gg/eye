@@ -14,6 +14,10 @@ actor AXReader {
     private var failStreak: [pid_t: Int] = [:]
     private var sickUntil: [pid_t: Date] = [:]
     private let queue = DispatchQueue(label: "com.zbseye.axreader", qos: .userInitiated)
+    /// Свой PID. ИНВАРИАНТ: AXReader НИКОГДА не инспектирует собственный процесс — иначе обход читает
+    /// наше же SwiftUI-дерево, и `kAXValue` у нашего Slider СИНХРОННО вызывает его @MainActor `Binding.get`
+    /// (TimelineView) прямо на этой serial-очереди → `dispatch_assert_queue(main)` → краш (диагноз Pro).
+    private static let ownPID = ProcessInfo.processInfo.processIdentifier
 
     init(config: CaptureConfig) { self.config = config }
 
@@ -23,6 +27,10 @@ actor AXReader {
     }
 
     func extract(pid: pid_t) async -> AXExtraction {
+        guard pid != Self.ownPID else {                       // защита инварианта (см. ownPID): второй рубеж,
+            assertionFailure("AXReader must not inspect its own process")  // чтобы новый call site не воскресил баг
+            return AXExtraction()
+        }
         // sick-PID: недавно повисал — не дёргаем AX, сразу отдаём пустышку (Coordinator уйдёт в OCR)
         if let until = sickUntil[pid], until > Date() {
             var ext = AXExtraction(); ext.quality = .sickPID; return ext
@@ -54,6 +62,10 @@ actor AXReader {
     /// Дешёвый заголовок окна для ocrOnly-приложений (Zed/Figma): один AX-вызов, без обхода дерева —
     /// иначе их записи оставались без windowTitle вовсе.
     func titleOnly(pid: pid_t) async -> String? {
+        guard pid != Self.ownPID else {
+            assertionFailure("AXReader must not inspect its own process")
+            return nil
+        }
         let cfg = config
         return await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
             queue.async {
@@ -129,8 +141,20 @@ private enum AXCore {
             let role = copyString(node, kAXRoleAttribute) ?? "?"
             var nodeText = ""
             var len = 0
-            for attr in [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute,
-                         kAXPlaceholderValueAttribute, kAXSelectedTextAttribute] {
+            // Pro: НЕ читать kAXValue без разбора роли. У не-text-элементов (AXSlider и пр.) числовое value
+            // потом всё равно отбрасывается `copyString`, но сам getter — лишний IPC и побочка (у нашего
+            // собственного Slider — синхронный @MainActor Binding.get). text-роли: полный набор; chrome:
+            // только title/description; остальные: ничего.
+            let attrs: [String]
+            if contentRoles.contains(role) || role == "AXStaticText" || role == "AXHeading" {
+                attrs = [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute,
+                         kAXPlaceholderValueAttribute, kAXSelectedTextAttribute]
+            } else if chromeRoles.contains(role) {
+                attrs = [kAXTitleAttribute, kAXDescriptionAttribute]
+            } else {
+                attrs = []
+            }
+            for attr in attrs {
                 if let s = copyString(node, attr), !s.isEmpty {
                     nodeText += s + " "
                     len += s.count
