@@ -106,4 +106,12 @@ live: REST-батарея, MCP, sqlite-сверка; см. историю ком
 **iCloud-бэкап** (сжатый, keep-N, на выходе), трекинг размера, daily-summary автоматизация, экспорт.
 
 Отложено: тест-таргет (XCTest); source_id для мультимонитор-дедупа (~0.15% кадров, задокументировано
-в `HistoryImporter`); нотаризация (нет платного аккаунта — установка через «Open Anyway»).
+в `HistoryImporter`).
+
+**Раздача — Developer ID + нотаризация (НЕ App Store).** App Store требует App Sandbox, под которым
+невозможен cross-app AX (ядро) + профиль «пишет всё» реджектится — поэтому, как Rewind/screenpipe, цель
+notarized Developer ID вне App Store. Пайплайн готов: `scripts/build-notarized.sh` (Hardened Runtime +
+Developer ID + timestamp + notarytool + staple), сетап серта/кредов — `docs/NOTARIZE.md`. Блокер только
+один: платная Apple Developer Program ($99) + серт «Developer ID Application» (у Ника пока «Apple
+Development» — другой тип). До неё — `scripts/build-release.sh` (self-signed «Slishu Dev» + «Open Anyway»;
+минусы cdhash/TCC-чехарды ровно те, что нотаризация снимает).
