@@ -49,6 +49,7 @@ final class AppEnvironment {
     private(set) var export: ExportService?
     private(set) var historyImporter: HistoryImporter?
     private(set) var dataError: String?
+    private(set) var progress: ProgressStore?
 
     @ObservationIgnored private var retentionTask: Task<Void, Never>?
     @ObservationIgnored private var backupTask: Task<Void, Never>?
@@ -69,15 +70,34 @@ final class AppEnvironment {
         }
     }
 
-    /// 👁 Делайтер: раз за пройденную «круглую» веху памяти — дружелюбное локальное уведомление.
+    /// 👁 Делайтер: раз за пройденную «круглую» веху памяти — дружелюбное локальное уведомление
+    /// + триггер visual-celebration в ProgressStore.
     /// Отмечает все пройденные сразу (не бэкафиллит старые по одной), празднует только верхнюю новую.
-    nonisolated static func celebrateMilestoneIfNeeded(frames: Int) {
-        let milestones = [1_000, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000]
+    func celebrateMilestoneIfNeeded(frames: Int) {
+        let milestones = MemoryMilestones.frames
         let key = "zbseye.milestones.celebrated"
         let done = Set(UserDefaults.standard.array(forKey: key) as? [Int] ?? [])
         let crossed = milestones.filter { $0 <= frames }
         guard let top = crossed.filter({ !done.contains($0) }).max() else { return }
         UserDefaults.standard.set(crossed, forKey: key)   // отметить ВСЕ пройденные — без спама старыми
+        let pretty = NumberFormatter.localizedString(from: NSNumber(value: top), number: .decimal)
+        let content = UNMutableNotificationContent()
+        content.title = "👁 ZBS Eye"
+        content.body = "\(pretty) моментов в твоей памяти. Всё — на этом Mac, только для тебя."
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "zbseye.milestone.\(top)", content: content, trigger: nil))
+        // Визуальный делайтер: overlay в UI
+        progress?.celebrateMilestone(top)
+    }
+
+    // Keep nonisolated static version for legacy callsites (unused internally now, safe to leave)
+    nonisolated static func celebrateMilestoneIfNeeded(frames: Int) {
+        let milestones = MemoryMilestones.frames
+        let key = "zbseye.milestones.celebrated"
+        let done = Set(UserDefaults.standard.array(forKey: key) as? [Int] ?? [])
+        let crossed = milestones.filter { $0 <= frames }
+        guard let top = crossed.filter({ !done.contains($0) }).max() else { return }
+        UserDefaults.standard.set(crossed, forKey: key)
         let pretty = NumberFormatter.localizedString(from: NSNumber(value: top), number: .decimal)
         let content = UNMutableNotificationContent()
         content.title = "👁 ZBS Eye"
@@ -117,6 +137,8 @@ final class AppEnvironment {
             self.storage = storage
             let db = try ZBSEyeDatabase(path: ZBSEyeDatabase.defaultURL().path)
             self.db = db
+            // Gamification: прогресс и вехи
+            self.progress = ProgressStore(db: db)
             let backupManager = BackupManager(db: db, storage: storage)
             self.backupManager = backupManager
             backupSettings.manager = backupManager
@@ -276,7 +298,10 @@ final class AppEnvironment {
                     }
                     // 👁 делайтер: дружелюбно отметить пройденную «круглую» веху памяти (раз каждую)
                     if let frames = try? await db.pool.read({ try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM screen_captures") ?? 0 }) {
-                        Self.celebrateMilestoneIfNeeded(frames: frames)
+                        await MainActor.run { self?.celebrateMilestoneIfNeeded(frames: frames) }
+                        if let progressStore = await MainActor.run(body: { self?.progress }) {
+                            await progressStore.refresh()
+                        }
                     }
                     try? await Task.sleep(for: .seconds(1800))
                 }
@@ -424,6 +449,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case ask = "Спроси"
     case automations = "Автоматизации"
     case connections = "Подключения"
+    case progress = "Прогресс"
     case settings = "Настройки"
 
     var id: String { rawValue }
@@ -435,6 +461,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .ask:         return "questionmark.bubble"
         case .automations:       return "powerplug"
         case .connections: return "app.connected.to.app.below.fill"
+        case .progress:    return "chart.bar.fill"
         case .settings:    return "gearshape"
         }
     }
