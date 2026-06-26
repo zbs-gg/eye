@@ -26,6 +26,9 @@ private struct TimelineBody: View {
     @State private var seekTask: Task<Void, Never>?
     @State private var jumpDate = Date()
     @FocusState private var searchFocused: Bool
+    /// Текущая сцена для правой панели (обновляется при смене cursor).
+    @State private var currentScene: ActivityScene?
+    @State private var sceneLoadTask: Task<Void, Never>?
 
     private var showResults: Bool { store.isSearching || !store.results.isEmpty }
 
@@ -210,19 +213,37 @@ private struct TimelineBody: View {
                         Text(c.ts.formatted(date: .abbreviated, time: .standard)).font(.caption).foregroundStyle(.secondary)
                         if let q = c.axQuality { StatusPill(text: Self.qualityLabel(q), color: Self.qualityColor(q)) }
                         if let s = Self.sourcePill(c) {
-                            // Источник ≠ ax_quality: показываем, откуда реально пришёл текст (AX/OCR/смесь).
                             StatusPill(text: s.text, color: s.color, system: s.icon)
                         }
                     }
-                    Divider()
-                    Text(c.text.isEmpty ? "(текст не извлечён)" : c.text)
-                        .font(.callout).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    // Саммари сцены (вместо/поверх RAW OCR-дампа).
+                    if let scene = currentScene {
+                        Divider()
+                        SceneSummaryCard(scene: scene) {
+                            // «Перейти к началу сцены»
+                            Task { await store.seek(to: scene.startTs) }
+                        }
+                    } else {
+                        Divider()
+                        Text(c.text.isEmpty ? "(текст не извлечён)" : c.text)
+                            .font(.callout).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 } else {
                     Text("Нет кадра на этот момент").foregroundStyle(.secondary)
                 }
             }
             .padding(14)
+        }
+        .onChange(of: store.cursor) { _, newCursor in
+            // При смене курсора подгружаем сцену для правой панели.
+            // Дебаунсим — только после settle (нет смысла грузить каждый кадр play).
+            sceneLoadTask?.cancel()
+            sceneLoadTask = Task {
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                currentScene = await env.sceneStore?.scene(for: newCursor)
+            }
         }
     }
 

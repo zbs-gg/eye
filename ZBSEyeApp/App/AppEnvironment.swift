@@ -42,6 +42,7 @@ final class AppEnvironment {
     private(set) var ask: AskStore?
     private(set) var httpServer: ZBSEyeHTTPServer?
     private(set) var automations: DaySummaryStore?
+    private(set) var sceneStore: SceneStore?
     private(set) var audio: AudioCoordinator?
     private(set) var storage: StorageManager?   // для Settings-хранилища (занято/удаление/Finder)
     private(set) var db: ZBSEyeDatabase?         // для Settings-разбивки размера / бэкапа
@@ -215,6 +216,10 @@ final class AppEnvironment {
             let timelineSvc = TimelineService(db: db)
             self.timelineStore = TimelineStore(search: searchSvc, timeline: timelineSvc,
                                                mediaDirectory: storage.mediaDirectory)
+
+            // «День в активностях»: сцены поверх screen_captures (без новой таблицы).
+            let sceneSvc = SceneService(db: db)
+            self.sceneStore = SceneStore(service: sceneSvc, timeline: timelineSvc)
 
             // «Спроси свою память»: RAG-ответ через тот же гибрид-поиск + локальная LLM (свой
             // LocalLLMClient, stateless actor). Гейт localhost-only внутри — приватная история не уходит.
@@ -415,6 +420,7 @@ final class AppEnvironment {
 
 enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case timeline = "Таймлайн"
+    case activities = "Активности"
     case ask = "Спроси"
     case automations = "Автоматизации"
     case connections = "Подключения"
@@ -425,6 +431,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     var systemImage: String {
         switch self {
         case .timeline:    return "clock.arrow.circlepath"
+        case .activities:  return "calendar.day.timeline.left"
         case .ask:         return "questionmark.bubble"
         case .automations:       return "powerplug"
         case .connections: return "app.connected.to.app.below.fill"
