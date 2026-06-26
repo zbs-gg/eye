@@ -23,6 +23,7 @@ struct TimelineView: View {
 private struct TimelineBody: View {
     @Bindable var store: TimelineStore
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var seekTask: Task<Void, Never>?
     @State private var jumpDate = Date()
     @FocusState private var searchFocused: Bool
@@ -44,7 +45,7 @@ private struct TimelineBody: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
-            .animation(.easeInOut(duration: 0.18), value: showResults)
+            .animation(reduceMotion ? .none : .easeInOut(duration: 0.18), value: showResults)
         }
         .background { shortcuts }
     }
@@ -87,6 +88,7 @@ private struct TimelineBody: View {
                 if !store.searchQuery.isEmpty {
                     Button { store.clearSearch() } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.borderless).foregroundStyle(.secondary)
+                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
                 // Семантика не готова (качается ~300MB / нет сети) — честно говорим, что поиск пока FTS-only.
                 switch EmbeddingStatusStore.shared.status {
@@ -104,6 +106,7 @@ private struct TimelineBody: View {
             }
             .padding(8)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .animation(reduceMotion ? .none : .snappy(duration: 0.15), value: store.searchQuery.isEmpty)
 
             Button {
                 env.recording.toggle()
@@ -113,10 +116,13 @@ private struct TimelineBody: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(env.recording.isCapturing ? .red : .accentColor)
+            .animation(reduceMotion ? .none : .snappy(duration: 0.2), value: env.recording.isCapturing)
 
             Text("\(env.recording.screenFrameCount)")
                 .font(.system(.body, design: .rounded).weight(.semibold))
                 .monospacedDigit()
+                .contentTransition(.numericText())
+                .animation(reduceMotion ? .none : .snappy(duration: 0.25), value: env.recording.screenFrameCount)
                 .help("Кадров за сессию")
         }
         .padding(16)
@@ -185,7 +191,8 @@ private struct TimelineBody: View {
                 }
             } else {
                 HSplitView {
-                    FramePreview(frameID: store.current?.id, url: store.imageURL(store.current?.relativePath))
+                    FramePreview(frameID: store.current?.id, url: store.imageURL(store.current?.relativePath),
+                                 reduceMotion: reduceMotion)
                         .frame(minWidth: 320)
                     detailPanel
                         .frame(minWidth: 260, idealWidth: 320)
@@ -200,29 +207,39 @@ private struct TimelineBody: View {
             VStack(alignment: .leading, spacing: 10) {
                 if let a = store.audioDetail {
                     audioCard(a)
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .move(edge: .top)),
+                            removal: .opacity.combined(with: .move(edge: .top))
+                        ))
                     Divider()
                 }
                 if let c = store.current {
-                    Text(c.appName ?? c.bundleId ?? "—").font(.headline)
-                    if let w = c.windowTitle { Text(w).font(.subheadline).foregroundStyle(.secondary) }
-                    if let u = c.browserURL { Text(u).font(.caption).foregroundStyle(.blue).lineLimit(2) }
-                    HStack {
-                        Text(c.ts.formatted(date: .abbreviated, time: .standard)).font(.caption).foregroundStyle(.secondary)
-                        if let q = c.axQuality { StatusPill(text: Self.qualityLabel(q), color: Self.qualityColor(q)) }
-                        if let s = Self.sourcePill(c) {
-                            // Источник ≠ ax_quality: показываем, откуда реально пришёл текст (AX/OCR/смесь).
-                            StatusPill(text: s.text, color: s.color, system: s.icon)
+                    Group {
+                        Text(c.appName ?? c.bundleId ?? "—").font(.headline)
+                        if let w = c.windowTitle { Text(w).font(.subheadline).foregroundStyle(.secondary) }
+                        if let u = c.browserURL { Text(u).font(.caption).foregroundStyle(.blue).lineLimit(2) }
+                        HStack {
+                            Text(c.ts.formatted(date: .abbreviated, time: .standard)).font(.caption).foregroundStyle(.secondary)
+                            if let q = c.axQuality { StatusPill(text: Self.qualityLabel(q), color: Self.qualityColor(q)) }
+                            if let s = Self.sourcePill(c) {
+                                // Источник ≠ ax_quality: показываем, откуда реально пришёл текст (AX/OCR/смесь).
+                                StatusPill(text: s.text, color: s.color, system: s.icon)
+                            }
                         }
+                        Divider()
+                        Text(c.text.isEmpty ? "(текст не извлечён)" : c.text)
+                            .font(.callout).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    Divider()
-                    Text(c.text.isEmpty ? "(текст не извлечён)" : c.text)
-                        .font(.callout).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity)
                 } else {
                     Text("Нет кадра на этот момент").foregroundStyle(.secondary)
+                        .transition(.opacity)
                 }
             }
             .padding(14)
+            .animation(reduceMotion ? .none : .smooth(duration: 0.2), value: store.current?.id)
+            .animation(reduceMotion ? .none : .smooth(duration: 0.2), value: store.audioDetail?.id)
         }
     }
 
@@ -246,8 +263,10 @@ private struct TimelineBody: View {
                     Image(systemName: playIcon(a)).font(.title3)
                 }
                 .buttonStyle(.borderless)
+                .animation(reduceMotion ? .none : .snappy(duration: 0.15), value: playIcon(a))
                 ProgressView(value: isCurrent(a) ? store.audioPlayer.progress : 0)
                     .progressViewStyle(.linear)
+                    .animation(reduceMotion ? .none : .linear(duration: 0.1), value: store.audioPlayer.progress)
             }
             if let t = a.transcript, !t.isEmpty {
                 Text(t).font(.callout).textSelection(.enabled)
@@ -285,6 +304,7 @@ private struct TimelineBody: View {
             DensityStrip(buckets: store.density, audioBuckets: store.audioDensity,
                          start: store.rangeStart, end: store.rangeEnd,
                          cursor: store.cursor, playing: store.isPlaying,
+                         reduceMotion: reduceMotion,
                          onSeek: { scheduleSeek(toEpoch: $0.timeIntervalSince1970) })
                 .frame(height: 46)
 
@@ -294,6 +314,7 @@ private struct TimelineBody: View {
                     get: { min(max(store.cursor.timeIntervalSince1970, lo), hi) },
                     set: { scheduleSeek(toEpoch: $0) }
                 ), in: lo...hi)
+                .animation(reduceMotion ? .none : .smooth(duration: 0.15), value: store.cursor.timeIntervalSince1970)
             }
 
             HStack(spacing: 12) {
@@ -301,6 +322,8 @@ private struct TimelineBody: View {
                 Spacer(minLength: 8)
                 Text(store.cursor.formatted(date: .abbreviated, time: .standard))
                     .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
+                    .animation(reduceMotion ? .none : .snappy(duration: 0.2), value: store.cursor)
                 Spacer(minLength: 8)
                 // быстрые прыжки: «прошлый вторник 15:00» больше не требует возни со слайдером
                 Button("Сегодня") { Task { await store.jumpToNewest() } }
@@ -319,6 +342,7 @@ private struct TimelineBody: View {
                     ForEach(TimelineStore.Zoom.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented).fixedSize()
+                .animation(reduceMotion ? .none : .smooth(duration: 0.25), value: store.zoom)
             }
         }
         .padding(16)
@@ -327,22 +351,22 @@ private struct TimelineBody: View {
 
     private var transport: some View {
         HStack(spacing: 8) {
-            Button { Task { await store.stepBackward() } } label: {
-                Image(systemName: "backward.frame.fill")
+            TransportButton(systemImage: "backward.frame.fill",
+                            help: "Предыдущий кадр",
+                            reduceMotion: reduceMotion) {
+                Task { await store.stepBackward() }
             }
-            .buttonStyle(.bordered).help("Предыдущий кадр")
 
-            Button { store.togglePlay() } label: {
-                Image(systemName: store.isPlaying ? "pause.fill" : "play.fill")
-                    .frame(width: 30, height: 22)
+            PlayPauseButton(isPlaying: store.isPlaying,
+                            reduceMotion: reduceMotion) {
+                store.togglePlay()
             }
-            .buttonStyle(.borderedProminent)
-            .help(store.isPlaying ? "Пауза" : "Воспроизвести")
 
-            Button { Task { await store.stepForward() } } label: {
-                Image(systemName: "forward.frame.fill")
+            TransportButton(systemImage: "forward.frame.fill",
+                            help: "Следующий кадр",
+                            reduceMotion: reduceMotion) {
+                Task { await store.stepForward() }
             }
-            .buttonStyle(.bordered).help("Следующий кадр")
 
             Picker("", selection: Binding(get: { store.speed }, set: { store.setSpeed($0) })) {
                 ForEach(TimelineStore.speeds, id: \.self) { s in Text("\(Int(s))×").tag(s) }
@@ -384,11 +408,58 @@ private struct TimelineBody: View {
     }
 }
 
+// MARK: - транспортные кнопки с hover-микроанимацией
+
+/// Bordered transport button с лёгким scale-эффектом при наведении.
+private struct TransportButton: View {
+    let systemImage: String
+    let help: String
+    let reduceMotion: Bool
+    let action: () -> Void
+
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+        }
+        .buttonStyle(.bordered)
+        .help(help)
+        .scaleEffect(hovered && !reduceMotion ? 1.06 : 1.0)
+        .animation(reduceMotion ? .none : .snappy(duration: 0.12), value: hovered)
+        .onHover { hovered = $0 }
+    }
+}
+
+/// Play/Pause кнопка с иконкой-crossfade при смене состояния.
+private struct PlayPauseButton: View {
+    let isPlaying: Bool
+    let reduceMotion: Bool
+    let action: () -> Void
+
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                .frame(width: 30, height: 22)
+                .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace.downUp.wholeSymbol))
+        }
+        .buttonStyle(.borderedProminent)
+        .help(isPlaying ? "Пауза" : "Воспроизвести")
+        .scaleEffect(hovered && !reduceMotion ? 1.05 : 1.0)
+        .animation(reduceMotion ? .none : .snappy(duration: 0.15), value: isPlaying)
+        .animation(reduceMotion ? .none : .snappy(duration: 0.12), value: hovered)
+        .onHover { hovered = $0 }
+    }
+}
+
 // MARK: - кадр (crossfade при смене)
 
 private struct FramePreview: View {
     let frameID: Int64?
     let url: URL?
+    let reduceMotion: Bool
     @State private var loaded: LoadedFrame?     // что на экране — id+image атомарно (нет рассинхрона)
 
     private struct LoadedFrame { let id: Int64; let image: NSImage }
@@ -411,7 +482,8 @@ private struct FramePreview: View {
                 ContentUnavailableView("Нет кадра", systemImage: "photo")
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: loaded?.id)
+        // При reduceMotion — мгновенная смена (nil duration = no animation); при норме — плавный crossfade.
+        .animation(reduceMotion ? .none : .easeInOut(duration: 0.15), value: loaded?.id)
         .task(id: frameID) {
             guard let u = url, let fid = frameID else { return }   // url==nil: держим прошлый loaded под бейджем
             let img = await Task.detached(priority: .userInitiated) { FramePreview.thumbnail(u, maxPixel: 2400) }.value
@@ -443,35 +515,54 @@ private struct DensityStrip: View {
     let end: Date
     let cursor: Date
     let playing: Bool
+    let reduceMotion: Bool
     let onSeek: (Date) -> Void
+
+    // Анимированная позиция плейхеда — обновляется вместе с cursor, но плавно.
+    @State private var animatedCursorFraction: Double = 0
+
+    private var cursorFraction: Double {
+        let span = max(1, end.timeIntervalSince1970 - start.timeIntervalSince1970)
+        return (cursor.timeIntervalSince1970 - start.timeIntervalSince1970) / span
+    }
 
     var body: some View {
         GeometryReader { geo in
-            Canvas { ctx, size in
-                let span = max(1, end.timeIntervalSince1970 - start.timeIntervalSince1970)
-                // верхняя дорожка — экран; нижние 6pt — аудио-полоска
-                let audioH: CGFloat = audioBuckets.isEmpty ? 0 : 6
-                let screenH = size.height - audioH
-                let maxCount = max(1, buckets.map(\.count).max() ?? 1)
-                for b in buckets {
-                    let x = (b.ts.timeIntervalSince1970 - start.timeIntervalSince1970) / span * size.width
-                    guard x >= 0, x <= size.width else { continue }
-                    let h = CGFloat(b.count) / CGFloat(maxCount) * screenH
-                    let rect = CGRect(x: x, y: screenH - h, width: max(1.5, size.width / 240), height: h)
-                    ctx.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(.accentColor.opacity(0.7)))
+            ZStack(alignment: .leading) {
+                // Canvas для баров — не перерисовывает плейхед при каждом cursor-тике.
+                Canvas { ctx, size in
+                    let span = max(1, end.timeIntervalSince1970 - start.timeIntervalSince1970)
+                    // верхняя дорожка — экран; нижние 6pt — аудио-полоска
+                    let audioH: CGFloat = audioBuckets.isEmpty ? 0 : 6
+                    let screenH = size.height - audioH
+                    let maxCount = max(1, buckets.map(\.count).max() ?? 1)
+                    for b in buckets {
+                        let x = (b.ts.timeIntervalSince1970 - start.timeIntervalSince1970) / span * size.width
+                        guard x >= 0, x <= size.width else { continue }
+                        let h = CGFloat(b.count) / CGFloat(maxCount) * screenH
+                        let rect = CGRect(x: x, y: screenH - h, width: max(1.5, size.width / 240), height: h)
+                        ctx.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(.accentColor.opacity(0.7)))
+                    }
+                    // аудио: оранжевые сегменты присутствия речи (бинарная полоска, не высота)
+                    for b in audioBuckets {
+                        let x = (b.ts.timeIntervalSince1970 - start.timeIntervalSince1970) / span * size.width
+                        guard x >= 0, x <= size.width else { continue }
+                        let rect = CGRect(x: x, y: screenH + 1, width: max(1.5, size.width / 240), height: audioH - 2)
+                        ctx.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(.orange.opacity(0.75)))
+                    }
                 }
-                // аудио: оранжевые сегменты присутствия речи (бинарная полоска, не высота)
-                for b in audioBuckets {
-                    let x = (b.ts.timeIntervalSince1970 - start.timeIntervalSince1970) / span * size.width
-                    guard x >= 0, x <= size.width else { continue }
-                    let rect = CGRect(x: x, y: screenH + 1, width: max(1.5, size.width / 240), height: audioH - 2)
-                    ctx.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(.orange.opacity(0.75)))
-                }
-                // Playhead: при проигрывании ярче/толще (accent) — сигнал, что идёт автоплей.
-                let cx = (cursor.timeIntervalSince1970 - start.timeIntervalSince1970) / span * size.width
-                ctx.stroke(Path { p in p.move(to: CGPoint(x: cx, y: 0)); p.addLine(to: CGPoint(x: cx, y: size.height)) },
-                           with: .color(playing ? .accentColor : .primary.opacity(0.6)),
-                           lineWidth: playing ? 2.5 : 1.5)
+
+                // Плейхед — отдельный слой, анимируется через animatedCursorFraction.
+                // При ручном скрабе анимация не включается (мгновенно), только при авто-плее.
+                let cx = animatedCursorFraction * geo.size.width
+                Rectangle()
+                    .fill(playing ? Color.accentColor : Color.primary.opacity(0.6))
+                    .frame(width: playing ? 2.5 : 1.5, height: geo.size.height)
+                    .offset(x: max(0, cx - (playing ? 1.25 : 0.75)))
+                    .animation(
+                        (reduceMotion || !playing) ? .none : .linear(duration: 0.12),
+                        value: animatedCursorFraction
+                    )
             }
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { v in
@@ -479,6 +570,19 @@ private struct DensityStrip: View {
                 let span = end.timeIntervalSince1970 - start.timeIntervalSince1970
                 onSeek(Date(timeIntervalSince1970: start.timeIntervalSince1970 + frac * span))
             })
+            .onChange(of: cursor) { _, _ in
+                // При воспроизведении — плавное движение плейхеда; при ручном скрабе — мгновенное.
+                if playing && !reduceMotion {
+                    withAnimation(.linear(duration: 0.12)) {
+                        animatedCursorFraction = cursorFraction
+                    }
+                } else {
+                    animatedCursorFraction = cursorFraction
+                }
+            }
+            .onChange(of: start) { _, _ in animatedCursorFraction = cursorFraction }
+            .onChange(of: end)   { _, _ in animatedCursorFraction = cursorFraction }
+            .onAppear { animatedCursorFraction = cursorFraction }
         }
         .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
     }
