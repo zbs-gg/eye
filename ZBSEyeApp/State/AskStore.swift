@@ -37,6 +37,7 @@ final class AskStore {
         guard !busy, !q.isEmpty else { return }
         input = ""
         messages.append(Message(role: .user, text: q))
+        AchievementCounters.bump(.questions)                // ачивки «Первый вопрос»/«Дознаватель»
         if let egg = Self.easterEgg(q) {                    // 🥚 пасхалка: личность Глаза, работает и без LLM
             messages.append(Message(role: .assistant, text: egg))
             return

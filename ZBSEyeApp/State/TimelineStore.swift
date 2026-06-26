@@ -270,6 +270,7 @@ final class TimelineStore {
     func runSearch() async {
         let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { results = []; return }
+        AchievementCounters.bump(.searches)                 // ачивка «Ищейка»
         searchGen += 1
         let gen = searchGen
         isSearching = true

@@ -7,7 +7,10 @@ import Observation
 @Observable
 final class BackupSettingsStore {
     var enabled: Bool {
-        didSet { if enabled != oldValue { UserDefaults.standard.set(enabled, forKey: Self.enabledKey) } }
+        didSet {
+            if enabled != oldValue { UserDefaults.standard.set(enabled, forKey: Self.enabledKey) }
+            if enabled { AchievementCounters.set(.icloudBackup) }   // ачивка «Облачный страж»
+        }
     }
     var keepN: Int {
         didSet { if keepN != oldValue { UserDefaults.standard.set(keepN, forKey: Self.keepKey) } }

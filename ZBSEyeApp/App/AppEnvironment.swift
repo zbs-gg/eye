@@ -440,6 +440,7 @@ final class AppEnvironment {
                     }
                 })
             StorageLocation.setRoot(report.newDataRoot)
+            AchievementCounters.set(.relocated)   // ачивка «На свой диск»
             storageSettings.relocationStatus = "Перенесено (\(report.mediaFilesCopied) медиа). Перезапуск…"
             try? await Task.sleep(for: .milliseconds(600))   // дать UI показать статус
             AppRelauncher.relaunch()
