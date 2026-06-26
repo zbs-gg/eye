@@ -51,6 +51,7 @@ final class AppEnvironment {
     private(set) var historyImporter: HistoryImporter?
     private(set) var dataError: String?
     private(set) var progress: ProgressStore?
+    private(set) var achievements: AchievementStore?
 
     @ObservationIgnored private var retentionTask: Task<Void, Never>?
     @ObservationIgnored private var backupTask: Task<Void, Never>?
@@ -244,6 +245,9 @@ final class AppEnvironment {
             // Переиспользуют сцены, картограф и саммари — дедуп логики (ревью Pro #9).
             let activityRepo = DayActivityRepository(db: db)
 
+            // Достижения: статистика из БД + счётчиков → каталог ачивок (открытие персистится).
+            self.achievements = AchievementStore(service: AchievementStatsService(db: db, repo: activityRepo))
+
             // «День в активностях»: сцены поверх screen_captures (без новой таблицы).
             let sceneSvc = SceneService(repo: activityRepo)
             self.sceneStore = SceneStore(service: sceneSvc, timeline: timelineSvc)
@@ -310,6 +314,9 @@ final class AppEnvironment {
                         await MainActor.run { self?.celebrateMilestoneIfNeeded(frames: frames) }
                         if let progressStore = await MainActor.run(body: { self?.progress }) {
                             await progressStore.refresh()
+                        }
+                        if let achStore = await MainActor.run(body: { self?.achievements }) {
+                            await achStore.refresh()
                         }
                     }
                     try? await Task.sleep(for: .seconds(1800))
@@ -398,6 +405,8 @@ final class AppEnvironment {
         await progress?.refresh()
         cartographer?.reset()
         automations?.reset()   // DaySummaryStore.preview = LLM-markdown по стёртому дню (тот же класс)
+        AchievementCounters.set(.deletedPeriod)   // ачивка «Чистильщик»
+        await achievements?.refresh()
         return report
     }
 
@@ -468,6 +477,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case automations = "Автоматизации"
     case connections = "Подключения"
     case progress = "Прогресс"
+    case achievements = "Достижения"
     case settings = "Настройки"
 
     var id: String { rawValue }
@@ -481,6 +491,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .automations:  return "powerplug"
         case .connections:  return "app.connected.to.app.below.fill"
         case .progress:     return "chart.bar.fill"
+        case .achievements: return "rosette"
         case .settings:     return "gearshape"
         }
     }

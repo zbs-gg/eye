@@ -98,6 +98,7 @@ final class CartographerStore {
                     == Calendar.current.startOfDay(for: day) else { phase = .idle; return }
             insights = result
             phase = .done
+            AchievementCounters.bump(.cartographerRuns)   // ачивки Картографа
         } catch is CancellationError {
             phase = .idle
         } catch let urlErr as URLError where urlErr.code == .cancelled {

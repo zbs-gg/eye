@@ -11,7 +11,11 @@ struct ActivitiesView: View {
             if let store = env.sceneStore, let timelineStore = env.timelineStore {
                 ActivitiesBody(store: store, timelineStore: timelineStore)
                     .environment(env)
-                    .task { await store.load() }
+                    .task {
+                        AchievementCounters.bump(.activitiesOpened)   // ачивка «Хронист дня»
+                        await store.load()
+                        await env.achievements?.refresh()
+                    }
             } else if let err = env.dataError {
                 ContentUnavailableView("Ошибка БД",
                                        systemImage: "exclamationmark.triangle",

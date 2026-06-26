@@ -18,6 +18,7 @@ struct RootWindow: View {
                 case .automations:  AutomationsView()
                 case .connections:  ConnectionsView()
                 case .progress:     MemoryProgressView()
+                case .achievements: AchievementsView()
                 case .settings:     SettingsView()
                 }
             }
@@ -32,6 +33,16 @@ struct RootWindow: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.92)))
                 .animation(.spring(duration: 0.4), value: milestone)
                 .zIndex(100)
+            }
+        }
+        .overlay(alignment: .center) {
+            if let unlock = env.achievements?.pendingUnlock {
+                AchievementUnlockOverlay(achievement: unlock) {
+                    env.achievements?.clearPendingUnlock()
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                .animation(.spring(duration: 0.45), value: unlock.id)
+                .zIndex(110)
             }
         }
         .sheet(isPresented: $env.showOnboarding) {
