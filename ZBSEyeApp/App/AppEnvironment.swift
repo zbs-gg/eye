@@ -393,6 +393,7 @@ final class AppEnvironment {
         await sceneStore?.load()
         await progress?.refresh()
         cartographer?.reset()
+        automations?.reset()   // DaySummaryStore.preview = LLM-markdown по стёртому дню (тот же класс)
         return report
     }
 

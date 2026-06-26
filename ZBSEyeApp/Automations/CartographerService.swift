@@ -189,6 +189,8 @@ actor CartographerService {
             topApps: a.topApps.map { PromptApp(app: clean($0.app, cap: 80), minutes: $0.minutes, captures: $0.captures) },
             textSamples: a.textSamples.map { clean($0, cap: 360) })
         let enc = JSONEncoder()
+        // .withoutEscapingSlashes — только косметика ('/' вместо '\/'); НЕ ослабляет экранирование
+        // кавычек/управляющих символов, фенс инъекции цел.
         enc.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
         let json = (try? enc.encode(data)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
 

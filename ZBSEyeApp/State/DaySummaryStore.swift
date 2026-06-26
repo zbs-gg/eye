@@ -75,6 +75,16 @@ final class DaySummaryStore {
 
     func cancelPreview() { previewTask?.cancel() }
 
+    /// Privacy (Pro NO-GO follow-up): сбросить собранное превью/запись — это LLM-вывод по истории,
+    /// которую только что удалили (deleteHistory). Расписание/настройки/audit не трогаем.
+    func reset() {
+        previewTask?.cancel()
+        preview = nil
+        lastWrite = nil
+        errorText = nil
+        phase = .idle
+    }
+
     /// Стадии collect+summarize. Запись НЕ делает. Вызывать через startPreview (для отменяемости).
     func buildPreview() async {
         guard !isBusy else { return }
