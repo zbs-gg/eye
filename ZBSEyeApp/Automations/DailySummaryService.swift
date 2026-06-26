@@ -34,7 +34,7 @@ actor DailySummaryService {
 
         // Текст репрезентативных кадров выбранных сессий — ОДНИМ батч-запросом (без N+1). Кадры берём
         // строго из самой сессии (app+window+ts уже учтены сегментацией) — чужой текст не протечёт.
-        let candidateIds = chosen.flatMap { Array($0.captureIds.prefix(120)) }
+        let candidateIds = chosen.flatMap { $0.sampledCaptureIds(max: 120) }
         let textByCapture = try await repo.batchText(captureIds: candidateIds)
 
         let slices: [DaySlice] = chosen.map { s in

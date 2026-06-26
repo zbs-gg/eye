@@ -65,7 +65,7 @@ actor CartographerService {
         // Текстовые сэмплы: топ-5 сессий (app+window) по числу кадров → батч-текст по их кадрам.
         let sessions = DayActivityRepository.sessions(caps, grouping: .appAndWindow, gapMs: 5 * 60 * 1000)
         let topSessions = sessions.sorted { $0.count > $1.count }.prefix(5)
-        let candidateIds = topSessions.flatMap { Array($0.captureIds.prefix(80)) }
+        let candidateIds = topSessions.flatMap { $0.sampledCaptureIds(max: 80) }
         let textByCapture = try await repo.batchText(captureIds: candidateIds)
         let textSamples: [String] = topSessions.compactMap { s in
             guard let best = s.captureIds.compactMap({ textByCapture[$0] }).max(by: { $0.count < $1.count }),

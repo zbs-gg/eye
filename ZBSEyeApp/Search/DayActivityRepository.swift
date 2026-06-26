@@ -25,6 +25,15 @@ struct ActivitySession: Sendable {
     var durationMs: Int64 { last.ts - first.ts }
     var appId: Int64? { first.appId }
     var captureIds: [Int64] { captures.map(\.id) }
+
+    /// До `max` РАВНОМЕРНО распределённых по сессии captureId (не только начало) — чтобы выборка текста
+    /// не смещалась к старту длинной сессии (самый длинный текстовый блок может быть в любом месте).
+    func sampledCaptureIds(max: Int) -> [Int64] {
+        let ids = captureIds
+        guard max > 0, ids.count > max else { return ids }
+        let step = Double(ids.count) / Double(max)
+        return (0..<max).map { ids[min(ids.count - 1, Int(Double($0) * step))] }
+    }
 }
 
 /// Как группировать кадры в сессии.
