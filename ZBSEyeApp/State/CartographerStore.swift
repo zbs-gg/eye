@@ -33,6 +33,17 @@ final class CartographerStore {
     /// LLM настроена и локальная — показываем кнопку генерации, иначе подсказку.
     var llmReady: Bool { connections.llm.isConfigured && connections.llm.isLocalOnly }
 
+    /// First-run consent (Pro #13): до явного согласия дневные фрагменты экрана НЕ уходят в локальную
+    /// LLM. UI показывает consent-карточку; генерация заблокирована.
+    private(set) var hasConsent: Bool = UserDefaults.standard.bool(forKey: "zbseye.cartographer.consent")
+
+    /// Пользователь согласился — фиксируем и сразу запускаем генерацию.
+    func grantConsentAndGenerate() {
+        UserDefaults.standard.set(true, forKey: "zbseye.cartographer.consent")
+        hasConsent = true
+        generate()
+    }
+
     @ObservationIgnored private let service: CartographerService
     @ObservationIgnored private let connections: ConnectionStore
     @ObservationIgnored private var generateTask: Task<Void, Never>?
@@ -45,7 +56,7 @@ final class CartographerStore {
     // MARK: — действия
 
     func generate() {
-        guard !isBusy else { return }
+        guard hasConsent, !isBusy else { return }   // без явного согласия фрагменты в LLM не уходят
         generateTask?.cancel()
         generateTask = Task { [weak self] in await self?.run() }
     }

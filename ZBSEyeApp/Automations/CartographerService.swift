@@ -1,21 +1,20 @@
 import Foundation
-import GRDB
 
 /// «Картограф» — on-device AI-советчик: смотрит активность дня → выдаёт 2-3 конкретных наблюдения/совета.
 /// Паттерн: как DailySummaryService, но без write-стадии — вся ценность в строчках инсайта.
 /// Egress: строго только localhost (LLMConfig.isLocalOnly гейт). Если LLM не настроена — дружелюбная
-/// подсказка, без пробы, без падения.
+/// подсказка, без пробы, без падения. Агрегацию дня делегирует общему DayActivityRepository.
 ///
 /// Privacy/инъекция (ревью Pro, NO-GO-фикс): экран — недоверенный ввод. Все screen-derived поля
 /// (имена приложений, текстовые фрагменты) уходят в LLM ТОЛЬКО как значения JSON (структурно не могут
 /// сломать промпт) + усечены по AutomationSafety + после LLM выход санитизируется (без md-картинок/ссылок,
 /// cap длины/числа строк). Каждый прогон пишет audit без контента.
 actor CartographerService {
-    private let db: ZBSEyeDatabase
+    private let repo: DayActivityRepository
     private let client: LocalLLMClient
 
-    init(db: ZBSEyeDatabase, client: LocalLLMClient) {
-        self.db = db
+    init(repo: DayActivityRepository, client: LocalLLMClient) {
+        self.repo = repo
         self.client = client
     }
 
@@ -36,102 +35,46 @@ actor CartographerService {
         let textSamples: [String]
     }
 
-    /// Собирает активность за день из `screen_captures` + `apps` + `text_blocks`. Только read — не нарушает
-    /// инвариант «один writer — IngestService». ОДИН основной скан дня; время считается по ts-дельтам
-    /// (а не по числу кадров — интервал захвата плавает: active≈3с, idle≈60с, bursts/dedup).
+    /// Собирает активность за день через DayActivityRepository (один скан + чистые агрегации). Время —
+    /// по ts-дельтам (не по числу кадров: интервал захвата плавает active≈3с/idle≈60с/bursts/dedup).
     func collect(day: Date, safety: AutomationSafety = .default) async throws -> DayActivity {
-        let cal = Calendar.current
-        let start = cal.startOfDay(for: day)
-        guard let end = cal.date(byAdding: .day, value: 1, to: start) else {
-            throw AutomationError.noData(day: day)
+        let start = Calendar.current.startOfDay(for: day)
+        let caps = try await repo.captures(forDay: day)
+        guard !caps.isEmpty else { throw AutomationError.noData(day: start) }
+
+        // Активное время по приложениям + кол-во кадров и имена.
+        let activeMs = DayActivityRepository.appActiveMs(caps, activeGapCapMs: 120 * 1000)
+        var nameByApp: [Int64: String] = [:]
+        var countByApp: [Int64: Int] = [:]
+        for c in caps {
+            guard let a = c.appId else { continue }
+            countByApp[a, default: 0] += 1
+            if let n = c.appName { nameByApp[a] = n }
         }
-        let startMs = msFromDate(start)
-        let endMs   = msFromDate(end) - 1
-        let maxSample = safety.maxSampleChars
-
-        return try await db.pool.read { dbc -> DayActivity in
-            // Один скан хронологии дня: id (для текста), ts (для времени), appId+appName, окно.
-            let rows = try Row.fetchAll(dbc, sql: """
-                SELECT c.id AS id, c.ts AS ts, c.appId AS appId, a.name AS appName, c.windowTitle AS windowTitle
-                FROM screen_captures c LEFT JOIN apps a ON a.id = c.appId
-                WHERE c.ts BETWEEN ? AND ? ORDER BY c.ts ASC
-                """, arguments: [startMs, endMs])
-            let total = rows.count
-            guard total > 0 else { throw AutomationError.noData(day: day) }
-
-            // Сессии (app+window, допуск на паузу 5 мин), активное время (cap на gap), переключения —
-            // всё за один проход. Sess не Sendable, живёт только тут.
-            struct Sess { var appId: Int64?; var win: String?; var startMs: Int64; var endMs: Int64
-                          var count: Int; var ids: [Int64]; var name: String }
-            let sessionGap: Int64 = 5 * 60 * 1000
-            let activeGapCap: Int64 = 120 * 1000   // дельта >2мин = простой: засчитываем максимум 2мин
-            var sessions: [Sess] = []
-            var durationByApp: [Int64: Int64] = [:]   // appId → активные ms
-            var nameByApp: [Int64: String] = [:]
-            var switches = 0
-            var prevApp: Int64? = nil, prevWin: String? = nil, prevTs: Int64? = nil
-
-            for r in rows {
-                let id: Int64 = r["id"]
-                let ts: Int64 = r["ts"]
-                let appId: Int64? = r["appId"]
-                let name: String = r["appName"] ?? "—"
-                let win: String? = r["windowTitle"]
-
-                // активное время: дельту от предыдущего кадра отдаём предыдущему приложению, cap на простой
-                if let pTs = prevTs, let pApp = prevApp {
-                    durationByApp[pApp, default: 0] += min(ts - pTs, activeGapCap)
-                }
-                if let appId { nameByApp[appId] = name }
-                if prevApp != nil && (appId != prevApp || win != prevWin) { switches += 1 }
-
-                if var last = sessions.last, last.appId == appId, last.win == win,
-                   (ts - last.endMs) <= sessionGap {
-                    last.endMs = ts; last.count += 1; last.ids.append(id)
-                    sessions[sessions.count - 1] = last
-                } else {
-                    sessions.append(Sess(appId: appId, win: win, startMs: ts, endMs: ts,
-                                         count: 1, ids: [id], name: name))
-                }
-                prevApp = appId; prevWin = win; prevTs = ts
-            }
-
-            // Топ-8 приложений по активному времени.
-            let topApps: [DayActivity.AppUsage] = durationByApp
-                .sorted { $0.value > $1.value }
-                .prefix(8)
-                .map { (appId, ms) in
-                    let captures = sessions.filter { $0.appId == appId }.reduce(0) { $0 + $1.count }
-                    return DayActivity.AppUsage(app: nameByApp[appId] ?? "—",
-                                                minutes: max(1, Int(ms / 60000)),
-                                                captures: captures)
-                }
-
-            // Текстовые сэмплы: из топ-5 сессий по числу кадров — ОДИН батч-запрос text_blocks по их id
-            // (вместо N запросов). Ограничиваем число id на сессию, чтобы IN-список не разрастался.
-            let topSessions = sessions.sorted { $0.count > $1.count }.prefix(5)
-            let candidateIds: [Int64] = topSessions.flatMap { Array($0.ids.prefix(80)) }
-            var textByCapture: [Int64: String] = [:]
-            if !candidateIds.isEmpty {
-                let ph = candidateIds.map { _ in "?" }.joined(separator: ",")
-                let trows = try Row.fetchAll(dbc,
-                    sql: "SELECT captureId, text FROM text_blocks WHERE captureId IN (\(ph))",
-                    arguments: StatementArguments(candidateIds))
-                for tr in trows {
-                    let cid: Int64 = tr["captureId"]
-                    let t: String = tr["text"] ?? ""
-                    if t.count > (textByCapture[cid]?.count ?? 0) { textByCapture[cid] = t }
-                }
-            }
-            let textSamples: [String] = topSessions.compactMap { s in
-                guard let best = s.ids.compactMap({ textByCapture[$0] }).max(by: { $0.count < $1.count }),
-                      !best.isEmpty else { return nil }
-                return Self.clean(best, cap: maxSample)
-            }
-
-            return DayActivity(day: start, topApps: topApps, contextSwitches: switches,
-                               totalCaptures: total, textSamples: textSamples)
+        let rankedApps = activeMs.sorted { $0.value > $1.value }.prefix(8)
+        let topApps: [DayActivity.AppUsage] = rankedApps.map { entry in
+            let appId: Int64 = entry.key
+            let ms: Int64 = entry.value
+            return DayActivity.AppUsage(app: nameByApp[appId] ?? "—",
+                                        minutes: max(1, Int(ms / 60000)),
+                                        captures: countByApp[appId] ?? 0)
         }
+
+        let switches = DayActivityRepository.contextSwitches(caps)
+
+        // Текстовые сэмплы: топ-5 сессий (app+window) по числу кадров → батч-текст по их кадрам.
+        let sessions = DayActivityRepository.sessions(caps, grouping: .appAndWindow, gapMs: 5 * 60 * 1000)
+        let topSessions = sessions.sorted { $0.count > $1.count }.prefix(5)
+        let candidateIds = topSessions.flatMap { Array($0.captureIds.prefix(80)) }
+        let textByCapture = try await repo.batchText(captureIds: candidateIds)
+        let textSamples: [String] = topSessions.compactMap { s in
+            guard let best = s.captureIds.compactMap({ textByCapture[$0] }).max(by: { $0.count < $1.count }),
+                  !best.isEmpty else { return nil }
+            return Self.clean(best, cap: safety.maxSampleChars)
+        }
+
+        return DayActivity(day: start, topApps: topApps, contextSwitches: switches,
+                           totalCaptures: caps.count, textSamples: textSamples)
     }
 
     // MARK: — генерация инсайтов

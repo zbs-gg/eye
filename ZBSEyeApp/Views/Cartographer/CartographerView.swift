@@ -36,6 +36,8 @@ private struct CartographerBody: View {
                 header
                 if !store.llmReady {
                     noLLMCard
+                } else if !store.hasConsent {
+                    consentCard
                 } else {
                     controlsCard
                     if let ins = store.insights { insightsCard(ins) }
@@ -72,6 +74,30 @@ private struct CartographerBody: View {
                     .foregroundStyle(.secondary)
                 Button("Открыть «Подключения»") { env.selectedSection = .connections }
                     .buttonStyle(.borderedProminent)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(6)
+        }
+    }
+
+    /// Разовое явное согласие (Pro #13): до него фрагменты экрана в LLM не уходят.
+    private var consentCard: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Разовое согласие", systemImage: "hand.raised.fill")
+                    .foregroundStyle(.tint).font(.headline)
+                Text("Чтобы дать инсайты, Картограф отправит сжатые фрагменты активности за выбранный день "
+                     + "(имена приложений, заголовки окон, короткие куски текста с экрана) в твою локальную "
+                     + "LLM — localhost-only endpoint. Никакого облака; на диск ничего не пишется — только "
+                     + "запрос к модели на этом Mac.")
+                    .foregroundStyle(.secondary)
+                Button {
+                    store.grantConsentAndGenerate()
+                } label: {
+                    Label("Понятно — анализировать день", systemImage: "sparkles")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(store.isBusy)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(6)

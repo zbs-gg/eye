@@ -240,8 +240,12 @@ final class AppEnvironment {
             self.timelineStore = TimelineStore(search: searchSvc, timeline: timelineSvc,
                                                mediaDirectory: storage.mediaDirectory)
 
+            // Общий слой агрегации активности дня (один скан + сегментация + активное время + батч-текст).
+            // Переиспользуют сцены, картограф и саммари — дедуп логики (ревью Pro #9).
+            let activityRepo = DayActivityRepository(db: db)
+
             // «День в активностях»: сцены поверх screen_captures (без новой таблицы).
-            let sceneSvc = SceneService(db: db)
+            let sceneSvc = SceneService(repo: activityRepo)
             self.sceneStore = SceneStore(service: sceneSvc, timeline: timelineSvc)
 
             // «Спроси свою память»: RAG-ответ через тот же гибрид-поиск + локальная LLM (свой
@@ -250,11 +254,11 @@ final class AppEnvironment {
             self.ask = AskStore(service: askService, connections: connections)
 
             // Картограф: AI-инсайты дня (on-device, read-only). Свой LocalLLMClient (stateless actor).
-            let cartographerSvc = CartographerService(db: db, client: LocalLLMClient())
+            let cartographerSvc = CartographerService(repo: activityRepo, client: LocalLLMClient())
             self.cartographer = CartographerStore(service: cartographerSvc, connections: connections)
 
             // Автоматизация v1 «саммари дня»: collect→LLM→write. Свой LocalLLMClient (stateless actor).
-            let summarySvc = DailySummaryService(db: db, client: LocalLLMClient())
+            let summarySvc = DailySummaryService(repo: activityRepo, client: LocalLLMClient())
             let automationsStore = DaySummaryStore(service: summarySvc, connections: connections)
             automationsStore.startScheduler()   // «конспект сам в конце дня» (тик 5 мин, гейты внутри)
             self.automations = automationsStore

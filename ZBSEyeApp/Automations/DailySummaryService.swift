@@ -1,16 +1,16 @@
 import Foundation
-import GRDB
 
 /// Движок единственной автоматизации v1: «саммари дня». Три стадии — collect (история из БД → компактные
 /// сессии) → summarize (локальная LLM) → write (Markdown в папку/Obsidian). Actor: вся работа с БД,
 /// сетью и файлами изолирована; наружу только Sendable. Egress строго локальный (файл), preview
 /// обязателен до записи (см. DaySummaryStore) — защита от prompt-injection из приватной истории.
+/// Агрегацию дня делегирует общему DayActivityRepository (один скан + сегментация + батч-текст).
 actor DailySummaryService {
-    private let db: ZBSEyeDatabase
+    private let repo: DayActivityRepository
     private let client: LocalLLMClient
 
-    init(db: ZBSEyeDatabase, client: LocalLLMClient) {
-        self.db = db
+    init(repo: DayActivityRepository, client: LocalLLMClient) {
+        self.repo = repo
         self.client = client
     }
 
@@ -19,67 +19,32 @@ actor DailySummaryService {
     /// Кадры дня → сессии (подряд идущие кадры одного app/окна, допуск на паузу 5 мин). Отбираем самые
     /// длинные maxInputSlices, для каждой берём самый длинный текстовый блок как репрезентативный сэмпл.
     func collect(day: Date, safety: AutomationSafety) async throws -> CollectedDay {
-        let cal = Calendar.current
-        let start = cal.startOfDay(for: day)
-        guard let end = cal.date(byAdding: .day, value: 1, to: start) else { throw AutomationError.noData(day: day) }
-        let startMs = msFromDate(start), endMs = msFromDate(end) - 1
-        let maxSlices = safety.maxInputSlices
-        let maxSample = safety.maxSampleChars
+        let start = Calendar.current.startOfDay(for: day)
+        let caps = try await repo.captures(forDay: day)
+        guard !caps.isEmpty else { throw AutomationError.noData(day: day) }
 
-        // Весь сбор+группировка+выборка текста — в одной read-транзакции. Локальный класс Sess
-        // (не Sendable) живёт только внутри; наружу уходит [DaySlice] (Sendable).
-        let result: ([DaySlice], Int, Int) = try await db.pool.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT c.ts AS ts, c.appId AS appId, c.windowTitle AS windowTitle, c.browserUrl AS browserUrl,
-                       a.name AS appName
-                FROM screen_captures c LEFT JOIN apps a ON a.id = c.appId
-                WHERE c.ts BETWEEN ? AND ? ORDER BY c.ts ASC
-                """, arguments: [startMs, endMs])
-            let total = rows.count
-            guard total > 0 else { return ([], 0, 0) }
+        // Сессии app+window (допуск на паузу 5 мин); топ по длительности (при равной — по числу кадров),
+        // затем обратно в хронологию для промпта.
+        let sessions = DayActivityRepository.sessions(caps, grouping: .appAndWindow, gapMs: 5 * 60 * 1000)
+        let totalSlices = sessions.count
+        let chosen = sessions
+            .sorted { ($0.durationMs, $0.count) > ($1.durationMs, $1.count) }
+            .prefix(safety.maxInputSlices)
+            .sorted { $0.startMs < $1.startMs }
 
-            let gap: Int64 = 5 * 60 * 1000
-            var sessions: [Sess] = []
-            for r in rows {
-                let ts: Int64 = r["ts"]
-                let appId: Int64? = r["appId"]
-                let app: String = r["appName"] ?? "—"
-                let win: String? = r["windowTitle"]
-                // Группа по appId (не по имени) — два приложения с одинаковым именем не сольются.
-                if let last = sessions.last, last.appId == appId, last.window == win, (ts - last.endMs) <= gap {
-                    last.endMs = ts; last.captures += 1
-                } else {
-                    sessions.append(Sess(startMs: ts, endMs: ts, appId: appId, app: app,
-                                         window: win, url: r["browserUrl"]))
-                }
-            }
-            let totalSlices = sessions.count
+        // Текст репрезентативных кадров выбранных сессий — ОДНИМ батч-запросом (без N+1). Кадры берём
+        // строго из самой сессии (app+window+ts уже учтены сегментацией) — чужой текст не протечёт.
+        let candidateIds = chosen.flatMap { Array($0.captureIds.prefix(120)) }
+        let textByCapture = try await repo.batchText(captureIds: candidateIds)
 
-            // Топ по длительности (при равной — по числу кадров), затем обратно в хронологию для промпта.
-            let chosen = sessions
-                .sorted { ($0.endMs - $0.startMs, $0.captures) > ($1.endMs - $1.startMs, $1.captures) }
-                .prefix(maxSlices)
-                .sorted { $0.startMs < $1.startMs }
-
-            let slices: [DaySlice] = try chosen.map { s in
-                // Текст строго ЭТОЙ сессии: фильтр по appId+window+ts. Без app/window-фильтра соседний кадр
-                // чужого приложения с тем же граничным ts (BETWEEN включителен) протёк бы в чужой сэмпл.
-                let raw = try String.fetchOne(db, sql: """
-                    SELECT tb.text FROM text_blocks tb
-                    JOIN screen_captures c ON c.id = tb.captureId
-                    WHERE c.ts BETWEEN ? AND ? AND c.appId IS ? AND c.windowTitle IS ?
-                    ORDER BY length(tb.text) DESC LIMIT 1
-                    """, arguments: [s.startMs, s.endMs, s.appId, s.window]) ?? ""
-                return DaySlice(
-                    start: dateFromMs(s.startMs), end: dateFromMs(s.endMs),
-                    app: s.app, window: s.window, url: s.url,
-                    sample: Self.clean(raw, cap: maxSample), captures: s.captures)
-            }
-            return (slices, total, totalSlices)
+        let slices: [DaySlice] = chosen.map { s in
+            let best = s.captureIds.compactMap { textByCapture[$0] }.max(by: { $0.count < $1.count }) ?? ""
+            return DaySlice(
+                start: dateFromMs(s.startMs), end: dateFromMs(s.endMs),
+                app: s.first.appName ?? "—", window: s.first.windowTitle, url: s.first.browserUrl,
+                sample: Self.clean(best, cap: safety.maxSampleChars), captures: s.count)
         }
-
-        guard result.1 > 0 else { throw AutomationError.noData(day: day) }
-        return CollectedDay(day: start, slices: result.0, totalCaptures: result.1, totalSlices: result.2)
+        return CollectedDay(day: start, slices: slices, totalCaptures: caps.count, totalSlices: totalSlices)
     }
 
     // MARK: стадия 2 — summarize (= preview)
@@ -246,21 +211,5 @@ actor DailySummaryService {
     static func ymd(_ d: Date) -> String {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
         return f.string(from: d)
-    }
-}
-
-/// Мутабельная сессия времени сборки — живёт и умирает внутри одной read-транзакции. Не Sendable,
-/// наружу не уходит (наружу — DaySlice).
-private final class Sess {
-    var startMs: Int64
-    var endMs: Int64
-    let appId: Int64?
-    let app: String
-    let window: String?
-    let url: String?
-    var captures: Int = 1
-    init(startMs: Int64, endMs: Int64, appId: Int64?, app: String, window: String?, url: String?) {
-        self.startMs = startMs; self.endMs = endMs; self.appId = appId
-        self.app = app; self.window = window; self.url = url
     }
 }
