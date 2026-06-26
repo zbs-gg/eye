@@ -11,13 +11,14 @@ struct RootWindow: View {
         } detail: {
             Group {
                 switch env.selectedSection {
-                case .timeline:    TimelineView()
-                case .activities:  ActivitiesView()
-                case .ask:         AskView()
-                case .automations:       AutomationsView()
-                case .connections: ConnectionsView()
-                case .progress:    MemoryProgressView()
-                case .settings:    SettingsView()
+                case .timeline:     TimelineView()
+                case .activities:   ActivitiesView()
+                case .ask:          AskView()
+                case .cartographer: CartographerView()
+                case .automations:  AutomationsView()
+                case .connections:  ConnectionsView()
+                case .progress:     MemoryProgressView()
+                case .settings:     SettingsView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

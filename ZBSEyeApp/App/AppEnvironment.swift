@@ -40,6 +40,7 @@ final class AppEnvironment {
     private(set) var retention: RetentionManager?
     private(set) var timelineStore: TimelineStore?
     private(set) var ask: AskStore?
+    private(set) var cartographer: CartographerStore?
     private(set) var httpServer: ZBSEyeHTTPServer?
     private(set) var automations: DaySummaryStore?
     private(set) var sceneStore: SceneStore?
@@ -248,6 +249,10 @@ final class AppEnvironment {
             let askService = AskService(search: searchSvc, client: LocalLLMClient(), db: db)
             self.ask = AskStore(service: askService, connections: connections)
 
+            // Картограф: AI-инсайты дня (on-device, read-only). Свой LocalLLMClient (stateless actor).
+            let cartographerSvc = CartographerService(db: db, client: LocalLLMClient())
+            self.cartographer = CartographerStore(service: cartographerSvc, connections: connections)
+
             // Автоматизация v1 «саммари дня»: collect→LLM→write. Свой LocalLLMClient (stateless actor).
             let summarySvc = DailySummaryService(db: db, client: LocalLLMClient())
             let automationsStore = DaySummaryStore(service: summarySvc, connections: connections)
@@ -447,6 +452,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case timeline = "Таймлайн"
     case activities = "Активности"
     case ask = "Спроси"
+    case cartographer = "Картограф"
     case automations = "Автоматизации"
     case connections = "Подключения"
     case progress = "Прогресс"
@@ -456,13 +462,14 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
 
     var systemImage: String {
         switch self {
-        case .timeline:    return "clock.arrow.circlepath"
-        case .activities:  return "calendar.day.timeline.left"
-        case .ask:         return "questionmark.bubble"
-        case .automations:       return "powerplug"
-        case .connections: return "app.connected.to.app.below.fill"
-        case .progress:    return "chart.bar.fill"
-        case .settings:    return "gearshape"
+        case .timeline:     return "clock.arrow.circlepath"
+        case .activities:   return "calendar.day.timeline.left"
+        case .ask:          return "questionmark.bubble"
+        case .cartographer: return "map"
+        case .automations:  return "powerplug"
+        case .connections:  return "app.connected.to.app.below.fill"
+        case .progress:     return "chart.bar.fill"
+        case .settings:     return "gearshape"
         }
     }
 }
