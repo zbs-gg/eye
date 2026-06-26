@@ -63,7 +63,8 @@ ZBS Eye тихо ведёт «вечную память» работы за ко
 `bash scripts/build-release.sh` → распаковать в `/Applications` → запуск → **System Settings → Privacy &
 Security → «Open Anyway»**. Минус: смена подписи иногда сбрасывает TCC-права (нотаризация это убирает).
 
-Детали сборки — [`BUILD.md`](BUILD.md). Архитектура и гид для контрибьюторов/агентов — [`AGENTS.md`](AGENTS.md).
+**Полное описание продукта** — [`docs/ABOUT.md`](docs/ABOUT.md). Детали сборки — [`BUILD.md`](BUILD.md).
+Архитектура и гид для контрибьюторов/агентов — [`AGENTS.md`](AGENTS.md). Раздача — [`docs/NOTARIZE.md`](docs/NOTARIZE.md).
 
 ## Приватность
 
