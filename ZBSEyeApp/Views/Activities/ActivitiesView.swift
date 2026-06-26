@@ -61,15 +61,17 @@ private struct ActivitiesBody: View {
         if store.isLoading {
             ProgressView("Сегментирую…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let err = store.error {
+            // Ошибка РАНЬШЕ «пусто»: при ошибке scenes тоже пуст, иначе ошибка маскировалась бы
+            // под «нет активности» (ревью Pro #11).
+            ContentUnavailableView("Ошибка", systemImage: "exclamationmark.triangle",
+                                   description: Text(err))
         } else if store.scenes.isEmpty {
             ContentUnavailableView {
                 Label("Нет активности", systemImage: "calendar.badge.clock")
             } description: {
                 Text("За этот день нет записанных кадров. Выбери другой день.")
             }
-        } else if let err = store.error {
-            ContentUnavailableView("Ошибка", systemImage: "exclamationmark.triangle",
-                                   description: Text(err))
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {

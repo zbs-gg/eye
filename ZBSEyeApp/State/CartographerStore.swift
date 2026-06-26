@@ -56,6 +56,16 @@ final class CartographerStore {
         if phase == .loading { phase = .idle }
     }
 
+    /// Privacy: сбросить инсайты целиком — историю, на которой они построены, удалили.
+    /// Вызывается из AppEnvironment.deleteHistory.
+    func reset() {
+        generateTask?.cancel()
+        generateTask = nil
+        insights = nil
+        errorText = nil
+        phase = .idle
+    }
+
     // MARK: — внутреннее
 
     private func run() async {
@@ -70,7 +80,11 @@ final class CartographerStore {
         let llm = connections.llm
         do {
             let result = try await service.generate(day: day, llm: llm)
-            if Task.isCancelled { phase = .idle; return }
+            // Гонка: пока генерили — мог смениться выбранный день или прийти отмена.
+            // Не перезаписываем результат чужого дня (иначе инсайты вчера показываются под сегодня).
+            guard !Task.isCancelled,
+                  Calendar.current.startOfDay(for: selectedDay)
+                    == Calendar.current.startOfDay(for: day) else { phase = .idle; return }
             insights = result
             phase = .done
         } catch is CancellationError {

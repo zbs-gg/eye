@@ -1,6 +1,5 @@
 import Foundation
 import GRDB
-import AppKit
 
 /// Одна сцена — непрерывная активность в одном приложении без разрыва > `gapThreshold`.
 /// Sendable: пересекает актор-границы (SceneService → SceneStore → SwiftUI).
@@ -28,6 +27,17 @@ actor SceneService {
 
     init(db: ZBSEyeDatabase) { self.db = db }
 
+    /// Сырая строка кадра для сегментации.
+    private struct RawRow: Sendable {
+        let captureId: Int64
+        let ts: Int64
+        let appId: Int64?
+        let bundleId: String?
+        let appName: String?
+        let windowTitle: String?
+        let browserUrl: String?
+    }
+
     /// Список сцен за один календарный день. `day` — любое время внутри нужного дня.
     func scenes(forDay day: Date) async throws -> [ActivityScene] {
         let cal = Calendar.current
@@ -36,24 +46,51 @@ actor SceneService {
         return try await scenes(from: start, to: end)
     }
 
-    /// Список сцен в произвольном диапазоне.
+    /// Список сцен в произвольном диапазоне. Текст для саммари тянется ОДНИМ батч-запросом по
+    /// репрезентативным кадрам всех сцен (а не отдельным запросом на каждую сцену — ревью Pro #7).
     func scenes(from: Date, to: Date) async throws -> [ActivityScene] {
         let fromMs = msFromDate(from)
         let toMs = msFromDate(to)
 
-        // Читаем сырые строки: ts, appId, windowTitle, browserUrl + имя приложения + склеенный текст.
-        // Отдельный запрос для текста не делаем — кешируем per-capture только для репрезентативных кадров.
-        struct RawRow: Sendable {
-            let captureId: Int64
-            let ts: Int64
-            let appId: Int64?
-            let bundleId: String?
-            let appName: String?
-            let windowTitle: String?
-            let browserUrl: String?
-        }
+        let rows = try await fetchRows(fromMs: fromMs, toMs: toMs)
+        guard !rows.isEmpty else { return [] }
 
-        let rows: [RawRow] = try await db.pool.read { dbc in
+        let segments = Self.segment(rows, gapThreshold: gapThreshold)
+        // Репрезентативный кадр каждой сцены — середина по индексу. Текст к ним — одним запросом.
+        let repIds = segments.map { $0[$0.count / 2].captureId }
+        let textByCapture = try await batchRepText(captureIds: repIds)
+
+        return segments.map { seg in
+            let repId = seg[seg.count / 2].captureId
+            return Self.buildScene(seg, repText: textByCapture[repId] ?? "")
+        }
+    }
+
+    /// Сцена, в которую попадает момент времени (для правой панели таймлайна).
+    /// Расширенное окно (±90 мин) + ТОЧНОЕ содержание: возвращаем сцену, только если её диапазон
+    /// реально накрывает `time`. Если курсор в «дыре» (нет активности) — nil (UI покажет RAW).
+    /// Без fallback-«ближайшей» (ревью Pro #4 — кадр чужой сцены не должен подменять текущий).
+    func scene(containing time: Date) async throws -> ActivityScene? {
+        let window: TimeInterval = 90 * 60
+        let timeMs = msFromDate(time)
+        let rows = try await fetchRows(fromMs: msFromDate(time.addingTimeInterval(-window)),
+                                       toMs: msFromDate(time.addingTimeInterval(window)))
+        guard !rows.isEmpty else { return nil }
+
+        let segments = Self.segment(rows, gapThreshold: gapThreshold)
+        // Точное содержание: первый кадр сцены ≤ time ≤ последний. В дыре между сценами — ни одна
+        // не накрывает → nil.
+        guard let seg = segments.first(where: { ($0.first?.ts ?? .max) <= timeMs
+                                                 && ($0.last?.ts ?? .min) >= timeMs }) else { return nil }
+        let repId = seg[seg.count / 2].captureId
+        let textByCapture = try await batchRepText(captureIds: [repId])
+        return Self.buildScene(seg, repText: textByCapture[repId] ?? "")
+    }
+
+    // MARK: - выборка
+
+    private func fetchRows(fromMs: Int64, toMs: Int64) async throws -> [RawRow] {
+        try await db.pool.read { dbc in
             try Row.fetchAll(dbc, sql: """
                 SELECT c.id AS cid, c.ts AS ts, c.appId AS appId,
                        a.bundleId AS bundleId, a.name AS appName,
@@ -63,107 +100,71 @@ actor SceneService {
                 WHERE c.ts BETWEEN ? AND ?
                 ORDER BY c.ts ASC, c.id ASC
                 """, arguments: [fromMs, toMs]).map { row in
-                RawRow(
-                    captureId: row["cid"],
-                    ts: row["ts"],
-                    appId: row["appId"],
-                    bundleId: row["bundleId"],
-                    appName: row["appName"],
-                    windowTitle: row["windowTitle"],
-                    browserUrl: row["browserUrl"]
-                )
+                RawRow(captureId: row["cid"], ts: row["ts"], appId: row["appId"],
+                       bundleId: row["bundleId"], appName: row["appName"],
+                       windowTitle: row["windowTitle"], browserUrl: row["browserUrl"])
             }
         }
+    }
 
+    /// Текст репрезентативных кадров — ОДНИМ запросом `WHERE captureId IN (…)` (без N+1).
+    private func batchRepText(captureIds: [Int64]) async throws -> [Int64: String] {
+        let ids = Array(Set(captureIds))
+        guard !ids.isEmpty else { return [:] }
+        return try await db.pool.read { dbc -> [Int64: String] in
+            let ph = ids.map { _ in "?" }.joined(separator: ",")
+            let rows = try Row.fetchAll(dbc, sql: """
+                SELECT captureId, group_concat(text, ' ') AS txt
+                FROM text_blocks WHERE captureId IN (\(ph)) GROUP BY captureId
+                """, arguments: StatementArguments(ids))
+            var out: [Int64: String] = [:]
+            for r in rows { out[r["captureId"]] = r["txt"] ?? "" }
+            return out
+        }
+    }
+
+    // MARK: - сегментация (чистая, без БД)
+
+    /// Новая сцена при смене appId ИЛИ разрыве > gapThreshold.
+    private static func segment(_ rows: [RawRow], gapThreshold: TimeInterval) -> [[RawRow]] {
         guard !rows.isEmpty else { return [] }
-
-        // Сегментация: новая сцена при смене appId ИЛИ разрыве > gapThreshold.
-        struct SceneAccumulator {
-            var rows: [RawRow]
-        }
-        var accumulators: [SceneAccumulator] = []
-        var current = SceneAccumulator(rows: [rows[0]])
-
+        var segments: [[RawRow]] = []
+        var current: [RawRow] = [rows[0]]
         for row in rows.dropFirst() {
-            let prev = current.rows.last!
+            let prev = current.last!
             let gapSec = Double(row.ts - prev.ts) / 1000.0
-            let sameApp = row.appId == prev.appId
-
-            if sameApp && gapSec <= gapThreshold {
-                current.rows.append(row)
+            if row.appId == prev.appId && gapSec <= gapThreshold {
+                current.append(row)
             } else {
-                accumulators.append(current)
-                current = SceneAccumulator(rows: [row])
+                segments.append(current)
+                current = [row]
             }
         }
-        accumulators.append(current)
-
-        // Строим Scene для каждого аккумулятора.
-        var scenes: [ActivityScene] = []
-        for acc in accumulators {
-            guard let first = acc.rows.first, let last = acc.rows.last else { continue }
-            let startDate = dateFromMs(first.ts)
-            let endDate = dateFromMs(last.ts)
-            let durationSec = max(1, Double(last.ts - first.ts) / 1000.0)
-
-            // Репрезентативный кадр — середина по индексу.
-            let repRow = acc.rows[acc.rows.count / 2]
-            let repTitle = repRow.windowTitle ?? first.windowTitle
-            let repURL = repRow.browserUrl ?? first.browserUrl
-
-            // Саммари: эвристика без LLM — appName + windowTitle + топ-фраз из text_blocks.
-            let captureIds = acc.rows.map(\.captureId)
-            let summary = try await buildSummary(
-                captureIds: captureIds,
-                appName: first.appName,
-                bundleId: first.bundleId,
-                windowTitle: repTitle,
-                browserURL: repURL
-            )
-
-            let sceneId = "\(first.appId.map(String.init) ?? "noapp")-\(first.ts)"
-            scenes.append(ActivityScene(
-                id: sceneId,
-                appId: first.appId,
-                bundleId: first.bundleId,
-                appName: first.appName,
-                repWindowTitle: repTitle,
-                browserURL: repURL,
-                startTs: startDate,
-                endTs: endDate,
-                durationSec: durationSec,
-                frameCount: acc.rows.count,
-                summary: summary
-            ))
-        }
-
-        return scenes
+        segments.append(current)
+        return segments
     }
 
-    /// Сцена, в которую попадает момент времени (для правой панели таймлайна).
-    /// Берёт окно ±5 минут от момента, сегментирует, возвращает сцену с cursor внутри.
-    func scene(containing time: Date) async throws -> ActivityScene? {
-        let window: TimeInterval = 5 * 60
-        let from = time.addingTimeInterval(-window)
-        let to = time.addingTimeInterval(window)
-        let candidates = try await scenes(from: from, to: to)
-        // Выбираем сцену, внутри которой лежит time.
-        return candidates.first { $0.startTs <= time && $0.endTs >= time.addingTimeInterval(-1) }
-            ?? candidates.last   // fallback — ближайшая предшествующая
+    private static func buildScene(_ seg: [RawRow], repText: String) -> ActivityScene {
+        let first = seg.first!, last = seg.last!
+        let repRow = seg[seg.count / 2]
+        let repTitle = repRow.windowTitle ?? first.windowTitle
+        let repURL = repRow.browserUrl ?? first.browserUrl
+        let summary = buildSummary(appName: first.appName, bundleId: first.bundleId,
+                                   windowTitle: repTitle, browserURL: repURL, repText: repText)
+        let sceneId = "\(first.appId.map(String.init) ?? "noapp")-\(first.ts)"
+        return ActivityScene(
+            id: sceneId, appId: first.appId, bundleId: first.bundleId, appName: first.appName,
+            repWindowTitle: repTitle, browserURL: repURL,
+            startTs: dateFromMs(first.ts), endTs: dateFromMs(last.ts),
+            durationSec: max(1, Double(last.ts - first.ts) / 1000.0),
+            frameCount: seg.count, summary: summary)
     }
 
-    // MARK: - эвристическое саммари (без LLM)
+    // MARK: - эвристическое саммари (без LLM, без БД)
 
-    private func buildSummary(
-        captureIds: [Int64],
-        appName: String?,
-        bundleId: String?,
-        windowTitle: String?,
-        browserURL: String?
-    ) async throws -> String {
-        // Заголовок: appName (или bundleId без префикса «com.apple.»).
+    private static func buildSummary(appName: String?, bundleId: String?, windowTitle: String?,
+                                     browserURL: String?, repText: String) -> String {
         var parts: [String] = []
-
         let app = appName ?? bundleId.map { cleanBundleId($0) } ?? "Приложение"
         parts.append(app)
 
@@ -173,55 +174,31 @@ actor SceneService {
             parts.append(title)
         }
 
-        // Топ-фразы из text_blocks: берём репрезентативный кадр (середина диапазона).
-        // Не тянем text для всех N кадров — только один, чтобы не грузить БД.
-        if captureIds.count > 0 {
-            let repId = captureIds[captureIds.count / 2]
-            let phrases = try await topPhrases(captureId: repId, maxPhrases: 3)
-            if !phrases.isEmpty {
-                parts.append("— \(phrases.joined(separator: ", "))")
-            }
-        }
+        let phrases = topPhrases(from: repText, maxPhrases: 3)
+        if !phrases.isEmpty { parts.append("— \(phrases.joined(separator: ", "))") }
 
         return parts.joined(separator: " · ")
     }
 
-    /// Извлекаем топ-N осмысленных фраз из text_blocks одного кадра.
-    /// Фильтруем мусор: меню-слова (Файл, Правка, Вид, Edit, File, View…), однобуквенные токены.
-    private func topPhrases(captureId: Int64, maxPhrases: Int) async throws -> [String] {
-        let raw = try await db.pool.read { dbc in
-            try String.fetchOne(dbc, sql:
-                "SELECT group_concat(text, ' ') FROM text_blocks WHERE captureId = ?",
-                arguments: [captureId]) ?? ""
-        }
+    /// Топ-N осмысленных фраз из склеенного текста кадра. Фильтруем меню-шум и короткие токены.
+    private static func topPhrases(from raw: String, maxPhrases: Int) -> [String] {
         guard !raw.isEmpty else { return [] }
-
         let menuNoise: Set<String> = [
             "файл", "правка", "вид", "формат", "окно", "помощь", "справка", "инструменты",
             "file", "edit", "view", "format", "window", "help", "tools", "insert",
             "выбрать всё", "отменить", "копировать", "вставить",
             "undo", "redo", "copy", "paste", "select", "all",
         ]
-
-        // Делим на токены по пробелам/переносам, фильтруем, дедуплицируем.
         let tokens = raw
             .components(separatedBy: .whitespacesAndNewlines)
             .map { $0.trimmingCharacters(in: .punctuationCharacters) }
-            .filter { word in
-                guard word.count >= 3 else { return false }
-                return !menuNoise.contains(word.lowercased())
-            }
-
-        // Считаем частоту.
+            .filter { $0.count >= 3 && !menuNoise.contains($0.lowercased()) }
         var freq: [String: Int] = [:]
         for t in tokens { freq[t, default: 0] += 1 }
-
-        let sorted = freq.sorted { $0.value > $1.value }.prefix(maxPhrases).map(\.key)
-        return Array(sorted)
+        return Array(freq.sorted { $0.value > $1.value }.prefix(maxPhrases).map(\.key))
     }
 
-    private func cleanBundleId(_ bundleId: String) -> String {
-        // "com.apple.Safari" → "Safari", "com.github.atom" → "atom"
+    private static func cleanBundleId(_ bundleId: String) -> String {
         if let last = bundleId.components(separatedBy: ".").last, last.count > 1 {
             return last.prefix(1).uppercased() + last.dropFirst()
         }

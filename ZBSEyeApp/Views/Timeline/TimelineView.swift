@@ -231,7 +231,9 @@ private struct TimelineBody: View {
                         }
                         Divider()
                         // Саммари сцены вместо RAW OCR-дампа; fallback на сырой текст, если сцены нет.
-                        if let scene = currentScene {
+                        // Гейт (Pro #4): показываем сцену ТОЛЬКО если её диапазон реально накрывает
+                        // текущий кадр — иначе (устаревшая/чужая сцена при дебаунсе) показываем RAW.
+                        if let scene = currentScene, scene.startTs <= c.ts, c.ts <= scene.endTs {
                             SceneSummaryCard(scene: scene) {
                                 Task { await store.seek(to: scene.startTs) }
                             }

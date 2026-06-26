@@ -7,7 +7,14 @@ struct CartographerView: View {
 
     var body: some View {
         Group {
-            if let store = env.cartographer {
+            if let err = env.dataError {
+                // Honest-state: БД не поднялась — это жёсткая ошибка, а не «ещё грузится».
+                ContentUnavailableView {
+                    Label("Память недоступна", systemImage: "exclamationmark.triangle.fill")
+                } description: {
+                    Text(err)
+                }
+            } else if let store = env.cartographer {
                 CartographerBody(store: store)
             } else {
                 ContentUnavailableView("Инициализация…", systemImage: "map")
@@ -49,7 +56,8 @@ private struct CartographerBody: View {
                 .font(.title2).bold()
             Text("Смотрит на твою активность за день и даёт 2–3 конкретных наблюдения: "
                  + "на что уходит время, где можно фокусироваться лучше. "
-                 + "Всё на устройстве — никакого облака.")
+                 + "Дневные фрагменты уходят только в твою локальную LLM (localhost-only endpoint) — "
+                 + "никакого облака.")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }

@@ -82,20 +82,17 @@ final class ProgressStore {
             let minTs: Int64 = row["minTs"] ?? 0
             let maxTs: Int64 = row["maxTs"] ?? 0
 
-            // Distinct active days (calendar days in local time that have at least one frame)
-            let activeDays = try Int.fetchOne(dbc, sql: """
-                SELECT COUNT(DISTINCT date(ts / 1000, 'unixepoch', 'localtime'))
-                FROM screen_captures
-                """) ?? 0
-
-            // Streak: consecutive calendar days ending today (local time), walking backwards.
-            // We fetch distinct active day strings in DESC order and walk until a gap.
+            // Distinct active day strings (DESC) — ОДИН скан дат: и для стрика, и для счётчика дней
+            // (activeDays = их количество). Раньше был отдельный COUNT(DISTINCT date(...)) — лишний
+            // полный скан истории (ревью Pro #8).
             let dayStrings = try String.fetchAll(dbc, sql: """
                 SELECT DISTINCT date(ts / 1000, 'unixepoch', 'localtime') AS d
                 FROM screen_captures
                 ORDER BY d DESC
                 """)
+            let activeDays = dayStrings.count
 
+            // Streak: consecutive calendar days ending today (local time), walking backwards.
             var streakDays = 0
             let cal = Calendar.current
             var expected = cal.startOfDay(for: Date())

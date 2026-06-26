@@ -43,6 +43,11 @@ struct MemoryProgressView: View {
                         Divider()
                         nextMilestoneRow(s)
                     }
+                } else if let err = env.dataError {
+                    // Honest-state: БД не поднялась — жёсткая ошибка, а не «ещё грузится».
+                    Label(err, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout).foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     Text("База ещё не загружена")
                         .font(.callout).foregroundStyle(.secondary)

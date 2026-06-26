@@ -386,6 +386,13 @@ final class AppEnvironment {
         await storageSettings.refresh(storage: storage, db: db)
         // курсор таймлайна мог указывать в стёртое — обновить
         await timelineStore?.load()
+        // PRIVACY (Pro NO-GO): производные приватные состояния построены на удалённой истории —
+        // инвалидируем их, иначе сцены/прогресс/инсайты Картографа продолжат показывать стёртое.
+        // currentScene в TimelineView пересчитается сам (onChange курсора после load + гейт «сцена
+        // содержит текущий момент»).
+        await sceneStore?.load()
+        await progress?.refresh()
+        cartographer?.reset()
         return report
     }
 
