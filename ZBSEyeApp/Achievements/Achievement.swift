@@ -119,7 +119,7 @@ enum AchievementCatalog {
       + fam("streak", "badge_flame", .streak,
             [3, 5, 7, 10, 14, 21, 30, 45, 60, 75, 100, 150, 200, 365],
             name: { "\($0) дней подряд" }, detail: { "Запись \($0) дней подряд без пропусков" },
-            cond: { .streakAtLeast($0) }, rewards: [30: .theme(.frost), 100: .appIcon("icon_alt_gold")])
+            cond: { .streakAtLeast($0) }, rewards: [7: .appIcon("icon_alt_glow"), 30: .theme(.frost), 100: .appIcon("icon_alt_gold")])
       + fam("days", "badge_calendar", .memory,
             [1, 3, 7, 14, 30, 60, 100, 150, 200, 300, 365],
             name: { "\($0) дней с памятью" }, detail: { "\($0) разных дней с записью" },

@@ -73,6 +73,7 @@ enum RewardCatalog {
     /// Альт-иконки приложения (имя ассета → подпись). «» = дефолтная (из AppIcon).
     static let appIcons: [(asset: String, title: String)] = [
         ("", "Стандарт"),
+        ("icon_alt_glow", "Светящийся"),
         ("icon_alt_gold", "Золотой глаз"),
         ("icon_alt_neon", "Неоновый глаз"),
         ("icon_alt_aurora", "Аврора"),
