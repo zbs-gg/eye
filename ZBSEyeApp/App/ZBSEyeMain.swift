@@ -5,12 +5,6 @@ import Foundation
 @main
 struct ZBSEyeMain {
     static func main() {
-        // ПЕРВЫМ делом (до открытия БД и чтения настроек любым режимом): одноразовые миграции после
-        // ребрендинга кодовой базы — ключи UserDefaults на новый префикс, перенос данных со старого
-        // имени папки на «ZBS Eye», затем переименование файла базы на новое имя.
-        StorageLocation.migrateLegacyDefaultsIfNeeded()
-        StorageLocation.migrateFromLegacyNameIfNeeded()
-        StorageLocation.migrateDatabaseFilenameIfNeeded()
         if CommandLine.arguments.contains("--mcp") {
             // MCP stdio: dispatchMain() держит процесс и даёт concurrency-пулу работать
             // (DispatchSemaphore.wait мёртво блокировал бы main-thread и Task не запускался бы).

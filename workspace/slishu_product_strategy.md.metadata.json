@@ -1,6 +1,0 @@
-{
-  "artifactType": "ARTIFACT_TYPE_OTHER",
-  "summary": "Product strategy and UX improvement roadmap for Slishu (completely offline background capture utility). Evaluates architectural blockers, lists missing critical product features (incognito apps, storage pruning, semantic vectors, timeline scrubbing), and presents the local-first branding vision with a generated premium macOS app icon.",
-  "updatedAt": "2026-05-21T12:57:35.995369Z",
-  "requestFeedback": true
-}

@@ -15,27 +15,29 @@ build/
 .build/
 .swiftpm/
 
-# MLX / ML model weights (качаются по требованию, не в репо)
+# MLX / ML model weights (downloaded on demand, never committed)
 *.safetensors
 *.gguf
 *.mlmodelc/
 Models/weights/
 
-# Служебные артефакты прошлого Gemini/Antigravity-агента (логи, транскрипты, внутренние сообщения)
-workspace/.system_generated/
-workspace/.agents/
-
-# Локальные данные приложения (на всякий случай, если попадут в дерево)
+# Local app data (in case it ends up in the tree)
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
 *.heic
 *.m4a
 
-# XcodeGen генерит из project.yml
+# XcodeGen generates the project from project.yml
 ZBSEye.xcodeproj/
+Slishu.xcodeproj/
 
-# релизные артефакты (большие zip)
+# Release artifacts (large zips)
 dist/
-workspace/groom/runs/
-workspace/groom/launchd.*.log
+
+# Internal (not part of the product): planning/research, benchmarks, ops automation
+workspace/
+harness/
+scripts/launchd/
+scripts/groom-roadmap.sh
+scripts/groom-ledger.py

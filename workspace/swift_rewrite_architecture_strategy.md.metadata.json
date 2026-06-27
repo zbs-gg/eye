@@ -1,5 +1,0 @@
-{
-  "artifactType": "ARTIFACT_TYPE_OTHER",
-  "summary": "Architectural strategy and multi-agent development pipeline for rewriting Screenpipe in 100% native Swift, detailing local API hosting, native JavaScriptCore pipes, integration with the official Swift SDK for MCP, and a structured agent-based engineering workflow.",
-  "updatedAt": "2026-05-20T15:24:47.414209Z"
-}

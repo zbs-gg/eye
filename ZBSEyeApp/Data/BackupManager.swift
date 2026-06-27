@@ -62,7 +62,7 @@ actor BackupManager {
         let items = (try? FileManager.default.contentsOfDirectory(
             at: backupsDirectory(), includingPropertiesForKeys: nil)) ?? []
         return items
-            .filter { ($0.lastPathComponent.hasPrefix("zbseye-") || $0.lastPathComponent.hasPrefix("slishu-")) && $0.lastPathComponent.hasSuffix(".sqlite.lzfse") }
+            .filter { $0.lastPathComponent.hasPrefix("zbseye-") && $0.lastPathComponent.hasSuffix(".sqlite.lzfse") }
             .sorted { $0.lastPathComponent > $1.lastPathComponent }
     }
 

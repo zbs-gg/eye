@@ -1,5 +1,5 @@
 #!/bin/bash
-# Создаёт self-signed code-signing сертификат «Slishu Dev» в login-keychain (БЕЗ платного
+# Создаёт self-signed code-signing сертификат «ZBS Eye Dev» в login-keychain (БЕЗ платного
 # Apple Developer аккаунта). Стабильная идентичность подписи = TCC-права (Screen Recording,
 # Accessibility, Microphone) и Keychain ACL переживают ребилды — главная dev-боль уходит.
 #
@@ -10,7 +10,7 @@
 # Settings: выключить и снова включить ZBSEye в Screen Recording, затем Microphone).
 set -euo pipefail
 
-NAME="Slishu Dev"
+NAME="ZBS Eye Dev"
 LOGIN_KC="$HOME/Library/Keychains/login.keychain-db"
 
 # Уже есть рабочая идентичность для подписи кода? — повторно не пересоздаём (новый keypair = снова
