@@ -6,71 +6,97 @@ import AppKit
 struct AchievementBadgeView: View {
     let achievement: Achievement
     let unlocked: Bool
-    var size: CGFloat = 96
+    var size: CGFloat = 104
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var sweep = false
 
     private var hasAsset: Bool { NSImage(named: achievement.badge) != nil }
+    /// Разнобой фазы по id — бейджи переливаются не в унисон.
+    private var phaseDelay: Double { Double(abs(achievement.id.hashValue) % 1000) / 1000.0 * 3.0 }
 
     var body: some View {
-        VStack(spacing: max(3, size * 0.05)) {
+        VStack(spacing: max(4, size * 0.06)) {
             ZStack {
-                RoundedRectangle(cornerRadius: size * 0.2, style: .continuous)
-                    .fill(LinearGradient(colors: cardColors, startPoint: .top, endPoint: .bottom))
-                if hasAsset {
-                    Image(achievement.badge).resizable().scaledToFit()
-                        .padding(size * 0.02)
-                        .saturation(unlocked ? 1 : 0)
-                        .opacity(unlocked ? 1 : 0.5)
-                } else {
-                    fallback
-                }
+                // Сам бейдж — крупно, без подложки (медальон уже своей формы, фон прозрачный).
+                badgeArt
+                    .frame(width: size, height: size)
+                    .saturation(unlocked ? 1 : 0)
+                    .opacity(unlocked ? 1 : 0.4)
+                    // мягкое свечение в цвете тира
+                    .shadow(color: unlocked ? achievement.tint.color.opacity(0.55) : .clear, radius: size * 0.13)
+                    .overlay { if unlocked { shimmer } }       // перелив поверх, маскирован по бейджу
+
                 if !unlocked {
                     Image(systemName: "lock.fill")
                         .font(.system(size: size * 0.22, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.8))
-                        .shadow(color: .black.opacity(0.6), radius: 3)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .shadow(color: .black.opacity(0.7), radius: 3)
                 }
             }
             .frame(width: size, height: size)
-            .clipShape(RoundedRectangle(cornerRadius: size * 0.2, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: size * 0.2, style: .continuous)
-                .strokeBorder(.white.opacity(unlocked ? 0.10 : 0.04), lineWidth: 1))
-            .shadow(color: unlocked ? achievement.tint.color.opacity(0.35) : .clear, radius: size * 0.09)
 
             if achievement.tierStars > 0 {
-                HStack(spacing: size * 0.02) {
-                    ForEach(0..<min(5, achievement.tierStars), id: \.self) { _ in
-                        Image(systemName: "star.fill").font(.system(size: size * 0.085))
-                            .foregroundStyle(unlocked ? achievement.tint.color : Color.gray.opacity(0.4))
+                HStack(spacing: size * 0.025) {
+                    ForEach(0..<5, id: \.self) { i in
+                        Image(systemName: i < achievement.tierStars ? "star.fill" : "star")
+                            .font(.system(size: size * 0.082))
+                            .foregroundStyle(i < achievement.tierStars
+                                ? (unlocked ? achievement.tint.color : Color.gray.opacity(0.5))
+                                : Color.gray.opacity(0.22))
                     }
                 }
             }
         }
+        .onAppear {
+            guard unlocked, !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: false).delay(phaseDelay)) {
+                sweep = true
+            }
+        }
     }
 
-    private var cardColors: [Color] {
-        unlocked
-            ? [Color(white: 0.14), achievement.tint.color.opacity(0.18), Color(white: 0.06)]
-            : [Color(white: 0.12), Color(white: 0.05)]
+    @ViewBuilder private var badgeArt: some View {
+        if hasAsset {
+            Image(achievement.badge).resizable().scaledToFit()
+        } else {
+            fallback
+        }
     }
 
-    /// Запасной бейдж в стиле иконки: тёмный squircle + кант + SF-символ в цвете (пока ассет не нарезан).
+    /// Голографический перелив: диагональная световая полоса, бегущая по бейджу, маскированная его формой.
+    @ViewBuilder private var shimmer: some View {
+        let band = LinearGradient(
+            colors: [.clear, .white.opacity(0.0), .white.opacity(0.45), .white.opacity(0.0), .clear],
+            startPoint: .topLeading, endPoint: .bottomTrailing)
+        GeometryReader { geo in
+            Rectangle().fill(band)
+                .frame(width: geo.size.width * 0.55)
+                .rotationEffect(.degrees(22))
+                .offset(x: sweep ? geo.size.width * 1.25 : -geo.size.width * 1.25)
+                .blendMode(.plusLighter)
+        }
+        .allowsHitTesting(false)
+        // полоса видна только на пикселях бейджа (не на прозрачном фоне/квадрате)
+        .mask(badgeArt.frame(width: size, height: size))
+    }
+
+    /// Запасной бейдж (пока ассет не нарезан): squircle + SF-символ в цвете тира.
     private var fallback: some View {
         let r = size * 0.235
         return ZStack {
             RoundedRectangle(cornerRadius: r, style: .continuous)
-                .fill(LinearGradient(colors: [Color(white: 0.12), Color(white: 0.03)],
+                .fill(LinearGradient(colors: [Color(white: 0.14), Color(white: 0.04)],
                                      startPoint: .top, endPoint: .bottom))
             RoundedRectangle(cornerRadius: r, style: .continuous)
-                .strokeBorder(LinearGradient(colors: [Color(white: 0.55), Color(white: 0.15)],
-                                             startPoint: .top, endPoint: .bottom), lineWidth: size * 0.02)
+                .strokeBorder(LinearGradient(colors: [achievement.tint.color.opacity(0.7), Color(white: 0.2)],
+                                             startPoint: .top, endPoint: .bottom), lineWidth: size * 0.025)
             Image(systemName: Self.fallbackSymbol(achievement.badge))
                 .font(.system(size: size * 0.42, weight: .semibold))
-                .foregroundStyle(unlocked ? achievement.tint.color : Color(white: 0.4))
-                .shadow(color: unlocked ? achievement.tint.color.opacity(0.7) : .clear, radius: size * 0.08)
+                .foregroundStyle(achievement.tint.color)
+                .shadow(color: achievement.tint.color.opacity(0.7), radius: size * 0.08)
         }
-        .frame(width: size * 0.92, height: size * 0.92)
-        .saturation(unlocked ? 1 : 0.2)
-        .opacity(unlocked ? 1 : 0.55)
+        .frame(width: size * 0.94, height: size * 0.94)
     }
 
     static func fallbackSymbol(_ badge: String) -> String {
@@ -125,7 +151,7 @@ private struct AchievementsGallery: View {
     let store: AchievementStore
     @State private var selected: Achievement?
 
-    private let columns = [GridItem(.adaptive(minimum: 104, maximum: 140), spacing: 18)]
+    private let columns = [GridItem(.adaptive(minimum: 128, maximum: 168), spacing: 20)]
 
     var body: some View {
         ScrollView {
@@ -173,7 +199,7 @@ private struct AchievementsGallery: View {
             selected = a
         } label: {
             VStack(spacing: 8) {
-                AchievementBadgeView(achievement: a, unlocked: unlocked, size: 96)
+                AchievementBadgeView(achievement: a, unlocked: unlocked, size: 116)
                 Text(hidden ? "???" : a.title)
                     .font(.caption).multilineTextAlignment(.center)
                     .foregroundStyle(unlocked ? .primary : .secondary)
