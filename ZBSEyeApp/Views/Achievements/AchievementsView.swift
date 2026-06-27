@@ -100,29 +100,29 @@ struct AchievementBadgeView: View {
     }
 
     static func fallbackSymbol(_ badge: String) -> String {
-        switch badge {
-        case "badge_star": return "star.fill"
-        case "badge_trophy": return "trophy.fill"
-        case "badge_flame": return "flame.fill"
-        case "badge_calendar": return "calendar"
-        case "badge_stopwatch": return "stopwatch.fill"
-        case "badge_owl": return "moon.stars.fill"
-        case "badge_sunrise": return "sunrise.fill"
-        case "badge_ghost": return "theatermasks.fill"
-        case "badge_apps": return "square.grid.3x3.fill"
-        case "badge_tabs": return "rectangle.stack.fill"
-        case "badge_spiral": return "tornado"
-        case "badge_target": return "target"
-        case "badge_anchor": return "anchor"
-        case "badge_bubble": return "bubble.left.fill"
-        case "badge_magnifier": return "magnifyingglass"
-        case "badge_brain": return "brain.head.profile"
-        case "badge_timeline": return "calendar.day.timeline.left"
-        case "badge_broom": return "wind"
-        case "badge_drive": return "externaldrive.fill"
-        case "badge_cloud": return "icloud.fill"
-        default: return "rosette.fill"
-        }
+        // по префиксу семьи (badge_<family>_<i>) / спец-ачивке
+        if badge.hasPrefix("badge_frames") { return "sparkles" }
+        if badge.hasPrefix("badge_age") { return "tree.fill" }
+        if badge.hasPrefix("badge_streak") { return "flame.fill" }
+        if badge.hasPrefix("badge_days") { return "circle.circle.fill" }
+        if badge.hasPrefix("badge_carto") { return "eye.fill" }
+        if badge.hasPrefix("badge_activities") { return "photo.stack.fill" }
+        if badge.hasPrefix("badge_atlas") { return "globe" }
+        if badge.hasPrefix("badge_constellation") { return "sparkles" }
+        if badge.hasPrefix("badge_domains") { return "point.3.connected.trianglepath.dotted" }
+        if badge.hasPrefix("badge_deep") { return "water.waves" }
+        if badge.hasPrefix("badge_burst") { return "gauge.high" }
+        if badge.hasPrefix("badge_switch") { return "tornado" }
+        if badge.hasPrefix("badge_searches") { return "magnifyingglass" }
+        if badge.hasPrefix("badge_questions") { return "bubble.left.and.bubble.right.fill" }
+        if badge.hasPrefix("badge_night") { return "moon.stars.fill" }
+        if badge.hasPrefix("badge_early") { return "sunrise.fill" }
+        if badge.hasPrefix("badge_weekend") { return "theatermasks.fill" }
+        if badge.hasPrefix("badge_focus") { return "target" }
+        if badge.hasPrefix("badge_clean") { return "wind" }
+        if badge.hasPrefix("badge_relocate") { return "externaldrive.fill" }
+        if badge.hasPrefix("badge_guard") { return "icloud.fill" }
+        return "rosette.fill"
     }
 }
 
@@ -157,11 +157,11 @@ private struct AchievementsGallery: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 progressHeader
-                ForEach(AchievementCategory.allCases) { cat in
+                ForEach(AchievementCatalog.categories, id: \.self) { cat in
                     let items = store.catalog.filter { $0.category == cat }
                     if !items.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
-                            Text(cat.rawValue).font(.headline)
+                            Text(cat).font(.headline)
                             LazyVGrid(columns: columns, alignment: .leading, spacing: 18) {
                                 ForEach(items) { a in cell(a) }
                             }
