@@ -31,7 +31,7 @@ struct ZBSEyeApp: App {
             let degraded = env.recording.lowDiskPaused || env.permissions.screenNeedsRestart
             return degraded ? "exclamationmark.triangle.fill" : "record.circle.fill"
         }
-        return "waveform"
+        return env.rewards.menuBarIcon   // выбранный значок-награда (в покое)
     }
 
     var body: some Scene {

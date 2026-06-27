@@ -16,6 +16,7 @@ final class AppEnvironment {
     let storageSettings = StorageSettingsStore()
     let backupSettings = BackupSettingsStore()
     let privacy = PrivacyStore()
+    let rewards = RewardsStore()   // оформление-награды (тема/иконка/меню-бар) — не зависит от БД
 
     var selectedSection: SidebarSection = .timeline
 
@@ -112,6 +113,7 @@ final class AppEnvironment {
     /// по мере появления модулей (Фаза 2, шаги 3+).
     func bootstrap() async {
         ZBSEyeHTTPServer.log("bootstrap: begin")
+        rewards.applyAppIcon()   // выбранная альт-иконка приложения (dock) — применить на старте
         // Crash-маркер: при прошлом запуске флаг чистого выхода не выставился → сессия умерла
         // некорректно (kill/краш/паника ядра). Видно в Console.app при удалённой диагностике.
         let cleanKey = "zbseye.cleanShutdown"
@@ -247,6 +249,7 @@ final class AppEnvironment {
 
             // Достижения: статистика из БД + счётчиков → каталог ачивок (открытие персистится).
             self.achievements = AchievementStore(service: AchievementStatsService(db: db, repo: activityRepo))
+            rewards.achievements = self.achievements   // награды знают, что открыто
 
             // «День в активностях»: сцены поверх screen_captures (без новой таблицы).
             let sceneSvc = SceneService(repo: activityRepo)
@@ -479,6 +482,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case connections = "Подключения"
     case progress = "Прогресс"
     case achievements = "Достижения"
+    case appearance = "Оформление"
     case settings = "Настройки"
 
     var id: String { rawValue }
@@ -493,6 +497,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .connections:  return "app.connected.to.app.below.fill"
         case .progress:     return "chart.bar.fill"
         case .achievements: return "rosette"
+        case .appearance:   return "paintpalette"
         case .settings:     return "gearshape"
         }
     }

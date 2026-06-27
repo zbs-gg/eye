@@ -19,6 +19,11 @@ struct AchievementUnlockOverlay: View {
             Text(achievement.title).font(.title2.bold()).multilineTextAlignment(.center)
             Text(achievement.detail).font(.callout)
                 .foregroundStyle(.secondary).multilineTextAlignment(.center)
+            if let reward = achievement.reward.label {
+                Label("\(reward) — в «Оформлении»", systemImage: "gift.fill")
+                    .font(.caption.bold()).foregroundStyle(achievement.tint.color)
+                    .padding(.top, 2)
+            }
         }
         .padding(28)
         .frame(maxWidth: 340)

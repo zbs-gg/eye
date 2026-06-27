@@ -102,6 +102,7 @@ struct Achievement: Identifiable, Sendable {
     let category: AchievementCategory
     let condition: AchievementCondition
     let secret: Bool            // скрытое (показываем «???» пока закрыто) — для ироничных
+    let reward: AchievementReward   // что открывает (тема / иконка app / значок меню-бара)
 }
 
 // MARK: — каталог
@@ -112,45 +113,45 @@ enum AchievementCatalog {
     static let all: [Achievement] = [
         // ── Память (объём) ──
         a("memory.1k",   "Первая память",   "1 000 моментов в твоей памяти",        "badge_star",     .bronze,  .memory, .framesAtLeast(1_000)),
-        a("memory.10k",  "Архивариус",      "10 000 моментов",                       "badge_star",     .silver,  .memory, .framesAtLeast(10_000)),
-        a("memory.100k", "Хранитель",       "100 000 моментов",                      "badge_star",     .gold,    .memory, .framesAtLeast(100_000)),
-        a("memory.1m",   "Вечная память",   "1 000 000 моментов — ты не забываешь ничего", "badge_trophy", .diamond, .memory, .framesAtLeast(1_000_000)),
+        a("memory.10k",  "Архивариус",      "10 000 моментов",                       "badge_star",     .silver,  .memory, .framesAtLeast(10_000), reward: .menuBarIcon("sparkles")),
+        a("memory.100k", "Хранитель",       "100 000 моментов",                      "badge_star",     .gold,    .memory, .framesAtLeast(100_000), reward: .theme(.gold)),
+        a("memory.1m",   "Вечная память",   "1 000 000 моментов — ты не забываешь ничего", "badge_trophy", .diamond, .memory, .framesAtLeast(1_000_000), reward: .theme(.magical)),
 
         // ── Постоянство (стрик) ──
         a("streak.7",    "Неделя в потоке", "7 дней подряд с записью",               "badge_flame",    .bronze,  .streak, .streakAtLeast(7)),
-        a("streak.30",   "Месяц без пропусков", "30 дней подряд",                    "badge_flame",    .gold,    .streak, .streakAtLeast(30)),
-        a("streak.100",  "Сотня дней",      "100 дней подряд — машина",              "badge_flame",    .blue,    .streak, .streakAtLeast(100)),
+        a("streak.30",   "Месяц без пропусков", "30 дней подряд",                    "badge_flame",    .gold,    .streak, .streakAtLeast(30), reward: .theme(.frost)),
+        a("streak.100",  "Сотня дней",      "100 дней подряд — машина",              "badge_flame",    .blue,    .streak, .streakAtLeast(100), reward: .appIcon("icon_alt_gold")),
 
         // ── Возраст памяти ──
         a("age.1",       "День прожит",     "Твоей памяти больше суток",             "badge_calendar", .teal,    .memory, .memoryAgeDaysAtLeast(1)),
         a("age.30",      "Ветеран памяти",  "Памяти больше месяца",                  "badge_calendar", .gold,    .memory, .memoryAgeDaysAtLeast(30)),
 
         // ── Интенсивность ──
-        a("intense.day", "Марафонец",       "10 000 кадров за один день",            "badge_stopwatch", .amber,  .focus,  .framesInDayAtLeast(10_000)),
+        a("intense.day", "Марафонец",       "10 000 кадров за один день",            "badge_stopwatch", .amber,  .focus,  .framesInDayAtLeast(10_000), reward: .appIcon("icon_alt_neon")),
 
         // ── Время суток ──
-        a("time.night",  "Ночная сова",     "Активность после полуночи",             "badge_owl",      .violet,  .time,   .nightActivity),
+        a("time.night",  "Ночная сова",     "Активность после полуночи",             "badge_owl",      .violet,  .time,   .nightActivity, reward: .menuBarIcon("moon.stars.fill")),
         a("time.early",  "Ранняя пташка",   "Активность до 7 утра",                  "badge_sunrise",  .amber,   .time,   .earlyActivity),
         a("time.weekend","Призрак выходного","Работал в выходной — отдыхать не пробовал?", "badge_ghost", .teal, .fun, .weekendActivity, secret: true),
 
         // ── Широта ──
         a("breadth.10",  "Многостаночник",  "10 разных приложений за день",          "badge_apps",     .green,   .breadth, .distinctAppsInDayAtLeast(10)),
-        a("breadth.50",  "Исследователь",   "50 разных приложений за всё время",     "badge_apps",     .blue,    .breadth, .distinctAppsAllTimeAtLeast(50)),
-        a("breadth.tabs","Коллекционер вкладок","30 разных сайтов за день",          "badge_tabs",     .blue,    .breadth, .browserDomainsAtLeast(30)),
+        a("breadth.50",  "Исследователь",   "50 разных приложений за всё время",     "badge_apps",     .blue,    .breadth, .distinctAppsAllTimeAtLeast(50), reward: .appIcon("icon_alt_aurora")),
+        a("breadth.tabs","Коллекционер вкладок","30 разных сайтов за день",          "badge_tabs",     .blue,    .breadth, .browserDomainsAtLeast(30), reward: .menuBarIcon("crown.fill")),
 
         // ── Фокус / характер ──
         a("focus.day",   "Глубокий фокус",  "День с кучей работы и почти без переключений", "badge_target", .red, .focus, .focusDay),
-        a("focus.switch","Карусель контекста","200 переключений за день — белка в колесе", "badge_spiral", .magenta, .fun, .switchesInDayAtLeast(200), secret: true),
+        a("focus.switch","Карусель контекста","200 переключений за день — белка в колесе", "badge_spiral", .magenta, .fun, .switchesInDayAtLeast(200), secret: true, reward: .menuBarIcon("bolt.fill")),
         a("focus.deep",  "Глубокая работа", "3 часа в одном приложении без отрыва",  "badge_anchor",   .blue,    .focus,  .singleAppMinutesAtLeast(180)),
 
         // ── Поиск и вопросы ──
         a("ask.first",   "Первый вопрос",   "Спросил свою память впервые",           "badge_bubble",   .teal,    .ask,    .questionsAtLeast(1)),
-        a("ask.50",      "Дознаватель",     "50 вопросов к памяти",                  "badge_bubble",   .violet,  .ask,    .questionsAtLeast(50)),
+        a("ask.50",      "Дознаватель",     "50 вопросов к памяти",                  "badge_bubble",   .violet,  .ask,    .questionsAtLeast(50), reward: .menuBarIcon("eye.fill")),
         a("ask.search",  "Ищейка",          "100 поисков по истории",                "badge_magnifier", .blue,   .ask,    .searchesAtLeast(100)),
 
         // ── Картограф ──
-        a("carto.first", "Картограф пробудился", "Первый дневной инсайт",            "badge_brain",    .violet,  .cartographer, .cartographerRunsAtLeast(1)),
-        a("carto.7",     "Под наблюдением",  "7 дней с инсайтами Картографа",        "badge_brain",    .magenta, .cartographer, .cartographerRunsAtLeast(7)),
+        a("carto.first", "Картограф пробудился", "Первый дневной инсайт",            "badge_brain",    .violet,  .cartographer, .cartographerRunsAtLeast(1), reward: .theme(.neon)),
+        a("carto.7",     "Под наблюдением",  "7 дней с инсайтами Картографа",        "badge_brain",    .magenta, .cartographer, .cartographerRunsAtLeast(7), reward: .theme(.midnight)),
 
         // ── Активности ──
         a("act.first",   "Хронист дня",     "Открыл «День в активностях»",           "badge_timeline", .blue,    .cartographer, .activitiesOpenedAtLeast(1)),
@@ -158,13 +159,14 @@ enum AchievementCatalog {
         // ── Контроль / приватность ──
         a("ctrl.clean",  "Чистильщик",      "Стёр период истории — твоё право",      "badge_broom",    .lime,    .control, .deletedPeriod),
         a("ctrl.disk",   "На свой диск",    "Перенёс память на внешний SSD",         "badge_drive",    .blue,    .control, .relocated),
-        a("ctrl.cloud",  "Облачный страж",  "Включил сжатый iCloud-бэкап",           "badge_cloud",    .teal,    .control, .icloudBackup),
+        a("ctrl.cloud",  "Облачный страж",  "Включил сжатый iCloud-бэкап",           "badge_cloud",    .teal,    .control, .icloudBackup, reward: .appIcon("icon_alt_frost")),
     ]
 
     private static func a(_ id: String, _ title: String, _ detail: String, _ badge: String,
                           _ tint: AchievementTint, _ category: AchievementCategory,
-                          _ condition: AchievementCondition, secret: Bool = false) -> Achievement {
+                          _ condition: AchievementCondition, secret: Bool = false,
+                          reward: AchievementReward = .none) -> Achievement {
         Achievement(id: id, title: title, detail: detail, badge: badge, tint: tint,
-                    category: category, condition: condition, secret: secret)
+                    category: category, condition: condition, secret: secret, reward: reward)
     }
 }
