@@ -1,11 +1,11 @@
 #!/bin/bash
-# Verify-сборка ZBS Eye для оркестратора / агент-лупов (build-гейт «сделано/не сделано»).
-# Паттерн повторяет scripts/build-release.sh: xcodegen generate → xcodebuild
-# (PIPESTATUS-gated, нельзя доверять exit-коду grep) → проверка, что «ZBS Eye.app»
-# реально лежит в DerivedData (а не остался от прошлой сборки — поэтому rm ДО).
-# Отличия от релиза: Debug-конфигурация, ad-hoc подпись, без упаковки модели и zip.
-# SwiftLint — ТОЛЬКО advisory: печатает счётчик, никогда не блокирует.
-# Финал: строка в ~/.claude/verify-log.jsonl по схеме
+# Verify build of ZBS Eye for the orchestrator / agent loops (a "done/not done" build gate).
+# The pattern mirrors scripts/build-release.sh: xcodegen generate → xcodebuild
+# (PIPESTATUS-gated, can't trust grep's exit code) → check that "ZBS Eye.app"
+# is actually in DerivedData (and isn't left over from a previous build — hence the rm BEFORE).
+# Differences from release: Debug configuration, ad-hoc signing, no model bundling and no zip.
+# SwiftLint — advisory ONLY: prints a count, never blocks.
+# Final: a line in ~/.claude/verify-log.jsonl per the schema
 #   {"ts","workspace","repo","loop","kind","outcome","ref"}.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -26,37 +26,37 @@ fail() {
   exit 1
 }
 
-xcodegen generate || fail "xcodegen generate провалился"
+xcodegen generate || fail "xcodegen generate failed"
 
 DERIVED="build/DerivedData"
 APP="$DERIVED/Build/Products/Debug/ZBS Eye.app"
-# Старый продукт убрать ДО сборки: при провале xcodebuild нельзя молча
-# засчитать прошлый .app как «собрался».
+# Remove the old product BEFORE building: if xcodebuild fails we must not silently
+# count the previous .app as "built".
 rm -rf "$APP"
 
 set +e
-# CODE_SIGN_STYLE=Manual + пустой DEVELOPMENT_TEAM — как в build-release.sh:
-# SPM-зависимости (GRDB/swift-crypto/transformers) при automatic-signing
-# требуют Apple Team → BUILD FAILED. С Manual ad-hoc подписываются без команды.
+# CODE_SIGN_STYLE=Manual + empty DEVELOPMENT_TEAM — as in build-release.sh:
+# SPM dependencies (GRDB/swift-crypto/transformers) with automatic-signing
+# require an Apple Team → BUILD FAILED. With Manual they get ad-hoc signed without a team.
 xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Debug \
   -derivedDataPath "$DERIVED" \
   CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \
   build 2>&1 | grep -E "error:|warning:|BUILD"
 XC_STATUS=${PIPESTATUS[0]}
 set -e
-[ "$XC_STATUS" -eq 0 ] || fail "xcodebuild провалился (exit $XC_STATUS)"
-[ -d "$APP" ] || fail "ZBS Eye.app не появился в $APP"
+[ "$XC_STATUS" -eq 0 ] || fail "xcodebuild failed (exit $XC_STATUS)"
+[ -d "$APP" ] || fail "ZBS Eye.app did not appear in $APP"
 
-# SwiftLint — advisory only. Не блокирует НИКОГДА: swiftlint возвращает
-# non-zero при error-severity находках, поэтому весь вызов под || true.
-# Скоуп только на собственные исходники: без путей линтуется build/DerivedData
-# со всеми SPM-чекаутами — десятки тысяч чужих замечаний, чистый шум.
+# SwiftLint — advisory only. NEVER blocks: swiftlint returns
+# non-zero on error-severity findings, so the whole call is under || true.
+# Scoped only to our own sources: without paths it lints build/DerivedData
+# with all the SPM checkouts — tens of thousands of foreign warnings, pure noise.
 if command -v swiftlint >/dev/null 2>&1; then
   LINT_COUNT=$(swiftlint lint --quiet ZBSEyeApp Packages 2>/dev/null | grep -c ': \(warning\|error\):' || true)
-  echo "ℹ️  SwiftLint (advisory, не блокирует): ${LINT_COUNT} замечаний"
+  echo "ℹ️  SwiftLint (advisory, non-blocking): ${LINT_COUNT} findings"
 else
-  echo "ℹ️  SwiftLint не установлен — пропускаю (advisory)"
+  echo "ℹ️  SwiftLint not installed — skipping (advisory)"
 fi
 
 ledger pass
-echo "✅ verify зелёный: $APP ($(( $(date +%s) - START ))s)"
+echo "✅ verify green: $APP ($(( $(date +%s) - START ))s)"

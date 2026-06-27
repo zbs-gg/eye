@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: — тема оформления (на всё приложение)
+// MARK: — appearance theme (applies app-wide)
 
 enum AppTheme: String, Sendable, CaseIterable, Identifiable {
     case standard, magical, midnight, gold, neon, frost
@@ -9,16 +9,16 @@ enum AppTheme: String, Sendable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .standard: return "Стандарт"
-        case .magical:  return "Магия"
-        case .midnight: return "Полночь"
-        case .gold:     return "Золото"
-        case .neon:     return "Неон"
-        case .frost:    return "Мороз"
+        case .standard: return "Standard"
+        case .magical:  return "Magic"
+        case .midnight: return "Midnight"
+        case .gold:     return "Gold"
+        case .neon:     return "Neon"
+        case .frost:    return "Frost"
         }
     }
 
-    /// Акцентный цвет (tint всего приложения).
+    /// Accent color (app-wide tint).
     var accent: Color {
         switch self {
         case .standard: return Color(red: 0.30, green: 0.55, blue: 1.00)
@@ -30,7 +30,7 @@ enum AppTheme: String, Sendable, CaseIterable, Identifiable {
         }
     }
 
-    /// Цвета «ауры» — мягкий анимированный фон под контентом. Пусто → без фона (стандарт).
+    /// "Aura" colors — a soft animated background under the content. Empty → no background (standard).
     var auraColors: [Color] {
         switch self {
         case .standard: return []
@@ -44,49 +44,49 @@ enum AppTheme: String, Sendable, CaseIterable, Identifiable {
 
     var hasAura: Bool { !auraColors.isEmpty }
 
-    /// Сколько ауры подмешивать (магия — заметно, остальные — тоньше).
+    /// How much aura to blend in (magic — noticeable, the rest — subtler).
     var auraOpacity: Double { self == .magical || self == .neon ? 0.32 : 0.20 }
 }
 
-// MARK: — награда за достижение
+// MARK: — achievement reward
 
 enum AchievementReward: Sendable, Equatable {
     case none
     case theme(AppTheme)
-    case appIcon(String)       // имя ассета альт-иконки приложения (dock)
-    case menuBarIcon(String)   // SF-символ для меню-бара (в покое)
+    case appIcon(String)       // asset name of the alternate app icon (dock)
+    case menuBarIcon(String)   // SF Symbol for the menu bar (when idle)
 
-    /// Короткое описание для UI («+ тема Магия»).
+    /// Short description for the UI ("+ Magic theme").
     var label: String? {
         switch self {
         case .none:               return nil
-        case .theme(let t):       return "Тема «\(t.title)»"
-        case .appIcon:            return "Иконка приложения"
-        case .menuBarIcon:        return "Значок в меню-баре"
+        case .theme(let t):       return "\"\(t.title)\" theme"
+        case .appIcon:            return "App icon"
+        case .menuBarIcon:        return "Menu bar icon"
         }
     }
 }
 
-// MARK: — каталог альт-иконок и меню-бар-значков (для раздела «Оформление»)
+// MARK: — catalog of alternate icons and menu bar icons (for the "Appearance" section)
 
 enum RewardCatalog {
-    /// Альт-иконки приложения (имя ассета → подпись). «» = дефолтная (из AppIcon).
+    /// Alternate app icons (asset name → caption). "" = the default (from AppIcon).
     static let appIcons: [(asset: String, title: String)] = [
-        ("", "Стандарт"),
-        ("icon_alt_glow", "Светящийся"),
-        ("icon_alt_gold", "Золотой глаз"),
-        ("icon_alt_neon", "Неоновый глаз"),
-        ("icon_alt_aurora", "Аврора"),
-        ("icon_alt_frost", "Морозный"),
+        ("", "Standard"),
+        ("icon_alt_glow", "Glowing"),
+        ("icon_alt_gold", "Golden Eye"),
+        ("icon_alt_neon", "Neon Eye"),
+        ("icon_alt_aurora", "Aurora"),
+        ("icon_alt_frost", "Frosty"),
     ]
 
-    /// Значки меню-бара (SF-символ → подпись) для состояния «в покое».
+    /// Menu bar icons (SF Symbol → caption) for the "idle" state.
     static let menuBarIcons: [(symbol: String, title: String)] = [
-        ("waveform", "Волна"),
-        ("eye.fill", "Глаз"),
-        ("sparkles", "Искры"),
-        ("moon.stars.fill", "Ночь"),
-        ("bolt.fill", "Молния"),
-        ("crown.fill", "Корона"),
+        ("waveform", "Wave"),
+        ("eye.fill", "Eye"),
+        ("sparkles", "Sparkles"),
+        ("moon.stars.fill", "Night"),
+        ("bolt.fill", "Lightning"),
+        ("crown.fill", "Crown"),
     ]
 }

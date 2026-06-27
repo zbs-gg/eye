@@ -1,11 +1,11 @@
 import Foundation
 import GRDB
 
-/// «Спроси свою память» (actor): retrieval-augmented ответ ПОЛНОСТЬЮ на устройстве. Берёт вопрос →
-/// гибридный поиск (FTS+semantic, cross-lingual) по истории экрана и разговоров → собирает
-/// пронумерованный контекст с датами/источниками → локальная LLM отвечает СТРОГО по контексту с
-/// ссылками [n]. Никакого egress: та же локальная-only LLM, что и у автоматизаций (AutomationError
-/// гейтит не-localhost). Источники возвращаем наружу — клик ведёт в таймлайн к моменту.
+/// "Ask your memory" (actor): a retrieval-augmented answer ENTIRELY on-device. Takes a question →
+/// hybrid search (FTS+semantic, cross-lingual) over screen and conversation history → assembles
+/// numbered context with dates/sources → a local LLM answers STRICTLY from the context with
+/// [n] citations. No egress: the same local-only LLM the automations use (AutomationError
+/// gates non-localhost). Sources are returned to the caller — a click jumps to that moment in the timeline.
 actor AskService {
     private let search: SearchService
     private let client: LocalLLMClient
@@ -19,11 +19,11 @@ actor AskService {
 
     struct Answer: Sendable {
         let text: String
-        let truncated: Bool          // модель упёрлась в maxOutputTokens — ответ неполный
-        let sources: [SearchResult]  // что попало в контекст (для ссылок [n] и перехода в таймлайн)
+        let truncated: Bool          // model hit maxOutputTokens — answer is incomplete
+        let sources: [SearchResult]  // what made it into the context (for [n] citations and jumping into the timeline)
     }
 
-    /// Один вопрос → ответ. Бросает AutomationError (.noLLM/.nonLocalLLM/.llm) — UI их показывает как есть.
+    /// One question → answer. Throws AutomationError (.noLLM/.nonLocalLLM/.llm) — the UI shows them as-is.
     func answer(question: String, llm: LLMConfig,
                 safety: AutomationSafety = .default) async throws -> Answer {
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -31,25 +31,25 @@ actor AskService {
         guard llm.isConfigured else { throw AutomationError.noLLM }
         guard llm.isLocalOnly else { throw AutomationError.nonLocalLLM(URL(string: llm.normalizedBaseURL)?.host ?? llm.baseURL) }
 
-        // Окно retrieval: десяток лучших хитов — достаточно для ответа, помещается в контекст модели.
+        // Retrieval window: the top dozen hits — enough to answer, fits in the model's context.
         let hits = try await search.search(query: q, filters: SearchFilters(limit: 10))
         guard !hits.isEmpty else {
-            return Answer(text: "В истории не нашлось ничего по этому запросу. Попробуй переформулировать — "
-                          + "поиск понимает и смысл (cross-lingual), не только точные слова.",
+            return Answer(text: "Nothing in your history matched this query. Try rephrasing it — "
+                          + "search understands meaning too (cross-lingual), not just exact words.",
                           truncated: false, sources: [])
         }
 
-        // Контекст: фуллер-текст каждого источника (не 12-словный сниппет) с датой и источником, усечён.
+        // Context: a fuller text of each source (not a 12-word snippet) with date and source, truncated.
         let excerpts = try await excerpts(for: hits, maxChars: safety.maxSampleChars)
         let context = excerpts.enumerated().map { i, e in "[\(i + 1)] \(e)" }.joined(separator: "\n")
 
         let system = """
-        Ты — ассистент памяти ZBS Eye. Отвечай на вопрос пользователя, опираясь ТОЛЬКО на приведённые \
-        фрагменты его собственной истории экрана и разговоров. Фрагменты помечены [n] с датой и источником. \
-        Ссылайся на номера [n], которые подтверждают ответ. Если во фрагментах нет ответа — честно скажи, \
-        что не нашёл, и предложи уточнить запрос. Ничего не выдумывай. Отвечай кратко и по делу, на языке вопроса.
+        You are the ZBS Eye memory assistant. Answer the user's question relying ONLY on the provided \
+        fragments of their own screen and conversation history. Fragments are marked [n] with date and source. \
+        Cite the [n] numbers that support your answer. If the fragments contain no answer, honestly say \
+        you didn't find it and suggest refining the query. Don't make anything up. Answer briefly and to the point, in the language of the question.
         """
-        let user = "Вопрос: \(q)\n\nФрагменты истории (от самого релевантного):\n\(context)"
+        let user = "Question: \(q)\n\nHistory fragments (most relevant first):\n\(context)"
 
         let out = try await client.chat(llm, system: system, user: user,
                                          maxTokens: safety.maxOutputTokens, timeout: safety.requestTimeout)
@@ -57,11 +57,11 @@ actor AskService {
                       truncated: out.truncated, sources: hits)
     }
 
-    /// Для каждого хита — строка «дата · источник — текст». Текст: фуллер-выборка из БД (экран —
-    /// склейка text_blocks; аудио — транскрипт), усечённая до maxChars. Источник недоступен → сниппет.
+    /// For each hit — a "date · source — text" line. Text: a fuller selection from the DB (screen —
+    /// concatenated text_blocks; audio — transcript), truncated to maxChars. Source unavailable → snippet.
     private func excerpts(for hits: [SearchResult], maxChars: Int) async throws -> [String] {
         try await db.pool.read { dbc in
-            // df локально внутри @Sendable-замыкания (DateFormatter не Sendable — нельзя захватывать снаружи).
+            // df local inside the @Sendable closure (DateFormatter isn't Sendable — can't capture it from outside).
             let df = DateFormatter()
             df.locale = Locale(identifier: "ru_RU")
             df.dateFormat = "d MMM, HH:mm"
@@ -71,13 +71,13 @@ actor AskService {
                 let raw: String
                 switch r.kind {
                 case .screen:
-                    let app = r.appName ?? r.bundleId ?? "экран"
+                    let app = r.appName ?? r.bundleId ?? "screen"
                     label = [app, r.windowTitle].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " — ")
                     raw = (try? String.fetchOne(dbc, sql:
                         "SELECT group_concat(text, ' ') FROM text_blocks WHERE captureId = ?",
                         arguments: [r.id])) ?? r.snippet
                 case .audio:
-                    label = r.appName ?? "Аудио"   // у аудио-результата appName уже = лейбл канала (я/собеседник)
+                    label = r.appName ?? "Audio"   // for an audio result appName is already = channel label (me/other)
                     raw = (try? String.fetchOne(dbc, sql:
                         "SELECT group_concat(text, ' ') FROM transcriptions WHERE audioId = ?",
                         arguments: [r.id])) ?? r.snippet
@@ -88,7 +88,7 @@ actor AskService {
         }
     }
 
-    /// Нормализуем выборку под контекст: схлопываем пробелы/переводы строк, усечение по словам.
+    /// Normalize the selection for context: collapse spaces/newlines, truncate by words.
     private static func clean(_ s: String, maxChars: Int) -> String {
         let collapsed = s.split(whereSeparator: { $0 == "\n" || $0 == "\t" || $0 == " " })
             .joined(separator: " ")

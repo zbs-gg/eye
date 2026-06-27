@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-// MARK: — аура-фон темы (мягкие дрейфующие цветовые пятна)
+// MARK: — theme aura background (soft drifting color blobs)
 
 struct ThemeAuraView: View {
     let theme: AppTheme
@@ -39,7 +39,7 @@ struct ThemeAuraView: View {
     }
 }
 
-// MARK: — раздел «Оформление»
+// MARK: — “Appearance” section
 
 struct AppearanceView: View {
     @Environment(AppEnvironment.self) private var env
@@ -48,9 +48,9 @@ struct AppearanceView: View {
         @Bindable var rewards = env.rewards
         return ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                Text("Оформление").font(.largeTitle.bold())
-                Text("Награды за достижения. Открывай ачивки — и здесь появляются темы, иконки приложения "
-                     + "и значки меню-бара.")
+                Text("Appearance").font(.largeTitle.bold())
+                Text("Rewards for achievements. Unlock achievements — and themes, app icons "
+                     + "and menu bar glyphs show up here.")
                     .font(.callout).foregroundStyle(.secondary)
 
                 themesSection(rewards)
@@ -61,12 +61,12 @@ struct AppearanceView: View {
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .navigationTitle("Оформление")
+        .navigationTitle("Appearance")
     }
 
-    // ── темы ──
+    // ── themes ──
     private func themesSection(_ rewards: RewardsStore) -> some View {
-        section("Тема") {
+        section("Theme") {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 14)],
                       alignment: .leading, spacing: 14) {
                 ForEach(AppTheme.allCases) { t in
@@ -101,9 +101,9 @@ struct AppearanceView: View {
         .contentShape(Rectangle())
     }
 
-    // ── иконки приложения ──
+    // ── app icons ──
     private func appIconsSection(_ rewards: RewardsStore) -> some View {
-        section("Иконка приложения") {
+        section("App icon") {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 96, maximum: 120), spacing: 14)],
                       alignment: .leading, spacing: 14) {
                 ForEach(RewardCatalog.appIcons, id: \.asset) { item in
@@ -146,9 +146,9 @@ struct AppearanceView: View {
         .contentShape(Rectangle())
     }
 
-    // ── меню-бар ──
+    // ── menu bar ──
     private func menuBarSection(_ rewards: RewardsStore) -> some View {
-        section("Значок в меню-баре") {
+        section("Menu bar glyph") {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 80, maximum: 110), spacing: 12)],
                       alignment: .leading, spacing: 12) {
                 ForEach(RewardCatalog.menuBarIcons, id: \.symbol) { item in
@@ -185,7 +185,7 @@ struct AppearanceView: View {
     }
 
     private func lockHint(_ reward: AchievementReward, _ rewards: RewardsStore) -> String? {
-        // подсказка только для закрытых
+        // hint only for locked items
         switch reward {
         case .theme(let t) where rewards.isThemeUnlocked(t): return nil
         case .appIcon(let a) where rewards.isAppIconUnlocked(a): return nil
@@ -193,6 +193,6 @@ struct AppearanceView: View {
         default: break
         }
         guard let ach = rewards.unlockingAchievement(for: reward) else { return nil }
-        return "Откроется: «\(ach.title)»"
+        return "Unlocks with: “\(ach.title)”"
     }
 }

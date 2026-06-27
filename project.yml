@@ -1,4 +1,4 @@
-name: ZBSEye                 # внутренний коднейм таргета/схемы. Бренд продукта — «ZBS Eye» (display name + bundle id ниже)
+name: ZBSEye                 # internal codename of the target/scheme. Product brand — "ZBS Eye" (display name + bundle id below)
 options:
   bundleIdPrefix: gg.zbs
   developmentLanguage: ru
@@ -47,19 +47,19 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye
-        PRODUCT_NAME: "ZBS Eye"          # бандл = «ZBS Eye.app» (таргет/схема — ZBSEye, без пробела)
+        PRODUCT_NAME: "ZBS Eye"          # bundle = "ZBS Eye.app" (target/scheme — ZBSEye, no space)
         INFOPLIST_KEY_CFBundleDisplayName: "ZBS Eye"
         INFOPLIST_KEY_CFBundleName: "ZBS Eye"
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_ENTITLEMENTS: ZBSEyeApp/ZBSEye.entitlements
-        # Дефолт — ad-hoc. Стабильная self-signed идентичность «ZBS Eye Dev» (внутреннее имя серта; без
-        # $99-аккаунта): scripts/make-signing-cert.sh один раз, затем сборка с CODE_SIGN_IDENTITY="ZBS Eye Dev"
-        # (scripts/build-release.sh делает это сам). Стабильная подпись = TCC-права и Keychain ACL
-        # переживают ребилды. Developer ID/нотаризация — когда появится платный аккаунт.
+        # Default — ad-hoc. A stable self-signed identity "ZBS Eye Dev" (internal cert name; without
+        # a $99 account): scripts/make-signing-cert.sh once, then build with CODE_SIGN_IDENTITY="ZBS Eye Dev"
+        # (scripts/build-release.sh does this itself). A stable signature = TCC permissions and Keychain ACL
+        # survive rebuilds. Developer ID/notarization — when a paid account appears.
         CODE_SIGN_IDENTITY: "-"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        INFOPLIST_KEY_NSScreenCaptureUsageDescription: "ZBS Eye читает экран для истории активности и таймлайна, а также (если включено в настройках) записывает системный звук — звонки, встречи, видео — для поиска по разговорам. Всё остаётся на устройстве."
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: "ZBS Eye записывает и транскрибирует аудио локально, для поиска по разговорам."
-        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "ZBS Eye распознаёт речь на устройстве для поиска по аудио."
+        INFOPLIST_KEY_NSScreenCaptureUsageDescription: "ZBS Eye reads the screen for your activity history and timeline, and (if enabled in settings) records system audio — calls, meetings, videos — to make conversations searchable. Everything stays on your device."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "ZBS Eye records and transcribes audio locally, to make conversations searchable."
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "ZBS Eye recognizes speech on-device to make audio searchable."
         INFOPLIST_KEY_LSUIElement: "NO"
         INFOPLIST_KEY_LSMinimumSystemVersion: "15.0"

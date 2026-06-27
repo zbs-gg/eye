@@ -24,9 +24,9 @@ private struct StatusFooter: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !env.permissions.allCriticalGranted {
-                // Кликабельный пилл → сразу в Настройки (раньше был тупиковым лейблом).
+                // Clickable pill → straight to Settings (used to be a dead-end label).
                 Button { env.selectedSection = .settings } label: {
-                    StatusPill(text: "Нужны разрешения", color: .orange, system: "lock.shield")
+                    StatusPill(text: "Permissions needed", color: .orange, system: "lock.shield")
                 }
                 .buttonStyle(.plain)
             }

@@ -1,19 +1,19 @@
 import Foundation
 
-/// Типобезопасные DTO ответов /v1 (Codable, snake-free camelCase). Никакой ручной сборки JSON.
+/// Type-safe DTOs for /v1 responses (Codable, snake-free camelCase). No hand-rolled JSON.
 enum APIDTO {
     struct Health: Encodable {
         let status: String
         let version: String
         let capturing: Bool
-        // `port` НЕ светим: он уже в port-файле для своих, а в неавторизованном /health это лишний
-        // информационный сигнал атакующему (не нужно сканировать). `capturing` оставлен — его читает MCP.
+        // We don’t expose `port`: it’s already in the port file for our own use, and in the unauthenticated
+        // /health it’s an extra information signal to an attacker (no need to scan). `capturing` is kept — MCP reads it.
     }
     struct AppRef: Encodable { let bundleId: String?; let name: String? }
     struct Media: Encodable {
         let frameUrl: String?
-        var audioUrl: String? = nil        // kind=audio: m4a сегмент
-        var transcriptUrl: String? = nil   // kind=audio: текст транскрипта
+        var audioUrl: String? = nil        // kind=audio: m4a segment
+        var transcriptUrl: String? = nil   // kind=audio: transcript text
     }
     struct SearchHit: Encodable {
         let id: Int64
@@ -39,9 +39,9 @@ enum APIDTO {
         let tsISO: String
         let durationSec: Double
         let channel: String       // mic | system
-        let speaker: String?      // я | собеседник
+        let speaker: String?      // me | other party
         let language: String?
-        let text: String?         // nil = транскрипта (ещё) нет
+        let text: String?         // nil = transcript not (yet) available
         let audioUrl: String
     }
     struct DensityBucketDTO: Encodable { let ts: Int64; let count: Int }

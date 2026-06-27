@@ -1,34 +1,37 @@
-# ZBSEye — сборка
+# ZBSEye — build
 
-Проект генерируется из `project.yml` через [XcodeGen](https://github.com/yonaskolb/XcodeGen)
-(`ZBSEye.xcodeproj` в `.gitignore` — не коммитится).
+The project is generated from `project.yml` via [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+(`ZBSEye.xcodeproj` is in `.gitignore` — not committed).
 
-## Требования
-- macOS 15+ (разработка на 26 Tahoe), Xcode 26+, Swift 6.
+## Requirements
+- macOS 15+ (developed on 26 Tahoe), Xcode 26+, Swift 6.
 - `brew install xcodegen`
 
-## Сборка
+## Build
 ```bash
-xcodegen generate                 # сгенерировать ZBSEye.xcodeproj из project.yml
+xcodegen generate                 # generate ZBSEye.xcodeproj from project.yml
 open ZBSEye.xcodeproj             # → Xcode → Cmd+R
-# или из CLI:
+# or from the CLI:
 xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Debug build
 ```
 
-## Архитектура (Фаза 2, в работе)
+A one-shot build + sign check is in `scripts/verify.sh` (xcodegen → xcodebuild Debug).
+
+## Architecture
 ```
 ZBSEyeApp/
-  App/        ZBSEyeApp (@main), AppEnvironment (@Observable корень)
-  State/      *Store.swift — @Observable @MainActor (Permissions, Recording, Server)
-  Services/   Permissions/PermissionChecker (реальные TCC-пробы)
-  Views/      Sidebar, Timeline, Automations, Connections, Settings, MenuBar, Components
-  ZBSEye.entitlements  — Hardened Runtime БЕЗ App Sandbox
+  App/        ZBSEyeApp (@main), AppEnvironment (@Observable root)
+  Capture/    CaptureCoordinator, FramePipeline (capture+HEIC+phash), AXReader
+  Audio/      AudioCoordinator, mic/system engines, VADSegmenter, TranscriptionService
+  Data/       ZBSEyeDatabase, StorageLocation, StorageManager, BackupManager, RetentionManager, IngestService
+  Search/     SearchService (FTS+vector RRF), EmbeddingService (e5), TimelineService, VectorBackfill
+  Server/     ZBSEyeHTTPServer (FlyingFox REST, 127.0.0.1, Bearer), KeychainStore
+  MCP/        ZBSEyeMCPServer (stdio)
+  Automations/ HistoryImporter, DailySummaryService, ExportService, CartographerService
+  State/      *Store.swift — @Observable @MainActor
+  Views/      Sidebar, Timeline, Activities, Ask, Cartographer, Achievements, Settings, MenuBar, Components
+  ZBSEye.entitlements  — Hardened Runtime WITHOUT App Sandbox
 ```
 Swift 6 strict concurrency = `complete`. Deployment target macOS 15.0.
 
-Дальше (по `workspace/PLAN.md`): FramePipelineActor (capture+encode+hash) · DB/FTS/retention ·
-authenticated localhost REST · AX/OCR capture loop с telemetry · vector (sqlite-vec + shards) ·
-Timeline/scrubber · Automations · audio/transcription.
-
-Harness-инструменты (отдельные SPM-пакеты, не часть app): `harness/electron-ax-smoke`,
-`harness/sqlite-vec-bench`, `harness/sck-burst-bench`.
+See [`AGENTS.md`](AGENTS.md) for the architecture map, invariants, and gotchas.

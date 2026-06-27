@@ -1,15 +1,16 @@
 import SwiftUI
 import AppKit
 
-/// AppDelegate ради ОДНОГО хука: applicationShouldTerminate → terminateLater, чтобы успеть iCloud-
-/// снапшот ДО смерти процесса (willTerminate уже не успевает — там процесс умирает синхронно).
-/// onTerminate выставляет AppEnvironment.bootstrap (если бэкап включён). Без него — мгновенный выход.
+/// AppDelegate exists for ONE hook: applicationShouldTerminate → terminateLater, so we can take the
+/// iCloud snapshot BEFORE the process dies (willTerminate no longer has time — the process dies
+/// synchronously there). onTerminate is set by AppEnvironment.bootstrap (if backup is enabled).
+/// Without it — an immediate exit.
 final class ZBSEyeAppDelegate: NSObject, NSApplicationDelegate {
     @MainActor static var onTerminate: (@MainActor () async -> Void)?
-    private var isTerminating = false   // повторный Cmd+Q / Force Quit пока бэкап идёт → НЕ плодим reply
+    private var isTerminating = false   // a repeated Cmd+Q / Force Quit while the backup is running → do NOT spawn another reply
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if isTerminating { return .terminateLater }   // уже завершаемся — ждём первый reply
+        if isTerminating { return .terminateLater }   // already terminating — waiting for the first reply
         guard let handler = ZBSEyeAppDelegate.onTerminate else { return .terminateNow }
         isTerminating = true
         Task { @MainActor in
@@ -24,14 +25,14 @@ struct ZBSEyeApp: App {
     @NSApplicationDelegateAdaptor(ZBSEyeAppDelegate.self) private var appDelegate
     @State private var env = AppEnvironment()
 
-    /// Иконка честная: предупреждение, если запись «идёт», но фактически деградировала
-    /// (мало места / SCK мёртв и нужен перезапуск) — а не вечная зелёная точка.
+    /// An honest icon: a warning if recording is "ongoing" but has actually degraded
+    /// (low disk space / SCK is dead and a restart is needed) — rather than a perpetual green dot.
     private var menuBarIcon: String {
         if env.recording.isCapturing {
             let degraded = env.recording.lowDiskPaused || env.permissions.screenNeedsRestart
             return degraded ? "exclamationmark.triangle.fill" : "record.circle.fill"
         }
-        return env.rewards.menuBarIcon   // выбранный значок-награда (в покое)
+        return env.rewards.menuBarIcon   // the chosen reward icon (when idle)
     }
 
     var body: some Scene {

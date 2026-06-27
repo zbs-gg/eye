@@ -1,14 +1,14 @@
 import Foundation
 import Observation
 
-/// Состояние достижений: каталог + множество открытых (persist) + статистика. На refresh пересчитывает
-/// статистику и открывает новые ачивки (раз, навсегда). Новое открытие → pendingUnlock для анимации.
+/// Achievement state: catalog + set of unlocked ones (persist) + statistics. On refresh it recomputes
+/// the statistics and unlocks new achievements (once, forever). A new unlock → pendingUnlock for the animation.
 @MainActor
 @Observable
 final class AchievementStore {
     private(set) var stats = AchievementStats()
     private(set) var unlocked: Set<String> = []
-    /// Очередь только что открытых — для всплывающей награды (показываем по одной).
+    /// Queue of just-unlocked ones — for the pop-up reward (we show them one at a time).
     private(set) var pendingUnlock: Achievement?
 
     @ObservationIgnored private let service: AchievementStatsService
@@ -36,7 +36,7 @@ final class AchievementStore {
         unlockDates[id].map { Date(timeIntervalSince1970: $0) }
     }
 
-    /// Пересчитать статистику и открыть новые достижения. Вызывается после ingest-тика / на appear.
+    /// Recompute the statistics and unlock new achievements. Called after an ingest tick / on appear.
     func refresh() async {
         let s = await service.compute()
         stats = s
@@ -52,7 +52,7 @@ final class AchievementStore {
         if pendingUnlock == nil { advanceQueue() }
     }
 
-    /// Анимация награды показана — берём следующую из очереди.
+    /// The reward animation has been shown — take the next one from the queue.
     func clearPendingUnlock() {
         pendingUnlock = nil
         advanceQueue()

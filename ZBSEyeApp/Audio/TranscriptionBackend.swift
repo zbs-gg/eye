@@ -12,16 +12,16 @@ enum TranscriptionError: LocalizedError {
     case failed(String)
     var errorDescription: String? {
         switch self {
-        case .recognizerUnavailable(let l): return "Распознаватель речи недоступен для локали \(l)."
-        case .onDeviceUnavailable(let l):   return "Нет on-device модели речи для \(l) — включи диктовку в Системных настройках."
-        case .notAuthorized:                return "Нет разрешения на распознавание речи."
-        case .empty:                        return "Пустой результат распознавания."
-        case .lowConfidence:                return "Низкая уверенность распознавания (вероятно шум) — пропущено."
-        case .timedOut:                     return "Таймаут распознавания."
-        case .failed(let m):                return "Ошибка распознавания: \(m)"
+        case .recognizerUnavailable(let l): return "Speech recognizer unavailable for locale \(l)."
+        case .onDeviceUnavailable(let l):   return "No on-device speech model for \(l) — enable Dictation in System Settings."
+        case .notAuthorized:                return "No permission for speech recognition."
+        case .empty:                        return "Empty recognition result."
+        case .lowConfidence:                return "Low recognition confidence (likely noise) — skipped."
+        case .timedOut:                     return "Recognition timed out."
+        case .failed(let m):                return "Recognition error: \(m)"
         }
     }
-    /// Короткий тип для health/UI (отличить конфиг-проблему от транзиента).
+    /// Short type for health/UI (to distinguish a config problem from a transient one).
     var kind: String {
         switch self {
         case .recognizerUnavailable: return "recognizerUnavailable"
@@ -35,18 +35,18 @@ enum TranscriptionError: LocalizedError {
     }
 }
 
-/// Сменный backend транскрипции (план: light default + MLX Quality mode позже за этим протоколом).
+/// Swappable transcription backend (plan: light default + an MLX Quality mode later behind this protocol).
 protocol TranscriptionBackend: Sendable {
     var engineName: String { get }
-    /// Пробует локали, возвращает результат с лучшим совпадением языка (auto-detect). timeout — потолок
-    /// на распознавание одной локали (защита от зависшего on-device движка).
+    /// Tries the locales and returns the result with the best language match (auto-detect). timeout — the cap
+    /// on recognizing a single locale (protection against a hung on-device engine).
     func transcribe(fileURL: URL, localeIdentifiers: [String],
                     minConfidence: Float, timeout: TimeInterval) async throws -> Transcript
     func unload() async
 }
 
-/// On-device Apple Speech. 100% локально (requiresOnDeviceRecognition=true). Файл-режим (URL request) —
-/// под VAD-сегменты. Распознаватели кэшируются по локали; выгрузка — TranscriptionService по idle.
+/// On-device Apple Speech. 100% local (requiresOnDeviceRecognition=true). File mode (URL request) —
+/// for VAD segments. Recognizers are cached per locale; unloading — TranscriptionService on idle.
 actor SFSpeechBackend: TranscriptionBackend {
     nonisolated let engineName = "sfspeech"
     private var recognizers: [String: SFSpeechRecognizer] = [:]
@@ -55,10 +55,10 @@ actor SFSpeechBackend: TranscriptionBackend {
                     minConfidence: Float, timeout: TimeInterval) async throws -> Transcript {
         guard SFSpeechRecognizer.authorizationStatus() == .authorized else { throw TranscriptionError.notAuthorized }
 
-        // Прогоняем файл через локали и выбираем по СОВПАДЕНИЮ ЯЗЫКА (NLLanguageRecognizer), а НЕ по
-        // confidence: on-device SFSpeech сплошь и рядом отдаёт confidence 0 на верном тексте — по нему
-        // нельзя ни сравнивать локали, ни отсеивать (иначе теряли бы всё). confidence используем только
-        // как вторичный сигнал отсева явного шума, и только когда он реально > 0.
+        // We run the file through the locales and pick by LANGUAGE MATCH (NLLanguageRecognizer), NOT by
+        // confidence: on-device SFSpeech routinely returns confidence 0 on correct text — you can't use it
+        // to compare locales or to filter (otherwise we'd lose everything). We use confidence only as a
+        // secondary signal to filter obvious noise, and only when it's actually > 0.
         var candidates: [Candidate] = []
         var unavailableCount = 0
         var lastFail: TranscriptionError?
@@ -80,7 +80,7 @@ actor SFSpeechBackend: TranscriptionBackend {
                 let match = Self.languageMatches(trimmed, locale: id)
                 candidates.append(Candidate(text: trimmed, score: r.hasConfidence ? r.confidence : nil,
                                             locale: id, langMatch: match))
-                // short-circuit: язык совпал и (нет confidence ИЛИ он выше порога) → вторую локаль не гоняем.
+                // short-circuit: language matched and (no confidence OR it's above threshold) → don't run the second locale.
                 if match, (r.hasConfidence ? r.confidence : 1) >= minConfidence { break }
             } catch {
                 lastFail = (error as? TranscriptionError) ?? .failed("\(error)")
@@ -88,7 +88,7 @@ actor SFSpeechBackend: TranscriptionBackend {
         }
 
         guard !candidates.isEmpty else {
-            // onDeviceUnavailable — только если ВСЕ локали реально без on-device модели (честный health).
+            // onDeviceUnavailable — only if ALL locales really have no on-device model (honest health).
             if unavailableCount == localeIdentifiers.count, unavailableCount > 0 {
                 throw TranscriptionError.onDeviceUnavailable(localeIdentifiers.joined(separator: ","))
             }
@@ -96,31 +96,31 @@ actor SFSpeechBackend: TranscriptionBackend {
         }
 
         let best = Self.pickBest(candidates)
-        // Гейт отсева применяем ТОЛЬКО при реальном confidence (>0); при unknown не дропаем.
+        // We apply the filter gate ONLY when confidence is real (>0); on unknown we don't drop.
         if let s = best.score, s < minConfidence { throw TranscriptionError.lowConfidence }
         return Transcript(text: best.text, language: best.locale, engine: engineName)
     }
 
     func unload() { recognizers.removeAll() }
 
-    // MARK: выбор кандидата
+    // MARK: candidate selection
 
     private struct Candidate { let text: String; let score: Float?; let locale: String; let langMatch: Bool }
 
-    /// Совпадает ли распознанный язык с локалью распознавателя («ru-RU» → "ru").
+    /// Whether the recognized language matches the recognizer's locale ("ru-RU" → "ru").
     static func languageMatches(_ text: String, locale: String) -> Bool {
         guard let lang = NLLanguageRecognizer.dominantLanguage(for: text)?.rawValue else { return false }
         return lang.lowercased().hasPrefix(String(locale.prefix(2)).lowercased())
     }
 
-    /// Среди совпавших по языку (или всех, если ни один не совпал): макс confidence, при unknown — длиннейший.
+    /// Among those matching by language (or all, if none matched): max confidence, on unknown — the longest.
     private static func pickBest(_ c: [Candidate]) -> Candidate {
         let matched = c.filter { $0.langMatch }
         let pool = matched.isEmpty ? c : matched
         return pool.max { a, b in
             switch (a.score, b.score) {
             case let (sa?, sb?): return sa < sb
-            case (nil, _?):      return true       // у b есть score, у a нет → b лучше
+            case (nil, _?):      return true       // b has a score, a doesn't → b is better
             case (_?, nil):      return false
             case (nil, nil):     return a.text.count < b.text.count
             }
@@ -136,13 +136,13 @@ actor SFSpeechBackend: TranscriptionBackend {
         return r
     }
 
-    // MARK: распознавание с таймаутом
+    // MARK: recognition with a timeout
 
     private struct Recognized: Sendable { let text: String; let confidence: Float; let hasConfidence: Bool }
 
-    /// Распознаёт один файл с потолком по времени. Континюэйшн держим в боксе — резолвит ЛИБО handler
-    /// (final/error), ЛИБО timeoutTask (после отмены SFSpeech-task), ровно один раз. Без таймаута зависший
-    /// on-device движок заблокировал бы общую очередь обоих легов навсегда.
+    /// Recognizes one file with a time cap. We hold the continuation in a box — it's resolved EITHER by the
+    /// handler (final/error) OR by timeoutTask (after cancelling the SFSpeech task), exactly once. Without a
+    /// timeout a hung on-device engine would block the shared queue of both legs forever.
     private func recognizeOnce(_ rec: SFSpeechRecognizer, _ req: SFSpeechURLRecognitionRequest,
                                timeout: TimeInterval) async throws -> Recognized {
         let box = ContinuationBox<Recognized>()
@@ -150,8 +150,8 @@ actor SFSpeechBackend: TranscriptionBackend {
         let timeoutTask = Task {
             try? await Task.sleep(for: .seconds(timeout))
             if !Task.isCancelled {
-                taskBox.cancel()                                   // прерываем SFSpeech (handler с error/cancel)
-                box.resumeThrowing(TranscriptionError.timedOut)    // и сами резолвим — без зависания
+                taskBox.cancel()                                   // interrupt SFSpeech (handler with error/cancel)
+                box.resumeThrowing(TranscriptionError.timedOut)    // and resolve ourselves — no hang
             }
         }
         defer { timeoutTask.cancel() }
@@ -173,7 +173,7 @@ actor SFSpeechBackend: TranscriptionBackend {
     }
 }
 
-/// Одноразовый резолв континюэйшна из нескольких источников (handler / timeout). Потокобезопасен.
+/// One-shot resolution of a continuation from several sources (handler / timeout). Thread-safe.
 private final class ContinuationBox<T: Sendable>: @unchecked Sendable {
     private var cont: CheckedContinuation<T, Error>?
     private let lock = NSLock()
@@ -182,7 +182,7 @@ private final class ContinuationBox<T: Sendable>: @unchecked Sendable {
     func resumeThrowing(_ e: Error) { lock.lock(); let c = cont; cont = nil; lock.unlock(); c?.resume(throwing: e) }
 }
 
-/// Держит SFSpeechRecognitionTask, чтобы отменить его по таймауту (non-Sendable → @unchecked).
+/// Holds the SFSpeechRecognitionTask so it can be cancelled on timeout (non-Sendable → @unchecked).
 private final class SpeechTaskBox: @unchecked Sendable {
     private var task: SFSpeechRecognitionTask?
     private let lock = NSLock()

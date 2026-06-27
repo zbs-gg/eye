@@ -1,37 +1,37 @@
 import Foundation
 import ApplicationServices
 
-/// Чтение accessibility-текста активного окна. По Pro: тяжёлый AX-обход (синхронный C-IPC) выполняется
-/// на ВЫДЕЛЕННОЙ serial-очереди, НЕ на cooperative actor executor. Actor хранит только per-pid кэш
-/// «флаги уже выставлены». AXUIElement создаётся и умирает на очереди — наружу только Sendable AXExtraction.
-/// Логика портирована из отлаженного harness `electron-ax-smoke` (production-вариант: один обход + один
-/// ретрай при пустом дереве вместо серии замеров).
+/// Reading the accessibility text of the active window. Per Pro: the heavy AX traversal (synchronous C-IPC)
+/// runs on a DEDICATED serial queue, NOT on the cooperative actor executor. The actor only holds a per-pid cache
+/// of "flags already set". The AXUIElement is created and dies on the queue — only the Sendable AXExtraction
+/// leaves it. The logic is ported from the debugged harness `electron-ax-smoke` (production variant: one traversal +
+/// one retry on an empty tree instead of a series of measurements).
 actor AXReader {
     private let config: CaptureConfig
     private var flaggedPIDs: Set<pid_t> = []
-    /// Per-PID health (план: sick-backoff): подряд тайм-ауты без контента → skip AX на 60с,
-    /// зависшее приложение не съедает бюджет каждого цикла.
+    /// Per-PID health (plan: sick-backoff): consecutive timeouts with no content → skip AX for 60s,
+    /// so a hung app doesn't eat the budget of every cycle.
     private var failStreak: [pid_t: Int] = [:]
     private var sickUntil: [pid_t: Date] = [:]
     private let queue = DispatchQueue(label: "com.zbseye.axreader", qos: .userInitiated)
-    /// Свой PID. ИНВАРИАНТ: AXReader НИКОГДА не инспектирует собственный процесс — иначе обход читает
-    /// наше же SwiftUI-дерево, и `kAXValue` у нашего Slider СИНХРОННО вызывает его @MainActor `Binding.get`
-    /// (TimelineView) прямо на этой serial-очереди → `dispatch_assert_queue(main)` → краш (диагноз Pro).
+    /// Our own PID. INVARIANT: AXReader NEVER inspects its own process — otherwise the traversal reads
+    /// our own SwiftUI tree, and `kAXValue` on our Slider SYNCHRONOUSLY calls its @MainActor `Binding.get`
+    /// (TimelineView) right on this serial queue → `dispatch_assert_queue(main)` → crash (Pro's diagnosis).
     private static let ownPID = ProcessInfo.processInfo.processIdentifier
 
     init(config: CaptureConfig) { self.config = config }
 
     func reset() { flaggedPIDs.removeAll(); failStreak.removeAll(); sickUntil.removeAll() }
-    func forget(pid: pid_t) {                              // при смерти процесса (pid reuse)
+    func forget(pid: pid_t) {                              // on process death (pid reuse)
         flaggedPIDs.remove(pid); failStreak[pid] = nil; sickUntil[pid] = nil
     }
 
     func extract(pid: pid_t) async -> AXExtraction {
-        guard pid != Self.ownPID else {                       // защита инварианта (см. ownPID): второй рубеж,
-            assertionFailure("AXReader must not inspect its own process")  // чтобы новый call site не воскресил баг
+        guard pid != Self.ownPID else {                       // invariant guard (see ownPID): the second line of defense,
+            assertionFailure("AXReader must not inspect its own process")  // so a new call site doesn't resurrect the bug
             return AXExtraction()
         }
-        // sick-PID: недавно повисал — не дёргаем AX, сразу отдаём пустышку (Coordinator уйдёт в OCR)
+        // sick-PID: recently hung — don't poke AX, return an empty result right away (the Coordinator will fall back to OCR)
         if let until = sickUntil[pid], until > Date() {
             var ext = AXExtraction(); ext.quality = .sickPID; return ext
         }
@@ -43,12 +43,12 @@ actor AXReader {
                 cont.resume(returning: AXCore.perform(pid: pid, maySetFlags: mayFlag, config: cfg))
             }
         }
-        // Флаги не «прилипли»? Откатываем — попробуем выставить в следующий раз (Electron поднимается лениво).
+        // Flags didn't "stick"? Roll back — we'll try to set them next time (Electron starts up lazily).
         if mayFlag && result.manualResult != nil
             && result.manualResult != "success" && result.enhancedResult != "success" {
             flaggedPIDs.remove(pid)
         }
-        // health-учёт: timeout без контента — страйк; 3 подряд → sick на 60с
+        // health accounting: timeout with no content — a strike; 3 in a row → sick for 60s
         if result.hitBudgetLimit && result.contentChars == 0 {
             let n = (failStreak[pid] ?? 0) + 1
             failStreak[pid] = n
@@ -59,8 +59,8 @@ actor AXReader {
         return result
     }
 
-    /// Дешёвый заголовок окна для ocrOnly-приложений (Zed/Figma): один AX-вызов, без обхода дерева —
-    /// иначе их записи оставались без windowTitle вовсе.
+    /// A cheap window title for ocrOnly apps (Zed/Figma): a single AX call, without traversing the tree —
+    /// otherwise their records were left without a windowTitle at all.
     func titleOnly(pid: pid_t) async -> String? {
         guard pid != Self.ownPID else {
             assertionFailure("AXReader must not inspect its own process")
@@ -75,7 +75,7 @@ actor AXReader {
     }
 }
 
-// MARK: - синхронное AX-ядро (выполняется на serial-очереди AXReader)
+// MARK: - synchronous AX core (runs on AXReader's serial queue)
 
 private enum AXCore {
     static let contentRoles: Set<String> = [
@@ -91,24 +91,24 @@ private enum AXCore {
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, Float(config.axMessagingTimeout))
 
-        // CONSERVATIVE (план/Pro): сначала пробуем БЕЗ флагов — здоровые нативные приложения отдают
-        // дерево сразу, а AXEnhancedUserInterface им только вредит (ломает анимации/раскладку у части
-        // приложений). Флаги — ТОЛЬКО если дерево пустое (Electron ленится), с retry-лестницей.
+        // CONSERVATIVE (plan/Pro): first try WITHOUT flags — healthy native apps return their tree
+        // right away, and AXEnhancedUserInterface only hurts them (breaks animations/layout in some
+        // apps). Flags — ONLY if the tree is empty (Electron is lazy), with a retry ladder.
         var result = traverse(app: app, config: config)
         if result.contentChars == 0 && maySetFlags && !result.hitDeadline {
             ext.manualResult = errString(setAttr(app, "AXManualAccessibility", true))
             ext.enhancedResult = errString(setAttr(app, "AXEnhancedUserInterface", true))
-            for delayMs in [250, 750] {                   // лестница: дерево строится лениво/асинхронно
+            for delayMs in [250, 750] {                   // ladder: the tree is built lazily/asynchronously
                 usleep(useconds_t(delayMs * 1000))
                 result = traverse(app: app, config: config)
                 if result.contentChars > 0 { break }
             }
         } else if result.contentChars == 0 && !result.hitDeadline {
-            // флаги уже выставлялись ранее — один обычный ретрай
+            // flags were already set earlier — one regular retry
             usleep(useconds_t(config.axEmptyRetryMs * 1000))
             result = traverse(app: app, config: config)
         }
-        ext.treeWasEmpty = result.contentChars == 0   // всегда, не только в ветке ретрая
+        ext.treeWasEmpty = result.contentChars == 0   // always, not only in the retry branch
 
         ext.contentText = String(result.text.prefix(20_000))
         ext.contentChars = result.contentChars
@@ -125,7 +125,7 @@ private enum AXCore {
         return ext
     }
 
-    // ── budgeted iterative traversal (стек, deadline на каждом узле) ──
+    // ── budgeted iterative traversal (stack, deadline on every node) ──
     struct TR { var nodeCount = 0; var text = ""; var contentChars = 0; var chromeChars = 0
         var url: String?; var hitDeadline = false }
 
@@ -141,10 +141,10 @@ private enum AXCore {
             let role = copyString(node, kAXRoleAttribute) ?? "?"
             var nodeText = ""
             var len = 0
-            // Pro: НЕ читать kAXValue без разбора роли. У не-text-элементов (AXSlider и пр.) числовое value
-            // потом всё равно отбрасывается `copyString`, но сам getter — лишний IPC и побочка (у нашего
-            // собственного Slider — синхронный @MainActor Binding.get). text-роли: полный набор; chrome:
-            // только title/description; остальные: ничего.
+            // Pro: do NOT read kAXValue without inspecting the role. On non-text elements (AXSlider etc.) the numeric value
+            // is then thrown away by `copyString` anyway, but the getter itself is a redundant IPC and a side effect (on our
+            // own Slider it's a synchronous @MainActor Binding.get). text roles: the full set; chrome:
+            // only title/description; everything else: nothing.
             let attrs: [String]
             if contentRoles.contains(role) || role == "AXStaticText" || role == "AXHeading" {
                 attrs = [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute,
@@ -163,8 +163,8 @@ private enum AXCore {
             if len > 0 {
                 let (c, ch) = contribution(role: role, len: len)
                 r.contentChars += c; r.chromeChars += ch
-                // в текст — только КОНТЕНТ: пункты меню/кнопки/тулбары засоряли FTS мусором
-                // («Файл Правка Вид…» в каждом кадре) и съедали 20k-лимит
+                // into the text — only CONTENT: menu items/buttons/toolbars were polluting FTS with junk
+                // ("File Edit View…" in every frame) and eating up the 20k limit
                 if c > 0, r.text.count < 20_000 { r.text += nodeText }
             }
             if role == "AXWebArea", r.url == nil { r.url = copyURL(node) }
@@ -189,7 +189,7 @@ private enum AXCore {
         return .none
     }
 
-    /// Только заголовок focused/main окна — один-два AX-вызова, без обхода.
+    /// Only the title of the focused/main window — one or two AX calls, without traversal.
     static func focusedWindowTitle(pid: pid_t, config: CaptureConfig) -> String? {
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, Float(config.axMessagingTimeout))
@@ -198,7 +198,7 @@ private enum AXCore {
         return copyString(win, kAXTitleAttribute)
     }
 
-    // ── AX C-обёртки ──
+    // ── AX C wrappers ──
     static func copyString(_ e: AXUIElement, _ attr: String) -> String? {
         var v: CFTypeRef?
         guard AXUIElementCopyAttributeValue(e, attr as CFString, &v) == .success, let val = v else { return nil }

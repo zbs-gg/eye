@@ -1,131 +1,131 @@
-# ZBS Eye — Дорожная карта
+# ZBS Eye — Roadmap
 
-**Вечная локальная память твоего Mac.** Непрерывно записывает экран и звук, даёт найти любой момент
-за секунды. 100% на устройстве — без облака, без аккаунта, без подписки.
+**Eternal local memory for your Mac.** Continuously records screen and sound, lets you find any moment
+in seconds. 100% on-device — no cloud, no account, no subscription.
 
-Этот документ — куда мы идём и зачем. Текущее состояние кода и архитектуру см. в `AGENTS.md`.
-
----
-
-## Зачем это вообще
-
-Категория «персональная память компьютера» осиротела: главный игрок ушёл к большой корпорации,
-оставшиеся — либо облачные (твоя жизнь уезжает на чужие серверы), либо ушли на подписку $25–50/мес
-с обязательным аккаунтом. ZBS Eye занимает эту нишу с противоположной позицией: **всё остаётся у тебя.**
-
-Две цели по продукту:
-
-1. **Заменить персональную память постфактум** — записывает всё, ищешь по-человечески, перематываешь
-   время. Это ядро (v1.0).
-2. **Заменить живого ИИ-суфлёра в звонках** — подсказки в реальном времени поверх разговора. Новый
-   слой поверх готового аудио-пайплайна (v1.5).
+This document is where we're going and why. For the current code state and architecture, see `AGENTS.md`.
 
 ---
 
-## Принципы (не нарушаем никогда)
+## Why this exists at all
 
-- **Ноль egress.** Сервер слушает только `127.0.0.1`, всё кроме `/health` — за Bearer-токеном.
-- **Ноль аккаунтов, ноль подписки, ноль телеметрии.** Это и есть продукт, а не временная позиция.
-- **ИИ — только локальный** (локальная LLM). Никаких «облачных пресетов по умолчанию».
-- **Дефолт — писать всё**, но дать человеку контроль: пауза, исключения, удаление периода.
-- **Нативность и лёгкость.** Swift/SwiftUI, аппаратное ускорение Apple Silicon, минимум зависимостей.
+The "personal computer memory" category was orphaned: the main player was acquired by a big corporation,
+and the rest are either cloud-based (your life moves onto someone else's servers) or moved to a $25–50/mo
+subscription with a mandatory account. ZBS Eye takes this niche from the opposite stance: **everything stays with you.**
 
----
+Two product goals:
 
-## Сейчас работает (проверено вживую)
-
-- Захват экрана: ScreenCaptureKit → HEIC, accessibility-текст + OCR-fallback, perceptual-hash дедуп.
-- Аудио: микрофон + системный звук, VAD, on-device транскрипция (SFSpeech).
-- Гибрид-поиск: FTS5 + семантика (multilingual-e5, 384-dim) через RRF — **cross-lingual ru↔en**.
-- Таймлайн: скруббер, плотность активности, плеер 1×/2×/4×, zoom день/час/10 мин.
-- Локальный REST + MCP для ИИ-агентов.
-- Хранилище: retention (по умолчанию вечно), перенос на внешний SSD, iCloud-бэкап сжатым снапшотом,
-  трекинг размера.
-- Автоматизации: ежедневная сводка (локальная LLM → файл/Obsidian), экспорт.
+1. **Replace personal memory after the fact** — record everything, search like a human, rewind time.
+   This is the core (v1.0).
+2. **Replace a live AI prompter in calls** — real-time hints over a conversation. A new layer on top of
+   the existing audio pipeline (v1.5).
 
 ---
 
-## v1.0 — «ежедневный драйвер»
+## Principles (never broken)
 
-> Цель: можно поставить себе на 24/7 и **доверять** — ничего не теряется молча, поиск находит всё,
-> первый запуск понятен. Это та планка, на которой продукт перестаёт «врать».
+- **Zero egress.** The server listens only on `127.0.0.1`; everything except `/health` is behind a Bearer token.
+- **Zero accounts, zero subscription, zero telemetry.** That IS the product, not a temporary stance.
+- **AI is local only** (a local LLM). No "cloud presets by default".
+- **Default is to record everything**, but give the person control: pause, exclusions, delete a range.
+- **Native and lightweight.** Swift/SwiftUI, Apple Silicon hardware acceleration, minimal dependencies.
+
+---
+
+## Working now (verified live)
+
+- Screen capture: ScreenCaptureKit → HEIC, accessibility text + OCR fallback, perceptual-hash dedup.
+- Audio: microphone + system audio, VAD, on-device transcription (SFSpeech).
+- Hybrid search: FTS5 + semantics (multilingual-e5, 384-dim) via RRF — **cross-lingual**.
+- Timeline: scrubber, activity density, 1×/2×/4× player, day/hour/10-min zoom.
+- Local REST + MCP for AI agents.
+- Storage: retention (forever by default), move to external SSD, iCloud backup as a compressed snapshot,
+  size tracking.
+- Automations: daily summary (local LLM → file/Obsidian), export.
+
+---
+
+## v1.0 — "daily driver"
+
+> Goal: you can run it 24/7 and **trust** it — nothing is lost silently, search finds everything, the
+> first launch is clear. That's the bar at which the product stops "lying".
 >
-> **Статус: фактически достигнут в коде** (проверка сборки — на Mac, см. ниже). Ниже ✅ — реализовано,
-> 🟡 — частично/полировка, ⏳ — отложено по причине.
+> **Status: effectively reached in code** (build verification is on the Mac, see below). Below, ✅ = done,
+> 🟡 = partial/polish, ⏳ = deferred for a reason.
 
-### 1. Надёжность записи — ✅
-- ✅ Бэкфилл транскрипции: незатранскрибированные сегменты (краш/фейл) до-ставляются на старте
-  (`AudioCoordinator.backfillUntranscribed`, окно 7 дней, проверка файла).
-- ✅ Диагностируемость: `os.Logger` по категориям (`Log`), crash-маркер (clean-shutdown флаг), лог сервера.
-- ✅ Хранилище в реальном времени: непрерывный retention-таймер + триггер по размеру; disk-guard перед
-  захватом (`diskOK`/`freeBytes`) + экстренный prune.
+### 1. Recording reliability — ✅
+- ✅ Transcription backfill: untranscribed segments (crash/fail) are delivered at startup
+  (`AudioCoordinator.backfillUntranscribed`, 7-day window, file check).
+- ✅ Diagnosability: `os.Logger` by category (`Log`), crash marker (clean-shutdown flag), server log.
+- ✅ Real-time storage: a continuous retention timer + a size trigger; a disk guard before capture
+  (`diskOK`/`freeBytes`) + emergency prune.
 
-### 2. Глубина захвата — 🟡
-- ✅ Мультимонитор: снимается дисплей сфокусированного окна (`displayForFrontmostWindow`).
-- ⏳ Полировка (требует тюнинга на железе): приоритетное извлечение AX вместо полного обхода, per-PID
-  backoff (не тормозить чужие приложения), per-tile hash, заголовки/URL для OCR-only окон.
+### 2. Capture depth — 🟡
+- ✅ Multi-monitor: the display of the focused window is captured (`displayForFrontmostWindow`).
+- ⏳ Polish (needs tuning on hardware): priority AX extraction instead of a full traversal, per-PID
+  backoff (don't slow other apps), per-tile hash, titles/URLs for OCR-only windows.
 
-### 3. Поиск целиком — ✅
-- ✅ Фильтры время/приложение/тип + пагинация сквозь `SearchService` → REST (`/v1/search`) → MCP
-  (`search_history`); shard-фильтр vec по месячным бакетам + recency-first.
+### 3. Full search — ✅
+- ✅ Time/app/type filters + pagination through `SearchService` → REST (`/v1/search`) → MCP
+  (`search_history`); a vec shard filter by monthly buckets + recency-first.
 
-### 4. Память о звонках — ✅
-- ✅ Семантика по транскриптам (vec_transcripts, cross-lingual: ru-запрос находит en-разговор).
-- ✅ Аудио на таймлайне: панель транскрипта + проигрывание m4a (`AudioPlayerStore`).
+### 4. Call memory — ✅
+- ✅ Semantics over transcripts (vec_transcripts, cross-lingual: a query in one language finds a conversation in another).
+- ✅ Audio on the timeline: a transcript panel + m4a playback (`AudioPlayerStore`).
 
-### 5. По-настоящему ноль egress — ✅
-- ✅ Модель эмбеддингов упаковывается в бандл (`scripts/build-release.sh`) — first-run без сети.
+### 5. Truly zero egress — ✅
+- ✅ The embedding model is bundled (`scripts/build-release.sh`) — first-run with no network.
 
-### 6. «Спроси свою память» — ✅
-- ✅ Раздел «Спроси»: вопрос → гибрид-поиск → локальная LLM отвечает по фрагментам со ссылками
-  (`AskService`/`AskStore`/`AskView`). Полностью на устройстве — локальный аналог «Ask Rewind».
-- ✅ Выбор LLM-модели из реально загруженных в LM Studio/Ollama (`/v1/models`), а не свободный ввод.
+### 6. "Ask your memory" — ✅
+- ✅ "Ask" section: question → hybrid search → a local LLM answers from fragments with links
+  (`AskService`/`AskStore`/`AskView`). Fully on-device — a local equivalent of "Ask Rewind".
+- ✅ LLM model picker from what's actually loaded in LM Studio/Ollama (`/v1/models`), not free text input.
 
-### 7. Упаковка для раздачи — ✅
-- ✅ Автостарт при логине (`SMAppService`), онбординг первого запуска.
-- ✅ **Нотаризация (Developer ID)** — `scripts/build-notarized.sh` (Hardened Runtime + Developer ID +
-  notarytool + staple). Раздача **вне App Store** (sandbox убил бы cross-app AX — ядро). Установка двойным
-  кликом, без «Open Anyway»; подпись стабильна — ребилды НЕ сбрасывают TCC. Сетап серта — `docs/NOTARIZE.md`.
-- ⏳ Автообновления (Sparkle) и тест-таргет (XCTest) — следующие.
+### 7. Packaging for distribution — ✅
+- ✅ Launch at login (`SMAppService`), first-run onboarding.
+- ✅ **Notarization (Developer ID)** — `scripts/build-notarized.sh` (Hardened Runtime + Developer ID +
+  notarytool + staple). Distribution **outside the App Store** (the sandbox would kill cross-app AX — the core).
+  Double-click install, no "Open Anyway"; the signature is stable — rebuilds do NOT reset TCC. Cert setup — `docs/NOTARIZE.md`.
+- ⏳ Auto-updates (Sparkle) and a test target (XCTest) — next.
 
-### Осознанно отложено из v1 (с причиной)
-- ⏳ **VAD «речь против музыки»** — сейчас гейт по энергии (RMS). Полноценный классификатор музыки рискует
-  глушить речь (худший провал для рекордера) и требует тюнинга на реальном звуке — делаем после полевых тестов.
+### Deliberately deferred from v1 (with a reason)
+- ⏳ **VAD "speech vs music"** — currently an energy (RMS) gate. A full music classifier risks muting
+  speech (the worst failure for a recorder) and needs tuning on real audio — we'll do it after field tests.
 
-**Критерий готовности v1.0:** неделя реального использования на 24/7 без молчаливых потерь;
-поиск находит и текст экрана, и разговоры; первый запуск на свежей машине проходится без подсказок.
+**v1.0 readiness criterion:** a week of real 24/7 use with no silent losses; search finds both screen
+text and conversations; the first launch on a fresh machine is completed without hints.
 
-> **Собрано, нотаризовано, работает live** (2026-06-25): нотаризованный Developer ID-билд установлен,
-> запускается двойным кликом, пишет на внешний SSD (50k+ кадров). Краш живой записи (self-AX reentrancy)
-> исправлен и live-проверен. К формальной «галочке v1.0» осталось: тест-таргет (XCTest).
-
----
-
-## v1.5 — «живой суфлёр» (новый эпик)
-
-> Цель: подсказки в реальном времени во время звонка — то, чего нет у памяти-постфактум.
-
-- **Live-overlay**: лёгкое окно поверх звонка.
-- **Стриминг-транскрипт обеих сторон** (микрофон = я, системный звук = собеседник) в реальном времени.
-- **Локальная LLM на потоке**: подсказки, ответы, конспект по ходу разговора.
-
-Архитектурно фундамент уже есть (аудио-пайплайн микрофон+система, локальная LLM, поиск по контексту) —
-нужен слой реального времени и overlay-окно.
+> **Built, notarized, working live** (2026-06-25): a notarized Developer ID build is installed, launches
+> with a double-click, writes to an external SSD (50k+ frames). The live-recording crash (self-AX reentrancy)
+> is fixed and verified live. For the formal "v1.0 check mark", what remains is: a test target (XCTest).
 
 ---
 
-## v2.0 — экосистема и polish
+## v1.5 — "live prompter" (new epic)
 
-- **Автоматизации по расписанию** + уведомления (сейчас только вручную).
-- **Коннекторы**: Obsidian / Notion / др. как полноценные приёмники.
-- **Расширенный экспорт** дня/всего (markdown + медиа) — «забери память с собой», против lock-in.
-- **Диаризация спикеров** глубже простых лейблов я/собеседник.
-- **Горячие клавиши, переход к дате, исключения приложений** — мелочи ежедневного комфорта.
+> Goal: real-time hints during a call — something after-the-fact memory doesn't have.
+
+- **Live overlay**: a lightweight window over the call.
+- **Streaming transcript of both sides** (microphone = me, system audio = the other party) in real time.
+- **A local LLM on the stream**: hints, answers, a running summary during the conversation.
+
+The foundation is already there architecturally (mic+system audio pipeline, a local LLM, context search) —
+what's needed is the real-time layer and the overlay window.
 
 ---
 
-## Сознательно НЕ делаем (это позиция, а не TODO)
+## v2.0 — ecosystem and polish
 
-- Облако, аккаунты, телеметрию — никогда.
-- Блэклист приложений по умолчанию — дефолт «писать всё», исключения только opt-in.
-- Тяжёлые модели, греющие процессор, — лёгкость нативного стека есть часть продукта.
+- **Scheduled automations** + notifications (currently manual only).
+- **Connectors**: Obsidian / Notion / etc. as full destinations.
+- **Extended export** of a day/everything (markdown + media) — "take your memory with you", against lock-in.
+- **Speaker diarization** deeper than simple me/other-party labels.
+- **Hotkeys, jump to date, app exclusions** — the small daily-comfort things.
+
+---
+
+## Deliberately NOT doing (this is a stance, not a TODO)
+
+- Cloud, accounts, telemetry — never.
+- An app blocklist by default — the default is "record everything", exclusions are opt-in only.
+- Heavy models that heat the CPU — the lightness of the native stack is part of the product.

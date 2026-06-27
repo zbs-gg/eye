@@ -2,22 +2,22 @@ import SwiftUI
 import AppKit
 import Observation
 
-/// Оформление-награды: выбранная тема / альт-иконка приложения / значок меню-бара. Что РАЗБЛОКИРОВАНО —
-/// выводится из открытых достижений (reward в каталоге). Выбор персистится. @MainActor @Observable.
+/// Cosmetic rewards: selected theme / alt app icon / menu-bar icon. What's UNLOCKED is
+/// derived from earned achievements (the reward in the catalog). The choice persists. @MainActor @Observable.
 @MainActor
 @Observable
 final class RewardsStore {
     var theme: AppTheme {
         didSet { UserDefaults.standard.set(theme.rawValue, forKey: Self.themeKey) }
     }
-    /// Имя ассета альт-иконки приложения; "" = дефолтная (из AppIcon).
+    /// Alt app icon asset name; "" = default (from AppIcon).
     var appIconAsset: String {
         didSet {
             UserDefaults.standard.set(appIconAsset, forKey: Self.iconKey)
             applyAppIcon()
         }
     }
-    /// SF-символ значка меню-бара «в покое».
+    /// SF Symbol for the menu-bar icon "at rest".
     var menuBarIcon: String {
         didSet { UserDefaults.standard.set(menuBarIcon, forKey: Self.menuKey) }
     }
@@ -34,7 +34,7 @@ final class RewardsStore {
         menuBarIcon = UserDefaults.standard.string(forKey: Self.menuKey) ?? "waveform"
     }
 
-    /// Применить выбранную иконку приложения к dock (на старте и при смене). nil → дефолтная.
+    /// Apply the selected app icon to the dock (on launch and on change). nil → default.
     func applyAppIcon() {
         if appIconAsset.isEmpty {
             NSApp.applicationIconImage = nil
@@ -43,13 +43,13 @@ final class RewardsStore {
         }
     }
 
-    // MARK: — что разблокировано (из достижений)
+    // MARK: — what's unlocked (from achievements)
 
     func isThemeUnlocked(_ t: AppTheme) -> Bool { t == .standard || rewardUnlocked(.theme(t)) }
     func isAppIconUnlocked(_ asset: String) -> Bool { asset.isEmpty || rewardUnlocked(.appIcon(asset)) }
     func isMenuBarUnlocked(_ sym: String) -> Bool { sym == "waveform" || rewardUnlocked(.menuBarIcon(sym)) }
 
-    /// Достижение, чьё открытие даёт этот reward (для подсказки «откроется за X»).
+    /// The achievement whose unlock grants this reward (for the "unlocks at X" hint).
     func unlockingAchievement(for r: AchievementReward) -> Achievement? {
         AchievementCatalog.all.first { $0.reward == r }
     }

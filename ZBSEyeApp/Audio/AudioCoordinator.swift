@@ -2,10 +2,10 @@ import Foundation
 import Observation
 import GRDB
 
-/// Оркестратор аудио-записи (@MainActor): два независимых лега — микрофон (AVAudioEngine) и системный
-/// звук (ScreenCaptureKit). Разные права (mic vs screen recording), общий TranscriptionService.
-/// Гейты (что включать) — снаружи (RecordingStore/AppEnvironment). @Observable — per-source флаги
-/// (micRunning/systemRunning) питают честный индикатор записи в menubar/sidebar.
+/// Audio-recording orchestrator (@MainActor): two independent legs — microphone (AVAudioEngine) and system
+/// audio (ScreenCaptureKit). Different permissions (mic vs screen recording), a shared TranscriptionService.
+/// The gates (what to enable) live outside (RecordingStore/AppEnvironment). @Observable — per-source flags
+/// (micRunning/systemRunning) feed the honest recording indicator in the menubar/sidebar.
 @MainActor
 @Observable
 final class AudioCoordinator {
@@ -18,17 +18,17 @@ final class AudioCoordinator {
     @ObservationIgnored private var systemTask: Task<Void, Never>?
 
     private(set) var isRunning = false
-    private(set) var micStartFailed = false      // движок не стартанул (нет mic/устройства) — для health/UI
-    private(set) var systemStartFailed = false   // SCStream не стартанул (нет screen-доступа/дисплея)
-    private(set) var micRunning = false          // per-source индикатор: что реально пишется
+    private(set) var micStartFailed = false      // the engine did not start (no mic/device) — for health/UI
+    private(set) var systemStartFailed = false   // SCStream did not start (no screen access/display)
+    private(set) var micRunning = false          // per-source indicator: what is actually being recorded
     private(set) var systemRunning = false
     @ObservationIgnored var onSegment: (@MainActor () -> Void)?
 
     @ObservationIgnored private var micRestarts = RestartBudget()
     @ObservationIgnored private var systemRestarts = RestartBudget()
-    /// Бамп на каждый start()/stop() координатора: рестарт-циклы прежней сессии самоустраняются.
+    /// Bumped on every coordinator start()/stop(): restart loops from the previous session self-terminate.
     @ObservationIgnored private var legGeneration = 0
-    /// Эпохи легов: хвост СТАРОГО runLeg не должен перетирать micRunning/systemRunning НОВОГО запуска.
+    /// Leg epochs: the tail of an OLD runLeg must not overwrite the micRunning/systemRunning of a NEW start.
     @ObservationIgnored private var micEpoch = 0
     @ObservationIgnored private var systemEpoch = 0
 
@@ -43,8 +43,8 @@ final class AudioCoordinator {
         self.micEngine = AudioCaptureEngine(config: config)
         self.systemEngine = SystemAudioCaptureEngine(config: config)
 
-        // Устойчивость 24/7: смена аудио-устройства (AirPods) / смерть SCStream → авто-рестарт лега
-        // с задержкой и бюджетом (анти-цикл при перманентной поломке). Раньше — молчаливая смерть.
+        // 24/7 resilience: an audio-device change (AirPods) / SCStream death → auto-restart the leg
+        // with a delay and a budget (anti-loop on a permanent breakage). Previously — a silent death.
         micEngine.onConfigurationChange = { [weak self] in
             Task { @MainActor in await self?.restartLeg(mic: true) }
         }
@@ -53,10 +53,10 @@ final class AudioCoordinator {
         }
     }
 
-    /// Перезапуск лега после смерти движка. НЕ терминальный: бюджет (5/мин) гасит штормы рестартов,
-    /// но после исчерпания — минутный отдых и новая попытка (устройство могло стабилизироваться;
-    /// перманентная смерть лега до ручного вмешательства недопустима для 24/7-рекордера).
-    /// generation-гард: ручной stop()/start() во время паузы делает этот цикл устаревшим.
+    /// Restart a leg after the engine dies. NOT terminal: the budget (5/min) quenches restart storms,
+    /// but once exhausted — a one-minute rest and a fresh attempt (the device may have stabilized;
+    /// a permanent leg death until manual intervention is unacceptable for a 24/7 recorder).
+    /// generation guard: a manual stop()/start() during the pause makes this loop stale.
     private func restartLeg(mic: Bool) async {
         guard isRunning else { return }
         let gen = legGeneration
@@ -73,7 +73,7 @@ final class AudioCoordinator {
             if mic {
                 if startMicLeg() { return }
             } else {
-                startSystemLeg()   // async-движок: провал старта вернётся новым restartLeg из catch
+                startSystemLeg()   // async engine: a start failure will come back as a new restartLeg from catch
                 return
             }
         }
@@ -94,18 +94,18 @@ final class AudioCoordinator {
         micRunning = false
         systemRunning = false
         micEngine.stop()
-        systemEngine.stop()   // finish() закроет stream → for-await завершится → flushFinal внутри лега
-        // Дождаться обоих легов (их flushFinal), затем выгрузить модель — в фоне (мы @MainActor, не await'им).
+        systemEngine.stop()   // finish() will close the stream → for-await completes → flushFinal inside the leg
+        // Wait for both legs (their flushFinal), then unload the model — in the background (we're @MainActor, not awaiting).
         let mt = micTask, st = systemTask, transcription = self.transcription
         Task { await mt?.value; await st?.value; await transcription.quiesce() }
-        // micTask/systemTask НЕ зануляем: следующий start ждёт их через previous (сериализация циклов).
+        // We do NOT nil out micTask/systemTask: the next start waits for them via previous (serialization of cycles).
     }
 
     func health() async -> TranscriptionHealth { await transcription.snapshot() }
 
-    /// Backfill: аудио-сегменты БЕЗ транскрипта (краш потерял in-memory очередь / транзиентный фейл) —
-    /// дотранскрибировать. Окно 7 дней (вечные фейлы вроде музыки не молотим бесконечно), файл должен
-    /// существовать. Вызывается из bootstrap с задержкой.
+    /// Backfill: audio segments WITHOUT a transcript (a crash lost the in-memory queue / a transient failure) —
+    /// re-transcribe them. A 7-day window (we don't grind on permanent failures like music forever), the file must
+    /// exist. Called from bootstrap with a delay.
     func backfillUntranscribed(db: ZBSEyeDatabase, storage: StorageManager) async {
         struct Item: Sendable { let id: Int64; let ts: Int64; let dur: Double; let rel: String; let channel: String }
         let weekAgoMs = msFromDate(Date().addingTimeInterval(-7 * 86_400))
@@ -128,19 +128,19 @@ final class AudioCoordinator {
                 durationSec: item.dur, channel: item.channel))
             queued += 1
         }
-        if queued > 0 { Log.audio.info("transcription backfill: \(queued) сегментов в очередь") }
+        if queued > 0 { Log.audio.info("transcription backfill: \(queued) segments queued") }
     }
 
-    /// Privacy-сброс in-flight аудио: открытый VAD-сегмент живёт в памяти (ни в БД, ни на диске) —
-    /// deleteRange его не видит, и «стереть навсегда» иначе переживал бы до 28с речи, захваченной
-    /// ДО клика (каноничный сценарий: произнёс пароль → жмёт удалить). Плюс чистка очереди транскрипции.
+    /// Privacy reset of in-flight audio: an open VAD segment lives in memory (neither in the DB nor on disk) —
+    /// deleteRange does not see it, and otherwise "erase forever" would still leave up to 28s of speech captured
+    /// BEFORE the click (the canonical scenario: said a password → hits delete). Plus a cleanup of the transcription queue.
     func discardInFlight(from: Date, to: Date) async {
         await micPipeline.reset()
         await systemPipeline.reset()
         await transcription.purgeQueued(from: from, to: to)
     }
 
-    // MARK: легы
+    // MARK: legs
 
     @discardableResult
     private func startMicLeg() -> Bool {
@@ -158,7 +158,7 @@ final class AudioCoordinator {
         return true
     }
 
-    /// Системный лег: engine.start() async (SCStream.startCapture), поэтому весь лег — внутри Task.
+    /// System leg: engine.start() is async (SCStream.startCapture), so the whole leg lives inside a Task.
     private func startSystemLeg() {
         systemStartFailed = false
         let previous = systemTask
@@ -174,7 +174,7 @@ final class AudioCoordinator {
                 Log.audio.error("system audio start failed: \(String(describing: error), privacy: .public)")
                 await MainActor.run {
                     self?.systemStartFailed = true
-                    // транзиентный провал старта (дисплеи перестраиваются) не должен быть терминальным
+                    // a transient start failure (displays reconfiguring) must not be terminal
                     Task { @MainActor in await self?.restartLeg(mic: false) }
                 }
                 return
@@ -190,8 +190,8 @@ final class AudioCoordinator {
         }
     }
 
-    /// Общий консьюмер лега: ждёт завершения прошлого цикла, reset, дренаж, flushFinal (всё на одном
-    /// потоке управления — без гонки flush vs трейлинг-feed).
+    /// Shared leg consumer: waits for the previous cycle to finish, reset, drain, flushFinal (all on one
+    /// control flow — without a flush vs trailing-feed race).
     private func runLeg(stream: AsyncStream<AudioFrame>, pipeline: AudioPipeline,
                         previous: Task<Void, Never>?, epoch: Int) -> Task<Void, Never> {
         Task { [weak self] in
@@ -202,13 +202,13 @@ final class AudioCoordinator {
                 if closed { Task { @MainActor in self?.onSegment?() } }
             }
             await pipeline.flushFinal()
-            // epoch-гард: хвост СТАРОГО лега после авто-рестарта не перетирает индикатор НОВОГО
+            // epoch guard: the tail of an OLD leg after an auto-restart does not overwrite the NEW indicator
             await MainActor.run { if self?.micEpoch == epoch { self?.micRunning = false } }
         }
     }
 }
 
-/// Бюджет авто-рестартов: максимум 5 за минуту — анти-цикл при перманентной поломке устройства.
+/// Auto-restart budget: at most 5 per minute — anti-loop on a permanent device breakage.
 private struct RestartBudget {
     private var stamps: [Date] = []
     mutating func allow() -> Bool {

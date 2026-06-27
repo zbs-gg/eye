@@ -1,8 +1,8 @@
 import Foundation
 import GRDB
 
-/// GRDB-модели. Колонки — camelCase (совпадают с именами свойств, без CodingKeys-маппинга).
-/// REST-DTO (snake_case/ISO) — отдельный слой (Фаза 2, шаг 5).
+/// GRDB models. Columns — camelCase (matching the property names, without CodingKeys mapping).
+/// REST-DTO (snake_case/ISO) — a separate layer (Phase 2, step 5).
 
 struct AppRow: Codable, FetchableRecord, MutablePersistableRecord {
     static let databaseTableName = "apps"
@@ -25,7 +25,7 @@ struct ScreenCaptureRow: Codable, FetchableRecord, MutablePersistableRecord {
     var height: Int?
     var bytes: Int?
     var axQuality: String?
-    // телеметрия (план v2 — доказывать AX-first)
+    // telemetry (v2 plan — to prove AX-first)
     var usefulTextChars: Int?
     var nodeCount: Int?
     var treeWasEmpty: Bool?
@@ -43,8 +43,8 @@ struct TextBlockRow: Codable, FetchableRecord, MutablePersistableRecord {
     var source: String            // "ax" | "ocr"
     var text: String
     var confidence: Double
-    // bbox: НОРМАЛИЗОВАННЫЕ [0..1], origin СНИЗУ-СЛЕВА (Vision/CoreGraphics; пишет только source='ocr').
-    // Для отрисовки на SwiftUI/AppKit-слое (origin сверху-слева) инвертировать Y: screenY = 1 - bboxY - bboxH.
+    // bbox: NORMALIZED [0..1], origin BOTTOM-LEFT (Vision/CoreGraphics; only source='ocr' writes it).
+    // To draw on the SwiftUI/AppKit layer (origin top-left), invert Y: screenY = 1 - bboxY - bboxH.
     var bboxX: Double?
     var bboxY: Double?
     var bboxW: Double?

@@ -15,23 +15,23 @@ enum RelocationError: LocalizedError {
     case verifyFailed(String)
     var errorDescription: String? {
         switch self {
-        case .sameLocation: return "Это уже текущая папка данных"
-        case let .destinationOccupied(p): return "В выбранной папке уже есть данные ZBS Eye (\(p)) — выбери другую"
+        case .sameLocation: return "This is already the current data folder"
+        case let .destinationOccupied(p): return "The selected folder already contains ZBS Eye data (\(p)) — pick another one"
         case let .insufficientSpace(n, f):
-            return "Недостаточно места: нужно ~\(n / 1_000_000) МБ, свободно \(f / 1_000_000) МБ"
-        case let .verifyFailed(m): return "Перенос не подтверждён: \(m). Данные на старом месте целы."
+            return "Not enough space: need ~\(n / 1_000_000) MB, \(f / 1_000_000) MB free"
+        case let .verifyFailed(m): return "Move not confirmed: \(m). The data at the old location is intact."
         }
     }
 }
 
-/// Перенос «вечной памяти» (БД + media) в другую папку. БД — GRDB online backup (консистентный
-/// снапшот живого пула под WAL; vec0/FTS5 как страницы). media — COPY (НЕ move: старое место цело до
-/// подтверждения). Verify (integrity + COUNT-parity + media count) ДО переключения. Вызывающий ПОТОМ
-/// делает StorageLocation.setRoot + relaunch (репоинт через рестарт — единственный способ перецепить и
-/// вспомогательные процессы --mcp/--backup-now, которые читают путь независимо).
+/// Moves "forever memory" (DB + media) to another folder. DB — GRDB online backup (a consistent
+/// snapshot of the live pool under WAL; vec0/FTS5 as pages). media — COPY (NOT move: the old location stays intact until
+/// confirmation). Verify (integrity + COUNT-parity + media count) BEFORE switching over. The caller THEN
+/// does StorageLocation.setRoot + relaunch (repointing via restart is the only way to re-attach the
+/// helper processes --mcp/--backup-now too, which read the path independently).
 actor StorageRelocator {
-    /// chosen — папка, выбранная пользователем; данные лягут в chosen/ZBS Eye. Захват ДОЛЖЕН быть на
-    /// паузе (recording.pauseForMaintenance) до вызова, иначе пара граничных кадров осядет в старом root.
+    /// chosen — the folder picked by the user; data lands in chosen/ZBS Eye. Capture MUST be
+    /// paused (recording.pauseForMaintenance) before the call, otherwise a couple of boundary frames settle into the old root.
     func migrate(sourcePool: DatabasePool, sourceDBURL: URL, sourceMedia: URL, chosen: URL,
                  progress: @Sendable @escaping (Double, String) -> Void) async throws -> RelocationReport {
         let newRoot = chosen.appendingPathComponent("ZBS Eye", isDirectory: true)
@@ -42,15 +42,15 @@ actor StorageRelocator {
             let fm = FileManager.default
             let destDB = newRoot.appendingPathComponent("zbseye.sqlite")
             let destMedia = newRoot.appendingPathComponent("media", isDirectory: true)
-            // Занятый dest (напр. возврат в legacy, где осталась устаревшая копия) — НЕ клобберим и НЕ
-            // блокируем: отодвигаем в сторону ZBS Eye.replaced-<ts> (без потерь, юзер удалит сам).
+            // An occupied dest (e.g. moving back to legacy, where a stale copy remained) — we do NOT clobber and do NOT
+            // block: we move it aside to ZBS Eye.replaced-<ts> (no data loss, the user deletes it themselves).
             if fm.fileExists(atPath: destDB.path) {
                 let aside = newRoot.deletingLastPathComponent()
                     .appendingPathComponent("ZBS Eye.replaced-\(BackupManager.timestamp())", isDirectory: true)
                 try fm.moveItem(at: newRoot, to: aside)
             }
 
-            // pre-flight: место на ЦЕЛЕВОМ томе
+            // pre-flight: space on the TARGET volume
             let srcDBBytes = BackupManager.fileBytes(sourceDBURL)
             let mediaFiles = (try? fm.contentsOfDirectory(at: sourceMedia,
                                                           includingPropertiesForKeys: [.fileSizeKey])) ?? []
@@ -65,44 +65,44 @@ actor StorageRelocator {
             try fm.createDirectory(at: destMedia, withIntermediateDirectories: true)
 
             do {
-                // 1. БД: online backup живого пула → dest .sqlite
-                progress(0.05, "Копирую базу…")
+                // 1. DB: online backup of the live pool → dest .sqlite
+                progress(0.05, "Copying the database…")
                 var dest: DatabaseQueue? = try DatabaseQueue(path: destDB.path)
                 try sourcePool.backup(to: dest!)
 
-                // 2. verify ДО переключения: integrity dest + COUNT-parity src↔dst (захват на паузе → src статичен)
-                progress(0.45, "Проверяю базу…")
+                // 2. verify BEFORE switching: integrity of dest + COUNT-parity src↔dst (capture paused → src is static)
+                progress(0.45, "Verifying the database…")
                 let srcCounts = try sourcePool.read { try Self.counts($0) }
                 let destCounts = try dest!.read { db -> [String: Int] in
                     let ic = try String.fetchOne(db, sql: "PRAGMA integrity_check") ?? "?"
                     guard ic == "ok" else { throw RelocationError.verifyFailed("integrity_check=\(ic)") }
                     return try Self.counts(db)
                 }
-                dest = nil   // закрыть соединение dest перед дальнейшим
+                dest = nil   // close the dest connection before proceeding
                 guard srcCounts == destCounts else {
-                    throw RelocationError.verifyFailed("счётчики не совпали (src \(srcCounts), dst \(destCounts))")
+                    throw RelocationError.verifyFailed("counts did not match (src \(srcCounts), dst \(destCounts))")
                 }
 
-                // 3. media — COPY (старое место цело)
-                progress(0.55, "Копирую медиа (\(mediaFiles.count))…")
+                // 3. media — COPY (the old location stays intact)
+                progress(0.55, "Copying media (\(mediaFiles.count))…")
                 for (i, f) in mediaFiles.enumerated() {
                     let to = destMedia.appendingPathComponent(f.lastPathComponent)
                     try? fm.removeItem(at: to)
                     try fm.copyItem(at: f, to: to)
                     if i % 300 == 0 {
-                        progress(0.55 + 0.4 * Double(i) / Double(max(1, mediaFiles.count)), "Копирую медиа…")
+                        progress(0.55 + 0.4 * Double(i) / Double(max(1, mediaFiles.count)), "Copying media…")
                     }
                 }
                 // 4. media parity
                 let destCount = ((try? fm.contentsOfDirectory(at: destMedia, includingPropertiesForKeys: nil)) ?? []).count
                 guard destCount >= mediaFiles.count else {
-                    throw RelocationError.verifyFailed("медиа: скопировано \(destCount) из \(mediaFiles.count)")
+                    throw RelocationError.verifyFailed("media: copied \(destCount) of \(mediaFiles.count)")
                 }
 
-                progress(1.0, "Готово")
+                progress(1.0, "Done")
                 return RelocationReport(newDataRoot: newRoot, dbBytes: srcDBBytes, mediaFilesCopied: mediaFiles.count)
             } catch {
-                try? fm.removeItem(at: newRoot)   // откат: источник нетронут
+                try? fm.removeItem(at: newRoot)   // rollback: source untouched
                 throw error
             }
         }.value

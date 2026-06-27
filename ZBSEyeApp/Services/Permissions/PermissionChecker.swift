@@ -16,13 +16,13 @@ struct PermissionSnapshot: Sendable {
     var speech: PermissionStatus = .notDetermined
 }
 
-/// Чистые пробы статуса TCC-прав (по дизайну онбординга, Pro выделил как высший приоритет).
-/// `screenRecording` отличает `.needsRestart` (право выдано, но SCStream вернул -3801) на стороне
-/// capture-слоя; здесь — базовая проба `CGPreflightScreenCaptureAccess`.
+/// Pure probes of TCC permission status (per onboarding design, Pro flagged it as top priority).
+/// `screenRecording` distinguishes `.needsRestart` (permission granted, but SCStream returned -3801) on the
+/// capture layer's side; here — the basic `CGPreflightScreenCaptureAccess` probe.
 enum PermissionChecker {
-    /// CGPreflight/AXIsProcessTrusted не различают denied и notDetermined (оба false). Различаем сами:
-    /// пока мы ни разу не запрашивали право — это notDetermined (кнопка «Запросить» осмыслена);
-    /// после запроса false = denied (осмыслена кнопка «Настройки»).
+    /// CGPreflight/AXIsProcessTrusted don't distinguish denied from notDetermined (both false). We distinguish ourselves:
+    /// while we've never requested the permission — it's notDetermined (the "Request" button makes sense);
+    /// after a request, false = denied (the "Settings" button makes sense).
     private static let requestedScreenKey = "zbseye.requested.screenRecording"
     private static let requestedAXKey = "zbseye.requested.accessibility"
 
@@ -58,7 +58,7 @@ enum PermissionChecker {
                            speech: speech())
     }
 
-    // ── запросы (показывают системный промпт) ──
+    // ── requests (show the system prompt) ──
     static func requestScreenRecording() {
         UserDefaults.standard.set(true, forKey: requestedScreenKey)
         CGRequestScreenCaptureAccess()
@@ -66,7 +66,7 @@ enum PermissionChecker {
 
     static func requestAccessibility() {
         UserDefaults.standard.set(true, forKey: requestedAXKey)
-        // kAXTrustedCheckOptionPrompt — глобальная var (не Sendable в Swift 6); значение стабильно.
+        // kAXTrustedCheckOptionPrompt — a global var (not Sendable in Swift 6); the value is stable.
         _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
 
@@ -80,7 +80,7 @@ enum PermissionChecker {
         }
     }
 
-    /// Deep-link в нужную панель System Settings, напр. "Privacy_ScreenCapture".
+    /// Deep-link to the relevant System Settings pane, e.g. "Privacy_ScreenCapture".
     @MainActor
     static func openSettings(_ pane: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {

@@ -26,8 +26,8 @@ struct RootWindow: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 900, minHeight: 600)
-        .background(ThemeAuraView(theme: env.rewards.theme).ignoresSafeArea())   // аура-фон темы
-        .tint(env.rewards.theme.accent)                                          // акцент всего UI
+        .background(ThemeAuraView(theme: env.rewards.theme).ignoresSafeArea())   // theme aura background
+        .tint(env.rewards.theme.accent)                                          // accent for the whole UI
         .animation(.easeInOut(duration: 0.5), value: env.rewards.theme)
         .overlay(alignment: .center) {
             if let milestone = env.progress?.pendingCelebration {
@@ -52,7 +52,7 @@ struct RootWindow: View {
         .sheet(isPresented: $env.showOnboarding) {
             OnboardingView()
                 .environment(env)
-                .interactiveDismissDisabled()   // закрытие — только кнопками (внутри есть «Позже»)
+                .interactiveDismissDisabled()   // dismiss only via buttons (there's a "Later" inside)
         }
     }
 }

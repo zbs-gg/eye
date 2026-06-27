@@ -2,15 +2,15 @@ import Foundation
 import Observation
 import AppKit
 
-/// Privacy-исключения: список приложений, которые НЕ записываются. Дефолт — пустой («писать всё» —
-/// позиция продукта); исключения — осознанный opt-in для 1Password/банка. Persist в UserDefaults.
+/// Privacy exclusions: the list of apps that are NOT recorded. Default is empty (“record everything” —
+/// the product stance); exclusions are a deliberate opt-in for 1Password/banking. Persisted in UserDefaults.
 @MainActor
 @Observable
 final class PrivacyStore {
     private(set) var ignoredBundleIds: [String] {
         didSet { UserDefaults.standard.set(ignoredBundleIds, forKey: Self.key) }
     }
-    /// Имена для UI (bundleId → отображаемое имя, лениво из установленного приложения).
+    /// Names for the UI (bundleId → display name, fetched lazily from the installed app).
     private(set) var displayNames: [String: String] = [:]
 
     @ObservationIgnored private static let key = "zbseye.privacy.ignoredApps"
@@ -22,15 +22,15 @@ final class PrivacyStore {
 
     func isIgnored(_ bundleId: String) -> Bool { ignoredBundleIds.contains(bundleId) }
 
-    /// Выбор .app через NSOpenPanel → bundleId.
+    /// Pick a .app via NSOpenPanel → bundleId.
     func addAppViaPanel() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowedContentTypes = [.applicationBundle]
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
-        panel.prompt = "Исключить"
-        panel.message = "Экран и текст этого приложения не будут записываться (звук — не гасится)"
+        panel.prompt = "Exclude"
+        panel.message = "This app’s screen and text won’t be recorded (audio is not muted)"
         guard panel.runModal() == .OK, let url = panel.url,
               let bundle = Bundle(url: url), let id = bundle.bundleIdentifier else { return }
         guard !ignoredBundleIds.contains(id) else { return }

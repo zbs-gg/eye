@@ -1,13 +1,13 @@
 import Foundation
 import GRDB
 
-/// Запросы для time-travel скруббера: границы истории, тики кадров, плотность по бакетам, кадр в момент.
+/// Queries for the time-travel scrubber: history bounds, frame ticks, density by buckets, the frame at a moment.
 actor TimelineService {
     private let db: ZBSEyeDatabase
     init(db: ZBSEyeDatabase) { self.db = db }
 
-    /// Границы истории по ОБОИМ источникам (экран + аудио): живое аудио при статичном экране тоже
-    /// двигает хвост таймлайна (иначе запись звонка не появлялась на strip до нового кадра).
+    /// History bounds across BOTH sources (screen + audio): live audio over a static screen also
+    /// moves the timeline tail (otherwise a call recording wouldn't appear on the strip until a new frame).
     func bounds() async throws -> TimeBounds {
         try await db.pool.read { db in
             let row = try Row.fetchOne(db, sql: """
@@ -24,7 +24,7 @@ actor TimelineService {
         }
     }
 
-    /// Плотность активности по бакетам (для density-strip). bucketMs — ширина бакета.
+    /// Activity density by buckets (for the density strip). bucketMs — bucket width.
     func density(from: Date, to: Date, bucketMs: Int64) async throws -> [DensityBucket] {
         let f = msFromDate(from), t = msFromDate(to)
         let b = max(1000, bucketMs)
@@ -39,13 +39,13 @@ actor TimelineService {
         }
     }
 
-    /// Ближайший кадр ≤ времени + его агрегированный текст и контекст.
+    /// The nearest frame ≤ the time + its aggregated text and context.
     func frameAt(_ time: Date) async throws -> FrameDetail? {
         try await fetchFrame(where: "c.ts <= ? ORDER BY c.ts DESC, c.id DESC", args: [msFromDate(time)])
     }
 
-    /// Строго следующий кадр — для шага вперёд и плеера. Тай-брейк (ts,id): кадры с равным ts
-    /// (мультимонитор) не схлопываются — плеер посетит каждый. afterId nil → строгий ts-переход.
+    /// Strictly the next frame — for stepping forward and the player. Tie-break (ts,id): frames with equal ts
+    /// (multi-monitor) don't collapse — the player visits each. afterId nil → a strict ts transition.
     func nextFrame(after time: Date, afterId: Int64? = nil) async throws -> FrameDetail? {
         let t = msFromDate(time)
         if let id = afterId {
@@ -56,7 +56,7 @@ actor TimelineService {
         return try await fetchFrame(where: "c.ts > ? ORDER BY c.ts ASC, c.id ASC", args: [t])
     }
 
-    /// Строго предыдущий кадр — для шага назад (зеркальный тай-брейк).
+    /// Strictly the previous frame — for stepping back (mirrored tie-break).
     func prevFrame(before time: Date, beforeId: Int64? = nil) async throws -> FrameDetail? {
         let t = msFromDate(time)
         if let id = beforeId {
@@ -71,7 +71,7 @@ actor TimelineService {
         try await fetchFrame(where: "c.id = ?", args: [id])
     }
 
-    /// Плотность АУДИО-активности (вторая дорожка density-strip): где в истории есть речь.
+    /// AUDIO activity density (the density strip's second track): where in history there's speech.
     func audioDensity(from: Date, to: Date, bucketMs: Int64) async throws -> [DensityBucket] {
         let f = msFromDate(from), t = msFromDate(to)
         let b = max(1000, bucketMs)
@@ -86,7 +86,7 @@ actor TimelineService {
         }
     }
 
-    /// Аудио-сегмент + его транскрипт (для панели прослушивания в таймлайне).
+    /// Audio segment + its transcript (for the listening panel in the timeline).
     func audioDetail(id: Int64) async throws -> AudioDetail? {
         try await db.pool.read { db in
             guard let row = try Row.fetchOne(db, sql:
@@ -102,8 +102,8 @@ actor TimelineService {
         }
     }
 
-    // Общий маппинг: один кадр по предикату + его склеенный текст. clause включает ORDER/LIMIT не нужен —
-    // LIMIT 1 добавляем здесь; ORDER задаётся в clause до LIMIT. clause — compile-time константы выше.
+    // Shared mapping: one frame by a predicate + its concatenated text. clause doesn't need to include ORDER/LIMIT —
+    // we add LIMIT 1 here; ORDER is set in clause before LIMIT. clause — the compile-time constants above.
     private func fetchFrame(where clause: String, args: [Int64]) async throws -> FrameDetail? {
         try await db.pool.read { db in
             guard let row = try Row.fetchOne(db, sql: """

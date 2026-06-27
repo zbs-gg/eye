@@ -3,9 +3,9 @@ import Observation
 import AppKit
 import UserNotifications
 
-/// UI-состояние автоматизации «саммари дня». Поток жёстко preview-then-write (план: firstRunRequiresPreview):
-/// сначала «Собрать превью» (collect+LLM, без записи) → пользователь видит результат → «Записать».
-/// Так приватная история и возможный prompt-injection не уходят в файл без явного подтверждения.
+/// UI state for the "day summary" automation. The flow is strictly preview-then-write (plan: firstRunRequiresPreview):
+/// first "Build preview" (collect+LLM, no write) → the user sees the result → "Write".
+/// This way private history and any possible prompt injection never reach a file without explicit confirmation.
 @MainActor
 @Observable
 final class DaySummaryStore {
@@ -16,16 +16,16 @@ final class DaySummaryStore {
     @ObservationIgnored private let safety: AutomationSafety = .default
     @ObservationIgnored private var previewTask: Task<Void, Never>?
 
-    /// Превью валидно только для дня, под который собрано. Смена дня в DatePicker обнуляет превью и
-    /// карточку записи — иначе кнопка «Записать» обещала бы новый день, а записала бы старое превью.
-    // ── расписание: «конспект сам в конце дня» (US-33). Auto-write только после ≥1 ручной записи —
-    //    first-run preview обязателен (prompt-injection гейт из дизайна automations). ──
+    /// A preview is valid only for the day it was built for. Changing the day in the DatePicker clears the preview and
+    /// the write card — otherwise the "Write" button would promise a new day but write the old preview.
+    // ── schedule: "summary writes itself at the end of the day" (US-33). Auto-write only after ≥1 manual write —
+    //    a first-run preview is mandatory (prompt-injection gate from the automations design). ──
     var scheduleEnabled: Bool = UserDefaults.standard.bool(forKey: "zbseye.automation.scheduleEnabled") {
         didSet {
             UserDefaults.standard.set(scheduleEnabled, forKey: "zbseye.automation.scheduleEnabled")
             if scheduleEnabled {
                 Self.requestNotificationAuth()
-                // точка отсчёта = вчера: включение расписания не должно тут же генерить catch-up
+                // baseline = yesterday: enabling the schedule must not immediately generate a catch-up
                 if UserDefaults.standard.string(forKey: "zbseye.automation.lastAutoDone") == nil {
                     let y = Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
                     UserDefaults.standard.set(DailySummaryService.ymd(y), forKey: "zbseye.automation.lastAutoDone")
@@ -40,7 +40,7 @@ final class DaySummaryStore {
     var autoWriteEnabled: Bool = UserDefaults.standard.bool(forKey: "zbseye.automation.autoWrite") {
         didSet { UserDefaults.standard.set(autoWriteEnabled, forKey: "zbseye.automation.autoWrite") }
     }
-    /// Была ли хоть одна РУЧНАЯ запись (юзер видел и одобрил формат) — гейт для auto-write.
+    /// Whether there has been at least one MANUAL write (the user saw and approved the format) — the gate for auto-write.
     private(set) var hasWrittenManually = UserDefaults.standard.bool(forKey: "zbseye.automation.manualWriteDone")
     @ObservationIgnored private var schedulerTask: Task<Void, Never>?
 
@@ -66,7 +66,7 @@ final class DaySummaryStore {
     var isBusy: Bool { phase == .summarizing || phase == .writing }
     var isReady: Bool { connections.isReady }
 
-    /// Запуск превью с удержанием Task — чтобы долгий вызов локальной модели можно было отменить.
+    /// Start the preview while holding onto the Task — so a long local-model call can be cancelled.
     func startPreview() {
         guard !isBusy else { return }
         previewTask?.cancel()
@@ -75,8 +75,8 @@ final class DaySummaryStore {
 
     func cancelPreview() { previewTask?.cancel() }
 
-    /// Privacy (Pro NO-GO follow-up): сбросить собранное превью/запись — это LLM-вывод по истории,
-    /// которую только что удалили (deleteHistory). Расписание/настройки/audit не трогаем.
+    /// Privacy (Pro NO-GO follow-up): clear the collected preview/write — it is an LLM inference over the history
+    /// that was just deleted (deleteHistory). We don't touch the schedule/settings/audit.
     func reset() {
         previewTask?.cancel()
         preview = nil
@@ -85,7 +85,7 @@ final class DaySummaryStore {
         phase = .idle
     }
 
-    /// Стадии collect+summarize. Запись НЕ делает. Вызывать через startPreview (для отменяемости).
+    /// The collect+summarize stages. Does NOT write. Call via startPreview (for cancellability).
     func buildPreview() async {
         guard !isBusy else { return }
         errorText = nil; lastWrite = nil; preview = nil
@@ -95,7 +95,7 @@ final class DaySummaryStore {
         phase = .summarizing
         do {
             let p = try await service.preview(day: selectedDay, llm: connections.llm, safety: safety)
-            if Task.isCancelled { phase = .idle; return }   // отменили во время запроса — без ошибки
+            if Task.isCancelled { phase = .idle; return }   // cancelled during the request — no error
             preview = p; phase = .done
         } catch is CancellationError {
             phase = .idle
@@ -108,7 +108,7 @@ final class DaySummaryStore {
         await refreshAudit()
     }
 
-    /// Запись подтверждённого превью в выбранную папку.
+    /// Write the confirmed preview into the selected folder.
     func writeApproved() async {
         guard let p = preview, !isBusy else { return }
         guard let url = connections.resolveDestinationURL() else {
@@ -132,9 +132,9 @@ final class DaySummaryStore {
 
     func refreshAudit() async { audit = await service.recentAudit() }
 
-    // MARK: расписание
+    // MARK: schedule
 
-    /// Тик раз в 5 минут: после scheduleHour, один раз в день. Запуск из bootstrap.
+    /// Ticks once every 5 minutes: after scheduleHour, once a day. Started from bootstrap.
     func startScheduler() {
         guard schedulerTask == nil else { return }
         schedulerTask = Task { [weak self] in
@@ -154,8 +154,8 @@ final class DaySummaryStore {
         let yesterdayYmd = DailySummaryService.ymd(yesterday)
         let done = UserDefaults.standard.string(forKey: "zbseye.automation.lastAutoDone") ?? yesterdayYmd
 
-        // Цель прогона: catch-up за ВЧЕРА (Mac спал в scheduleHour — день не должен выпасть; история
-        // вчера уже полная, hour-гейт не нужен), иначе сегодня после scheduleHour.
+        // Target of the run: a catch-up for YESTERDAY (the Mac was asleep at scheduleHour — the day must not be lost;
+        // yesterday's history is already complete, no hour gate needed), otherwise today after scheduleHour.
         let targetDay: Date
         let targetYmd: String
         if done < yesterdayYmd {
@@ -166,8 +166,8 @@ final class DaySummaryStore {
             return
         }
 
-        // Ретраи: transient-фейл (Ollama ещё не поднят в 21:00) не должен убивать день — до 3 попыток
-        // с шагом ≥15 минут. Успех фиксирует день окончательно.
+        // Retries: a transient failure (Ollama not yet up at 21:00) must not kill the day — up to 3 attempts
+        // with a ≥15-minute step. A success commits the day for good.
         let attemptDay = UserDefaults.standard.string(forKey: "zbseye.automation.attemptDay")
         var attempts = attemptDay == targetYmd ? UserDefaults.standard.integer(forKey: "zbseye.automation.attemptCount") : 0
         let lastAttempt = UserDefaults.standard.object(forKey: "zbseye.automation.lastAttemptAt") as? Date ?? .distantPast
@@ -177,34 +177,34 @@ final class DaySummaryStore {
         UserDefaults.standard.set(attempts, forKey: "zbseye.automation.attemptCount")
         UserDefaults.standard.set(now, forKey: "zbseye.automation.lastAttemptAt")
 
-        // Не перетираем работу юзера: если он смотрит ДРУГОЙ день с собранным превью — не трогаем
-        // его выбор (didSet снёс бы превью), просто зовём уведомлением.
+        // Don't overwrite the user's work: if they're looking at a DIFFERENT day with a built preview — don't touch
+        // their selection (didSet would wipe the preview), just nudge with a notification.
         if preview != nil && cal.startOfDay(for: selectedDay) != targetDay {
             UserDefaults.standard.set(targetYmd, forKey: "zbseye.automation.lastAutoDone")
-            Self.notify(title: "ZBS Eye", body: "Пора собрать конспект (\(targetYmd)) — открой Автоматизации.")
+            Self.notify(title: "ZBS Eye", body: "Time to build the summary (\(targetYmd)) — open Automations.")
             return
         }
 
         selectedDay = targetDay
-        // через previewTask — кнопка «Отмена» действует и на scheduled-прогон
+        // via previewTask — the "Cancel" button also applies to a scheduled run
         previewTask?.cancel()
         previewTask = Task { [weak self] in await self?.buildPreview() }
         await previewTask?.value
         guard preview != nil, phase == .done else {
             if attempts >= 3 {
-                Self.notify(title: "ZBS Eye", body: "Конспект (\(targetYmd)) не собрался после 3 попыток — открой Автоматизации (\(errorText ?? "ошибка")).")
+                Self.notify(title: "ZBS Eye", body: "The summary (\(targetYmd)) didn't build after 3 attempts — open Automations (\(errorText ?? "error")).")
                 UserDefaults.standard.set(targetYmd, forKey: "zbseye.automation.lastAutoDone")
             }
-            return   // attempts < 3 → следующая попытка через ≥15 мин
+            return   // attempts < 3 → next attempt in ≥15 min
         }
         UserDefaults.standard.set(targetYmd, forKey: "zbseye.automation.lastAutoDone")
         if autoWriteEnabled && hasWrittenManually {
             await writeApproved()
             Self.notify(title: "ZBS Eye", body: lastWrite != nil
-                ? "Конспект (\(targetYmd)) записан в \(connections.destination.subfolder.isEmpty ? "папку" : connections.destination.subfolder)."
-                : "Конспект собран, но запись не удалась — открой Автоматизации.")
+                ? "The summary (\(targetYmd)) was written to \(connections.destination.subfolder.isEmpty ? "the folder" : connections.destination.subfolder)."
+                : "The summary was built, but the write failed — open Automations.")
         } else {
-            Self.notify(title: "ZBS Eye", body: "Конспект (\(targetYmd)) готов — открой Автоматизации, проверь и запиши.")
+            Self.notify(title: "ZBS Eye", body: "The summary (\(targetYmd)) is ready — open Automations, review it and write.")
         }
     }
 

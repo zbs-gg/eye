@@ -9,10 +9,10 @@ import Metal
 struct OCRLine: Sendable {
     var text: String
     var confidence: Double
-    var bbox: CGRect?     // нормализованный bbox из Vision (0..1, origin снизу-слева) — для «кликни на найденное» / будущей redaction
+    var bbox: CGRect?     // normalized bbox from Vision (0..1, origin bottom-left) — for "click on what was found" / future redaction
 }
 
-/// CGImage иммутабелен и thread-safe — безопасно гонять вне актора для OCR.
+/// CGImage is immutable and thread-safe — safe to run off the actor for OCR.
 struct SendableCGImage: @unchecked Sendable { let image: CGImage }
 
 struct ProcessedFrame: Sendable {
@@ -22,19 +22,19 @@ struct ProcessedFrame: Sendable {
     var width: Int
     var height: Int
     var ocr: [OCRLine]
-    var displayID: UInt32   // какой дисплей реально сняли (monitorId в БД)
+    var displayID: UInt32   // which display we actually captured (monitorId in the DB)
 }
 
 enum CaptureError: Error { case noDisplay, encodeFailed }
 
-/// FramePipelineActor (по Pro): capture + encode + hash + OCR в ОДНОЙ isolation domain. CGImage/
-/// CVPixelBuffer живут и умирают здесь; наружу — только Sendable ProcessedFrame. Переиспользуемый
-/// Metal CIContext. Perceptual-hash дедуп (хранит UInt64, не буфер).
+/// FramePipelineActor (per Pro): capture + encode + hash + OCR in ONE isolation domain. CGImage/
+/// CVPixelBuffer live and die here; only a Sendable ProcessedFrame goes out. A reused
+/// Metal CIContext. Perceptual-hash dedup (stores a UInt64, not the buffer).
 actor FramePipeline {
     private let config: CaptureConfig
     private let ciContext: CIContext
     private var cachedContent: SCShareableContent?
-    private var lastHashes: [Int: [UInt64]] = [:]   // [full, 4 квадранта] per display
+    private var lastHashes: [Int: [UInt64]] = [:]   // [full, 4 quadrants] per display
 
     init(config: CaptureConfig) {
         self.config = config
@@ -54,9 +54,9 @@ actor FramePipeline {
         return c
     }
 
-    /// Захват + дедуп + HEIC + (опц) OCR. displayID — дисплей сфокусированного окна (NSScreen.main);
-    /// nil/не найден → первый. Возвращает nil если нет дисплея. При дубле — heicData пустой,
-    /// isDuplicate=true (Coordinator решает писать ли context-only запись).
+    /// Capture + dedup + HEIC + (opt) OCR. displayID — the display of the focused window (NSScreen.main);
+    /// nil/not found → the first one. Returns nil if there is no display. On a duplicate — heicData is empty,
+    /// isDuplicate=true (the Coordinator decides whether to write a context-only record).
     func process(displayID: CGDirectDisplayID?, needsOCR: Bool,
                  excludedBundleIds: Set<String> = []) async throws -> ProcessedFrame? {
         let content = try await currentContent()
@@ -64,8 +64,8 @@ actor FramePipeline {
                 ?? content.displays.first else { throw CaptureError.noDisplay }
         let dedupKey = Int(display.displayID)
 
-        // Privacy-исключения нативно через SCK: пиксели окон исключённых приложений не попадают
-        // в кадр ВООБЩЕ (и в OCR физически нечему утекать) — даже когда окно видно в фоне за другим.
+        // Privacy exclusions natively via SCK: the pixels of excluded apps' windows don't make it
+        // into the frame AT ALL (and there's physically nothing for OCR to leak) — even when the window is visible behind another in the background.
         let excludedApps = excludedBundleIds.isEmpty ? [] :
             content.applications.filter { excludedBundleIds.contains($0.bundleIdentifier) }
         let filter = SCContentFilter(display: display, excludingApplications: excludedApps,
@@ -78,12 +78,12 @@ actor FramePipeline {
         let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: cfg)
         let ciImage = CIImage(cgImage: cgImage)
 
-        // Per-tile дедуп: aHash целого экрана слеп к малым изменениям (новое сообщение в углу 4K
-        // меняет ≤3 бита из 64 → «дубликат»). Хэшируем целое + 4 квадранта: локальное изменение
-        // двигает хэш своего квадранта сильно — кадр больше не теряется.
+        // Per-tile dedup: aHash of the whole screen is blind to small changes (a new message in the corner of a 4K
+        // screen flips ≤3 bits out of 64 → "duplicate"). We hash the whole frame + 4 quadrants: a local change
+        // moves its own quadrant's hash a lot — the frame is no longer lost.
         let hashes = tileHashes(ciImage)
         let phash = hashes[0]
-        let prev = lastHashes[dedupKey]   // дедуп per-display: смена монитора не «дубликат» прошлого
+        let prev = lastHashes[dedupKey]   // per-display dedup: a monitor switch isn't a "duplicate" of the previous one
         let isDup = prev != nil && prev!.count == hashes.count &&
             zip(prev!, hashes).allSatisfy { Self.hamming($0, $1) <= config.dedupHammingThreshold }
         lastHashes[dedupKey] = hashes
@@ -98,7 +98,7 @@ actor FramePipeline {
 
         var ocr: [OCRLine] = []
         if needsOCR, let small = downscaledForOCR(ciImage) {
-            // OCR уходит с actor executor (dedicated queue) — актор свободен для следующего захвата
+            // OCR leaves the actor executor (dedicated queue) — the actor is free for the next capture
             ocr = await Self.runOCR(SendableCGImage(image: small), languages: config.ocrLanguages)
         }
         return ProcessedFrame(heicData: heic, phash: phash, isDuplicate: false,
@@ -106,7 +106,7 @@ actor FramePipeline {
                               displayID: display.displayID)
     }
 
-    /// Даунскейл до ocrDownscaleMaxDim (Pro: не OCR-ить полный Retina-кадр). Рендер через Metal.
+    /// Downscale to ocrDownscaleMaxDim (Pro: don't OCR a full Retina frame). Rendered via Metal.
     private func downscaledForOCR(_ image: CIImage) -> CGImage? {
         let w = image.extent.width, h = image.extent.height
         guard w > 0, h > 0 else { return nil }
@@ -115,17 +115,17 @@ actor FramePipeline {
         return ciContext.createCGImage(scaled, from: scaled.extent)
     }
 
-    // ── HEIC через аппаратный кодек ──
+    // ── HEIC via the hardware codec ──
     private func encodeHEIC(_ image: CIImage) -> Data? {
         let cs = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         return ciContext.heifRepresentation(of: image, format: .RGBA8, colorSpace: cs, options: [:])
     }
 
-    /// Хэши: [целый кадр, верх-лево, верх-право, низ-лево, низ-право].
+    /// Hashes: [whole frame, top-left, top-right, bottom-left, bottom-right].
     private func tileHashes(_ image: CIImage) -> [UInt64] {
         var out = [perceptualHash(image)]
         let e = image.extent
-        guard e.width >= 64, e.height >= 64 else { return out }   // мелкий кадр — квадранты бессмысленны
+        guard e.width >= 64, e.height >= 64 else { return out }   // a small frame — quadrants are meaningless
         let w = e.width / 2, h = e.height / 2
         for (ox, oy) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
             let rect = CGRect(x: e.minX + ox * w, y: e.minY + oy * h, width: w, height: h)
@@ -134,7 +134,7 @@ actor FramePipeline {
         return out
     }
 
-    // ── perceptual hash (aHash 8×8) — хранит UInt64, не буфер ──
+    // ── perceptual hash (aHash 8×8) — stores a UInt64, not the buffer ──
     private func perceptualHash(_ image: CIImage) -> UInt64 {
         guard image.extent.width > 0, image.extent.height > 0 else { return 0 }
         let sx = 8.0 / image.extent.width
@@ -162,7 +162,7 @@ actor FramePipeline {
 
     static func hamming(_ a: UInt64, _ b: UInt64) -> Int { (a ^ b).nonzeroBitCount }
 
-    // ── Vision OCR на dedicated queue (НЕ блокирует actor executor; autoreleasepool; ANE) ──
+    // ── Vision OCR on a dedicated queue (does NOT block the actor executor; autoreleasepool; ANE) ──
     nonisolated static func runOCR(_ img: SendableCGImage, languages: [String]) async -> [OCRLine] {
         await withCheckedContinuation { (cont: CheckedContinuation<[OCRLine], Never>) in
             DispatchQueue.global(qos: .utility).async {

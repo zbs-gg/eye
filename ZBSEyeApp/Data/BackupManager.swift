@@ -2,11 +2,11 @@ import Foundation
 import GRDB
 import Compression
 
-/// Сжатый снапшот живой БД в iCloud Drive. Живая база ОСТАЁТСЯ локальной (быстро, без corruption —
-/// см. project-storage-forever; живую SQLite в iCloud Drive нельзя). В iCloud уезжает консистентный
-/// снапшот: GRDB online backup (page-level под WAL, БЕЗ блокировки writer'а; vec0/FTS5 копируются как
-/// обычные страницы) → стрим-сжатие LZFSE. Бэкап = метаданные/текст/индекс поиска, НЕ гигабайты
-/// HEIC-медиа (осознанное v1-решение: медиа остаётся локально).
+/// A compressed snapshot of the live DB into iCloud Drive. The live database STAYS local (fast, no corruption —
+/// see project-storage-forever; you can't keep live SQLite in iCloud Drive). What goes to iCloud is a consistent
+/// snapshot: GRDB online backup (page-level under WAL, WITHOUT locking the writer; vec0/FTS5 are copied as
+/// ordinary pages) → LZFSE stream compression. The backup = metadata/text/search index, NOT gigabytes
+/// of HEIC media (a deliberate v1 decision: media stays local).
 struct BackupResult: Sendable {
     let url: URL
     let compressedBytes: Int64
@@ -20,10 +20,10 @@ enum BackupError: LocalizedError {
     case verifyFailed(String)
     var errorDescription: String? {
         switch self {
-        case .iCloudUnavailable: return "iCloud Drive недоступен (не залогинен или выключен)"
+        case .iCloudUnavailable: return "iCloud Drive is unavailable (not signed in or turned off)"
         case let .insufficientSpace(n, f):
-            return "Недостаточно места: нужно ~\(n / 1_000_000) МБ, свободно \(f / 1_000_000) МБ"
-        case let .verifyFailed(m): return "Снапшот не прошёл проверку: \(m)"
+            return "Not enough space: need ~\(n / 1_000_000) MB, \(f / 1_000_000) MB free"
+        case let .verifyFailed(m): return "Snapshot failed verification: \(m)"
         }
     }
 }
@@ -31,8 +31,8 @@ enum BackupError: LocalizedError {
 actor BackupManager {
     private let db: ZBSEyeDatabase
     private let storage: StorageManager
-    private let dbURL: URL   // фиксируем путь открытого пула в init (не ZBSEyeDatabase.defaultURL() в момент
-                             // бэкапа — он мог бы указать на новый root в окне relocate)
+    private let dbURL: URL   // pin the open pool's path in init (not ZBSEyeDatabase.defaultURL() at backup
+                             // time — it could point to a new root during a relocate window)
 
     init(db: ZBSEyeDatabase, storage: StorageManager) {
         self.db = db
@@ -40,7 +40,7 @@ actor BackupManager {
         self.dbURL = (try? ZBSEyeDatabase.defaultURL()) ?? StorageLocation.databaseURL()
     }
 
-    // MARK: - iCloud-пути (без App Sandbox можно писать в CloudDocs как обычный путь; синк делает система)
+    // MARK: - iCloud paths (without App Sandbox we can write to CloudDocs as a normal path; the system handles sync)
 
     static func iCloudBase() -> URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -56,8 +56,8 @@ actor BackupManager {
         iCloudBase().appendingPathComponent("ZBS Eye/Backups", isDirectory: true)
     }
 
-    /// Снапшоты, новейшие первыми. Имя zbseye-YYYYMMDD-HHmmss-SSS.sqlite.lzfse сортируется
-    /// лексикографически = хронологически.
+    /// Snapshots, newest first. The name zbseye-YYYYMMDD-HHmmss-SSS.sqlite.lzfse sorts
+    /// lexicographically = chronologically.
     static func listBackups() -> [URL] {
         let items = (try? FileManager.default.contentsOfDirectory(
             at: backupsDirectory(), includingPropertiesForKeys: nil)) ?? []
@@ -66,23 +66,23 @@ actor BackupManager {
             .sorted { $0.lastPathComponent > $1.lastPathComponent }
     }
 
-    // MARK: - создание бэкапа
+    // MARK: - creating a backup
 
     func makeBackup(keepN: Int) async throws -> BackupResult {
         guard Self.iCloudAvailable() else { throw BackupError.iCloudUnavailable }
         let sourceBytes = Self.fileBytes(dbURL)
         let free = storage.freeBytes()
-        let needed = sourceBytes * 2            // temp .sqlite + .lzfse одновременно
+        let needed = sourceBytes * 2            // temp .sqlite + .lzfse at the same time
         guard free > needed else { throw BackupError.insufficientSpace(needed: needed, free: free) }
 
-        // PASSIVE checkpoint — свести WAL в main (не нужен для консистентности backup, но уменьшает объём)
+        // PASSIVE checkpoint — fold WAL into main (not needed for backup consistency, but reduces size)
         try? await db.pool.writeWithoutTransaction { dbc in
             _ = try? dbc.execute(sql: "PRAGMA wal_checkpoint(PASSIVE)")
         }
 
-        // Тяжёлую работу выполняем прямо в актор-методе (BackupManager — выделенный актор, не блокирует
-        // чужую работу). НЕ Task.detached: тогда отмена вызывающей задачи (таймаут на выходе) корректно
-        // прерывает выполнение, а не оставляет осиротевший detached-таск дописывать после reply.
+        // We do the heavy work right in the actor method (BackupManager is a dedicated actor, doesn't block
+        // others' work). NOT Task.detached: that way cancelling the calling task (timeout on exit) properly
+        // interrupts execution rather than leaving an orphaned detached task writing after the reply.
         let stamp = Self.timestamp()
         let dir = Self.backupsDirectory()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -94,29 +94,29 @@ actor BackupManager {
             try? FileManager.default.removeItem(at: tmpLzfse)
         }
 
-        // 1. online backup живого пула → temp .sqlite (page-level; vec0/FTS5/grdb_migrations включены)
+        // 1. online backup of the live pool → temp .sqlite (page-level; vec0/FTS5/grdb_migrations included)
         var dest: DatabaseQueue? = try DatabaseQueue(path: tmpSqlite.path)
         try db.pool.backup(to: dest!)
 
-        // 2. verify снапшота ДО сжатия: integrity + COUNT
+        // 2. verify the snapshot BEFORE compression: integrity + COUNT
         let frames = try await dest!.read { d -> Int in
             let ic = try String.fetchOne(d, sql: "PRAGMA integrity_check") ?? "?"
             guard ic == "ok" else { throw BackupError.verifyFailed("integrity_check=\(ic)") }
             return try Int.fetchOne(d, sql: "SELECT COUNT(*) FROM screen_captures") ?? 0
         }
-        dest = nil   // закрыть соединение перед чтением файла на сжатие
+        dest = nil   // close the connection before reading the file for compression
 
-        // 3. стрим-сжатие temp .sqlite → temp .lzfse (чанки 1MB, не держим всё в RAM)
+        // 3. stream-compress temp .sqlite → temp .lzfse (1MB chunks, don't hold it all in RAM)
         try Self.compress(src: tmpSqlite, to: tmpLzfse)
 
-        // 4. в iCloud через staging + атомарный rename: если процесс убьют (бэкап на выходе) во время
-        //    копии — останется лишь *.partial (не пройдёт фильтр listBackups), а не битый .lzfse.
+        // 4. into iCloud via staging + atomic rename: if the process is killed (backup on exit) during
+        //    the copy — only *.partial remains (won't pass the listBackups filter), not a corrupt .lzfse.
         let finalURL = dir.appendingPathComponent("zbseye-\(stamp).sqlite.lzfse")
         let staging = dir.appendingPathComponent("zbseye-\(stamp).sqlite.lzfse.partial")
         try? FileManager.default.removeItem(at: staging)
-        try FileManager.default.copyItem(at: tmpLzfse, to: staging)   // кросс-томовый: copy, не move
+        try FileManager.default.copyItem(at: tmpLzfse, to: staging)   // cross-volume: copy, not move
         try? FileManager.default.removeItem(at: finalURL)
-        try FileManager.default.moveItem(at: staging, to: finalURL)   // атомарный rename в той же папке
+        try FileManager.default.moveItem(at: staging, to: finalURL)   // atomic rename within the same folder
 
         let compressed = Self.fileBytes(finalURL)
         Self.prune(keepN: keepN)
@@ -128,15 +128,15 @@ actor BackupManager {
 
     static func prune(keepN: Int) {
         let fm = FileManager.default
-        // подчистить осиротевшие .partial (прерванный бэкап на выходе)
+        // clean up orphaned .partial files (a backup interrupted on exit)
         let items = (try? fm.contentsOfDirectory(at: backupsDirectory(), includingPropertiesForKeys: nil)) ?? []
         for u in items where u.lastPathComponent.hasSuffix(".lzfse.partial") { try? fm.removeItem(at: u) }
-        let all = listBackups()            // новейшие первыми
+        let all = listBackups()            // newest first
         guard keepN > 0, all.count > keepN else { return }
         for url in all.dropFirst(keepN) { try? fm.removeItem(at: url) }
     }
 
-    // MARK: - сжатие / распаковка (LZFSE, стримово)
+    // MARK: - compression / decompression (LZFSE, streaming)
 
     static func compress(src: URL, to dst: URL) throws {
         FileManager.default.createFile(atPath: dst.path, contents: nil)
@@ -153,7 +153,7 @@ actor BackupManager {
         try filter.finalize()
     }
 
-    /// Распаковка снапшота (для --backup-verify и будущего restore).
+    /// Decompress a snapshot (for --backup-verify and a future restore).
     static func decompress(_ src: URL, to dst: URL) throws {
         FileManager.default.createFile(atPath: dst.path, contents: nil)
         let out = try FileHandle(forWritingTo: dst)
@@ -168,7 +168,7 @@ actor BackupManager {
         }
     }
 
-    /// Распаковать + проверить снапшот (для --backup-verify): integrity_check + COUNT кадров.
+    /// Decompress + verify a snapshot (for --backup-verify): integrity_check + frame COUNT.
     static func verify(_ compressed: URL) throws -> (ok: Bool, frames: Int) {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("zbseye-verify-\(UUID().uuidString).sqlite")
@@ -192,8 +192,8 @@ actor BackupManager {
     static func timestamp() -> String {
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")
-        df.timeZone = TimeZone(identifier: "UTC")   // UTC: лексикографический порядок имён = хронология
-        df.dateFormat = "yyyyMMdd-HHmmss-SSS"        // (иначе при смене часового пояса keep-N удалит не те)
+        df.timeZone = TimeZone(identifier: "UTC")   // UTC: lexicographic order of names = chronology
+        df.dateFormat = "yyyyMMdd-HHmmss-SSS"        // (otherwise, on a timezone change, keep-N would delete the wrong ones)
         return df.string(from: Date())
     }
 }

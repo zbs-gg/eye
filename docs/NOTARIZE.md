@@ -1,63 +1,62 @@
-# Нотаризация ZBS Eye (Developer ID, раздача вне App Store)
+# Notarizing ZBS Eye (Developer ID, distribution outside the App Store)
 
-> **Почему не App Store.** App Store требует App Sandbox, а под ним невозможны cross-app Accessibility
-> (чтение AX-дерева других приложений — главный путь извлечения текста), плюс профиль «вечная память,
-> пишет всё» почти гарантированно реджектится по приватности. Все аналоги (Rewind до Apple, screenpipe)
-> раздаются через **Developer ID + нотаризацию**. Это и сохраняет фичи, и убирает cdhash/«Open Anyway»/
-> TCC-чехарду self-signed (нотаризованная подпись стабильна — права переживают ребилды).
+> **Why not the App Store.** The App Store requires App Sandbox, under which cross-app Accessibility is
+> impossible (reading the AX tree of other apps — the main path of text extraction), plus an "eternal memory,
+> records everything" profile is almost guaranteed to be rejected on privacy. All the equivalents (Rewind
+> before Apple, screenpipe) are distributed via **Developer ID + notarization**. This both keeps the features
+> and removes the cdhash/"Open Anyway"/TCC churn of self-signing (a notarized signature is stable — permissions survive rebuilds).
 
-## Что нужно один раз
+## One-time setup
 
-### 1. Платная Apple Developer Program — $99/год
-- https://developer.apple.com/programme/enroll/ → Enroll (как Individual). Оплата $99, активация обычно
-  в течение суток.
-- Твой текущий серт **«Apple Development»** для нотаризации **НЕ годится** — это тип для запуска на своих
-  устройствах. Нужен именно **«Developer ID Application»** (появляется только в платной программе).
+### 1. The paid Apple Developer Program — $99/year
+- https://developer.apple.com/programs/enroll/ → Enroll (as Individual). Pay $99; activation is usually within a day.
+- Your current **"Apple Development"** certificate is **NOT suitable** for notarization — that type is for
+  running on your own devices. You need a **"Developer ID Application"** (it only appears in the paid program).
 
-### 2. Серт «Developer ID Application»
-Проще через Xcode:
-- Xcode → **Settings → Accounts** → выбрать Apple ID → **Manage Certificates…** → **«+»** →
-  **Developer ID Application**. Серт лёг в login-keychain.
-- Проверка: `security find-identity -v -p codesigning | grep "Developer ID Application"` — должна быть строка.
+### 2. The "Developer ID Application" certificate
+Easiest via Xcode:
+- Xcode → **Settings → Accounts** → select the Apple ID → **Manage Certificates…** → **"+"** →
+  **Developer ID Application**. The cert lands in the login keychain.
+- Check: `security find-identity -v -p codesigning | grep "Developer ID Application"` — there should be a line.
 
-(Альтернатива: developer.apple.com → Certificates → «+» → Developer ID Application → загрузить CSR из
+(Alternative: developer.apple.com → Certificates → "+" → Developer ID Application → upload a CSR from
 Keychain Access → Certificate Assistant.)
 
-### 3. App-specific password для notarytool
-- https://appleid.apple.com → **Sign-In and Security → App-Specific Passwords** → **«+»** → назвать
-  «zbseye-notary» → скопировать пароль вида `abcd-efgh-ijkl-mnop`.
+### 3. App-specific password for notarytool
+- https://appleid.apple.com → **Sign-In and Security → App-Specific Passwords** → **"+"** → name it
+  "zbseye-notary" → copy a password like `abcd-efgh-ijkl-mnop`.
 
-### 4. Сохранить креды notarytool в keychain (один раз)
+### 4. Store the notarytool credentials in the keychain (once)
 ```bash
 xcrun notarytool store-credentials zbseye-notary \
-  --apple-id ТВОЙ_APPLE_ID_EMAIL \
-  --team-id ТВОЙ_TEAM_ID \
-  --password ABCD-EFGH-IJKL-MNOP        # тот самый app-specific
+  --apple-id YOUR_APPLE_ID_EMAIL \
+  --team-id YOUR_TEAM_ID \
+  --password ABCD-EFGH-IJKL-MNOP        # that same app-specific one
 ```
-`TEAM_ID` — 10-символьный код из developer.apple.com → Membership (или из имени серта в скобках:
-`Developer ID Application: Имя (ABCDE12345)`).
+`TEAM_ID` is the 10-character code from developer.apple.com → Membership (or from the cert name in
+parentheses: `Developer ID Application: Name (ABCDE12345)`).
 
-## Сборка + нотаризация (каждый релиз)
+## Build + notarize (every release)
 
 ```bash
 bash scripts/build-notarized.sh
 ```
-Скрипт сам: соберёт Release с **Hardened Runtime**, подпишет **Developer ID** + secure timestamp,
-упакует e5-модель, отправит в Apple (`notarytool --wait`, ~2–10 мин), сделает `stapler staple` и проверит
-`spctl` (должно быть `accepted, source=Notarized Developer ID`). На выходе — `dist/ZBSEye-notarized-*.zip`.
+The script does it all: builds Release with **Hardened Runtime**, signs with **Developer ID** + a secure
+timestamp, packages the e5 model, submits to Apple (`notarytool --wait`, ~2–10 min), runs `stapler staple`
+and checks `spctl` (it should be `accepted, source=Notarized Developer ID`). The output is `dist/ZBSEye-notarized-*.zip`.
 
-## Установка у получателя
-Распаковать в `/Applications`, запустить **двойным кликом** — Gatekeeper пропускает без «Open Anyway»
-(даже оффлайн, благодаря stapled-тикету). Права Screen Recording / Accessibility / Microphone выдаются
-один раз; подпись стабильна, ребилды их не сбрасывают.
+## Install on the recipient's machine
+Unzip into `/Applications`, launch with a **double-click** — Gatekeeper passes it without "Open Anyway"
+(even offline, thanks to the stapled ticket). Screen Recording / Accessibility / Microphone permissions are
+granted once; the signature is stable, rebuilds don't reset them.
 
-## Если notarytool отклонил
-`xcrun notarytool log <submission-id> --keychain-profile zbseye-notary` — покажет, что не подписано
-(чаще: вложенный код без Hardened Runtime/timestamp, или лишний entitlement `get-task-allow` из Debug).
-Скрипт собирает Release (без `get-task-allow`) и ставит `--options runtime --timestamp` на сборку, так что
-обычно проходит с первого раза.
+## If notarytool rejected it
+`xcrun notarytool log <submission-id> --keychain-profile zbseye-notary` — shows what's not signed
+(most often: nested code without Hardened Runtime/timestamp, or a stray `get-task-allow` entitlement from Debug).
+The script builds Release (without `get-task-allow`) and sets `--options runtime --timestamp` on the build, so
+it usually passes on the first try.
 
-## Текущее состояние (до программы)
-- Серт сейчас: только self-signed «Slishu Dev» + «Apple Development». Нотаризация заблокирована до п.1–2.
-- Пока программы нет — `scripts/build-release.sh` (self-signed, установка через «Open Anyway»). Минусы
-  self-signed (cdhash/TCC-чехарда при каждом ребилде) — ровно то, что нотаризация убирает.
+## Current state (before the program)
+- The cert right now: only self-signed "ZBS Eye Dev" + "Apple Development". Notarization is blocked until steps 1–2.
+- Until there's a program — `scripts/build-release.sh` (self-signed, install via "Open Anyway"). The downsides
+  of self-signing (cdhash/TCC churn on every rebuild) are exactly what notarization removes.

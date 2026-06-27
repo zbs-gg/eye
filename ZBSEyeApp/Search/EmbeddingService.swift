@@ -3,8 +3,8 @@ import CoreML
 import Observation
 import Embeddings
 
-/// Статус семантической модели для UI (качается / готова / нет сети). @MainActor-синглтон:
-/// пишут акторы загрузки, читает SwiftUI («поиск пока по словам — семантика качается»).
+/// Status of the semantic model for the UI (downloading / ready / no network). @MainActor singleton:
+/// the loading actors write, SwiftUI reads ("search is by words for now — semantics are downloading").
 @MainActor
 @Observable
 final class EmbeddingStatusStore {
@@ -14,14 +14,14 @@ final class EmbeddingStatusStore {
     fileprivate func set(_ s: Status) { if status != s { status = s } }
 }
 
-/// Координатор загрузки e5 — ОДИН на процесс. GUI держит два EmbeddingService (ingest и search,
-/// анти head-of-line) — без координатора оба параллельно тянули бы ~300MB с HuggingFace. Здесь
-/// загрузки сериализованы актором: первая качает снапшот, вторая берёт из дискового кеша.
-/// Кеш — Application Support/ZBS Eye/models (НЕ ~/Documents: тот синкается iCloud → утечка «ноль egress»).
+/// e5 loading coordinator — ONE per process. The GUI holds two EmbeddingServices (ingest and search,
+/// anti head-of-line) — without a coordinator both would pull ~300MB from HuggingFace in parallel. Here
+/// loads are serialized by an actor: the first downloads the snapshot, the second takes it from the disk cache.
+/// Cache — Application Support/ZBS Eye/models (NOT ~/Documents: that syncs to iCloud → a "zero egress" leak).
 actor E5ModelProvider {
     static let shared = E5ModelProvider()
     private var lastFailureAt: Date?
-    /// После провала (оффлайн first-run) не долбим сеть на каждый embed — ретрай не чаще раза в минуту.
+    /// After a failure (offline first-run) don't hammer the network on every embed — retry at most once a minute.
     private let retryInterval: TimeInterval = 60
 
     static func modelsDirectory() -> URL? {
@@ -33,8 +33,8 @@ actor E5ModelProvider {
         return dir
     }
 
-    /// Модель, упакованная в .app (scripts/build-release.sh кладёт её в Resources/models) → кеш.
-    /// Закрывает последний egress: first-run работает целиком оффлайн, ничего не качается.
+    /// The model packaged into the .app (scripts/build-release.sh puts it in Resources/models) → cache.
+    /// Closes the last egress: first-run works entirely offline, nothing is downloaded.
     private static func copyBundledModelIfNeeded(to base: URL) {
         let repo = "models/intfloat/multilingual-e5-small"
         let fm = FileManager.default
@@ -45,16 +45,16 @@ actor E5ModelProvider {
         do {
             try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             try fm.copyItem(at: bundled, to: target)
-            Log.app.info("e5: модель скопирована из бандла приложения (оффлайн first-run)")
+            Log.app.info("e5: model copied from the app bundle (offline first-run)")
         } catch {
-            // не молчим: иначе first-run уйдёт в сеть за 300MB, а лог покажет «оффлайн» (ложь)
-            Log.app.error("e5: не удалось скопировать модель из бандла (\(error.localizedDescription)) — будет сетевой fallback")
+            // don't stay silent: otherwise first-run goes to the network for 300MB while the log says "offline" (a lie)
+            Log.app.error("e5: failed to copy the model from the bundle (\(error.localizedDescription)) — will fall back to network")
         }
     }
 
-    /// Раньше HubApi качал в ~/Documents/huggingface (риск iCloud-синка приватной модели + 300MB
-    /// перекачки при смене base). Разово переносим ТОЛЬКО НАШ репозиторий модели — общий HF-кеш
-    /// могут использовать другие приложения, конфисковывать его целиком нельзя.
+    /// Previously HubApi downloaded into ~/Documents/huggingface (risk of iCloud-syncing a private model + 300MB
+    /// re-download on a base change). We move ONLY OUR model repository once — the shared HF cache may be used by
+    /// other apps, so we must not confiscate it wholesale.
     private static func migrateLegacyCacheIfNeeded(to base: URL) {
         let fm = FileManager.default
         let repo = "models/intfloat/multilingual-e5-small"
@@ -66,7 +66,7 @@ actor E5ModelProvider {
         try? fm.moveItem(at: legacy, to: target)
     }
 
-    /// Загрузить bundle (download при первом обращении, далее — из кеша). nil = провал (ретрай позже).
+    /// Load the bundle (download on first access, then from cache). nil = failure (retry later).
     func loadBundle() async -> XLMRoberta.ModelBundle? {
         if let last = lastFailureAt, Date().timeIntervalSince(last) < retryInterval { return nil }
         await EmbeddingStatusStore.shared.set(.loading)
@@ -90,10 +90,10 @@ actor E5ModelProvider {
     }
 }
 
-/// Cross-lingual эмбеддинги (ru↔en) через multilingual-e5-small (384-dim) поверх swift-embeddings
-/// (Apple MLTensor, без MLX/Python). Загрузка/кеш — через E5ModelProvider (общий на процесс).
-/// e5 требует префиксы "query: " / "passage: ". Векторы L2-нормализованы.
-/// Провал загрузки НЕ вечный: повторная попытка при следующем embed (с минутным backoff в провайдере).
+/// Cross-lingual embeddings via multilingual-e5-small (384-dim) on top of swift-embeddings
+/// (Apple MLTensor, no MLX/Python). Loading/cache — via E5ModelProvider (shared per process).
+/// e5 requires the prefixes "query: " / "passage: ". Vectors are L2-normalized.
+/// A load failure is NOT permanent: it retries on the next embed (with a minute backoff in the provider).
 actor EmbeddingService {
     private var bundle: XLMRoberta.ModelBundle?
     private var loading = false
@@ -102,31 +102,31 @@ actor EmbeddingService {
 
     private func ready() async -> XLMRoberta.ModelBundle? {
         if let bundle { return bundle }
-        if loading { return nil }   // параллельный embed во время загрузки — не дублируем
+        if loading { return nil }   // a parallel embed during loading — don't duplicate
         loading = true
         defer { loading = false }
         bundle = await E5ModelProvider.shared.loadBundle()
         return bundle
     }
 
-    /// Эмбеддинг поискового запроса (префикс "query: ").
+    /// Embedding of a search query (prefix "query: ").
     func embed(query text: String) async -> [Float]? { await encode("query: " + text) }
-    /// Эмбеддинг индексируемого контента (префикс "passage: ").
+    /// Embedding of indexed content (prefix "passage: ").
     func embed(passage text: String) async -> [Float]? { await encode("passage: " + text) }
-    /// Совместимость: по умолчанию контент = passage.
+    /// Compatibility: by default content = passage.
     func embed(_ text: String) async -> [Float]? { await embed(passage: text) }
 
     private func encode(_ text: String) async -> [Float]? {
         let t = String(text.prefix(1800)).trimmingCharacters(in: .whitespacesAndNewlines)
         guard t.count > "passage: ".count, let bundle = await ready() else { return nil }
-        // e5 требует MEAN pooling по всем токенам (average_pool с attention-маской). Библиотечный
-        // `bundle.encode()` берёт CLS-токен (sequenceOutput[.., 0, ..]) — это верно для классификации,
-        // но НЕ для e5-retrieval: схлопывает косинусный зазор (ru↔en падал до ~0.03). Поэтому идём через
-        // model напрямую и усредняем сами. Single-text без паддинга → маска вся = 1 → mean по всем токенам.
+        // e5 requires MEAN pooling over all tokens (average_pool with an attention mask). The library's
+        // `bundle.encode()` takes the CLS token (sequenceOutput[.., 0, ..]) — correct for classification,
+        // but NOT for e5 retrieval: it collapses the cosine gap (cross-lingual dropped to ~0.03). So we go
+        // through the model directly and average ourselves. Single text without padding → mask all = 1 → mean over all tokens.
         guard let tokens = try? bundle.tokenizer.tokenizeText(t, maxLength: 512), !tokens.isEmpty else { return nil }
         let inputIds = MLTensor(shape: [1, tokens.count], scalars: tokens)
         let sequence = bundle.model(inputIds: inputIds).sequenceOutput   // [1, seqLen, 384]
-        let pooled = sequence.mean(alongAxes: 1)                         // среднее по токенам → [1, 384]
+        let pooled = sequence.mean(alongAxes: 1)                         // mean over tokens → [1, 384]
         let shaped = await pooled.shapedArray(of: Float.self)
         var f = shaped.scalars
         var norm: Float = 0
@@ -137,13 +137,13 @@ actor EmbeddingService {
     }
 }
 
-/// Месячный бакет (YYYYMM) для temporal-партиции vec0.
+/// Monthly bucket (YYYYMM) for the vec0 temporal partition.
 func monthBucket(_ date: Date) -> Int {
     let c = Calendar.current.dateComponents([.year, .month], from: date)
     return (c.year ?? 2026) * 100 + (c.month ?? 1)
 }
 
-/// [Float] → Data (little-endian float32) для bind в vec0.
+/// [Float] → Data (little-endian float32) for binding into vec0.
 func floatBlob(_ v: [Float]) -> Data {
     v.withUnsafeBufferPointer { Data(buffer: $0) }
 }

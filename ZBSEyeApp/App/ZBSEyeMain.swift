@@ -1,41 +1,41 @@
 import Foundation
 
-/// Entry-point. По умолчанию — SwiftUI-приложение. С флагом `--mcp` — MCP stdio-сервер (для запуска из
-/// Claude Desktop / Cursor: `ZBS Eye.app/Contents/MacOS/ZBS Eye --mcp`), без GUI.
+/// Entry point. By default — a SwiftUI app. With the `--mcp` flag — an MCP stdio server (to launch from
+/// Claude Desktop / Cursor: `ZBS Eye.app/Contents/MacOS/ZBS Eye --mcp`), with no GUI.
 @main
 struct ZBSEyeMain {
     static func main() {
         if CommandLine.arguments.contains("--mcp") {
-            // MCP stdio: dispatchMain() держит процесс и даёт concurrency-пулу работать
-            // (DispatchSemaphore.wait мёртво блокировал бы main-thread и Task не запускался бы).
+            // MCP stdio: dispatchMain() keeps the process alive and lets the concurrency pool work
+            // (DispatchSemaphore.wait would dead-block the main thread and Task would never run).
             Task.detached {
                 await ZBSEyeMCPServer.runStdio()
                 exit(0)
             }
             dispatchMain()
         } else if CommandLine.arguments.contains("--import-history") {
-            // Headless-импорт прежней истории из ~/.screenpipe (то же, что кнопка в Настройках; удобно для
-            // скриптов/проверки). Идемпотентен — можно прерывать и продолжать.
+            // Headless import of prior history from ~/.screenpipe (same as the button in Settings; handy for
+            // scripts/checks). Idempotent — can be interrupted and resumed.
             Task.detached {
                 do {
                     let db = try ZBSEyeDatabase(path: ZBSEyeDatabase.defaultURL().path)
                     let importer = HistoryImporter(db: db)
-                    print("Импорт из \(HistoryImporter.defaultSourcePath)…")
+                    print("Importing from \(HistoryImporter.defaultSourcePath)…")
                     let report = try await importer.run { f, a in
-                        print("  кадров: \(f), аудио: \(a)")
+                        print("  frames: \(f), audio: \(a)")
                     }
-                    print("Готово: +\(report.frames) кадров, +\(report.audio) аудио.")
+                    print("Done: +\(report.frames) frames, +\(report.audio) audio.")
                     exit(0)
                 } catch {
-                    FileHandle.standardError.write("Импорт упал: \(error)\n".data(using: .utf8)!)
+                    FileHandle.standardError.write("Import failed: \(error)\n".data(using: .utf8)!)
                     exit(1)
                 }
             }
             dispatchMain()
         } else if let i = CommandLine.arguments.firstIndex(of: "--relocate"),
                   i + 1 < CommandLine.arguments.count {
-            // Headless-перенос хранилища в <path>/ZBS Eye (тот же мигратор, что в UI; без relaunch).
-            // GUI должен быть закрыт (иначе COUNT-parity дрогнет от конкурентной записи).
+            // Headless relocation of storage to <path>/ZBS Eye (same migrator as in the UI; no relaunch).
+            // The GUI must be closed (otherwise COUNT parity wavers from concurrent writes).
             let chosen = URL(fileURLWithPath: CommandLine.arguments[i + 1], isDirectory: true)
             Task.detached {
                 do {
@@ -48,17 +48,17 @@ struct ZBSEyeMain {
                         chosen: chosen,
                         progress: { p, m in print("  \(Int(p * 100))% \(m)") })
                     StorageLocation.setRoot(report.newDataRoot)
-                    print("Перенесено в: \(report.newDataRoot.path)")
-                    print("  БД \(report.dbBytes) байт, медиа \(report.mediaFilesCopied) файлов")
+                    print("Relocated to: \(report.newDataRoot.path)")
+                    print("  DB \(report.dbBytes) bytes, media \(report.mediaFilesCopied) files")
                     exit(0)
                 } catch {
-                    FileHandle.standardError.write("Перенос упал: \(error)\n".data(using: .utf8)!)
+                    FileHandle.standardError.write("Relocation failed: \(error)\n".data(using: .utf8)!)
                     exit(1)
                 }
             }
             dispatchMain()
         } else if CommandLine.arguments.contains("--backup-now") {
-            // Headless-бэкап в iCloud (то же, что кнопка/расписание; удобно для проверки).
+            // Headless backup to iCloud (same as the button/schedule; handy for checks).
             Task.detached {
                 do {
                     let storage = try StorageManager()
@@ -66,25 +66,25 @@ struct ZBSEyeMain {
                     let mgr = BackupManager(db: db, storage: storage)
                     let keep = UserDefaults.standard.object(forKey: "zbseye.backup.keepN") as? Int ?? 7
                     let r = try await mgr.makeBackup(keepN: keep)
-                    print("Бэкап: \(r.url.path)")
-                    print("  \(r.compressedBytes) байт (из \(r.sourceBytes)), \(r.frames) кадров")
+                    print("Backup: \(r.url.path)")
+                    print("  \(r.compressedBytes) bytes (from \(r.sourceBytes)), \(r.frames) frames")
                     exit(0)
                 } catch {
-                    FileHandle.standardError.write("Бэкап упал: \(error)\n".data(using: .utf8)!)
+                    FileHandle.standardError.write("Backup failed: \(error)\n".data(using: .utf8)!)
                     exit(1)
                 }
             }
             dispatchMain()
         } else if let i = CommandLine.arguments.firstIndex(of: "--backup-verify"),
                   i + 1 < CommandLine.arguments.count {
-            // Распаковать снапшот и проверить (integrity + COUNT).
+            // Unpack the snapshot and verify it (integrity + COUNT).
             let path = CommandLine.arguments[i + 1]
             do {
                 let (ok, frames) = try BackupManager.verify(URL(fileURLWithPath: path))
-                print("integrity_check=\(ok ? "ok" : "FAIL"), кадров=\(frames)")
+                print("integrity_check=\(ok ? "ok" : "FAIL"), frames=\(frames)")
                 exit(ok ? 0 : 2)
             } catch {
-                FileHandle.standardError.write("Verify упал: \(error)\n".data(using: .utf8)!)
+                FileHandle.standardError.write("Verify failed: \(error)\n".data(using: .utf8)!)
                 exit(1)
             }
         } else {

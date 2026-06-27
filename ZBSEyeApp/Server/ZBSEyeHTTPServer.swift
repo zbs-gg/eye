@@ -5,8 +5,8 @@ import GRDB
 import CoreImage
 import CoreGraphics
 
-/// Локальный REST `/v1` (FlyingFox). Bind ТОЛЬКО 127.0.0.1 (loopback, не INADDR_ANY!), динамический порт,
-/// **auth на ВСЁ кроме /health** (Bearer-токен из Keychain), Host-check, path-traversal hardening.
+/// Local REST `/v1` (FlyingFox). Binds ONLY 127.0.0.1 (loopback, not INADDR_ANY!), dynamic port,
+/// **auth on EVERYTHING except /health** (Bearer token from Keychain), Host check, path-traversal hardening.
 actor ZBSEyeHTTPServer {
     struct Deps: Sendable {
         let search: SearchService
@@ -31,8 +31,8 @@ actor ZBSEyeHTTPServer {
 
     func start(preferredPorts: [UInt16] = [8731, 8732, 11435, 8088]) async -> Int? {
         for port in preferredPorts {
-            // КРИТИЧНО: bind на 127.0.0.1 (loopback), а НЕ HTTPServer(port:) — он биндит INADDR_ANY (0.0.0.0)
-            // и открыл бы историю экрана всей локальной сети.
+            // CRITICAL: bind to 127.0.0.1 (loopback), and NOT HTTPServer(port:) — it binds INADDR_ANY (0.0.0.0)
+            // and would expose the screen history to the whole local network.
             guard let address = try? sockaddr_in.inet(ip4: "127.0.0.1", port: port) else { Self.log("bad addr \(port)"); continue }
             let srv = HTTPServer(address: address)
             await registerRoutes(srv)
@@ -59,10 +59,10 @@ actor ZBSEyeHTTPServer {
         Log.server.info("\(s, privacy: .public)")
         let line = "[\(Date())] \(s)\n"
         guard let data = line.data(using: .utf8) else { return }
-        let url = StorageLocation.serverLogURL()       // учитывает relocate
+        let url = StorageLocation.serverLogURL()       // accounts for relocate
         let dir = url.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        // Ротация: > 5MB → server.log.1 (одно поколение). 24/7-аптайм не должен растить лог бесконечно.
+        // Rotation: > 5MB → server.log.1 (one generation). 24/7 uptime mustn't grow the log forever.
         if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 5_000_000 {
             let rotated = dir.appendingPathComponent("server.log.1")
             try? FileManager.default.removeItem(at: rotated)
@@ -76,12 +76,12 @@ actor ZBSEyeHTTPServer {
     }
 
     func stop() async {
-        await server?.stop()        // корректная остановка FlyingFox (не только cancel)
+        await server?.stop()        // proper FlyingFox shutdown (not just cancel)
         runTask?.cancel()
         runTask = nil
         server = nil
         activePort = nil
-        Self.removePortFile()       // не оставлять stale port-файл (MCP мог бы пойти на чужой порт)
+        Self.removePortFile()       // don't leave a stale port file (MCP could hit the wrong port)
     }
 
     private static func removePortFile() {
@@ -186,16 +186,16 @@ actor ZBSEyeHTTPServer {
             guard let parsed = SearchKind(rawValue: k) else { return Self.badRequest("kind: screen|audio") }
             kind = parsed
         }
-        // Присутствующий, но нераспарсенный from/to — это 400, а НЕ молчаливый сброс фильтра:
-        // иначе «что я делал вчера» вернуло бы всю историю под видом «вчера» (ложь агенту).
+        // A present but unparsed from/to is a 400, NOT a silent filter reset:
+        // otherwise "what did I do yesterday" would return the whole history disguised as "yesterday" (a lie to the agent).
         var from: Date? = nil
         if let s = p["from"] {
-            guard let d = Self.parseTimeParam(s) else { return Self.badRequest("from: epoch-ms или ISO8601") }
+            guard let d = Self.parseTimeParam(s) else { return Self.badRequest("from: epoch-ms or ISO8601") }
             from = d
         }
         var to: Date? = nil
         if let s = p["to"] {
-            guard let d = Self.parseTimeParam(s) else { return Self.badRequest("to: epoch-ms или ISO8601") }
+            guard let d = Self.parseTimeParam(s) else { return Self.badRequest("to: epoch-ms or ISO8601") }
             to = d
         }
         let filters = SearchFilters(
@@ -205,7 +205,7 @@ actor ZBSEyeHTTPServer {
             limit: p["limit"].flatMap { Int($0) } ?? 60,
             offset: p["offset"].flatMap { Int($0) } ?? 0)
         do {
-            // честная ошибка вместо 200-пустышки: LAM обязан отличать «не нашлось» от «БД сломана»
+            // an honest error instead of an empty 200: the LAM must distinguish "not found" from "DB is broken"
             let results = try await deps.search.search(query: q, filters: filters)
             let hits = results.map { r in
                 APIDTO.SearchHit(
@@ -226,8 +226,8 @@ actor ZBSEyeHTTPServer {
         }
     }
 
-    /// from/to: epoch-ms (целое) или ISO8601 (с/без долей секунды — JS Date.toISOString() даёт доли;
-    /// один ISO8601DateFormatter оба варианта не парсит) или просто дата.
+    /// from/to: epoch-ms (integer) or ISO8601 (with/without fractional seconds — JS Date.toISOString() gives fractions;
+    /// a single ISO8601DateFormatter doesn't parse both variants) or just a date.
     static func parseTimeParam(_ s: String) -> Date? {
         if let ms = Int64(s) { return dateFromMs(ms) }
         let plain = ISO8601DateFormatter()
@@ -240,7 +240,7 @@ actor ZBSEyeHTTPServer {
         return dateOnly.date(from: s)
     }
 
-    /// Транскрипт аудио-сегмента (для LAM: «что обсуждали на звонке»).
+    /// Transcript of an audio segment (for the LAM: "what was discussed on the call").
     private func handleTranscript(_ req: HTTPRequest) async -> HTTPResponse {
         guard let id = Self.query(req)["audio_id"].flatMap({ Int64($0) }) else {
             return Self.badRequest("audio_id required")
@@ -258,7 +258,7 @@ actor ZBSEyeHTTPServer {
         }
     }
 
-    /// m4a-файл сегмента (тот же traversal-hardening, что и у кадров).
+    /// The segment's m4a file (the same traversal hardening as for frames).
     private func handleAudioFile(_ req: HTTPRequest) async -> HTTPResponse {
         guard let id = Self.query(req)["id"].flatMap({ Int64($0) }),
               let d = try? await deps.timeline.audioDetail(id: id) else { return Self.notFound("audio") }
@@ -309,22 +309,22 @@ actor ZBSEyeHTTPServer {
         guard let id = Self.query(req)["id"].flatMap({ Int64($0) }),
               let d = try? await deps.timeline.frameDetail(id: id),
               let rel = d.relativePath else { return Self.notFound("image") }
-        // path-traversal hardening: имя из БД (не из URL) + явный reject ".." / абсолютных + границы mediaDir
+        // path-traversal hardening: name from the DB (not the URL) + explicit reject of ".." / absolute + mediaDir bounds
         guard !rel.contains(".."), !rel.hasPrefix("/") else { return Self.notFound("image") }
         let base = deps.mediaDir.standardizedFileURL.resolvingSymlinksInPath()
         let target = base.appendingPathComponent(rel).standardizedFileURL.resolvingSymlinksInPath()
         guard Array(target.pathComponents.prefix(base.pathComponents.count)) == base.pathComponents,
               let data = try? Data(contentsOf: target) else { return Self.notFound("image") }
-        // ?format=jpeg — для браузеров/LLM-вьюеров (HEIC они не декодируют)
+        // ?format=jpeg — for browsers/LLM viewers (they don't decode HEIC)
         if Self.query(req)["format"] == "jpeg", let jpeg = Self.heicToJPEG(data) {
             return HTTPResponse(statusCode: .ok, headers: [HTTPHeader.contentType: "image/jpeg"], body: jpeg)
         }
         return HTTPResponse(statusCode: .ok, headers: [HTTPHeader.contentType: "image/heic"], body: data)
     }
 
-    /// HEIC→JPEG с даунскейлом до 1280px (как в MCP loadFrameJPEG): без него полноразмерный Retina/5K
-    /// кадр даёт 5-15MB ответ и ~100MB несжатого битмапа в RAM на КАЖДЫЙ запрос — агент в цикле копит
-    /// давление на память GUI-процесса.
+    /// HEIC→JPEG downscaled to 1280px (like MCP's loadFrameJPEG): without it a full-size Retina/5K
+    /// frame yields a 5-15MB response and ~100MB of uncompressed bitmap in RAM on EVERY request — an agent in a loop builds
+    /// up memory pressure on the GUI process.
     private static func heicToJPEG(_ heic: Data, maxDim: CGFloat = 1280) -> Data? {
         guard let ci = CIImage(data: heic) else { return nil }
         let ext = ci.extent
@@ -368,46 +368,46 @@ actor ZBSEyeHTTPServer {
     private static func error(_ status: HTTPStatusCode, _ msg: String, code: String = "error") -> HTTPResponse {
         json(APIDTO.ErrorResponse(error: .init(code: code, message: msg)), status: status)
     }
-    /// Компактная OpenAPI-спека (машинный контракт для LAM; раньше контракт жил только в коде).
+    /// Compact OpenAPI spec (a machine contract for the LAM; the contract used to live only in code).
     static let openAPISpec = #"""
     {"openapi":"3.0.3","info":{"title":"ZBS Eye Local API","version":"0.2.0",
-     "description":"Локальная память экрана/аудио. Auth: Bearer-токен на всё кроме /health. Время: epoch-ms или ISO8601."},
+     "description":"Local screen/audio memory. Auth: Bearer token on everything except /health. Time: epoch-ms or ISO8601."},
      "paths":{
-      "/health":{"get":{"summary":"Статус без auth","responses":{"200":{"description":"ok"}}}},
-      "/v1/search":{"get":{"summary":"Гибридный поиск (FTS+semantic, ru/en cross-lingual)",
+      "/health":{"get":{"summary":"Status without auth","responses":{"200":{"description":"ok"}}}},
+      "/v1/search":{"get":{"summary":"Hybrid search (FTS+semantic, ru/en cross-lingual)",
         "parameters":[{"name":"q","in":"query","required":true,"schema":{"type":"string"}},
           {"name":"from","in":"query","schema":{"type":"string"},"description":"epoch-ms | ISO8601"},
           {"name":"to","in":"query","schema":{"type":"string"}},
-          {"name":"app","in":"query","schema":{"type":"string"},"description":"подстрока bundleId/имени (screen)"},
+          {"name":"app","in":"query","schema":{"type":"string"},"description":"substring of bundleId/name (screen)"},
           {"name":"kind","in":"query","schema":{"type":"string","enum":["screen","audio"]}},
           {"name":"limit","in":"query","schema":{"type":"integer","maximum":200}},
           {"name":"offset","in":"query","schema":{"type":"integer"}}],
         "responses":{"200":{"description":"hits: id, kind, ts, app, snippet, media{frameUrl,audioUrl,transcriptUrl}"},
-                     "400":{"description":"невалидный параметр (нераспарсенное время и т.п.)"},"500":{"description":"сбой"}}}},
-      "/v1/frame":{"get":{"summary":"Кадр по id или ближайший к моменту (at)","parameters":[
+                     "400":{"description":"invalid parameter (unparsed time, etc.)"},"500":{"description":"failure"}}}},
+      "/v1/frame":{"get":{"summary":"Frame by id or nearest to a moment (at)","parameters":[
           {"name":"id","in":"query","schema":{"type":"integer"}},{"name":"at","in":"query","schema":{"type":"integer"},"description":"epoch-ms"}],
         "responses":{"200":{"description":"app, windowTitle, browserUrl, text, media.frameUrl"}}}},
-      "/v1/frame/image":{"get":{"summary":"Изображение кадра","parameters":[
+      "/v1/frame/image":{"get":{"summary":"Frame image","parameters":[
           {"name":"id","in":"query","required":true,"schema":{"type":"integer"}},
-          {"name":"format","in":"query","schema":{"type":"string","enum":["jpeg"]},"description":"для LLM-вьюеров"}],
+          {"name":"format","in":"query","schema":{"type":"string","enum":["jpeg"]},"description":"for LLM viewers"}],
         "responses":{"200":{"description":"image/heic | image/jpeg"}}}},
-      "/v1/transcript":{"get":{"summary":"Транскрипт аудио-сегмента","parameters":[
+      "/v1/transcript":{"get":{"summary":"Transcript of an audio segment","parameters":[
           {"name":"audio_id","in":"query","required":true,"schema":{"type":"integer"}}],
-        "responses":{"200":{"description":"text, speaker(я|собеседник), language, audioUrl"}}}},
-      "/v1/audio/file":{"get":{"summary":"m4a сегмента","parameters":[
+        "responses":{"200":{"description":"text, speaker(me|other), language, audioUrl"}}}},
+      "/v1/audio/file":{"get":{"summary":"Segment m4a","parameters":[
           {"name":"id","in":"query","required":true,"schema":{"type":"integer"}}],
         "responses":{"200":{"description":"audio/mp4"}}}},
-      "/v1/timeline":{"get":{"summary":"Плотность активности по бакетам","parameters":[
+      "/v1/timeline":{"get":{"summary":"Activity density by buckets","parameters":[
           {"name":"from","in":"query","required":true,"schema":{"type":"integer"}},
           {"name":"to","in":"query","required":true,"schema":{"type":"integer"}},
-          {"name":"bucket","in":"query","schema":{"type":"integer"},"description":"мс, default 60000"}],
+          {"name":"bucket","in":"query","schema":{"type":"integer"},"description":"ms, default 60000"}],
         "responses":{"200":{"description":"buckets[{ts,count}]"}}}},
-      "/v1/stats":{"get":{"summary":"Счётчики и диапазон истории","responses":{"200":{"description":"frames, audioChunks, mediaBytes…"}}}},
-      "/v1/capture/toggle":{"post":{"summary":"Вкл/выкл запись","parameters":[
+      "/v1/stats":{"get":{"summary":"Counters and history range","responses":{"200":{"description":"frames, audioChunks, mediaBytes…"}}}},
+      "/v1/capture/toggle":{"post":{"summary":"Toggle recording on/off","parameters":[
           {"name":"enable","in":"query","schema":{"type":"boolean"}}],"responses":{"200":{"description":"capturing"}}}}}}
     """#
 
-    private static func unauthorized() -> HTTPResponse { error(.unauthorized, "Требуется Bearer-токен, доступ только с localhost", code: "unauthorized") }
+    private static func unauthorized() -> HTTPResponse { error(.unauthorized, "Bearer token required, localhost-only access", code: "unauthorized") }
     private static func badRequest(_ m: String) -> HTTPResponse { error(.badRequest, m, code: "bad_request") }
     private static func notFound(_ m: String) -> HTTPResponse { error(.notFound, "not found: \(m)", code: "not_found") }
 }

@@ -1,3 +1,3 @@
 @AGENTS.md
-Claude-специфика: плагин swift-lsp включать в этом репо (глобально off); swiftlint — advisory, не гейт (нельзя блокирующим). Тест-таргета пока нет — верификация live (REST-батарея, MCP, sqlite-сверка) + `bash scripts/verify.sh` (build-гейт).
-После нетривиального коммита — subagent `post-commit-verifier` поверх build-гейта из ## Verify.
+Claude-specific: enable the swift-lsp plugin in this repo (it is off globally); swiftlint is advisory, not a gate (it must never be blocking). There is no test target yet — verification is live (REST battery, MCP, sqlite reconciliation) plus `bash scripts/verify.sh` (build gate).
+After a non-trivial commit, run the `post-commit-verifier` subagent on top of the build gate from ## Verify.

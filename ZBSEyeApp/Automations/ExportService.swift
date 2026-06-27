@@ -1,8 +1,8 @@
 import Foundation
 import GRDB
 
-/// Экспорт истории (анти-lock-in: «забрать память с собой»): Markdown по дням (сессии экрана +
-/// транскрипты) + опционально медиа-файлы. Переиспользует collect-группировку DailySummaryService.
+/// History export (anti-lock-in: "take your memory with you"): Markdown per day (screen sessions +
+/// transcripts) + optionally media files. Reuses DailySummaryService's collect-grouping.
 actor ExportService {
     private let db: ZBSEyeDatabase
     private let summary: DailySummaryService
@@ -21,7 +21,7 @@ actor ExportService {
         self.mediaDirectory = mediaDirectory
     }
 
-    /// Экспорт диапазона дней в папку. includeMedia — копировать heic/m4a (может быть много гигабайт).
+    /// Export a range of days into a folder. includeMedia — copy heic/m4a (can be many gigabytes).
     func export(from: Date, to: Date, into destination: URL, includeMedia: Bool) async throws -> Report {
         var report = Report()
         let cal = Calendar.current
@@ -29,7 +29,7 @@ actor ExportService {
         try FileManager.default.createDirectory(at: exportRoot, withIntermediateDirectories: true)
         report.path = exportRoot.path
 
-        // Clamp к старту данных: «вся история» с epoch-0 крутила бы ~20 000 пустых итераций с 1970.
+        // Clamp to the start of data: "all history" from epoch-0 would spin ~20,000 empty iterations from 1970.
         let oldestMs: Int64? = try await db.pool.read { dbc in
             try Int64.fetchOne(dbc, sql: """
                 SELECT MIN(t) FROM (
@@ -38,7 +38,7 @@ actor ExportService {
                 ) WHERE t IS NOT NULL
                 """)
         }
-        guard let oldestMs else { return report }   // данных нет вообще
+        guard let oldestMs else { return report }   // no data at all
         let effectiveFrom = max(from, dateFromMs(oldestMs))
 
         var day = cal.startOfDay(for: effectiveFrom)
@@ -61,12 +61,12 @@ actor ExportService {
         return report
     }
 
-    /// Markdown дня: сессии экрана (как в daily-summary, без LLM) + транскрипты с спикерами.
+    /// Markdown for a day: screen sessions (as in daily-summary, no LLM) + transcripts with speakers.
     private func markdownForDay(_ day: Date) async throws -> String? {
         let collected: CollectedDay
         do { collected = try await summary.collect(day: day, safety: .default) }
         catch let e as AutomationError {
-            if case .noData = e { return nil }   // пустой день — файла нет; остальное — реальная ошибка
+            if case .noData = e { return nil }   // empty day — no file; anything else is a real error
             throw e
         }
 
@@ -74,8 +74,8 @@ actor ExportService {
         let dayF = DateFormatter(); dayF.locale = Locale(identifier: "ru_RU"); dayF.dateFormat = "EEEE, d MMMM yyyy"
 
         var md = "# \(dayF.string(from: collected.day))\n\n"
-        md += "_Экспорт ZBS Eye · \(collected.totalCaptures) кадров, \(collected.totalSlices) сессий_\n\n"
-        md += "## Активность\n\n"
+        md += "_ZBS Eye export · \(collected.totalCaptures) frames, \(collected.totalSlices) sessions_\n\n"
+        md += "## Activity\n\n"
         for s in collected.slices {
             md += "### \(tf.string(from: s.start))–\(tf.string(from: s.end)) · \(s.app)"
             if let w = s.window, !w.isEmpty { md += " — \(w)" }
@@ -85,7 +85,7 @@ actor ExportService {
             md += "\n"
         }
 
-        // транскрипты дня (с спикерами)
+        // transcripts for the day (with speakers)
         let cal = Calendar.current
         let startMs = msFromDate(cal.startOfDay(for: day))
         let endMs = startMs + 86_400_000 - 1
@@ -100,7 +100,7 @@ actor ExportService {
             }
         }
         if !transcripts.isEmpty {
-            md += "## Разговоры\n\n"
+            md += "## Conversations\n\n"
             for t in transcripts {
                 let who = t.speaker ?? "—"
                 md += "**\(tf.string(from: dateFromMs(t.ts))) · \(who):** \(t.text)\n\n"
@@ -109,7 +109,7 @@ actor ExportService {
         return md
     }
 
-    /// Копия медиа дня в подпапку (heic кадров + m4a сегментов).
+    /// Copy a day's media into a subfolder (heic frames + m4a segments).
     private func copyMedia(day: Date, next: Date, into folder: URL) async throws -> (copied: Int, errors: Int) {
         let startMs = msFromDate(day), endMs = msFromDate(next) - 1
         let paths: [String] = try await db.pool.read { dbc in
@@ -129,7 +129,7 @@ actor ExportService {
         for rel in paths where !Task.isCancelled {
             let src = mediaDirectory.appendingPathComponent(rel)
             let dst = folder.appendingPathComponent(rel)
-            if FileManager.default.fileExists(atPath: dst.path) { copied += 1; continue }  // повторный экспорт
+            if FileManager.default.fileExists(atPath: dst.path) { copied += 1; continue }  // re-export
             do { try FileManager.default.copyItem(at: src, to: dst); copied += 1 }
             catch { errors += 1 }
         }

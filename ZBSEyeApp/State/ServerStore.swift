@@ -1,8 +1,8 @@
 import Foundation
 import Observation
 
-/// Заглушка состояния локального сервера. В Фазе 2 (шаг 5) обёрнёт ZBSEyeHTTPServer (actor),
-/// покажет реальный активный порт (фикс путаницы с 8080).
+/// Stub for the local server state. In Phase 2 (step 5) it will wrap ZBSEyeHTTPServer (actor)
+/// and show the real active port (fixes the confusion with 8080).
 @MainActor
 @Observable
 final class ServerStore {

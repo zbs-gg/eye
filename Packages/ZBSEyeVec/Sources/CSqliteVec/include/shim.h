@@ -1,7 +1,7 @@
 #ifndef CSQLITEVEC_SHIM_H
 #define CSQLITEVEC_SHIM_H
 
-/* Статическая линковка sqlite-vec: используем системный sqlite3.h (не extension API). */
+/* Static linking of sqlite-vec: we use the system sqlite3.h (not the extension API). */
 #ifndef SQLITE_CORE
 #define SQLITE_CORE 1
 #endif

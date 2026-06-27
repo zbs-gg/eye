@@ -2,9 +2,9 @@ import Foundation
 import Observation
 import AppKit
 
-/// Состояние «Подключений» (Шаг 9): конфиг локальной LLM + папка-назначение. Persist в UserDefaults
-/// (не секреты — endpoint/модель/путь), bookmark папки тоже там. @MainActor: владеет NSOpenPanel и
-/// биндингами формы. Секретов нет (локальная LLM без ключа) — Keychain не нужен; появится при cloud-флаге.
+/// State of "Connections" (Step 9): local LLM config + destination folder. Persisted in UserDefaults
+/// (not secrets — endpoint/model/path), the folder bookmark lives there too. @MainActor: owns NSOpenPanel and
+/// the form bindings. There are no secrets (local LLM with no key) — no Keychain needed; it will appear with a cloud flag.
 @MainActor
 @Observable
 final class ConnectionStore {
@@ -17,11 +17,11 @@ final class ConnectionStore {
     var llm: LLMConfig { didSet { if llm != oldValue { persist() } } }
     var destination: DestinationConfig { didSet { if destination != oldValue { persist() } } }
     var llmStatus: LLMTestStatus = .idle
-    /// Модели, отданные сервером (`GET /v1/models` — LM Studio/Ollama/…). Источник Picker'а в «Подключениях»:
-    /// список выбора берётся ИЗ реально загруженных в LM Studio моделей, а не вводится руками.
+    /// Models reported by the server (`GET /v1/models` — LM Studio/Ollama/…). The source for the Picker in "Connections":
+    /// the choices come FROM the models actually loaded in LM Studio, rather than being typed by hand.
     var availableModels: [String] = []
 
-    /// Опции Picker'а: модели с сервера + текущая выбранная (если её вдруг нет в списке — не теряем выбор).
+    /// Picker options: models from the server + the currently selected one (if it's somehow missing from the list — don't lose the choice).
     var modelOptions: [String] {
         var opts = availableModels
         if !llm.model.isEmpty, !opts.contains(llm.model) { opts.insert(llm.model, at: 0) }
@@ -38,10 +38,10 @@ final class ConnectionStore {
         self.destination = Self.loadCodable(DestinationConfig.self, key: Self.destKey) ?? .default
     }
 
-    /// Готовность к запуску automation: настроена LLM (локальная) И выбрано назначение.
+    /// Ready to start automation: an LLM (local) is configured AND a destination is chosen.
     var isReady: Bool { llm.isConfigured && llm.isLocalOnly && destination.isConfigured }
 
-    // MARK: проверка LLM
+    // MARK: LLM test
 
     func testLLM() async {
         llmStatus = .testing
@@ -50,8 +50,8 @@ final class ConnectionStore {
         case .ok(let models):
             llmStatus = .ok(models: models)
             availableModels = models
-            // авто-выбор: если модель не задана ИЛИ прежняя больше не загружена в LM Studio — берём первую
-            // доступную, чтобы «Спроси» сразу работал с реально поднятой моделью.
+            // auto-select: if no model is set OR the previous one is no longer loaded in LM Studio — take the first
+            // available one, so "Ask" works right away with an actually running model.
             if !models.isEmpty, !models.contains(llm.model) { llm.model = models[0] }
         case .failed(let msg):
             llmStatus = .failed(msg)
@@ -59,8 +59,8 @@ final class ConnectionStore {
         }
     }
 
-    /// Тихая подгрузка моделей при открытии «Подключений» (без шумного статуса, если сервер молчит —
-    /// просто остаётся ручной ввод). Не трогает llmStatus, чтобы не мигать «ошибкой» до явной проверки.
+    /// Quiet model loading when "Connections" is opened (no noisy status if the server is silent —
+    /// manual entry just remains). Doesn't touch llmStatus, so it won't flash an "error" before an explicit test.
     func loadModels() async {
         guard llm.isConfigured, llm.isLocalOnly else { return }
         if case .ok(let models) = await client.listModels(llm) {
@@ -69,36 +69,36 @@ final class ConnectionStore {
         }
     }
 
-    // MARK: выбор папки назначения
+    // MARK: destination folder selection
 
-    /// Открывает NSOpenPanel, сохраняет bookmark + отображаемый путь. Без App Sandbox security-scope
-    /// не обязателен, но bookmark переживает переименование/перенос папки (Obsidian vault мигрирует).
+    /// Opens NSOpenPanel, saves the bookmark + a displayable path. Without App Sandbox the security scope
+    /// isn't required, but the bookmark survives renaming/moving the folder (an Obsidian vault migrates).
     func pickDestination() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "Выбрать"
-        panel.message = "Папка для саммари (например, папка Obsidian vault)"
+        panel.prompt = "Choose"
+        panel.message = "Folder for summaries (for example, your Obsidian vault folder)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let bm = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
             destination.bookmark = bm
             destination.displayPath = url.path
         } catch {
-            // bookmark не вышел — хотя бы путь (без sandbox запись по пути всё равно сработает)
+            // the bookmark didn't work out — at least keep the path (without sandbox, writing by path still works)
             destination.displayPath = url.path
         }
     }
 
-    /// Резолвит bookmark → URL для записи. Возвращает (url, нужен ли stopAccessing).
+    /// Resolves the bookmark → URL for writing. Returns (url, whether stopAccessing is needed).
     func resolveDestinationURL() -> URL? {
         if let bm = destination.bookmark {
             var stale = false
             if let url = try? URL(resolvingBookmarkData: bm, options: [],
                                   relativeTo: nil, bookmarkDataIsStale: &stale) {
                 if stale, let fresh = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
-                    destination.bookmark = fresh   // обновляем протухший bookmark
+                    destination.bookmark = fresh   // refresh the stale bookmark
                 }
                 return url
             }

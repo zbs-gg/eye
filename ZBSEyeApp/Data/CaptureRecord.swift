@@ -1,15 +1,15 @@
 import Foundation
 import CoreGraphics
 
-/// Контракт между capture-слоем (Фаза 2, шаг 6) и Data-слоем. Capture формирует эти Sendable-значения
-/// и отдаёт в `IngestService`. Не трогает SQL/FTS напрямую.
+/// Contract between the capture layer (Phase 2, step 6) and the Data layer. Capture builds these Sendable values
+/// and hands them to `IngestService`. It does not touch SQL/FTS directly.
 
 public enum TextSource: String, Sendable, Codable {
     case ax     // accessibility — primary
     case ocr    // Vision fallback
 }
 
-/// Качество AX-извлечения (телеметрия, чтобы доказывать AX-first; из harness 1a).
+/// AX extraction quality (telemetry, to prove AX-first; from harness 1a).
 public enum AXQuality: String, Sendable, Codable {
     case none, titleOnly, partialUseful, fullUseful, timedOut, sickPID, ocr
 }
@@ -25,12 +25,12 @@ public struct CapturedTextBlock: Sendable {
 }
 
 public enum ImagePayload: Sendable {
-    case heicData(Data)                       // capture сжал, Data-слой пишет файл
-    case fileWritten(relativePath: String)    // capture уже записал файл
-    case none                                 // dedup context-only record (без кадра)
+    case heicData(Data)                       // capture compressed it, Data layer writes the file
+    case fileWritten(relativePath: String)    // capture already wrote the file
+    case none                                 // dedup context-only record (no frame)
 }
 
-/// Телеметрия извлечения (план v2 — доказывать AX-first, не «tree непустой = успех»). Из harness 1a.
+/// Extraction telemetry (v2 plan — prove AX-first, not “non-empty tree = success”). From harness 1a.
 public struct CaptureTelemetry: Sendable {
     public var usefulTextChars: Int = 0
     public var nodeCount: Int = 0
@@ -79,7 +79,7 @@ public struct AudioCaptureRecord: Sendable {
     public let relativePath: String
     public let durationSec: Double
     public let channel: String   // "mic" | "system"
-    public let bytes: Int?       // размер файла (для retention size-accounting)
+    public let bytes: Int?       // file size (for retention size-accounting)
     public init(timestamp: Date, relativePath: String, durationSec: Double,
                 channel: String = "mic", bytes: Int? = nil) {
         self.timestamp = timestamp; self.relativePath = relativePath

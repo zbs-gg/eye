@@ -2,8 +2,8 @@ import Foundation
 import Observation
 import GRDB
 
-/// Разбивка занятого места (Sendable — возвращается из Task.detached в @MainActor). Атрибуция
-/// импорт/живое по monitorId='sp' (живой захват пишет monitorId=String(displayID): '0'/'1'…).
+/// Breakdown of used space (Sendable — returned from a Task.detached into @MainActor). Attribution
+/// import/live by monitorId='sp' (live capture writes monitorId=String(displayID): '0'/'1'…).
 struct StorageBreakdown: Sendable, Equatable {
     var framesTotal = 0
     var framesImport = 0
@@ -11,7 +11,7 @@ struct StorageBreakdown: Sendable, Equatable {
     var audioTotal = 0
     var oldestTs: Int64?
     var newestTs: Int64?
-    var liveFrameBytes: Int64 = 0       // импорт имеет bytes=NULL → это размер только живых кадров в БД
+    var liveFrameBytes: Int64 = 0       // import has bytes=NULL → this is the size of live frames in the DB only
     var topApps: [AppUsage] = []
 
     struct AppUsage: Sendable, Equatable, Identifiable {
@@ -21,17 +21,17 @@ struct StorageBreakdown: Sendable, Equatable {
     }
 }
 
-/// Настройки хранилища: retention (дни/объём, 0 = без лимита) + сколько реально занято.
-/// Раньше юзер вообще не знал, что его история живёт 7 дней (хардкод без UI) — для продукта
-/// «вечная память» это молчаливое стирание трёх недель жизни.
+/// Storage settings: retention (days/size, 0 = no limit) + how much is actually used.
+/// Before, the user had no idea their history only lived 7 days (hardcoded, no UI) — for a
+/// "memory forever" product that's a silent erasure of three weeks of life.
 @MainActor
 @Observable
 final class StorageSettingsStore {
-    /// 0 = хранить вечно. Дефолт 0 («вечная память» — НЕ удаляем по умолчанию).
+    /// 0 = keep forever. Default 0 ("memory forever" — we do NOT delete by default).
     var retentionDays: Int {
         didSet { if retentionDays != oldValue { UserDefaults.standard.set(retentionDays, forKey: Self.daysKey) } }
     }
-    /// Лимит в ГБ; 0 = без лимита. Дефолт 0.
+    /// Limit in GB; 0 = no limit. Default 0.
     var maxGB: Int {
         didSet { if maxGB != oldValue { UserDefaults.standard.set(maxGB, forKey: Self.gbKey) } }
     }
@@ -42,7 +42,7 @@ final class StorageSettingsStore {
     private(set) var breakdown: StorageBreakdown?
     var totalBytes: Int64 { mediaBytes + databaseBytes }
 
-    // relocate (T1): состояние переноса хранилища
+    // relocate (T1): storage relocation state
     var relocationInProgress = false
     var relocationProgress: Double = 0
     var relocationStatus = ""
@@ -53,8 +53,8 @@ final class StorageSettingsStore {
     @ObservationIgnored private static let daysKey = "zbseye.retention.days"
     @ObservationIgnored private static let gbKey = "zbseye.retention.maxGB"
 
-    static let dayOptions = [0, 7, 14, 30, 90]   // 0 = «Вечно» первым: дефолт и суть продукта
-    static let gbOptions = [0, 10, 20, 50, 100]   // 0 = «Без лимита» первым
+    static let dayOptions = [0, 7, 14, 30, 90]   // 0 = "Forever" first: the default and the essence of the product
+    static let gbOptions = [0, 10, 20, 50, 100]   // 0 = "No limit" first
 
     var effectiveDays: Int? { retentionDays <= 0 ? nil : retentionDays }
     var effectiveMaxBytes: Int64? { maxGB <= 0 ? nil : Int64(maxGB) * 1024 * 1024 * 1024 }
@@ -66,9 +66,9 @@ final class StorageSettingsStore {
         maxGB = (d.object(forKey: Self.gbKey) == nil) ? 0 : d.integer(forKey: Self.gbKey)
     }
 
-    /// Пересчёт занятого места (медиа — обход папки, БД — размер sqlite+wal, свободно на томе) +
-    /// разбивка из БД (кадры импорт/живые, аудио, диапазон дат, топ-приложений). Вызывается при
-    /// открытии Settings; всё на utility-фоне одной read-транзакцией.
+    /// Recompute used space (media — folder walk, DB — size of sqlite+wal, free on the volume) +
+    /// the breakdown from the DB (import/live frames, audio, date range, top apps). Called when
+    /// Settings opens; all on a utility-priority background with a single read transaction.
     func refresh(storage: StorageManager?, db: ZBSEyeDatabase?) async {
         guard let storage else { return }
         let computed = await Task.detached(priority: .utility) { () async -> (Int64, Int64, Int64, StorageBreakdown?) in
@@ -90,8 +90,8 @@ final class StorageSettingsStore {
         breakdown = computed.3
     }
 
-    /// Одна агрегатная read-транзакция: счётчики/атрибуция/диапазон + топ-приложений. nil при отсутствии БД.
-    /// nonisolated: вызывается из Task.detached в refresh, не должна прыгать на MainActor.
+    /// One aggregate read transaction: counters/attribution/range + top apps. nil when there's no DB.
+    /// nonisolated: called from the Task.detached in refresh, must not hop onto MainActor.
     nonisolated private static func computeBreakdown(db: ZBSEyeDatabase?) async -> StorageBreakdown? {
         guard let db else { return nil }
         return try? await db.pool.read { dbc -> StorageBreakdown in

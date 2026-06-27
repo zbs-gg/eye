@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-// MARK: — бейдж (картинка-из-ассета, иначе fallback-squircle с SF-символом)
+// MARK: — badge (asset image, otherwise a fallback squircle with an SF Symbol)
 
 struct AchievementBadgeView: View {
     let achievement: Achievement
@@ -12,20 +12,20 @@ struct AchievementBadgeView: View {
     @State private var sweep = false
 
     private var hasAsset: Bool { NSImage(named: achievement.badge) != nil }
-    /// Разнобой фазы по id — бейджи переливаются не в унисон.
+    /// Phase scatter by id — the badges shimmer out of sync rather than in unison.
     private var phaseDelay: Double { Double(abs(achievement.id.hashValue) % 1000) / 1000.0 * 3.0 }
 
     var body: some View {
         VStack(spacing: max(4, size * 0.06)) {
             ZStack {
-                // Сам бейдж — крупно, без подложки (медальон уже своей формы, фон прозрачный).
+                // The badge itself — large, with no backing plate (the medallion already has its own shape, transparent background).
                 badgeArt
                     .frame(width: size, height: size)
                     .saturation(unlocked ? 1 : 0)
                     .opacity(unlocked ? 1 : 0.4)
-                    // мягкое свечение в цвете тира
+                    // soft glow in the tier color
                     .shadow(color: unlocked ? achievement.tint.color.opacity(0.55) : .clear, radius: size * 0.13)
-                    .overlay { if unlocked { shimmer } }       // перелив поверх, маскирован по бейджу
+                    .overlay { if unlocked { shimmer } }       // shimmer on top, masked to the badge
 
                 if !unlocked {
                     Image(systemName: "lock.fill")
@@ -64,7 +64,7 @@ struct AchievementBadgeView: View {
         }
     }
 
-    /// Голографический перелив: диагональная световая полоса, бегущая по бейджу, маскированная его формой.
+    /// Holographic shimmer: a diagonal light band sweeping across the badge, masked to its shape.
     @ViewBuilder private var shimmer: some View {
         let band = LinearGradient(
             colors: [.clear, .white.opacity(0.0), .white.opacity(0.45), .white.opacity(0.0), .clear],
@@ -77,11 +77,11 @@ struct AchievementBadgeView: View {
                 .blendMode(.plusLighter)
         }
         .allowsHitTesting(false)
-        // полоса видна только на пикселях бейджа (не на прозрачном фоне/квадрате)
+        // the band is visible only on the badge's pixels (not on the transparent background/square)
         .mask(badgeArt.frame(width: size, height: size))
     }
 
-    /// Запасной бейдж (пока ассет не нарезан): squircle + SF-символ в цвете тира.
+    /// Fallback badge (until the asset is cut): squircle + SF Symbol in the tier color.
     private var fallback: some View {
         let r = size * 0.235
         return ZStack {
@@ -100,7 +100,7 @@ struct AchievementBadgeView: View {
     }
 
     static func fallbackSymbol(_ badge: String) -> String {
-        // по префиксу семьи (badge_<family>_<i>) / спец-ачивке
+        // by family prefix (badge_<family>_<i>) / special achievement
         if badge.hasPrefix("badge_frames") { return "sparkles" }
         if badge.hasPrefix("badge_age") { return "tree.fill" }
         if badge.hasPrefix("badge_streak") { return "flame.fill" }
@@ -126,7 +126,7 @@ struct AchievementBadgeView: View {
     }
 }
 
-// MARK: — галерея достижений
+// MARK: — achievements gallery
 
 struct AchievementsView: View {
     @Environment(AppEnvironment.self) private var env
@@ -137,13 +137,13 @@ struct AchievementsView: View {
                 AchievementsGallery(store: store)
             } else if let err = env.dataError {
                 ContentUnavailableView {
-                    Label("Память недоступна", systemImage: "exclamationmark.triangle.fill")
+                    Label("Memory unavailable", systemImage: "exclamationmark.triangle.fill")
                 } description: { Text(err) }
             } else {
-                ContentUnavailableView("Инициализация…", systemImage: "rosette")
+                ContentUnavailableView("Initializing…", systemImage: "rosette")
             }
         }
-        .navigationTitle("Достижения")
+        .navigationTitle("Achievements")
     }
 }
 
@@ -180,9 +180,9 @@ private struct AchievementsGallery: View {
     private var progressHeader: some View {
         let frac = store.totalCount > 0 ? Double(store.unlockedCount) / Double(store.totalCount) : 0
         return VStack(alignment: .leading, spacing: 10) {
-            Text("Достижения").font(.largeTitle.bold())
+            Text("Achievements").font(.largeTitle.bold())
             HStack {
-                Text("\(store.unlockedCount) из \(store.totalCount) открыто")
+                Text("\(store.unlockedCount) of \(store.totalCount) unlocked")
                     .font(.callout).foregroundStyle(.secondary)
                 Spacer()
                 Text("\(Int(frac * 100))%").font(.callout.bold()).monospacedDigit()
@@ -208,7 +208,7 @@ private struct AchievementsGallery: View {
                     Text(d.formatted(date: .abbreviated, time: .omitted))
                         .font(.caption2).foregroundStyle(a.tint.color.opacity(0.9))
                 } else if !hidden {
-                    Text(" ").font(.caption2)   // выравнивание высоты
+                    Text(" ").font(.caption2)   // height alignment
                 }
             }
         }
@@ -221,18 +221,18 @@ private struct AchievementsGallery: View {
         return VStack(spacing: 18) {
             AchievementBadgeView(achievement: a, unlocked: unlocked, size: 160)
                 .padding(.top, 10)
-            Text(hidden ? "Секретное достижение" : a.title).font(.title2.bold())
-            Text(hidden ? "Открой его — и узнаешь, за что." : a.detail)
+            Text(hidden ? "Secret achievement" : a.title).font(.title2.bold())
+            Text(hidden ? "Unlock it — and you'll find out what it's for." : a.detail)
                 .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             if unlocked, let d = store.unlockedDate(a.id) {
-                Label("Открыто \(d.formatted(date: .abbreviated, time: .omitted))", systemImage: "checkmark.seal.fill")
+                Label("Unlocked \(d.formatted(date: .abbreviated, time: .omitted))", systemImage: "checkmark.seal.fill")
                     .font(.caption).foregroundStyle(a.tint.color)
             } else {
-                Label("Ещё закрыто", systemImage: "lock.fill")
+                Label("Still locked", systemImage: "lock.fill")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Button("Закрыть") { selected = nil }.keyboardShortcut(.defaultAction)
+            Button("Close") { selected = nil }.keyboardShortcut(.defaultAction)
         }
         .padding(28)
         .frame(width: 360)

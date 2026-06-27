@@ -31,8 +31,8 @@ struct ProgressSnapshot: Sendable, Equatable {
 
 // MARK: — ProgressStore
 
-/// @MainActor @Observable хранилище прогресса: стрик, вехи, возраст памяти.
-/// Читает БД через pool.read (background) — никакой блокировки MainActor.
+/// @MainActor @Observable progress store: streak, milestones, memory age.
+/// Reads the DB via pool.read (background) — no blocking of the MainActor.
 @MainActor
 @Observable
 final class ProgressStore {
@@ -82,9 +82,9 @@ final class ProgressStore {
             let minTs: Int64 = row["minTs"] ?? 0
             let maxTs: Int64 = row["maxTs"] ?? 0
 
-            // Distinct active day strings (DESC) — ОДИН скан дат: и для стрика, и для счётчика дней
-            // (activeDays = их количество). Раньше был отдельный COUNT(DISTINCT date(...)) — лишний
-            // полный скан истории (ревью Pro #8).
+            // Distinct active day strings (DESC) — ONE scan of dates: both for the streak and for the day counter
+            // (activeDays = their count). There used to be a separate COUNT(DISTINCT date(...)) — an extra
+            // full history scan (Pro review #8).
             let dayStrings = try String.fetchAll(dbc, sql: """
                 SELECT DISTINCT date(ts / 1000, 'unixepoch', 'localtime') AS d
                 FROM screen_captures

@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// Компактная панель прогресса: стрик, вехи, возраст памяти, прогресс-бар к следующей вехе.
+/// Compact progress panel: streak, milestones, memory age, progress bar to the next milestone.
 struct MemoryProgressView: View {
     @Environment(AppEnvironment.self) private var env
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("Прогресс").font(.largeTitle.bold())
+                Text("Progress").font(.largeTitle.bold())
                 statsCard
                 milestonesCard
             }
@@ -23,19 +23,19 @@ struct MemoryProgressView: View {
     private var statsCard: some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Твоя память").font(.headline)
+                Text("Your memory").font(.headline)
                 if let p = env.progress {
                     let s = p.snapshot
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())],
                               alignment: .leading, spacing: 12) {
-                        statCell(label: "Кадров",
+                        statCell(label: "Frames",
                                  value: NumberFormatter.localizedString(
                                     from: NSNumber(value: s.totalFrames), number: .decimal))
-                        statCell(label: "Стрик",
+                        statCell(label: "Streak",
                                  value: streakLabel(s.streakDays))
-                        statCell(label: "Дней использования",
+                        statCell(label: "Days used",
                                  value: "\(s.totalDays)")
-                        statCell(label: "Возраст памяти",
+                        statCell(label: "Memory age",
                                  value: ageDaysLabel(s.memoryAgeDays))
                     }
 
@@ -44,12 +44,12 @@ struct MemoryProgressView: View {
                         nextMilestoneRow(s)
                     }
                 } else if let err = env.dataError {
-                    // Honest-state: БД не поднялась — жёсткая ошибка, а не «ещё грузится».
+                    // Honest-state: DB didn't come up — a hard error, not "still loading".
                     Label(err, systemImage: "exclamationmark.triangle.fill")
                         .font(.callout).foregroundStyle(.orange)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    Text("База ещё не загружена")
+                    Text("Database not loaded yet")
                         .font(.callout).foregroundStyle(.secondary)
                 }
             }
@@ -61,7 +61,7 @@ struct MemoryProgressView: View {
         if let next = s.nextMilestone {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("До вехи \(NumberFormatter.localizedString(from: NSNumber(value: next), number: .decimal))")
+                    Text("To the \(NumberFormatter.localizedString(from: NSNumber(value: next), number: .decimal)) milestone")
                         .font(.callout)
                     Spacer()
                     Text(progressLabel(s))
@@ -71,7 +71,7 @@ struct MemoryProgressView: View {
             }
         } else {
             // Passed all milestones
-            Label("Все вехи пройдены — ты в числе пионеров вечной памяти.",
+            Label("All milestones passed — you're among the pioneers of forever memory.",
                   systemImage: "star.fill")
                 .font(.callout).foregroundStyle(.yellow)
         }
@@ -83,7 +83,7 @@ struct MemoryProgressView: View {
         let remaining = max(0, next - s.totalFrames)
         let r = NumberFormatter.localizedString(from: NSNumber(value: remaining), number: .decimal)
         let _ = prev   // suppress warning
-        return "ещё \(r)"
+        return "\(r) to go"
     }
 
     // MARK: — Milestones card
@@ -91,8 +91,8 @@ struct MemoryProgressView: View {
     private var milestonesCard: some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Вехи памяти").font(.headline)
-                Text("Каждая веха — это часть жизни, сохранённая локально навсегда.")
+                Text("Memory milestones").font(.headline)
+                Text("Each milestone is a piece of life saved locally, forever.")
                     .font(.caption).foregroundStyle(.secondary)
                 let total = env.progress?.snapshot.totalFrames ?? 0
                 ForEach(MemoryMilestones.frames, id: \.self) { m in
@@ -114,18 +114,16 @@ struct MemoryProgressView: View {
     private func streakLabel(_ days: Int) -> String {
         switch days {
         case 0: return "—"
-        case 1: return "1 день"
-        case 2...4: return "\(days) дня"
-        default: return "\(days) дней"
+        case 1: return "1 day"
+        default: return "\(days) days"
         }
     }
 
     private func ageDaysLabel(_ days: Int) -> String {
-        if days == 0 { return "менее суток" }
+        if days == 0 { return "less than a day" }
         switch days {
-        case 1: return "1 день"
-        case 2...4: return "\(days) дня"
-        default: return "\(days) дней"
+        case 1: return "1 day"
+        default: return "\(days) days"
         }
     }
 }
@@ -174,7 +172,7 @@ private struct MilestoneRow: View {
                 .foregroundStyle(reached ? .primary : .secondary)
             Spacer()
             if reached {
-                Text("достигнуто").font(.caption2).foregroundStyle(.secondary)
+                Text("reached").font(.caption2).foregroundStyle(.secondary)
             } else if current > 0 {
                 let pct = Int(min(99, Double(current) / Double(milestone) * 100))
                 Text("\(pct)%").font(.caption2).foregroundStyle(.secondary)

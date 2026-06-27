@@ -2,14 +2,14 @@ import Foundation
 import AppKit
 import CoreGraphics
 
-/// Оркестратор захвата (@MainActor — владеет observer'ами/таймером, делает только debounce+dispatch).
-/// Event-driven по смене активного приложения + active-tick fallback. Smart-pause (lock/sleep/idle),
-/// per-app capability cache (GPU/canvas → OCR-only, не дёргаем AX впустую). Тяжёлая работа — на акторах.
+/// Capture orchestrator (@MainActor — owns the observers/timer, does only debounce+dispatch).
+/// Event-driven on the active-app change + an active-tick fallback. Smart-pause (lock/sleep/idle),
+/// per-app capability cache (GPU/canvas → OCR-only, we don't poke AX in vain). Heavy work — on actors.
 @MainActor
 final class CaptureCoordinator {
     private enum CaptureClass { case unknown, axViable, ocrOnly }
 
-    /// Известные GPU/canvas-приложения (план: «OCR-only навсегда»). Остальное — обучается per-app.
+    /// Known GPU/canvas apps (plan: "OCR-only forever"). Everything else — learned per-app.
     private static let knownOCROnly: Set<String> = [
         "dev.zed.Zed", "dev.warp.Warp-Stable", "dev.warp.Warp",
         "net.kovidgoyal.kitty", "com.mitchellh.ghostty", "com.github.wez.wezterm",
@@ -23,7 +23,7 @@ final class CaptureCoordinator {
 
     private(set) var isRunning = false
     private var suspended = false              // lock/sleep
-    private var screenLocked = false           // экран заблокирован — гейтит resume-kick screensaver.didstop
+    private var screenLocked = false           // screen is locked — gates the resume-kick on screensaver.didstop
     private var tickTimer: Timer?
     private var observers: [NSObjectProtocol] = []
     private var distributedObservers: [NSObjectProtocol] = []
@@ -39,19 +39,19 @@ final class CaptureCoordinator {
     private var burstTask: Task<Void, Never>?
 
     var onFrame: (@MainActor () -> Void)?
-    /// N SCK-отказов подряд при выданном праве (классика -3801: TCC требует перезапуск процесса) —
-    /// поднять наверх, иначе горит «Запись идёт» при нуле кадров.
+    /// N SCK failures in a row with a granted permission (the classic -3801: TCC requires a process restart) —
+    /// surface it, otherwise "Recording" stays lit at zero frames.
     var onCaptureBroken: (@MainActor () -> Void)?
-    /// Захват восстановился после отказов (транзиентный noDisplay при wake/смене мониторов) — снять
-    /// needsRestart, иначе односторонний ratchet навсегда блокирует запись ложным «Нет прав».
+    /// Capture recovered after failures (a transient noDisplay on wake/monitor change) — clear
+    /// needsRestart, otherwise a one-way ratchet blocks recording forever with a false "No permissions".
     var onCaptureRecovered: (@MainActor () -> Void)?
-    /// Heartbeat: цикл прошёл штатно (включая дедуп и idle-skip) — для «захват жив» в UI.
+    /// Heartbeat: a cycle completed normally (including dedup and idle-skip) — for "capture is alive" in the UI.
     var onCycleOK: (@MainActor () -> Void)?
-    /// Возвращает false при критично малом свободном месте — цикл пропускает захват (диск не добиваем).
+    /// Returns false at critically low free space — the cycle skips capture (we don't fill the disk to the brim).
     var diskOK: @MainActor () -> Bool = { true }
-    /// Privacy-исключения (1Password/банк): true → приложение не записываем. Дефолт — пишем всё.
+    /// Privacy exclusions (1Password/bank): true → we don't record the app. Default — record everything.
     var isIgnoredApp: @MainActor (String) -> Bool = { _ in false }
-    /// Полный список исключённых (для SCContentFilter: вырезать их окна из ЛЮБОГО кадра, не только фокус).
+    /// The full list of excluded ones (for SCContentFilter: cut their windows out of ANY frame, not just the focus one).
     var ignoredBundleIds: @MainActor () -> Set<String> = { [] }
 
     init(ingest: IngestService, config: CaptureConfig = CaptureConfig()) {
@@ -62,8 +62,8 @@ final class CaptureCoordinator {
         loadCapability()
     }
 
-    /// Capability-кэш персистится (план: не переучивать после каждого рестарта). ocrOnly-вердикты
-    /// старше 7 дней сбрасываются — приложение могло обновиться и начать отдавать AX (re-probe).
+    /// The capability cache persists (plan: don't re-learn after every restart). ocrOnly verdicts
+    /// older than 7 days are reset — the app may have updated and started returning AX (re-probe).
     private func loadCapability() {
         let d = UserDefaults.standard
         guard let raw = d.dictionary(forKey: "zbseye.capability") as? [String: String],
@@ -74,7 +74,7 @@ final class CaptureCoordinator {
             capabilityCheckedAt[bundleId] = at
             switch cls {
             case "ax": capability[bundleId] = .axViable
-            case "ocr": if at > cutoff { capability[bundleId] = .ocrOnly }   // протух → re-probe
+            case "ocr": if at > cutoff { capability[bundleId] = .ocrOnly }   // expired → re-probe
             default: break
             }
         }
@@ -110,17 +110,17 @@ final class CaptureCoordinator {
         })
         observers.append(wsc.addObserver(forName: NSWorkspace.didWakeNotification,
                                          object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.suspended = false; self?.invalidateAndTrigger() }   // активный resume-kick: не ждём app-switch, восстанавливаемся из возможного stuck (старт-под-локом)
+            Task { @MainActor in self?.suspended = false; self?.invalidateAndTrigger() }   // active resume-kick: don't wait for an app-switch, recover from a possible stuck state (started-under-lock)
         })
-        // Сон ДИСПЛЕЯ (без сна системы) — иначе idle-захват всю ночь писал бы чёрные кадры,
-        // а SCK-ошибки взводили бы ложный «нужен перезапуск».
+        // DISPLAY sleep (without system sleep) — otherwise idle capture would write black frames all night,
+        // and SCK errors would arm a false "restart needed".
         observers.append(wsc.addObserver(forName: NSWorkspace.screensDidSleepNotification,
                                          object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.suspended = true }
         })
         observers.append(wsc.addObserver(forName: NSWorkspace.screensDidWakeNotification,
                                          object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.suspended = false; self?.invalidateAndTrigger() }   // активный resume-kick: не ждём app-switch, восстанавливаемся из возможного stuck (старт-под-локом)
+            Task { @MainActor in self?.suspended = false; self?.invalidateAndTrigger() }   // active resume-kick: don't wait for an app-switch, recover from a possible stuck state (started-under-lock)
         })
         observers.append(wsc.addObserver(forName: NSWorkspace.didTerminateApplicationNotification,
                                          object: nil, queue: .main) { [weak self] note in
@@ -129,8 +129,8 @@ final class CaptureCoordinator {
             Task { @MainActor in await self?.axReader.forget(pid: pid) }
         })
 
-        // Смена конфигурации дисплеев (подключение/отключение монитора, смена разрешения) —
-        // кеш SCShareableContent устаревает мгновенно, иначе захват падает до смены приложения.
+        // A change in display configuration (connecting/disconnecting a monitor, a resolution change) —
+        // the SCShareableContent cache goes stale instantly, otherwise capture breaks until an app change.
         observers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main) { [weak self] _ in
@@ -144,7 +144,7 @@ final class CaptureCoordinator {
         })
         distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screenIsUnlocked"),
                                                     object: nil, queue: .main) { [weak self] _ in
-            // активный resume-kick: не ждём app-switch, восстанавливаемся из возможного stuck (старт-под-локом)
+            // active resume-kick: don't wait for an app-switch, recover from a possible stuck state (started-under-lock)
             Task { @MainActor in self?.screenLocked = false; self?.suspended = false; self?.invalidateAndTrigger() }
         })
         distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screensaver.didstart"),
@@ -153,8 +153,8 @@ final class CaptureCoordinator {
         })
         distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screensaver.didstop"),
                                                     object: nil, queue: .main) { [weak self] _ in
-            // скринсейвер кончился: снимаем suspend, НО под локом НЕ триггерим захват — ждём screenIsUnlocked
-            // (иначе спустим лишний цикл на login-сессию). На разлоченном экране resume-kick корректен.
+            // the screensaver ended: we lift suspend, BUT under lock we DON'T trigger capture — we wait for screenIsUnlocked
+            // (otherwise we'd waste an extra cycle on the login session). On an unlocked screen the resume-kick is correct.
             Task { @MainActor in
                 self?.suspended = false
                 if self?.screenLocked == false { self?.invalidateAndTrigger() }
@@ -187,9 +187,9 @@ final class CaptureCoordinator {
 
     private func tickFired() {
         guard isRunning, !suspended else { return }
-        // idle: нет ввода дольше порога → РЕДКИЙ режим (кадр раз в idleCaptureInterval), не полный стоп:
-        // «записывать всё» включает входящее без ввода — чтение, видео, прилетающие сообщения.
-        // Это ЗДОРОВЬЕ, не сбой — heartbeat отбиваем, иначе UI после обеда кричал бы «захват умер».
+        // idle: no input longer than the threshold → a RARE mode (a frame once per idleCaptureInterval), not a full stop:
+        // "record everything" includes input-free incoming — reading, video, arriving messages.
+        // This is HEALTH, not a failure — we keep the heartbeat, otherwise the UI after lunch would scream "capture died".
         let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
         if idle > config.idleThresholdSec {
             onCycleOK?()
@@ -207,8 +207,8 @@ final class CaptureCoordinator {
         guard !suspended else { return }
         Task { await pipeline.invalidateContent() }
         trigger()
-        // burst trio: немедленный кадр выше + кадры на 700мс/2с — Electron/web часто ещё не дорисованы
-        // к первому захвату (план: «недорисованный кадр уходит в историю, а его phash гасит дорисованный»)
+        // burst trio: the immediate frame above + frames at 700ms/2s — Electron/web are often not yet drawn
+        // by the first capture (plan: "an undrawn frame goes into history, and its phash suppresses the drawn one")
         burstTask?.cancel()
         let delays = config.burstTrioDelays
         burstTask = Task { @MainActor [weak self] in
@@ -234,33 +234,33 @@ final class CaptureCoordinator {
     // MARK: cycle
 
     private func runCycle() async {
-        guard diskOK() else { return }   // диск почти полон — не пишем (статус поднимает AppEnvironment)
+        guard diskOK() else { return }   // disk almost full — we don't write (AppEnvironment raises the status)
         guard let app = NSWorkspace.shared.frontmostApplication,
               let bundleId = app.bundleIdentifier else { return }
-        // privacy-исключение: осознанный skip = здоровье цикла (heartbeat), а не сбой
+        // privacy exclusion: a deliberate skip = cycle health (heartbeat), not a failure
         if isIgnoredApp(bundleId) { onCycleOK?(); return }
         let pid = app.processIdentifier
-        // ГЛАВНЫЙ ФИКС (диагноз Pro): НИКОГДА не захватываем собственный процесс. При клике «Запись» ZBS Eye
-        // остаётся frontmost → AXReader читал бы НАШЕ AX-дерево → kAXValue у нашего SwiftUI-Slider синхронно
-        // зовёт его @MainActor Binding.get (TimelineView) прямо на axreader-очереди → dispatch_assert_queue → краш.
+        // THE MAIN FIX (Pro's diagnosis): NEVER capture our own process. On a "Record" click ZBS Eye
+        // stays frontmost → AXReader would read OUR AX tree → kAXValue on our SwiftUI Slider synchronously
+        // calls its @MainActor Binding.get (TimelineView) right on the axreader queue → dispatch_assert_queue → crash.
         guard pid != ProcessInfo.processInfo.processIdentifier else { onCycleOK?(); return }
         let appName = app.localizedName ?? bundleId
 
-        // per-app capability: GPU/canvas → сразу OCR, не тратим AX
+        // per-app capability: GPU/canvas → straight to OCR, we don't spend AX
         let cls = capability[bundleId] ?? (Self.knownOCROnly.contains(bundleId) ? .ocrOnly : .unknown)
 
         var ax = AXExtraction()
         var needsOCR: Bool
         if cls == .ocrOnly {
             needsOCR = true
-            // полный AX не зовём (дерево пустое/бесполезное), но заголовок окна — один дешёвый вызов:
-            // иначе записи Zed/Figma оставались вообще без windowTitle
+            // we don't call full AX (the tree is empty/useless), but the window title — one cheap call:
+            // otherwise Zed/Figma records were left without any windowTitle at all
             ax.windowTitle = await axReader.titleOnly(pid: pid)
         } else {
             ax = await axReader.extract(pid: pid)
             needsOCR = ax.contentChars < config.ocrMinContentChars
                 && (ax.quality == .none || ax.quality == .titleOnly || ax.treeWasEmpty)
-            // обучение capability (персистится; ocrOnly протухает через 7 дней → re-probe)
+            // capability learning (persists; ocrOnly expires after 7 days → re-probe)
             if ax.contentChars >= config.usefulThreshold {
                 if capability[bundleId] != .axViable { persistCapability(bundleId, .axViable) }
                 emptyStreak[bundleId] = 0
@@ -270,26 +270,26 @@ final class CaptureCoordinator {
                 if n >= config.ocrOnlyEmptyStreak { persistCapability(bundleId, .ocrOnly) }
             }
         }
-        // Pro action 3: после await actor'а AXReader мы обязаны снова быть на main. После self-PID фикса это
-        // стабильно проходит для внешних app; падение здесь означало бы РЕАЛЬНЫЙ runtime mis-hop (тогда — repro).
+        // Pro action 3: after awaiting the AXReader actor we must be back on main. After the self-PID fix this
+        // passes stably for external apps; a failure here would mean a REAL runtime mis-hop (then — repro).
         MainActor.preconditionIsolated()
 
-        // Дисплей FRONTMOST-окна по ГЕОМЕТРИИ. NSScreen.main здесь не годится: это экран key window
-        // НАШЕГО приложения — когда ZBS Eye в фоне (всегда при записи), он давал бы primary-дисплей,
-        // а не экран чужого активного окна.
+        // The display of the FRONTMOST window by GEOMETRY. NSScreen.main won't do here: it's the screen of OUR
+        // app's key window — when ZBS Eye is in the background (always while recording), it would give the primary
+        // display, not the screen of the other app's active window.
         let focusedDisplayID = Self.displayForFrontmostWindow(pid: pid)
 
         let frame: ProcessedFrame?
         do {
             var excludes = ignoredBundleIds()
-            if let own = Bundle.main.bundleIdentifier { excludes.insert(own) }   // Pro: таймлайн не пишет сам себя
+            if let own = Bundle.main.bundleIdentifier { excludes.insert(own) }   // Pro: the timeline doesn't record itself
             frame = try await pipeline.process(displayID: focusedDisplayID, needsOCR: needsOCR,
                                                excludedBundleIds: excludes)
-            if sckFailureStreak > 0 { onCaptureRecovered?() }   // транзиентный сбой прошёл — снять ratchet
+            if sckFailureStreak > 0 { onCaptureRecovered?() }   // a transient failure passed — clear the ratchet
             sckFailureStreak = 0
             onCycleOK?()
         } catch {
-            // -3801 после выдачи права / нет дисплея. Подряд идущие отказы = захват фактически мёртв.
+            // -3801 after a permission grant / no display. Consecutive failures = capture effectively dead.
             sckFailureStreak += 1
             Log.capture.error("SCK capture failed (streak \(self.sckFailureStreak)): \(String(describing: error), privacy: .public)")
             if sckFailureStreak == 3 { onCaptureBroken?() }
@@ -298,7 +298,7 @@ final class CaptureCoordinator {
         guard let frame else { return }
 
         if frame.isDuplicate {
-            // картинка та же — но если AX-текст изменился (скролл/новое сообщение), пишем context-only
+            // same image — but if the AX text changed (scroll/new message), we write context-only
             if ax.contentChars > 0, ax.contentText != (lastContentText[bundleId] ?? "") {
                 await write(bundleId: bundleId, appName: appName, ax: ax, ocr: [],
                             image: .none, width: frame.width, height: frame.height,
@@ -314,7 +314,7 @@ final class CaptureCoordinator {
         lastContentText[bundleId] = ax.contentText
     }
 
-    /// Дисплей самого верхнего обычного окна (layer 0) процесса — по пересечению bounds с дисплеями.
+    /// The display of the topmost normal window (layer 0) of the process — by intersecting bounds with displays.
     private static func displayForFrontmostWindow(pid: pid_t) -> CGDirectDisplayID? {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                     kCGNullWindowID) as? [[String: Any]] else { return nil }

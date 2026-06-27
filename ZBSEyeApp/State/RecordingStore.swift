@@ -1,10 +1,10 @@
 import Foundation
 import Observation
 
-/// Состояние записи. Делегирует старт/стоп в CaptureCoordinator (ставится из AppEnvironment.bootstrap).
-/// Желание «запись включена» персистится — после ребута/краша bootstrap возобновляет запись сам
-/// (вечная память не должна зависеть от ручного клика). isCapturing не врёт: без критичных прав
-/// запись не стартует, вместо ложной зелёной точки — blockedReason.
+/// Recording state. Delegates start/stop to CaptureCoordinator (set from AppEnvironment.bootstrap).
+/// The "recording on" desire is persisted — after a reboot/crash bootstrap resumes recording itself
+/// (forever memory must not depend on a manual click). isCapturing doesn't lie: without critical permissions
+/// recording doesn't start, and instead of a false green dot — blockedReason.
 @MainActor
 @Observable
 final class RecordingStore {
@@ -12,26 +12,26 @@ final class RecordingStore {
     private(set) var screenFrameCount = 0
     private(set) var audioChunkCount = 0
 
-    // Health для индикаторов (menubar/sidebar): продукт обязан показывать, ЧТО реально пишется.
+    // Health for the indicators (menubar/sidebar): the product must show WHAT is actually being recorded.
     private(set) var lastFrameAt: Date?
-    /// Heartbeat capture-цикла: успешный проход (включая дедуп и осознанный idle-skip). Отдельно от
-    /// lastFrameAt — статичный экран дедупится часами, это НЕ «захват умер» (анти-ложная тревога).
+    /// Capture-cycle heartbeat: a successful pass (including dedup and deliberate idle-skip). Separate from
+    /// lastFrameAt — a static screen gets deduped for hours, that is NOT "capture died" (anti-false-alarm).
     private(set) var lastCycleOKAt: Date?
     private(set) var lastAudioAt: Date?
     private(set) var lowDiskPaused = false
-    /// Запись не стартовала из-за прав — причина для UI (вместо ложного «Запись идёт»).
+    /// Recording didn't start due to permissions — the reason for the UI (instead of a false "Recording").
     private(set) var blockedReason: String?
-    /// Запись идёт, но деградировала (права отозваны mid-run и т.п.) — показывается ПРИ isCapturing.
+    /// Recording is on but degraded (permissions revoked mid-run, etc.) — shown WHEN isCapturing.
     private(set) var degradedReason: String?
-    /// Временная privacy-пауза («не пиши 15 минут»): желание записи СОХРАНЯЕТСЯ, автостарт-watcher
-    /// не возобновляет до истечения. nil = пауза не активна.
+    /// Temporary privacy pause ("don't record for 15 minutes"): the recording desire is KEPT, the autostart watcher
+    /// doesn't resume until it expires. nil = no pause active.
     private(set) var pausedUntil: Date?
     @ObservationIgnored private var resumeTask: Task<Void, Never>?
     @ObservationIgnored private static let pausedKey = "zbseye.recording.pausedUntil"
 
     init() {
-        // Пауза переживает перезапуск/краш: иначе релонч молча возобновлял бы запись посреди
-        // «не записывать 15 минут» — privacy-обещание сломано.
+        // The pause survives restart/crash: otherwise a relaunch would silently resume recording in the middle
+        // of "don't record for 15 minutes" — breaking the privacy promise.
         if let saved = UserDefaults.standard.object(forKey: Self.pausedKey) as? Date {
             if saved > Date() {
                 pausedUntil = saved
@@ -55,30 +55,30 @@ final class RecordingStore {
 
     @ObservationIgnored var coordinator: CaptureCoordinator?
     @ObservationIgnored var audio: AudioCoordinator?
-    /// Гейты (ставятся из AppEnvironment): критичные права записи; аудио mic/system.
+    /// Gates (set from AppEnvironment): critical recording permissions; mic/system audio.
     @ObservationIgnored var canCapture: @MainActor () -> Bool = { false }
-    /// Почему запись недоступна (needsRestart vs denied — тексты разные; ставит AppEnvironment).
+    /// Why recording is unavailable (needsRestart vs denied — different texts; set by AppEnvironment).
     @ObservationIgnored var blockedHint: @MainActor () -> String = {
-        "Нет прав (Запись экрана + Универсальный доступ). Запись включится автоматически после выдачи; повторный клик — отмена"
+        "No permissions (Screen Recording + Accessibility). Recording will turn on automatically once granted; click again to cancel"
     }
     @ObservationIgnored var micEnabled: @MainActor () -> Bool = { false }
     @ObservationIgnored var systemEnabled: @MainActor () -> Bool = { false }
 
     @ObservationIgnored private static let enabledKey = "zbseye.recording.enabled"
 
-    /// Желание пользователя (персист): были ли «Запись» включена при прошлом выходе.
+    /// User's desire (persisted): was "Recording" on at the last exit.
     var wantsRecording: Bool { UserDefaults.standard.bool(forKey: Self.enabledKey) }
 
     func toggle() {
         guard let coordinator else {
-            // bootstrap ещё идёт — кнопка не должна быть молчаливым no-op: запоминаем/снимаем намерение,
-            // autostart-watcher дожмёт старт после инициализации.
+            // bootstrap is still running — the button must not be a silent no-op: we remember/clear the intent,
+            // the autostart watcher will finish the start after initialization.
             if wantsRecording {
                 UserDefaults.standard.set(false, forKey: Self.enabledKey)
                 blockedReason = nil
             } else {
                 UserDefaults.standard.set(true, forKey: Self.enabledKey)
-                blockedReason = "ZBS Eye ещё запускается — запись включится автоматически"
+                blockedReason = "ZBS Eye is still starting up — recording will turn on automatically"
             }
             return
         }
@@ -89,12 +89,12 @@ final class RecordingStore {
             degradedReason = nil
             UserDefaults.standard.set(false, forKey: Self.enabledKey)
         } else {
-            // ручное включение снимает временную паузу (юзер передумал ждать)
+            // a manual turn-on clears the temporary pause (the user changed their mind about waiting)
             resumeTask?.cancel(); resumeTask = nil
             clearPause()
             guard canCapture() else {
-                // Честный toggle НАМЕРЕНИЯ: первый клик взводит (запись стартанёт сама после выдачи
-                // прав — говорим об этом), повторный клик СНИМАЕТ взвод (иначе отменить невозможно).
+                // Honest INTENT toggle: the first click arms it (recording will start itself after permissions
+                // are granted — we say so), a second click DISARMS it (otherwise it can't be canceled).
                 if wantsRecording {
                     UserDefaults.standard.set(false, forKey: Self.enabledKey)
                     blockedReason = nil
@@ -112,7 +112,7 @@ final class RecordingStore {
         }
     }
 
-    /// Явный отказ (онбординг «Позже» при взведённом намерении): остановить и снять взвод.
+    /// Explicit refusal (onboarding "Later" while the intent is armed): stop and disarm.
     func disarm() {
         if isCapturing { toggle() }
         else {
@@ -121,9 +121,9 @@ final class RecordingStore {
         }
     }
 
-    /// Остановка ради обслуживания (миграция хранилища): глушим захват, но НЕ трогаем намерение
-    /// (enabledKey) и паузу — после рестарта autostart возобновит. Гарантирует, что во время копии
-    /// данных в новый root никто не пишет в старый.
+    /// Stop for maintenance (storage migration): silence the capture, but do NOT touch the intent
+    /// (enabledKey) or the pause — after restart autostart will resume. Guarantees that during the data
+    /// copy to the new root nobody writes to the old one.
     func pauseForMaintenance() {
         guard isCapturing, let coordinator else { return }
         coordinator.stop()
@@ -132,16 +132,16 @@ final class RecordingStore {
         degradedReason = nil
     }
 
-    /// Автостарт из bootstrap (и после выдачи прав): если юзер хотел запись и права есть — включаем.
-    /// Временная пауза блокирует автостарт до истечения (resume-задача снимет pausedUntil).
+    /// Autostart from bootstrap (and after permissions are granted): if the user wanted recording and has permissions — turn it on.
+    /// A temporary pause blocks autostart until it expires (the resume task will clear pausedUntil).
     func startIfWanted() {
         guard pausedUntil == nil else { return }
         guard wantsRecording, !isCapturing, canCapture() else { return }
         toggle()
     }
 
-    /// Privacy-пауза из menubar: остановить запись на N минут, потом возобновить самой.
-    /// Желание записи (enabledKey) не трогаем — это пауза, не выключение.
+    /// Privacy pause from the menubar: stop recording for N minutes, then resume itself.
+    /// We don't touch the recording desire (enabledKey) — this is a pause, not a turn-off.
     func pauseFor(minutes: Int) {
         guard isCapturing, let coordinator else { return }
         coordinator.stop()
@@ -160,14 +160,14 @@ final class RecordingStore {
         }
     }
 
-    /// Снять паузу досрочно (кнопка «Возобновить сейчас»).
+    /// Clear the pause early (the "Resume now" button).
     func resumeNow() {
         resumeTask?.cancel(); resumeTask = nil
         clearPause()
         startIfWanted()
     }
 
-    /// Применить смену аудио-настроек на лету (вызывается из Settings, если запись активна).
+    /// Apply an audio-settings change on the fly (called from Settings if recording is active).
     func syncAudio() {
         guard isCapturing, let audio else { return }
         audio.stop()

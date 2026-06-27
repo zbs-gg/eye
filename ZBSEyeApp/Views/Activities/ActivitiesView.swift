@@ -1,8 +1,8 @@
 import SwiftUI
 import AppKit
 
-/// «День в активностях» — вертикальный список блоков-сцен.
-/// Клик по сцене → переход на таймлайн к startTs.
+/// "Day in activities" — a vertical list of scene blocks.
+/// Tapping a scene → jump to the timeline at startTs.
 struct ActivitiesView: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -12,16 +12,16 @@ struct ActivitiesView: View {
                 ActivitiesBody(store: store, timelineStore: timelineStore)
                     .environment(env)
                     .task {
-                        AchievementCounters.bump(.activitiesOpened)   // ачивка «Хронист дня»
+                        AchievementCounters.bump(.activitiesOpened)   // "Day Chronicler" achievement
                         await store.load()
                         await env.achievements?.refresh()
                     }
             } else if let err = env.dataError {
-                ContentUnavailableView("Ошибка БД",
+                ContentUnavailableView("Database error",
                                        systemImage: "exclamationmark.triangle",
                                        description: Text(err))
             } else {
-                ProgressView("Инициализация…")
+                ProgressView("Initializing…")
             }
         }
     }
@@ -42,10 +42,10 @@ private struct ActivitiesBody: View {
 
     private var toolbar: some View {
         HStack(spacing: 12) {
-            Text("День в активностях")
+            Text("Day in activities")
                 .font(.headline)
             Spacer()
-            Button("Сегодня") {
+            Button("Today") {
                 store.selectedDay = Calendar.current.startOfDay(for: Date())
                 Task { await store.load() }
             }
@@ -63,25 +63,25 @@ private struct ActivitiesBody: View {
     @ViewBuilder
     private var content: some View {
         if store.isLoading {
-            ProgressView("Сегментирую…")
+            ProgressView("Segmenting…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let err = store.error {
-            // Ошибка РАНЬШЕ «пусто»: при ошибке scenes тоже пуст, иначе ошибка маскировалась бы
-            // под «нет активности» (ревью Pro #11).
-            ContentUnavailableView("Ошибка", systemImage: "exclamationmark.triangle",
+            // Error BEFORE "empty": on error scenes is also empty, otherwise the error would be masked
+            // as "no activity" (Pro review #11).
+            ContentUnavailableView("Error", systemImage: "exclamationmark.triangle",
                                    description: Text(err))
         } else if store.scenes.isEmpty {
             ContentUnavailableView {
-                Label("Нет активности", systemImage: "calendar.badge.clock")
+                Label("No activity", systemImage: "calendar.badge.clock")
             } description: {
-                Text("За этот день нет записанных кадров. Выбери другой день.")
+                Text("No frames recorded for this day. Pick a different day.")
             }
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     let totalTime = totalDurationLabel(store.scenes)
                     HStack {
-                        Text("\(store.scenes.count) активностей · \(totalTime)")
+                        Text("\(store.scenes.count) activities · \(totalTime)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -91,7 +91,7 @@ private struct ActivitiesBody: View {
 
                     ForEach(store.scenes) { scene in
                         SceneCard(scene: scene) {
-                            // Клик → переходим на таймлайн к startTs сцены.
+                            // Tap → jump to the timeline at the scene's startTs.
                             env.selectedSection = .timeline
                             Task { await timelineStore.seek(to: scene.startTs) }
                         }
@@ -107,12 +107,12 @@ private struct ActivitiesBody: View {
         let total = scenes.reduce(0) { $0 + $1.durationSec }
         let hours = Int(total) / 3600
         let minutes = (Int(total) % 3600) / 60
-        if hours > 0 { return "\(hours) ч \(minutes) мин" }
-        return "\(minutes) мин"
+        if hours > 0 { return "\(hours) h \(minutes) min" }
+        return "\(minutes) min"
     }
 }
 
-// MARK: - карточка сцены
+// MARK: - scene card
 
 private struct SceneCard: View {
     let scene: ActivityScene
@@ -123,7 +123,7 @@ private struct SceneCard: View {
     var body: some View {
         Button(action: onTap) {
             HStack(alignment: .top, spacing: 12) {
-                // Иконка приложения
+                // App icon
                 Group {
                     if let icon = appIcon {
                         Image(nsImage: icon)
@@ -141,7 +141,7 @@ private struct SceneCard: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(scene.appName ?? scene.bundleId ?? "Приложение")
+                        Text(scene.appName ?? scene.bundleId ?? "App")
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
                         Spacer()
@@ -166,7 +166,7 @@ private struct SceneCard: View {
 
                     HStack(spacing: 8) {
                         Label(durationLabel(scene.durationSec), systemImage: "clock")
-                        Label("\(scene.frameCount) кадров", systemImage: "photo")
+                        Label("\(scene.frameCount) frames", systemImage: "photo")
                     }
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -190,12 +190,12 @@ private struct SceneCard: View {
 
     private func durationLabel(_ sec: Double) -> String {
         let s = Int(sec)
-        if s < 60 { return "\(s) с" }
-        if s < 3600 { return "\(s / 60) мин" }
-        return "\(s / 3600) ч \((s % 3600) / 60) мин"
+        if s < 60 { return "\(s) s" }
+        if s < 3600 { return "\(s / 60) min" }
+        return "\(s / 3600) h \((s % 3600) / 60) min"
     }
 
-    /// Иконка через NSWorkspace по bundleId. Async-friendly: не блокирует main actor надолго.
+    /// Icon via NSWorkspace by bundleId. Async-friendly: doesn't block the main actor for long.
     private func loadIcon(bundleId: String?) async -> NSImage? {
         guard let bid = bundleId else { return nil }
         return await Task.detached(priority: .userInitiated) {
@@ -207,12 +207,12 @@ private struct SceneCard: View {
     }
 }
 
-// MARK: - карточка-саммари сцены для правой панели таймлайна
+// MARK: - scene summary card for the timeline's right panel
 
-/// Встраивается в `detailPanel` TimelineView вместо RAW OCR-дампа когда известна текущая сцена.
+/// Embedded in TimelineView's `detailPanel` instead of a RAW OCR dump when the current scene is known.
 struct SceneSummaryCard: View {
     let scene: ActivityScene
-    let onJump: () -> Void      // «Перейти к началу» — seek(startTs)
+    let onJump: () -> Void      // "Jump to start" — seek(startTs)
 
     @State private var appIcon: NSImage?
 
@@ -223,14 +223,14 @@ struct SceneSummaryCard: View {
                     Image(nsImage: icon)
                         .resizable().frame(width: 20, height: 20).cornerRadius(4)
                 }
-                Text("Сцена")
+                Text("Scene")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
                     onJump()
                 } label: {
-                    Label("Начало", systemImage: "arrow.left.to.line")
+                    Label("Start", systemImage: "arrow.left.to.line")
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
@@ -244,7 +244,7 @@ struct SceneSummaryCard: View {
 
             HStack(spacing: 10) {
                 Label(durationLabel(scene.durationSec), systemImage: "clock")
-                Label("\(scene.frameCount) кадров", systemImage: "photo")
+                Label("\(scene.frameCount) frames", systemImage: "photo")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -258,9 +258,9 @@ struct SceneSummaryCard: View {
 
     private func durationLabel(_ sec: Double) -> String {
         let s = Int(sec)
-        if s < 60 { return "\(s) с" }
-        if s < 3600 { return "\(s / 60) мин" }
-        return "\(s / 3600) ч \((s % 3600) / 60) мин"
+        if s < 60 { return "\(s) s" }
+        if s < 3600 { return "\(s / 60) min" }
+        return "\(s / 3600) h \((s % 3600) / 60) min"
     }
 
     private func loadIcon(bundleId: String?) async -> NSImage? {

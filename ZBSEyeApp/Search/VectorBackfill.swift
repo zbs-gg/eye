@@ -1,12 +1,12 @@
 import Foundation
 import GRDB
 
-/// Дозаполнение semantic-индекса: кадры с текстом, но без вектора в vec_screen. Источники дыр:
-/// (1) миграция v3 дропнула старые 512-векторы; (2) оффлайн first-run — кадры ингестились, пока e5
-/// не была скачана. Без backfill эти кадры навсегда невидимы semantic-поиску.
-/// Ждёт готовности модели (а не выходит при «не готова» — иначе бы выходил ровно в сценарии, ради
-/// которого существует). Страница курсором по ts (без фуллскана на каждый батч), Set имеющихся
-/// векторов строится один раз и поддерживается инкрементально.
+/// Backfill of the semantic index: frames with text but no vector in vec_screen. Sources of the gaps:
+/// (1) the v3 migration dropped the old 512-dim vectors; (2) offline first-run — frames were ingested while e5
+/// had not yet been downloaded. Without backfill these frames stay forever invisible to semantic search.
+/// Waits for the model to be ready (rather than bailing on "not ready" — that would bail in exactly the scenario
+/// it exists for). Pages by a ts cursor (no full scan per batch), the Set of existing vectors is built once and
+/// maintained incrementally.
 actor VectorBackfill {
     private let db: ZBSEyeDatabase
     private let embedder: EmbeddingService
@@ -17,22 +17,22 @@ actor VectorBackfill {
         self.embedder = embedder
     }
 
-    /// Один проход до исчерпания. Повторный вызов при уже идущем — no-op.
+    /// One pass until exhausted. A repeat call while already running is a no-op.
     func run() async {
         guard !running else { return }
         running = true
         defer { running = false }
 
-        // 1) Дождаться модели: warmup-embed триггерит загрузку; оффлайн → ретрай раз в минуту
-        //    (E5ModelProvider сам держит backoff). Без этого first-run-оффлайн выходил бы навсегда.
+        // 1) Wait for the model: a warmup embed triggers the download; offline → retry once a minute
+        //    (E5ModelProvider keeps its own backoff). Without this the first-run-offline case would bail forever.
         while !Task.isCancelled {
             if await embedder.embed(passage: "warmup") != nil { break }
             try? await Task.sleep(for: .seconds(60))
         }
         guard !Task.isCancelled else { return }
 
-        // 2) Снапшот: имеющиеся вектора (один раз) + верхняя граница ts. Кадры новее снапшота
-        //    эмбеддит живой ingest — мы их не трогаем (нет гонки на дубль-вектор).
+        // 2) Snapshot: existing vectors (once) + the upper ts bound. Frames newer than the snapshot are
+        //    embedded by live ingest — we don't touch them (no race for a duplicate vector).
         guard let snapshot = try? await loadSnapshot() else { return }
         var have = snapshot.have
         var cursorTs = snapshot.maxTs + 1
@@ -49,8 +49,8 @@ actor VectorBackfill {
                 let blob = floatBlob(vec)
                 do {
                     try await db.pool.write { dbc in
-                        // WHERE EXISTS: кадр могли удалить (retention/privacy) пока мы эмбеддили —
-                        // иначе вектор-сирота удалённого контента жил бы вечно
+                        // WHERE EXISTS: the frame could have been deleted (retention/privacy) while we embedded —
+                        // otherwise an orphan vector of deleted content would live forever
                         try dbc.execute(sql: """
                             INSERT INTO vec_screen(capture_id, bucket_month, embedding)
                             SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM screen_captures WHERE id = ?)
@@ -60,18 +60,18 @@ actor VectorBackfill {
                     total += 1
                     failStreak = 0
                 } catch {
-                    // запись не удалась — НЕ засчитываем и не молотим вечно (диск/БД больны)
+                    // the write failed — don't count it and don't hammer forever (disk/DB are sick)
                     failStreak += 1
                     Log.app.error("backfill insert failed: \(String(describing: error), privacy: .public)")
                     if failStreak >= 10 { Log.app.error("backfill aborted: insert keeps failing"); return }
                 }
             }
-            try? await Task.sleep(for: .seconds(2))   // пауза между страницами — фон, не нагрузка
+            try? await Task.sleep(for: .seconds(2))   // pause between pages — background, not a load
         }
-        if total > 0 { Log.app.info("vector backfill: \(total) кадров доиндексировано") }
+        if total > 0 { Log.app.info("vector backfill: \(total) frames reindexed") }
 
-        // 3) Транскрипты без вектора (миграция v4 / оффлайн-период): объёмы на порядки меньше кадров —
-        //    одним проходом без пейджинга.
+        // 3) Transcripts without a vector (v4 migration / offline period): volumes are orders of magnitude
+        //    smaller than frames — handled in a single pass without paging.
         await backfillTranscripts()
     }
 
@@ -95,7 +95,7 @@ actor VectorBackfill {
                   vec.count == ZBSEyeDatabase.embeddingDim else { continue }
             let blob = floatBlob(vec)
             try? await db.pool.write { dbc in
-                // WHERE EXISTS: транскрипт могли удалить, пока шёл многоминутный backfill-инференс
+                // WHERE EXISTS: the transcript could have been deleted during the multi-minute backfill inference
                 try dbc.execute(sql: """
                     INSERT INTO vec_transcripts(transcription_id, bucket_month, embedding)
                     SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM transcriptions WHERE id = ?)
@@ -103,7 +103,7 @@ actor VectorBackfill {
             }
             total += 1
         }
-        if total > 0 { Log.app.info("transcript backfill: \(total) транскриптов доиндексировано") }
+        if total > 0 { Log.app.info("transcript backfill: \(total) transcripts reindexed") }
     }
 
     private struct PageItem: Sendable { let id: Int64; let ts: Int64 }
@@ -117,7 +117,7 @@ actor VectorBackfill {
         }
     }
 
-    /// Страница кандидатов (кадры с текстом) строго старше cursor — O(page), не фуллскан.
+    /// A page of candidates (frames with text) strictly older than the cursor — O(page), not a full scan.
     private func nextPage(before ts: Int64, limit: Int) async throws -> [PageItem] {
         try await db.pool.read { dbc in
             try Row.fetchAll(dbc, sql: """

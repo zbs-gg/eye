@@ -1,13 +1,13 @@
 import Foundation
 import Observation
 
-/// Модель time-travel таймлайна. Ось — ВРЕМЯ (не индекс массива). Держит окно [rangeStart, rangeEnd]
-/// вокруг cursor, плотность для density-strip, текущий кадр, и результаты FTS-поиска.
+/// The time-travel timeline model. The axis is TIME (not an array index). Holds a window [rangeStart, rangeEnd]
+/// around the cursor, density for the density-strip, the current frame, and FTS search results.
 @MainActor
 @Observable
 final class TimelineStore {
-    /// Зум = ширина видимого ОКНА времени для density-strip (overview+detail). Слайдер всегда по всей
-    /// истории (глобальная позиция); strip показывает окно вокруг playhead. seconds=nil → вся история.
+    /// Zoom = the width of the visible TIME window for the density-strip (overview+detail). The slider always spans the
+    /// whole history (global position); the strip shows a window around the playhead. seconds=nil → all history.
     enum Zoom: String, CaseIterable, Identifiable {
         case full, day, hour, tenMin
         var id: String { rawValue }
@@ -15,7 +15,7 @@ final class TimelineStore {
             switch self { case .full: nil; case .day: 86_400; case .hour: 3_600; case .tenMin: 600 }
         }
         var label: String {
-            switch self { case .full: "Вся"; case .day: "День"; case .hour: "Час"; case .tenMin: "10 мин" }
+            switch self { case .full: "All"; case .day: "Day"; case .hour: "Hour"; case .tenMin: "10 min" }
         }
     }
 
@@ -24,8 +24,8 @@ final class TimelineStore {
     @ObservationIgnored let mediaDirectory: URL
     @ObservationIgnored private var searchGen = 0
     @ObservationIgnored private var playTask: Task<Void, Never>?
-    @ObservationIgnored private var playGen = 0   // как searchGen: инвалидирует устаревший цикл плеера
-    @ObservationIgnored private var windowStart: Date?   // левый край окна strip; nil = вся история (.full)
+    @ObservationIgnored private var playGen = 0   // like searchGen: invalidates a stale player loop
+    @ObservationIgnored private var windowStart: Date?   // left edge of the strip window; nil = all history (.full)
     @ObservationIgnored private var liveTask: Task<Void, Never>?
 
     var bounds = TimeBounds(oldest: nil, newest: nil)
@@ -33,21 +33,21 @@ final class TimelineStore {
     var zoom: Zoom = .full
     var current: FrameDetail?
     var density: [DensityBucket] = []
-    var audioDensity: [DensityBucket] = []   // вторая дорожка strip: где в истории есть речь
+    var audioDensity: [DensityBucket] = []   // the strip's second track: where in history there's speech
     var searchQuery = ""
     var results: [SearchResult] = []
     var isSearching = false
-    /// Открытый аудио-сегмент (клик по аудио-хиту): транскрипт + прослушивание. Раньше аудио-хит
-    /// был тупиком — показывался ближайший экранный кадр, транскрипт пропадал.
+    /// An open audio segment (click on an audio hit): transcript + playback. Previously an audio hit
+    /// was a dead end — the nearest screen frame was shown, the transcript vanished.
     var audioDetail: AudioDetail?
     let audioPlayer = AudioPlayerStore()
 
-    // Плеер: воспроизведение по реальной каденции захваченных кадров, масштабируется скоростью.
+    // Player: playback at the real cadence of captured frames, scaled by speed.
     var isPlaying = false
     var speed: Double = 1            // 1× / 2× / 4×
     static let speeds: [Double] = [1, 2, 4]
 
-    // Окно density-strip: при .full = вся история; иначе — страница [windowStart, +zoom.seconds].
+    // The density-strip window: at .full = all history; otherwise — a page [windowStart, +zoom.seconds].
     var rangeStart: Date {
         if let ws = windowStart, zoom.seconds != nil { return ws }
         return bounds.oldest ?? Date().addingTimeInterval(-1800)
@@ -58,26 +58,26 @@ final class TimelineStore {
     }
     var hasData: Bool { bounds.oldest != nil }
 
-    /// ~300 столбиков на ТЕКУЩЕЕ окно при любом зуме (на 10-мин окне — секундная детализация).
+    /// ~300 bars for the CURRENT window at any zoom (on a 10-min window — second-level detail).
     private var effectiveBucketMs: Int64 {
         let span = max(1, msFromDate(rangeEnd) - msFromDate(rangeStart))
         return max(1000, span / 300)
     }
 
-    /// Левый край окна шириной w вокруг времени c, прижатый к границам истории.
+    /// The left edge of a window of width w around time c, clamped to the history bounds.
     private func clampedWindowStart(around c: Date, width w: Double) -> Date {
         guard let o = bounds.oldest, let n = bounds.newest else { return c.addingTimeInterval(-w / 2) }
-        if n.timeIntervalSince(o) <= w { return o }       // история короче окна → окно = вся история
+        if n.timeIntervalSince(o) <= w { return o }       // history shorter than the window → window = all history
         var start = c.addingTimeInterval(-w / 2)
         if start < o { start = o }
         if start.addingTimeInterval(w) > n { start = n.addingTimeInterval(-w) }
         return start
     }
 
-    /// Держит cursor в комфортной зоне окна; при выходе перецентрирует страницу. true → density пересчитать.
-    /// Страничный сдвиг (не каждый кадр) — поэтому density не дёргается при play на каждом тике.
+    /// Keeps the cursor in the window's comfort zone; on exit re-centers the page. true → recompute density.
+    /// Paged shift (not every frame) — so density doesn't twitch during play on every tick.
     private func reframeWindowIfNeeded() -> Bool {
-        // .full ИЛИ пустая история — окно не используется (иначе фантомный windowStart вокруг Date()).
+        // .full OR empty history — the window isn't used (otherwise a phantom windowStart around Date()).
         guard let w = zoom.seconds, bounds.oldest != nil else {
             if windowStart != nil { windowStart = nil; return true }
             return false
@@ -85,10 +85,10 @@ final class TimelineStore {
         let margin = w * 0.15
         if let ws = windowStart,
            cursor >= ws.addingTimeInterval(margin), cursor <= ws.addingTimeInterval(w - margin) {
-            return false                                  // в зоне — страницу не трогаем
+            return false                                  // inside the zone — don't touch the page
         }
-        // У края истории clamp упирается в тот же ws → возвращаем false, иначе density пересчитывался бы
-        // вхолостую каждый кадр в крайних 15% окна (нарушало бы «страничный, не покадровый» сдвиг).
+        // At the edge of history the clamp lands on the same ws → return false, otherwise density would recompute
+        // pointlessly every frame in the window's outer 15% (breaking the "paged, not per-frame" shift).
         let new = clampedWindowStart(around: cursor, width: w)
         let changed = (windowStart != new)
         windowStart = new
@@ -118,9 +118,9 @@ final class TimelineStore {
         await refresh()
     }
 
-    /// Живой таймлайн: во время записи bounds/density обновляются сами (раньше «История пуста» висела,
-    /// пока не переключишь раздел — первый опыт «нажал Запись и ничего» был тихим провалом).
-    /// Если playhead «приклеен к хвосту» (стоит на новейшем кадре) — следует за новыми кадрами.
+    /// Live timeline: while recording, bounds/density update by themselves (previously "History is empty" hung
+    /// until you switched sections — the first experience of "pressed Record and nothing" was a silent failure).
+    /// If the playhead is "stuck to the tail" (on the newest frame) — it follows new frames.
     func startLive() {
         guard liveTask == nil else { return }
         liveTask = Task { [weak self] in
@@ -132,11 +132,11 @@ final class TimelineStore {
     }
 
     private func liveTick() async {
-        guard !isPlaying else { return }                       // плеер сам двигает время
+        guard !isPlaying else { return }                       // the player moves time itself
         guard let b = try? await timeline.bounds() else { return }
         guard b.newest != bounds.newest || b.oldest != bounds.oldest else { return }
         let wasEmpty = bounds.oldest == nil
-        // «у хвоста» = курсор на/после прежнего newest (допуск 5с) — тогда следуем за записью
+        // "at the tail" = cursor on/after the previous newest (5s tolerance) — then we follow the recording
         let atTail = wasEmpty || (bounds.newest.map { cursor >= $0.addingTimeInterval(-5) } ?? true)
         bounds = b
         if atTail, let n = b.newest {
@@ -150,31 +150,31 @@ final class TimelineStore {
     func refresh() async {
         _ = reframeWindowIfNeeded()
         await refreshDensity()
-        // Прямое присваивание: до первого кадра истории frameAt вернёт nil — кадр надо ОЧИСТИТЬ,
-        // иначе в пустой зоне залипает прежний кадр (детали-«Нет кадра» иначе недостижимы).
+        // Direct assignment: before the first frame of history frameAt returns nil — the frame must be CLEARED,
+        // otherwise the previous frame sticks in an empty zone (the "No frame" details would be unreachable).
         current = try? await timeline.frameAt(cursor)
     }
 
     func seek(to t: Date) async {
-        if isPlaying { pause() }        // ручная перемотка забирает управление у плеера
+        if isPlaying { pause() }        // a manual scrub takes control away from the player
         cursor = t
-        current = try? await timeline.frameAt(t)   // nil до начала истории → очищаем (см. refresh)
-        if reframeWindowIfNeeded() { await refreshDensity() }   // окно сдвинулось (напр. coarse-seek слайдером)
-        // ушли далеко от открытого аудио-сегмента и он не играет → карточка чужого момента закрывается
+        current = try? await timeline.frameAt(t)   // nil before the start of history → clear (see refresh)
+        if reframeWindowIfNeeded() { await refreshDensity() }   // the window shifted (e.g. coarse-seek via the slider)
+        // moved far from the open audio segment and it isn't playing → the card of someone else's moment closes
         if let a = audioDetail, !audioPlayer.isPlaying,
            abs(t.timeIntervalSince(a.ts)) > max(60, a.durationSec + 60) {
             closeAudio()
         }
     }
 
-    // MARK: навигация по датам
+    // MARK: date navigation
 
-    /// «Сегодня» = хвост истории (новейший кадр).
+    /// "Today" = the tail of history (the newest frame).
     func jumpToNewest() async {
         if let n = bounds.newest { await seek(to: n) }
     }
 
-    /// Прыжок к дню: полдень выбранной даты, прижатый к границам истории.
+    /// Jump to a day: noon of the chosen date, clamped to the history bounds.
     func jump(to day: Date) async {
         let cal = Calendar.current
         let noon = cal.date(byAdding: .hour, value: 12, to: cal.startOfDay(for: day))
@@ -185,15 +185,15 @@ final class TimelineStore {
         await seek(to: target)
     }
 
-    // MARK: плеер
+    // MARK: player
 
     func togglePlay() { isPlaying ? pause() : play() }
 
     func play() {
-        guard hasData, !isPlaying else { return }                 // guard !isPlaying — нет двойного запуска
-        // один кадр всего — играть нечего, не мигаем кнопкой play→pause
+        guard hasData, !isPlaying else { return }                 // guard !isPlaying — no double start
+        // only one frame total — nothing to play, don't blink the button play→pause
         if let o = bounds.oldest, let n = bounds.newest, o == n { return }
-        // если стоим в конце — начинаем с начала истории (иначе play «ничего не делает»)
+        // if we're at the end — start from the beginning of history (otherwise play "does nothing")
         if let newest = bounds.newest, cursor >= newest, let oldest = bounds.oldest { cursor = oldest }
         isPlaying = true
         startLoop()
@@ -201,29 +201,29 @@ final class TimelineStore {
 
     func pause() {
         isPlaying = false
-        playGen += 1            // инвалидирует любой живой playLoop (его проверка gen == playGen упадёт)
+        playGen += 1            // invalidates any live playLoop (its check gen == playGen will fail)
         playTask?.cancel()
         playTask = nil
     }
 
     func setSpeed(_ s: Double) {
         speed = s
-        // Перезапуск цикла, чтобы текущий длинный sleep пересчитался под новую скорость (иначе лаг до 1.2с).
+        // Restart the loop so the current long sleep recomputes for the new speed (otherwise lag up to 1.2s).
         if isPlaying { startLoop() }
     }
 
-    /// Шаг по реальным кадрам (ставит на паузу — это ручная навигация). id текущего кадра —
-    /// тай-брейк для равных ts (мультимонитор): каждый кадр посещается ровно один раз.
+    /// Step by real frames (pauses — this is manual navigation). The current frame's id —
+    /// the tie-breaker for equal ts (multi-monitor): each frame is visited exactly once.
     func stepForward() async {
         pause()
-        let anchor = current?.ts ?? cursor   // якорь — видимый кадр: cursor мог уехать слайдером
+        let anchor = current?.ts ?? cursor   // anchor — the visible frame: cursor may have drifted via the slider
         if let f = try? await timeline.nextFrame(after: anchor, afterId: current?.id) {
             cursor = f.ts; current = f
         }
     }
     func stepBackward() async {
         pause()
-        let anchor = current?.ts ?? cursor   // иначе первый «шаг назад» после seek возвращал тот же кадр
+        let anchor = current?.ts ?? cursor   // otherwise the first "step back" after a seek returned the same frame
         if let f = try? await timeline.prevFrame(before: anchor, beforeId: current?.id) {
             cursor = f.ts; current = f
         }
@@ -237,29 +237,29 @@ final class TimelineStore {
     }
 
     private func playLoop(gen: Int) async {
-        // gen == playGen — этот цикл актуальный; pause()/новый startLoop() бампят playGen и вытесняют старый.
+        // gen == playGen — this loop is current; pause()/a new startLoop() bump playGen and evict the old one.
         while isPlaying && !Task.isCancelled && gen == playGen {
-            // try? уплощает Optional-возврат: и брошенная ошибка БД, и конец истории → nil → стоп.
+            // try? flattens the Optional return: both a thrown DB error and the end of history → nil → stop.
             let anchor = current?.ts ?? cursor
             guard let next = try? await timeline.nextFrame(after: anchor, afterId: current?.id)
             else { pause(); return }
-            // Реальный зазор до следующего кадра / скорость; max(0,…) покрывает нулевой/обратный gap
-            // (обратная перемотка, кадры с равным ts); cap 1.2с чтобы idle-разрывы не морозили плеер.
+            // The real gap to the next frame / speed; max(0,…) covers a zero/reverse gap
+            // (reverse scrub, frames with equal ts); cap 1.2s so idle gaps don't freeze the player.
             let gap = max(0, next.ts.timeIntervalSince(cursor))
             let wait = min(max(gap / speed, 0.05), 1.2)
             try? await Task.sleep(for: .seconds(wait))
-            guard isPlaying, !Task.isCancelled, gen == playGen else { return }  // не писать stale cursor
+            guard isPlaying, !Task.isCancelled, gen == playGen else { return }  // don't write a stale cursor
             cursor = next.ts
             current = next
-            if reframeWindowIfNeeded() { await refreshDensity() }   // playhead дошёл до края окна → сдвиг страницы
+            if reframeWindowIfNeeded() { await refreshDensity() }   // the playhead reached the window's edge → page shift
         }
     }
 
     func setZoom(_ z: Zoom) async {
         zoom = z
         _ = reframeWindowIfNeeded()
-        // guard на устаревание при быстром переключении зума; обновляем ОБЕ дорожки (иначе оранжевая
-        // аудио-полоска оставалась с бакетами прежнего окна — strip врал, где есть звонки)
+        // guard against staleness on fast zoom switching; update BOTH tracks (otherwise the orange
+        // audio strip kept the buckets of the previous window — the strip lied about where the calls are)
         let d = try? await timeline.density(from: rangeStart, to: rangeEnd, bucketMs: effectiveBucketMs)
         let a = try? await timeline.audioDensity(from: rangeStart, to: rangeEnd, bucketMs: effectiveBucketMs)
         guard zoom == z else { return }
@@ -270,12 +270,12 @@ final class TimelineStore {
     func runSearch() async {
         let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { results = []; return }
-        AchievementCounters.bump(.searches)                 // ачивка «Ищейка»
+        AchievementCounters.bump(.searches)                 // "Detective" achievement
         searchGen += 1
         let gen = searchGen
         isSearching = true
         let r = (try? await search.search(query: q)) ?? []
-        guard gen == searchGen else { return }   // пришёл устаревший результат — игнор
+        guard gen == searchGen else { return }   // a stale result arrived — ignore
         results = r
         isSearching = false
     }
@@ -283,19 +283,19 @@ final class TimelineStore {
     func clearSearch() {
         searchQuery = ""
         results = []
-        isSearching = false      // иначе showResults (isSearching||!results) держит оверлей открытым
-        searchGen += 1           // инвалидируем любой летящий runSearch — его результат отбросится (gen != searchGen)
+        isSearching = false      // otherwise showResults (isSearching||!results) keeps the overlay open
+        searchGen += 1           // invalidate any in-flight runSearch — its result will be dropped (gen != searchGen)
     }
 
     func select(_ r: SearchResult) async {
-        pause()                // прыжок на хит = ручная навигация, не автоплей
+        pause()                // jumping to a hit = manual navigation, not autoplay
         results = []
         searchQuery = ""
-        cursor = r.ts          // сначала курсор — refresh посчитает кадр+плотность для нового момента
+        cursor = r.ts          // cursor first — refresh computes the frame+density for the new moment
         await refresh()
-        // Аудио-хит: открыть панель транскрипта/прослушивания (а не молча терять найденный звонок).
+        // Audio hit: open the transcript/playback panel (instead of silently losing the found call).
         if r.kind == .audio {
-            if audioDetail?.id != r.id { audioPlayer.stop() }   // звук звонка A не должен звучать под карточкой B
+            if audioDetail?.id != r.id { audioPlayer.stop() }   // call A's audio must not play under card B
             audioDetail = try? await timeline.audioDetail(id: r.id)
         } else {
             closeAudio()

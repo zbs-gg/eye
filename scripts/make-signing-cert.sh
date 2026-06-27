@@ -1,35 +1,35 @@
 #!/bin/bash
-# Создаёт self-signed code-signing сертификат «ZBS Eye Dev» в login-keychain (БЕЗ платного
-# Apple Developer аккаунта). Стабильная идентичность подписи = TCC-права (Screen Recording,
-# Accessibility, Microphone) и Keychain ACL переживают ребилды — главная dev-боль уходит.
+# Creates a self-signed code-signing certificate "ZBS Eye Dev" in the login keychain (WITHOUT a paid
+# Apple Developer account). A stable signing identity = TCC permissions (Screen Recording,
+# Accessibility, Microphone) and Keychain ACL survive rebuilds — the main dev pain goes away.
 #
-# Запускать ОДИН РАЗ. Доверие кладётся в ПОЛЬЗОВАТЕЛЬСКИЙ trust-домен (без sudo) — macOS
-# покажет GUI-диалог «вносятся изменения в настройки доверия», подтверди Touch ID/паролем.
+# Run ONCE. Trust is placed into the USER trust domain (no sudo) — macOS
+# will show a GUI dialog "changes are being made to your trust settings", confirm with Touch ID/password.
 #
-# NB: первый билд с новой подписью ОДИН РАЗ сбросит уже выданные TCC-права (перевыдать в System
-# Settings: выключить и снова включить ZBSEye в Screen Recording, затем Microphone).
+# NB: the first build with the new signature will ONCE reset already-granted TCC permissions (re-grant in System
+# Settings: turn ZBSEye off and back on in Screen Recording, then Microphone).
 set -euo pipefail
 
 NAME="ZBS Eye Dev"
 LOGIN_KC="$HOME/Library/Keychains/login.keychain-db"
 
-# Уже есть рабочая идентичность для подписи кода? — повторно не пересоздаём (новый keypair = снова
-# слетит TCC). Реюзаем стабильную идентичность.
+# Already have a working code-signing identity? — don't recreate it (a new keypair = TCC
+# breaks again). Reuse the stable identity.
 if security find-identity -v -p codesigning | grep -q "$NAME"; then
-  echo "✅ Сертификат «${NAME}» уже существует и доверен — реюзаем:"
+  echo "✅ Certificate \"${NAME}\" already exists and is trusted — reusing:"
   security find-identity -v -p codesigning | grep "$NAME"
   exit 0
 fi
 
-# Остаток от прошлого частичного запуска (cert без trust / без приватного ключа) — убрать из
-# login-keychain, иначе повторный import даст второй серт → codesign: ambiguous identity.
-echo "→ Уборка прошлых копий сертификата из login-keychain (если были)…"
+# Leftover from a previous partial run (cert without trust / without private key) — remove from the
+# login keychain, otherwise a repeat import gives a second cert → codesign: ambiguous identity.
+echo "→ Cleaning up previous certificate copies from the login keychain (if any)…"
 while security delete-certificate -c "$NAME" "$LOGIN_KC" >/dev/null 2>&1; do :; done
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# Конфиг расширений: codeSigning EKU обязателен, иначе codesign не примет идентичность.
+# Extensions config: codeSigning EKU is mandatory, otherwise codesign won't accept the identity.
 cat > "$TMP/cert.cnf" <<EOF
 [req]
 distinguished_name = dn
@@ -43,8 +43,8 @@ extendedKeyUsage = critical,codeSigning
 basicConstraints = critical,CA:false
 EOF
 
-# ЯВНО системный /usr/bin/openssl (LibreSSL): Homebrew OpenSSL 3.x шифрует p12 алгоритмами,
-# которые macOS `security import` не понимает → «MAC verification failed (wrong password?)».
+# EXPLICITLY the system /usr/bin/openssl (LibreSSL): Homebrew OpenSSL 3.x encrypts the p12 with algorithms
+# that macOS `security import` doesn't understand → "MAC verification failed (wrong password?)".
 OPENSSL=/usr/bin/openssl
 
 "$OPENSSL" req -x509 -newkey rsa:2048 -keyout "$TMP/key.pem" -out "$TMP/cert.pem" \
@@ -53,25 +53,25 @@ OPENSSL=/usr/bin/openssl
 "$OPENSSL" pkcs12 -export -inkey "$TMP/key.pem" -in "$TMP/cert.pem" \
   -out "$TMP/cert.p12" -passout pass:zbseye -name "$NAME"
 
-# Импорт ключа+серта в login-keychain. -T codesign/security — добавить их в ACL ключа.
+# Import the key+cert into the login keychain. -T codesign/security — add them to the key's ACL.
 security import "$TMP/cert.p12" -k "$LOGIN_KC" -P zbseye \
   -T /usr/bin/codesign -T /usr/bin/security
 
-# Доверие в ПОЛЬЗОВАТЕЛЬСКОМ trust-домене (без -d/sudo): появится GUI-диалог, подтверди Touch ID.
-echo "→ Доверие сертификату (появится системный диалог — подтверди Touch ID)…"
+# Trust in the USER trust domain (no -d/sudo): a GUI dialog appears, confirm with Touch ID.
+echo "→ Trusting the certificate (a system dialog will appear — confirm with Touch ID)…"
 security add-trusted-cert -r trustRoot -k "$LOGIN_KC" "$TMP/cert.pem"
 
-# Partition-list, чтобы codesign не спрашивал на каждый билд. Без терминала пароль keychain
-# спросить нельзя → best-effort; при провале первая подпись покажет GUI «Always Allow» (нажать раз).
-echo "→ Partition-list для ключа (может не пройти без пароля — тогда «Always Allow» при первой сборке)…"
+# Partition-list, so codesign doesn't ask on every build. Without a terminal the keychain password
+# can't be asked → best-effort; on failure the first signing shows a GUI "Always Allow" (click once).
+echo "→ Partition-list for the key (may not pass without a password — then \"Always Allow\" on the first build)…"
 security set-key-partition-list -S apple-tool:,apple: -s -D "$NAME" "$LOGIN_KC" >/dev/null 2>&1 \
-  && echo "   partition-list установлен" \
-  || echo "   пропущено — подтверди «Always Allow» в диалоге при первой сборке"
+  && echo "   partition-list set" \
+  || echo "   skipped — confirm \"Always Allow\" in the dialog on the first build"
 
 echo ""
-echo "✅ Готово:"
+echo "✅ Done:"
 security find-identity -v -p codesigning | grep "$NAME"
 echo ""
-echo "Дальше: bash scripts/build-release.sh → установка в /Applications/ZBS Eye.app"
-echo "⚠️  Первый билд с этой подписью один раз сбросит TCC-права — перевыдай Screen Recording"
-echo "   (выключить/включить в System Settings) и Microphone."
+echo "Next: bash scripts/build-release.sh → install into /Applications/ZBS Eye.app"
+echo "⚠️  The first build with this signature will reset TCC permissions once — re-grant Screen Recording"
+echo "   (toggle off/on in System Settings) and Microphone."

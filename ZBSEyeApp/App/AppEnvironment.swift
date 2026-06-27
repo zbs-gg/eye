@@ -3,24 +3,24 @@ import AppKit
 import Observation
 import UserNotifications
 
-/// Корневое состояние приложения. Единственный @Observable, инжектится через .environment.
-/// Владеет всеми store'ами (по плану v2 — вместо разрозненных @State и 14-биндингового антипаттерна).
+/// Root application state. The single @Observable, injected via .environment.
+/// Owns all the stores (per the v2 plan — instead of scattered @State and the 14-binding antipattern).
 @MainActor
 @Observable
 final class AppEnvironment {
     let permissions = PermissionsStore()
     let recording = RecordingStore()
     let server = ServerStore()
-    let connections = ConnectionStore()   // конфиг LLM/назначения persist'ится сам, db не нужна
+    let connections = ConnectionStore()   // LLM/destination config persists itself, no db needed
     let audioSettings = AudioSettingsStore()
     let storageSettings = StorageSettingsStore()
     let backupSettings = BackupSettingsStore()
     let privacy = PrivacyStore()
-    let rewards = RewardsStore()   // оформление-награды (тема/иконка/меню-бар) — не зависит от БД
+    let rewards = RewardsStore()   // cosmetic rewards (theme/icon/menu-bar) — independent of the DB
 
     var selectedSection: SidebarSection = .timeline
 
-    /// Первый запуск → онбординг (consent «пишется всё» + права). Persist: показывается до завершения.
+    /// First launch → onboarding (consent "everything gets recorded" + permissions). Persist: shown until completed.
     var showOnboarding = !UserDefaults.standard.bool(forKey: "zbseye.onboarding.done")
 
     func completeOnboarding(startRecording: Bool) {
@@ -29,13 +29,13 @@ final class AppEnvironment {
         if startRecording {
             if !recording.isCapturing { recording.toggle() }
         } else {
-            // «Позже» — явный отказ в consent-точке: остановить возможный автостарт из-под шторки
-            // и снять взведённое намерение (иначе запись стартанула бы сама вопреки отказу).
+            // "Later" — an explicit refusal at the consent point: stop a possible autostart from under the shade
+            // and clear the armed intent (otherwise recording would start on its own against the refusal).
             recording.disarm()
         }
     }
 
-    // Data-слой (создаётся в bootstrap; nil до инициализации / при ошибке).
+    // Data layer (created in bootstrap; nil until initialized / on error).
     private(set) var database: ZBSEyeDatabase?
     private(set) var ingest: IngestService?
     private(set) var retention: RetentionManager?
@@ -46,8 +46,8 @@ final class AppEnvironment {
     private(set) var automations: DaySummaryStore?
     private(set) var sceneStore: SceneStore?
     private(set) var audio: AudioCoordinator?
-    private(set) var storage: StorageManager?   // для Settings-хранилища (занято/удаление/Finder)
-    private(set) var db: ZBSEyeDatabase?         // для Settings-разбивки размера / бэкапа
+    private(set) var storage: StorageManager?   // for the Settings storage card (used/delete/Finder)
+    private(set) var db: ZBSEyeDatabase?         // for the Settings size breakdown / backup
     private(set) var export: ExportService?
     private(set) var historyImporter: HistoryImporter?
     private(set) var dataError: String?
@@ -60,10 +60,10 @@ final class AppEnvironment {
     @ObservationIgnored private var autostartTask: Task<Void, Never>?
     @ObservationIgnored private var emergencyPruneInFlight = false
     @ObservationIgnored private var lastEmergencyPruneAt: Date?
-    /// Минимум свободного места: ниже — захват приостанавливается + экстренный prune (диск не добиваем).
+    /// Minimum free space: below this — capture is paused + emergency prune (we don't fill the disk to the brim).
     private nonisolated static let minFreeBytes: Int64 = 2 * 1024 * 1024 * 1024
 
-    /// Гонка операции против таймаута — чтобы бэкап на выходе не подвесил quit навсегда.
+    /// Race an operation against a timeout — so a backup on exit doesn't hang quit forever.
     nonisolated static func withTimeout(seconds: Double, _ op: @escaping @Sendable () async -> Void) async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await op() }
@@ -73,23 +73,23 @@ final class AppEnvironment {
         }
     }
 
-    /// 👁 Делайтер: раз за пройденную «круглую» веху памяти — дружелюбное локальное уведомление
-    /// + триггер visual-celebration в ProgressStore.
-    /// Отмечает все пройденные сразу (не бэкафиллит старые по одной), празднует только верхнюю новую.
+    /// 👁 Delighter: once per crossed "round" memory milestone — a friendly local notification
+    /// + a visual-celebration trigger in ProgressStore.
+    /// Marks all crossed ones at once (doesn't backfill old ones one by one), celebrates only the top new one.
     func celebrateMilestoneIfNeeded(frames: Int) {
         let milestones = MemoryMilestones.frames
         let key = "zbseye.milestones.celebrated"
         let done = Set(UserDefaults.standard.array(forKey: key) as? [Int] ?? [])
         let crossed = milestones.filter { $0 <= frames }
         guard let top = crossed.filter({ !done.contains($0) }).max() else { return }
-        UserDefaults.standard.set(crossed, forKey: key)   // отметить ВСЕ пройденные — без спама старыми
+        UserDefaults.standard.set(crossed, forKey: key)   // mark ALL crossed — no spam with old ones
         let pretty = NumberFormatter.localizedString(from: NSNumber(value: top), number: .decimal)
         let content = UNMutableNotificationContent()
         content.title = "👁 ZBS Eye"
-        content.body = "\(pretty) моментов в твоей памяти. Всё — на этом Mac, только для тебя."
+        content.body = "\(pretty) moments in your memory. All of it — on this Mac, for you only."
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: "zbseye.milestone.\(top)", content: content, trigger: nil))
-        // Визуальный делайтер: overlay в UI
+        // Visual delighter: overlay in the UI
         progress?.celebrateMilestone(top)
     }
 
@@ -104,23 +104,23 @@ final class AppEnvironment {
         let pretty = NumberFormatter.localizedString(from: NSNumber(value: top), number: .decimal)
         let content = UNMutableNotificationContent()
         content.title = "👁 ZBS Eye"
-        content.body = "\(pretty) моментов в твоей памяти. Всё — на этом Mac, только для тебя."
+        content.body = "\(pretty) moments in your memory. All of it — on this Mac, for you only."
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: "zbseye.milestone.\(top)", content: content, trigger: nil))
     }
 
-    /// Порядок запуска фоновых сервисов. Пока — пробы прав + Data-слой; capture/server/automations добавятся
-    /// по мере появления модулей (Фаза 2, шаги 3+).
+    /// Startup order of background services. For now — permission probes + the Data layer; capture/server/automations
+    /// will be added as the modules appear (Phase 2, steps 3+).
     func bootstrap() async {
         ZBSEyeHTTPServer.log("bootstrap: begin")
-        rewards.applyAppIcon()   // выбранная альт-иконка приложения (dock) — применить на старте
-        // Crash-маркер: при прошлом запуске флаг чистого выхода не выставился → сессия умерла
-        // некорректно (kill/краш/паника ядра). Видно в Console.app при удалённой диагностике.
+        rewards.applyAppIcon()   // the chosen alternate app icon (dock) — apply on startup
+        // Crash marker: if the clean-exit flag wasn't set on the previous launch → the session died
+        // incorrectly (kill/crash/kernel panic). Visible in Console.app for remote diagnostics.
         let cleanKey = "zbseye.cleanShutdown"
         if UserDefaults.standard.object(forKey: cleanKey) != nil,
            !UserDefaults.standard.bool(forKey: cleanKey) {
-            Log.app.error("предыдущая сессия завершилась НЕкорректно (crash/kill) — проверь дыры в истории")
-            ZBSEyeHTTPServer.log("CRASH-MARKER: предыдущая сессия завершилась некорректно (crash/kill)")
+            Log.app.error("previous session ended INCORRECTLY (crash/kill) — check for gaps in history")
+            ZBSEyeHTTPServer.log("CRASH-MARKER: previous session ended incorrectly (crash/kill)")
         }
         UserDefaults.standard.set(false, forKey: cleanKey)
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
@@ -128,12 +128,12 @@ final class AppEnvironment {
             UserDefaults.standard.set(true, forKey: cleanKey)
         }
         await permissions.refreshAll()
-        // АНТИ-SPLIT-BRAIN: если данные были перенесены на том, который сейчас недоступен — НЕ стартуем
-        // на legacy «с нуля» (иначе пустая история + раскол новых кадров). Просим подключить и перезапустить.
+        // ANTI-SPLIT-BRAIN: if the data was moved to a volume that's currently unavailable — DON'T start
+        // on legacy "from scratch" (otherwise empty history + a split of new frames). Ask to connect and restart.
         if let missing = StorageLocation.unavailableConfiguredPath() {
-            self.dataError = "Папка данных недоступна: \(missing). Подключи диск/том и перезапусти ZBS Eye — "
-                + "запись выключена, чтобы не раздвоить «вечную память»."
-            ZBSEyeHTTPServer.log("data root unavailable (\(missing)) — bootstrap прерван (анти-split-brain)")
+            self.dataError = "Data folder unavailable: \(missing). Connect the disk/volume and restart ZBS Eye — "
+                + "recording is off so the \"eternal memory\" isn't split in two."
+            ZBSEyeHTTPServer.log("data root unavailable (\(missing)) — bootstrap aborted (anti-split-brain)")
             return
         }
         do {
@@ -141,14 +141,14 @@ final class AppEnvironment {
             self.storage = storage
             let db = try ZBSEyeDatabase(path: ZBSEyeDatabase.defaultURL().path)
             self.db = db
-            // Gamification: прогресс и вехи
+            // Gamification: progress and milestones
             self.progress = ProgressStore(db: db)
             let backupManager = BackupManager(db: db, storage: storage)
             self.backupManager = backupManager
             backupSettings.manager = backupManager
             backupSettings.refresh()
-            // Бэкап на выходе (applicationShouldTerminate → terminateLater): успеть снапшот до смерти
-            // процесса (willTerminate уже не успел бы — там процесс умирает синхронно). С таймаутом 30с.
+            // Backup on exit (applicationShouldTerminate → terminateLater): snapshot in time before the process
+            // dies (willTerminate would be too late — the process dies synchronously there). With a 30s timeout.
             ZBSEyeAppDelegate.onTerminate = { [weak self] in
                 guard let self, self.backupSettings.enabled, BackupManager.iCloudAvailable() else { return }
                 let keep = self.backupSettings.keepN
@@ -158,16 +158,16 @@ final class AppEnvironment {
             }
             ZBSEyeHTTPServer.log("bootstrap: db ok")
             self.database = db
-            // Отдельные embedder для ingest и search — иначе тяжёлый embed на захвате блокирует
-            // эмбеддинг поискового запроса (head-of-line, по ревью). Скачивание модели при этом
-            // ОДНО на процесс (E5ModelProvider сериализует; кеш в Application Support).
+            // Separate embedders for ingest and search — otherwise a heavy embed on capture blocks
+            // the embedding of a search query (head-of-line, per review). The model download is still
+            // ONE per process (E5ModelProvider serializes; cache in Application Support).
             let ingestEmbedder = EmbeddingService()
             let ingestService = IngestService(db: db, storage: storage, embedder: ingestEmbedder)
             self.ingest = ingestService
 
-            // Backfill semantic-индекса (кадры без вектора: дроп миграции v3 / оффлайн first-run).
-            // Тот же embedder, что у ingest — третью копию модели в RAM не грузим. Старт с задержкой,
-            // чтобы не конкурировать с запуском.
+            // Backfill of the semantic index (frames without a vector: dropped v3 migration / offline first-run).
+            // The same embedder as ingest — we don't load a third copy of the model into RAM. Start delayed,
+            // so it doesn't compete with launch.
             let backfill = VectorBackfill(db: db, embedder: ingestEmbedder)
             Task.detached(priority: .utility) {
                 try? await Task.sleep(for: .seconds(30))
@@ -176,21 +176,21 @@ final class AppEnvironment {
             let retention = RetentionManager(db: db, storage: storage)
             self.retention = retention
 
-            // Capture loop (сердце). Стартует по toggle в RecordingStore.
+            // Capture loop (the heart). Starts on toggle in RecordingStore.
             let coordinator = CaptureCoordinator(ingest: ingestService)
             coordinator.onFrame = { [weak rec = recording] in rec?.noteFrame() }
-            // SCK мёртв при выданном праве (-3801 и пр.) → честный needsRestart вместо ложной записи.
+            // SCK dead despite a granted permission (-3801 etc.) → honest needsRestart instead of a false recording.
             coordinator.onCaptureBroken = { [weak self] in
                 Log.capture.error("capture broken at granted permission -> needsRestart")
                 self?.permissions.flagScreenNeedsRestart()
             }
-            // Транзиентный сбой (wake/смена мониторов) прошёл — снять ratchet, не блокировать запись.
+            // A transient failure (wake/monitor change) passed — clear the ratchet, don't block recording.
             coordinator.onCaptureRecovered = { [weak self] in
                 Log.capture.info("capture recovered -> clear needsRestart")
                 self?.permissions.clearScreenNeedsRestart()
             }
             coordinator.onCycleOK = { [weak rec = recording] in rec?.noteCycleOK() }
-            // Disk-guard: при < minFree пропускаем захват, поднимаем статус и запускаем экстренный prune.
+            // Disk-guard: at < minFree we skip capture, raise the status, and kick off an emergency prune.
             coordinator.diskOK = { [weak self] in
                 guard let self else { return false }
                 let ok = storage.freeBytes() > Self.minFreeBytes
@@ -201,26 +201,26 @@ final class AppEnvironment {
             coordinator.isIgnoredApp = { [weak self] in self?.privacy.isIgnored($0) ?? false }
             coordinator.ignoredBundleIds = { [weak self] in Set(self?.privacy.ignoredBundleIds ?? []) }
             recording.coordinator = coordinator
-            // Запись честная: без критичных прав не стартует (вместо ложной зелёной точки).
+            // Honest recording: won't start without the critical permissions (instead of a false green dot).
             recording.canCapture = { [weak self] in self?.permissions.allCriticalGranted ?? false }
             recording.blockedHint = { [weak self] in
                 if self?.permissions.screenNeedsRestart == true {
-                    return "Право выдано — перезапусти ZBS Eye (Настройки → Перезапустить). Запись включится автоматически"
+                    return "Permission granted — restart ZBS Eye (Settings → Restart). Recording will turn on automatically"
                 }
-                return "Нет прав (Запись экрана + Универсальный доступ). Запись включится автоматически после выдачи; повторный клик — отмена"
+                return "No permissions (Screen Recording + Accessibility). Recording turns on automatically once granted; click again to cancel"
             }
 
-            // Аудио-запись + on-device транскрипция (шаг 10). Гейт — транскрипция вкл + mic granted.
+            // Audio recording + on-device transcription (step 10). Gate — transcription on + mic granted.
             let audioCoordinator = AudioCoordinator(storage: storage, ingest: ingestService)
             audioCoordinator.onSegment = { [weak rec = recording] in rec?.noteAudioChunk() }
             recording.audio = audioCoordinator
-            // Гейты ЗАПИСИ звука (без speech-права: сырой звук ценен сам по себе — найдёшь по времени
-            // и прослушаешь в таймлайне; транскрипция отдельно, при наличии speech). Микрофон требует
-            // mic-доступ; системный звук — Screen Recording (уже выдан для экрана) + отдельный тумблер.
+            // Gates for RECORDING audio (without the speech permission: raw audio is valuable on its own — you'll
+            // find it by time and play it back in the timeline; transcription is separate, when speech is available).
+            // The microphone requires mic access; system audio — Screen Recording (already granted for screen) + its own toggle.
             recording.micEnabled = { [weak self] in
                 guard let self else { return false }
                 return self.audioSettings.transcriptionEnabled
-                    && !self.recording.lowDiskPaused        // disk-guard гейтит и аудио (не только экран)
+                    && !self.recording.lowDiskPaused        // disk-guard gates audio too (not just screen)
                     && self.permissions.snapshot.microphone == .granted
             }
             recording.systemEnabled = { [weak self] in
@@ -231,50 +231,50 @@ final class AppEnvironment {
                     && self.permissions.snapshot.screenRecording == .granted
             }
             self.audio = audioCoordinator
-            // Дотранскрибировать сегменты, оставшиеся без текста (краш/фейл) — через минуту после старта.
+            // Transcribe the segments left without text (crash/fail) — a minute after start.
             Task { [weak audioCoordinator] in
                 try? await Task.sleep(for: .seconds(60))
                 await audioCoordinator?.backfillUntranscribed(db: db, storage: storage)
             }
 
-            // Поиск (гибрид FTS+vector) + таймлайн.
+            // Search (hybrid FTS+vector) + timeline.
             let searchSvc = SearchService(db: db, embedder: EmbeddingService())
             let timelineSvc = TimelineService(db: db)
             self.timelineStore = TimelineStore(search: searchSvc, timeline: timelineSvc,
                                                mediaDirectory: storage.mediaDirectory)
 
-            // Общий слой агрегации активности дня (один скан + сегментация + активное время + батч-текст).
-            // Переиспользуют сцены, картограф и саммари — дедуп логики (ревью Pro #9).
+            // Shared aggregation layer for the day's activity (one scan + segmentation + active time + batch text).
+            // Reused by scenes, the cartographer, and the summary — deduping logic (Pro review #9).
             let activityRepo = DayActivityRepository(db: db)
 
-            // Достижения: статистика из БД + счётчиков → каталог ачивок (открытие персистится).
+            // Achievements: stats from the DB + counters → the achievement catalog (unlocks persist).
             self.achievements = AchievementStore(service: AchievementStatsService(db: db, repo: activityRepo))
-            rewards.achievements = self.achievements   // награды знают, что открыто
+            rewards.achievements = self.achievements   // the rewards know what's unlocked
 
-            // «День в активностях»: сцены поверх screen_captures (без новой таблицы).
+            // "The day in activities": scenes on top of screen_captures (without a new table).
             let sceneSvc = SceneService(repo: activityRepo)
             self.sceneStore = SceneStore(service: sceneSvc, timeline: timelineSvc)
 
-            // «Спроси свою память»: RAG-ответ через тот же гибрид-поиск + локальная LLM (свой
-            // LocalLLMClient, stateless actor). Гейт localhost-only внутри — приватная история не уходит.
+            // "Ask your memory": a RAG answer through the same hybrid search + a local LLM (its own
+            // LocalLLMClient, a stateless actor). The localhost-only gate is inside — private history doesn't leave.
             let askService = AskService(search: searchSvc, client: LocalLLMClient(), db: db)
             self.ask = AskStore(service: askService, connections: connections)
 
-            // Картограф: AI-инсайты дня (on-device, read-only). Свой LocalLLMClient (stateless actor).
+            // Cartographer: AI insights for the day (on-device, read-only). Its own LocalLLMClient (stateless actor).
             let cartographerSvc = CartographerService(repo: activityRepo, client: LocalLLMClient())
             self.cartographer = CartographerStore(service: cartographerSvc, connections: connections)
 
-            // Автоматизация v1 «саммари дня»: collect→LLM→write. Свой LocalLLMClient (stateless actor).
+            // Automation v1 "day summary": collect→LLM→write. Its own LocalLLMClient (stateless actor).
             let summarySvc = DailySummaryService(repo: activityRepo, client: LocalLLMClient())
             let automationsStore = DaySummaryStore(service: summarySvc, connections: connections)
-            automationsStore.startScheduler()   // «конспект сам в конце дня» (тик 5 мин, гейты внутри)
+            automationsStore.startScheduler()   // "a recap by itself at the end of the day" (5-min tick, gates inside)
             self.automations = automationsStore
 
-            // Экспорт (анти-lock-in): markdown по дням ± медиа.
+            // Export (anti-lock-in): markdown by day ± media.
             self.export = ExportService(db: db, summary: summarySvc, mediaDirectory: storage.mediaDirectory)
             self.historyImporter = HistoryImporter(db: db)
 
-            // Локальный REST /v1 (auth на всё кроме /health).
+            // Local REST /v1 (auth on everything except /health).
             let token = KeychainStore.apiToken()
             let rec = recording
             let deps = ZBSEyeHTTPServer.Deps(
@@ -297,11 +297,11 @@ final class AppEnvironment {
                 if let port { await MainActor.run { self?.server.setActive(port: port, token: token) } }
             }
 
-            // Retention НЕПРЕРЫВНО (не только на старте): сразу + каждые 30 мин. 24/7-аптайм неделями
-            // не должен уводить диск за лимит между перезапусками.
+            // Retention runs CONTINUOUSLY (not only at startup): immediately + every 30 min. A 24/7 uptime over weeks
+            // must not let the disk drift past the limit between restarts.
             retentionTask = Task.detached(priority: .utility) { [weak self] in
                 while !Task.isCancelled {
-                    // политика юзера из Settings (0 = без лимита → nil)
+                    // the user's policy from Settings (0 = no limit → nil)
                     let policy = await MainActor.run { () -> (Int?, Int64?) in
                         guard let s = self?.storageSettings else {
                             return (RetentionPolicy.defaultDays, RetentionPolicy.defaultMaxBytes)
@@ -312,7 +312,7 @@ final class AppEnvironment {
                     if let r = report, r.framesDeleted + r.audioDeleted + r.orphansDeleted > 0 {
                         Log.retention.info("prune: frames \(r.framesDeleted) audio \(r.audioDeleted) orphans \(r.orphansDeleted)")
                     }
-                    // 👁 делайтер: дружелюбно отметить пройденную «круглую» веху памяти (раз каждую)
+                    // 👁 delighter: warmly mark a crossed "round" memory milestone (once each)
                     if let frames = try? await db.pool.read({ try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM screen_captures") ?? 0 }) {
                         await MainActor.run { self?.celebrateMilestoneIfNeeded(frames: frames) }
                         if let progressStore = await MainActor.run(body: { self?.progress }) {
@@ -326,7 +326,7 @@ final class AppEnvironment {
                 }
             }
 
-            // iCloud-бэкап: каждые 6ч (+ ручной в Settings + на выходе). Гейты внутри (enabled && iCloud).
+            // iCloud backup: every 6h (+ manual in Settings + on exit). Gates inside (enabled && iCloud).
             backupTask = Task.detached(priority: .background) { [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(6 * 3600))
@@ -337,7 +337,7 @@ final class AppEnvironment {
                     guard cfg.0, BackupManager.iCloudAvailable() else { continue }
                     if let r = try? await backupManager.makeBackup(keepN: cfg.1) {
                         await MainActor.run { self?.backupSettings.noteScheduledBackup(r) }
-                        Log.app.info("iCloud backup: \(StorageSettingsStore.format(r.compressedBytes)) (\(r.frames) кадров)")
+                        Log.app.info("iCloud backup: \(StorageSettingsStore.format(r.compressedBytes)) (\(r.frames) frames)")
                     }
                 }
             }
@@ -347,30 +347,30 @@ final class AppEnvironment {
             ZBSEyeHTTPServer.log("bootstrap: dataError \(error)")
         }
 
-        // Поллинг прав (юзер выдаёт в Системных настройках — UI и автостарт подхватывают сами).
+        // Permission polling (the user grants them in System Settings — the UI and autostart pick it up themselves).
         permissions.startPolling()
-        // Автостарт: «вечная память» возобновляется после ребута/краша, если юзер её включал.
+        // Autostart: "eternal memory" resumes after a reboot/crash, if the user had it on.
         recording.startIfWanted()
-        // Watcher (4с): (1) автостарт при поздней выдаче прав; (2) деградация при отзыве прав mid-run
-        // (isCapturing висел бы true при мёртвом захвате); (3) дрейф аудио-гейтов — выдали mic/speech
-        // ПОСЛЕ старта записи / сменился lowDisk → пере-синк легов (раньше требовало рестарта записи).
+        // Watcher (4s): (1) autostart on late permission grant; (2) degradation on permission revocation mid-run
+        // (isCapturing would hang true with a dead capture); (3) audio-gate drift — mic/speech granted
+        // AFTER recording started / lowDisk changed → re-sync the legs (previously required restarting recording).
         autostartTask = Task { [weak self] in
             var prevGates: (mic: Bool, system: Bool)? = nil
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(4))
                 guard let self else { return }
                 self.recording.startIfWanted()
-                // отзыв прав mid-run → честная деградация в UI (вместо вечной зелёной точки)
+                // permission revoked mid-run → honest degradation in the UI (instead of a forever-green dot)
                 if self.recording.isCapturing {
                     if !self.permissions.allCriticalGranted {
                         self.recording.setDegraded(
                             self.permissions.screenNeedsRestart
-                                ? "Захват сломался — перезапусти ZBS Eye"
-                                : "Права отозваны — захват не работает")
+                                ? "Capture broke — restart ZBS Eye"
+                                : "Permissions revoked — capture isn't working")
                     } else {
                         self.recording.setDegraded(nil)
                     }
-                    // дрейф аудио-гейтов (новые права/настройки/lowDisk) → пересинк легов
+                    // audio-gate drift (new permissions/settings/lowDisk) → re-sync the legs
                     let gates = (self.recording.micEnabled(), self.recording.systemEnabled())
                     if let prev = prevGates, prev != gates { self.recording.syncAudio() }
                     prevGates = gates
@@ -381,52 +381,52 @@ final class AppEnvironment {
         }
     }
 
-    /// Удаление истории (privacy): lastSeconds=nil → всё. Возвращает отчёт для UI.
+    /// History deletion (privacy): lastSeconds=nil → everything. Returns a report for the UI.
     func deleteHistory(lastSeconds: TimeInterval?) async -> PruneReport? {
         guard let retention else { return nil }
-        // Верхняя граница фиксируется НА МОМЕНТ клика: при идущей записи «удалить 15 минут» не должно
-        // зацепить кадры, записанные во время самого удаления (батчи идут секунды).
+        // The upper bound is fixed AT THE MOMENT of the click: with recording running, "delete 15 minutes" must not
+        // catch frames recorded during the deletion itself (batches take seconds).
         let now = Date()
         let toMs: Int64 = lastSeconds == nil ? Int64.max : msFromDate(now)
         let fromMs: Int64 = lastSeconds.map { msFromDate(now.addingTimeInterval(-$0)) } ?? 0
-        // КРИТИЧНО (privacy): открытый VAD-сегмент живёт в памяти — deleteRange его не видит.
-        // Сбрасываем in-flight аудио ДО удаления, иначе «произнёс пароль → стереть» переживало бы
-        // до 28с речи, захваченной до клика (закрылось бы и легло в БД ПОСЛЕ удаления).
+        // CRITICAL (privacy): an open VAD segment lives in memory — deleteRange doesn't see it.
+        // We flush in-flight audio BEFORE the delete, otherwise "said a password → wipe" would survive
+        // up to 28s of speech captured before the click (it would close and land in the DB AFTER the delete).
         await audio?.discardInFlight(from: dateFromMs(fromMs), to: lastSeconds == nil ? now : dateFromMs(toMs))
         let report = try? await retention.deleteRange(fromMs: fromMs, toMs: toMs)
         if let r = report {
             Log.retention.info("manual delete: frames \(r.framesDeleted) audio \(r.audioDeleted)")
         }
         await storageSettings.refresh(storage: storage, db: db)
-        // курсор таймлайна мог указывать в стёртое — обновить
+        // the timeline cursor may have pointed into what was wiped — refresh it
         await timelineStore?.load()
-        // PRIVACY (Pro NO-GO): производные приватные состояния построены на удалённой истории —
-        // инвалидируем их, иначе сцены/прогресс/инсайты Картографа продолжат показывать стёртое.
-        // currentScene в TimelineView пересчитается сам (onChange курсора после load + гейт «сцена
-        // содержит текущий момент»).
+        // PRIVACY (Pro NO-GO): derived private states are built on the deleted history —
+        // we invalidate them, otherwise scenes/progress/Cartographer insights keep showing the wiped data.
+        // currentScene in TimelineView recomputes itself (cursor onChange after load + the gate "the scene
+        // contains the current moment").
         await sceneStore?.load()
         await progress?.refresh()
         cartographer?.reset()
-        automations?.reset()   // DaySummaryStore.preview = LLM-markdown по стёртому дню (тот же класс)
-        AchievementCounters.set(.deletedPeriod)   // ачивка «Чистильщик»
+        automations?.reset()   // DaySummaryStore.preview = LLM markdown over the wiped day (same class)
+        AchievementCounters.set(.deletedPeriod)   // "Cleaner" achievement
         await achievements?.refresh()
         return report
     }
 
-    /// Перенос всей памяти в выбранную папку (T1): пауза захвата → online backup БД + copy media →
-    /// verify (integrity + COUNT-parity) → flip StorageLocation → relaunch. Источник НЕ трогаем (copy);
-    /// при ошибке возобновляем запись, данные на старом месте целы.
+    /// Move all of memory to a chosen folder (T1): pause capture → online DB backup + copy media →
+    /// verify (integrity + COUNT parity) → flip StorageLocation → relaunch. We don't touch the source (copy);
+    /// on error we resume recording, the data at the old location is intact.
     func relocate(to chosen: URL) async {
         guard let db, let storage, !storageSettings.relocationInProgress else { return }
         storageSettings.relocationInProgress = true
         storageSettings.relocationError = nil
         storageSettings.relocationProgress = 0
-        storageSettings.relocationStatus = "Останавливаю запись…"
+        storageSettings.relocationStatus = "Stopping recording…"
         recording.pauseForMaintenance()
         audio?.stop()
-        // Дренаж: stop()/VAD-сегмент дописывают in-flight кадр/аудио детачнутыми задачами в СТАРЫЙ root.
-        // Ждём ~1.2с, чтобы они закоммитились в БД и записали media ДО online-backup-снапшота и снапшота
-        // списка media — иначе граничный кадр/сегмент осиротел бы (файл вне копии / строка вне бэкапа).
+        // Drain: stop()/the VAD segment finish writing the in-flight frame/audio via detached tasks to the OLD root.
+        // We wait ~1.2s for them to commit to the DB and write media BEFORE the online-backup snapshot and the snapshot
+        // of the media list — otherwise a boundary frame/segment would be orphaned (file outside the copy / row outside the backup).
         try? await Task.sleep(for: .milliseconds(1200))
 
         let relocator = StorageRelocator()
@@ -443,20 +443,20 @@ final class AppEnvironment {
                     }
                 })
             StorageLocation.setRoot(report.newDataRoot)
-            AchievementCounters.set(.relocated)   // ачивка «На свой диск»
-            storageSettings.relocationStatus = "Перенесено (\(report.mediaFilesCopied) медиа). Перезапуск…"
-            try? await Task.sleep(for: .milliseconds(600))   // дать UI показать статус
+            AchievementCounters.set(.relocated)   // "To Your Own Disk" achievement
+            storageSettings.relocationStatus = "Moved (\(report.mediaFilesCopied) media). Restarting…"
+            try? await Task.sleep(for: .milliseconds(600))   // let the UI show the status
             AppRelauncher.relaunch()
         } catch {
             storageSettings.relocationInProgress = false
             storageSettings.relocationError = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-            recording.startIfWanted()   // миграция не удалась — возобновить запись
+            recording.startIfWanted()   // migration failed — resume recording
         }
     }
 
-    /// Экстренный prune при low-disk: таргетирует СВОБОДНОЕ место (×2 порога паузы = гистерезис),
-    /// а не политику 7д/20GB — иначе при диске, забитом не нами, prune ничего не удалял бы и пауза
-    /// записи никогда не самоизлечивалась. Cooldown 10 мин — без чёрна каждый capture-тик.
+    /// Emergency prune on low-disk: targets FREE space (×2 the pause threshold = hysteresis),
+    /// not the 7d/20GB policy — otherwise, with a disk filled by data that isn't ours, prune would delete nothing
+    /// and the recording pause would never self-heal. Cooldown 10 min — no churn on every capture tick.
     private func emergencyPrune() {
         guard !emergencyPruneInFlight, let retention else { return }
         if let last = lastEmergencyPruneAt, Date().timeIntervalSince(last) < 600 { return }
@@ -474,16 +474,16 @@ final class AppEnvironment {
 }
 
 enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
-    case timeline = "Таймлайн"
-    case activities = "Активности"
-    case ask = "Спроси"
-    case cartographer = "Картограф"
-    case automations = "Автоматизации"
-    case connections = "Подключения"
-    case progress = "Прогресс"
-    case achievements = "Достижения"
-    case appearance = "Оформление"
-    case settings = "Настройки"
+    case timeline = "Timeline"
+    case activities = "Activities"
+    case ask = "Ask"
+    case cartographer = "Cartographer"
+    case automations = "Automations"
+    case connections = "Connections"
+    case progress = "Progress"
+    case achievements = "Achievements"
+    case appearance = "Appearance"
+    case settings = "Settings"
 
     var id: String { rawValue }
 

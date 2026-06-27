@@ -1,8 +1,8 @@
 import os
 
-/// Структурные логи (os.Logger, subsystem gg.zbs.eye) — видны в Console.app на любой машине,
-/// в т.ч. у друга при удалённой диагностике «запись умерла ночью». Категории по подсистемам.
-/// privacy: .public только для не-приватных значений (счётчики, коды ошибок) — НЕ для текста экрана.
+/// Structured logs (os.Logger, subsystem gg.zbs.eye) — visible in Console.app on any machine,
+/// including a friend's during remote diagnostics of "recording died overnight". Categories by subsystem.
+/// privacy: .public only for non-private values (counters, error codes) — NOT for screen text.
 enum Log {
     static let app = Logger(subsystem: "gg.zbs.eye", category: "app")
     static let capture = Logger(subsystem: "gg.zbs.eye", category: "capture")

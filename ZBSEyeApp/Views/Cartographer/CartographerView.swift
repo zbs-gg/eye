@@ -1,30 +1,30 @@
 import SwiftUI
 
-/// «Картограф» — AI-инсайты дня: что реально занимало время и конкретные советы.
-/// Полностью on-device (localhost LLM). Не пишет файлы — инсайты только в UI.
+/// "Cartographer" — AI insights for the day: what actually took up time and concrete advice.
+/// Fully on-device (localhost LLM). Writes no files — insights live only in the UI.
 struct CartographerView: View {
     @Environment(AppEnvironment.self) private var env
 
     var body: some View {
         Group {
             if let err = env.dataError {
-                // Honest-state: БД не поднялась — это жёсткая ошибка, а не «ещё грузится».
+                // Honest-state: the DB didn't come up — this is a hard error, not "still loading".
                 ContentUnavailableView {
-                    Label("Память недоступна", systemImage: "exclamationmark.triangle.fill")
+                    Label("Memory unavailable", systemImage: "exclamationmark.triangle.fill")
                 } description: {
                     Text(err)
                 }
             } else if let store = env.cartographer {
                 CartographerBody(store: store)
             } else {
-                ContentUnavailableView("Инициализация…", systemImage: "map")
+                ContentUnavailableView("Initializing…", systemImage: "map")
             }
         }
-        .navigationTitle("Картограф")
+        .navigationTitle("Cartographer")
     }
 }
 
-// MARK: — основное тело
+// MARK: — main body
 
 private struct CartographerBody: View {
     @Bindable var store: CartographerStore
@@ -50,16 +50,16 @@ private struct CartographerBody: View {
         }
     }
 
-    // MARK: блоки
+    // MARK: blocks
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Label("Картограф", systemImage: "map")
+            Label("Cartographer", systemImage: "map")
                 .font(.title2).bold()
-            Text("Смотрит на твою активность за день и даёт 2–3 конкретных наблюдения: "
-                 + "на что уходит время, где можно фокусироваться лучше. "
-                 + "Дневные фрагменты уходят только в твою локальную LLM (localhost-only endpoint) — "
-                 + "никакого облака.")
+            Text("Looks at your activity for the day and gives 2–3 concrete observations: "
+                 + "where your time goes, where you could focus better. "
+                 + "Daily fragments go only into your local LLM (localhost-only endpoint) — "
+                 + "no cloud.")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }
@@ -67,12 +67,12 @@ private struct CartographerBody: View {
     private var noLLMCard: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
-                Label("Нужна локальная LLM", systemImage: "exclamationmark.triangle.fill")
+                Label("A local LLM is required", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange).font(.headline)
-                Text("Укажи endpoint (Ollama / LM Studio / mlx_lm.server) и модель в «Подключениях» — "
-                     + "Картограф работает строго on-device, история не уходит в облако.")
+                Text("Set an endpoint (Ollama / LM Studio / mlx_lm.server) and a model in Connections — "
+                     + "Cartographer works strictly on-device, your history never goes to the cloud.")
                     .foregroundStyle(.secondary)
-                Button("Открыть «Подключения»") { env.selectedSection = .connections }
+                Button("Open Connections") { env.selectedSection = .connections }
                     .buttonStyle(.borderedProminent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -80,21 +80,21 @@ private struct CartographerBody: View {
         }
     }
 
-    /// Разовое явное согласие (Pro #13): до него фрагменты экрана в LLM не уходят.
+    /// One-time explicit consent (Pro #13): before it, screen fragments don't go to the LLM.
     private var consentCard: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
-                Label("Разовое согласие", systemImage: "hand.raised.fill")
+                Label("One-time consent", systemImage: "hand.raised.fill")
                     .foregroundStyle(.tint).font(.headline)
-                Text("Чтобы дать инсайты, Картограф отправит сжатые фрагменты активности за выбранный день "
-                     + "(имена приложений, заголовки окон, короткие куски текста с экрана) в твою локальную "
-                     + "LLM — localhost-only endpoint. Никакого облака; на диск ничего не пишется — только "
-                     + "запрос к модели на этом Mac.")
+                Text("To produce insights, Cartographer will send compact fragments of activity for the chosen day "
+                     + "(app names, window titles, short snippets of on-screen text) to your local "
+                     + "LLM — a localhost-only endpoint. No cloud; nothing is written to disk — only "
+                     + "a request to the model on this Mac.")
                     .foregroundStyle(.secondary)
                 Button {
                     store.grantConsentAndGenerate()
                 } label: {
-                    Label("Понятно — анализировать день", systemImage: "sparkles")
+                    Label("Got it — analyze the day", systemImage: "sparkles")
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(store.isBusy)
@@ -107,7 +107,7 @@ private struct CartographerBody: View {
     private var controlsCard: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
-                DatePicker("День", selection: $store.selectedDay, in: ...Date(),
+                DatePicker("Day", selection: $store.selectedDay, in: ...Date(),
                            displayedComponents: .date)
                     .datePickerStyle(.compact)
                     .disabled(store.isBusy)
@@ -116,15 +116,15 @@ private struct CartographerBody: View {
                     Button {
                         store.generate()
                     } label: {
-                        Label("Получить инсайты", systemImage: "sparkles")
+                        Label("Get insights", systemImage: "sparkles")
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(store.isBusy)
 
                     if store.isBusy {
                         ProgressView().controlSize(.small)
-                        Text("анализирую день…").foregroundStyle(.secondary)
-                        Button("Отмена") { store.cancel() }
+                        Text("analyzing the day…").foregroundStyle(.secondary)
+                        Button("Cancel") { store.cancel() }
                             .buttonStyle(.bordered)
                     }
                 }
@@ -137,18 +137,18 @@ private struct CartographerBody: View {
     private func insightsCard(_ ins: CartographerService.Insights) -> some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 14) {
-                // Заголовок с мета-данными
+                // Header with metadata
                 HStack(spacing: 10) {
-                    Label("Инсайты дня", systemImage: "lightbulb.fill")
+                    Label("Insights of the day", systemImage: "lightbulb.fill")
                         .font(.headline)
                     Spacer()
                     Text(ins.model)
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
-                // Строки инсайтов
+                // Insight lines
                 if ins.lines.isEmpty {
-                    Text("Модель не вернула инсайтов — попробуй ещё раз или смени модель.")
+                    Text("The model returned no insights — try again or switch the model.")
                         .foregroundStyle(.secondary).font(.callout)
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
@@ -159,14 +159,14 @@ private struct CartographerBody: View {
                 }
 
                 if ins.truncated {
-                    Label("Ответ модели обрезан по лимиту токенов.",
+                    Label("The model's response was truncated by the token limit.",
                           systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.orange)
                 }
 
                 Divider()
 
-                // Активность дня — мини-сводка
+                // Day's activity — mini summary
                 ActivitySummaryView(activity: ins.activity)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -184,7 +184,7 @@ private struct CartographerBody: View {
     }
 }
 
-// MARK: — строка инсайта
+// MARK: — insight row
 
 private struct InsightRow: View {
     let text: String
@@ -206,20 +206,20 @@ private struct InsightRow: View {
     }
 }
 
-// MARK: — мини-сводка активности
+// MARK: — activity mini summary
 
 private struct ActivitySummaryView: View {
     let activity: CartographerService.DayActivity
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Активность дня")
+            Text("Day's activity")
                 .font(.caption).foregroundStyle(.secondary).textCase(.uppercase)
                 .padding(.bottom, 2)
 
             HStack(spacing: 20) {
-                statBadge(value: "\(activity.totalCaptures)", label: "кадров")
-                statBadge(value: "\(activity.contextSwitches)", label: "переключений")
+                statBadge(value: "\(activity.totalCaptures)", label: "frames")
+                statBadge(value: "\(activity.contextSwitches)", label: "switches")
             }
 
             if !activity.topApps.isEmpty {
@@ -262,7 +262,7 @@ private struct CartographerAppRow: View {
                 .frame(maxHeight: .infinity, alignment: .center)
             }
             .frame(width: 80, height: 16)
-            Text("~\(usage.minutes) мин")
+            Text("~\(usage.minutes) min")
                 .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 .frame(width: 60, alignment: .trailing)
         }

@@ -1,14 +1,14 @@
 import Foundation
 
-/// Общие типы automation-слоя (Шаг 9): конфиг подключений, ограничения безопасности автоматизации,
-/// промежуточные данные daily-summary, audit-запись. Всё Sendable — ходит между @MainActor-store,
-/// actor-сервисом и сетью без шаринга мутабельного состояния.
+/// Shared types of the automation layer (Step 9): connection config, automation safety limits,
+/// intermediate daily-summary data, audit record. Everything is Sendable — it travels between the
+/// @MainActor store, the actor service, and the network without sharing mutable state.
 
-// MARK: подключения
+// MARK: connections
 
-/// Локальная LLM по OpenAI-совместимому `/chat/completions` (Ollama, LM Studio, mlx_lm.server,
-/// llama.cpp server). Один интерфейс на все — отличается только baseURL/портом и именем модели.
-/// НИКАКОГО cloud-egress: дефолт жёстко на 127.0.0.1.
+/// Local LLM over the OpenAI-compatible `/chat/completions` (Ollama, LM Studio, mlx_lm.server,
+/// llama.cpp server). One interface for all of them — they differ only in baseURL/port and model name.
+/// NO cloud egress: the default is hard-pinned to 127.0.0.1.
 struct LLMConfig: Codable, Sendable, Equatable {
     var baseURL: String
     var model: String
@@ -20,24 +20,24 @@ struct LLMConfig: Codable, Sendable, Equatable {
         !model.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    /// baseURL с дописанной схемой, если юзер ввёл «localhost:11434» / «127.0.0.1:11434» без http://
-    /// (так их показывают Ollama/LM Studio — без схемы URL.host = nil и проверки/endpoint ломались).
+    /// baseURL with the scheme appended if the user entered "localhost:11434" / "127.0.0.1:11434" without http://
+    /// (that's how Ollama/LM Studio display them — without a scheme URL.host = nil and the checks/endpoint broke).
     var normalizedBaseURL: String {
         let b = baseURL.trimmingCharacters(in: .whitespaces)
         if b.isEmpty || b.contains("://") { return b }
         return "http://" + b
     }
 
-    /// Только localhost разрешён в v1 (приватность — приватная история не должна утечь в облако).
-    /// host lowercased — DNS регистронезависим (LOCALHOST → localhost).
+    /// Only localhost is allowed in v1 (privacy — private history must not leak to the cloud).
+    /// host lowercased — DNS is case-insensitive (LOCALHOST → localhost).
     var isLocalOnly: Bool {
         guard let host = URL(string: normalizedBaseURL)?.host?.lowercased() else { return false }
         return ["127.0.0.1", "localhost", "::1", "0.0.0.0"].contains(host)
     }
 }
 
-/// Куда писать саммари: папка (security-scoped bookmark для устойчивости к переносу) + подпапка.
-/// Obsidian vault — это та же папка; «Obsidian» и «файловый экспорт» в v1 — один механизм.
+/// Where to write summaries: a folder (security-scoped bookmark for resilience against being moved) + subfolder.
+/// An Obsidian vault is just the same folder; "Obsidian" and "file export" are one mechanism in v1.
 struct DestinationConfig: Codable, Sendable, Equatable {
     var bookmark: Data?
     var displayPath: String?
@@ -48,43 +48,43 @@ struct DestinationConfig: Codable, Sendable, Equatable {
     var isConfigured: Bool { bookmark != nil || displayPath != nil }
 }
 
-// MARK: ограничения безопасности автоматизации
+// MARK: automation safety limits
 
-/// Жёсткие caps: автоматизация читает приватную историю → LLM → запись. Ограничиваем вход (сколько сессий),
-/// длину сэмпла, выход и таймаут. Защита от prompt-injection — delimiters + локальный-only egress +
-/// обязательный preview перед первой записью (см. DaySummaryStore).
+/// Hard caps: automation reads private history → LLM → write. We limit the input (how many sessions),
+/// the sample length, the output, and the timeout. Protection against prompt-injection — delimiters +
+/// local-only egress + a mandatory preview before the first write (see DaySummaryStore).
 struct AutomationSafety: Sendable, Equatable {
     var maxInputSlices = 80
     var maxSampleChars = 360
     var maxOutputTokens = 800
-    var requestTimeout: TimeInterval = 300   // локальная модель может холодно грузиться; stream:false = молчит до конца
+    var requestTimeout: TimeInterval = 300   // a local model may load cold; stream:false = silent until done
 
     static let `default` = AutomationSafety()
 }
 
-// MARK: данные daily-summary
+// MARK: daily-summary data
 
-/// Одна «сессия» активности: подряд идущие кадры одного приложения/окна (с допуском на паузу).
+/// One activity "session": consecutive frames of the same app/window (with a tolerance for a pause).
 struct DaySlice: Sendable, Equatable {
     let start: Date
     let end: Date
     let app: String
     let window: String?
     let url: String?
-    let sample: String        // репрезентативный текст сессии (усечён до maxSampleChars)
+    let sample: String        // representative text of the session (truncated to maxSampleChars)
     let captures: Int
 }
 
-/// Результат стадии collect: отобранные сессии дня + метаданные охвата.
+/// Result of the collect stage: the selected sessions of the day + coverage metadata.
 struct CollectedDay: Sendable {
     let day: Date
     let slices: [DaySlice]
     let totalCaptures: Int
-    let totalSlices: Int       // до отсечения по maxInputSlices
+    let totalSlices: Int       // before being trimmed by maxInputSlices
     var truncated: Bool { totalSlices > slices.count }
 }
 
-/// Результат стадии summarize (без записи). Это и есть preview.
+/// Result of the summarize stage (without writing). This is the preview.
 struct SummaryPreview: Sendable {
     let day: Date
     let markdown: String
@@ -92,11 +92,11 @@ struct SummaryPreview: Sendable {
     let totalCaptures: Int
     let model: String
     let promptChars: Int
-    let truncated: Bool         // вход обрезан по maxInputSlices (длинный день)
-    let outputTruncated: Bool   // модель упёрлась в maxOutputTokens (finish_reason=length) → конспект неполный
+    let truncated: Bool         // input was trimmed by maxInputSlices (a long day)
+    let outputTruncated: Bool   // the model hit maxOutputTokens (finish_reason=length) → the summary is incomplete
 }
 
-/// Результат стадии write.
+/// Result of the write stage.
 struct WriteResult: Sendable {
     let path: String
     let bytes: Int
@@ -105,8 +105,8 @@ struct WriteResult: Sendable {
 
 // MARK: audit
 
-/// Строка audit-лога (JSONL в Application Support/ZBS Eye/automation-audit.jsonl). Доказуемая история того,
-/// что автоматизация читала/писала — требование плана (автоматизация касается приватных данных).
+/// An audit-log row (JSONL in Application Support/ZBS Eye/automation-audit.jsonl). A provable record of what
+/// the automation read/wrote — a requirement of the plan (automation touches private data).
 struct AuditEntry: Codable, Sendable, Identifiable {
     var id: String { "\(at.timeIntervalSince1970)-\(action)" }
     let at: Date
@@ -122,7 +122,7 @@ struct AuditEntry: Codable, Sendable, Identifiable {
     let error: String?
 }
 
-// MARK: ошибки
+// MARK: errors
 
 enum AutomationError: LocalizedError {
     case noLLM
@@ -135,26 +135,26 @@ enum AutomationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noLLM:
-            return "Локальная LLM не настроена. Открой «Подключения» и укажи endpoint + модель."
+            return "Local LLM is not configured. Open \"Connections\" and specify an endpoint + model."
         case .nonLocalLLM(let host):
-            return "Endpoint «\(host)» не локальный. В v1 разрешён только 127.0.0.1/localhost — приватная история не уходит в облако."
+            return "Endpoint \"\(host)\" is not local. In v1 only 127.0.0.1/localhost is allowed — private history does not leave for the cloud."
         case .noDestination:
-            return "Не выбрана папка для записи. Открой «Подключения» → «Назначение»."
+            return "No folder selected for writing. Open \"Connections\" → \"Destination\"."
         case .noData(let day):
-            let f = DateFormatter(); f.dateStyle = .medium; f.locale = Locale(identifier: "ru_RU")
-            return "За \(f.string(from: day)) нет записанной активности."
+            let f = DateFormatter(); f.dateStyle = .medium; f.locale = Locale(identifier: "en_US")
+            return "No recorded activity for \(f.string(from: day))."
         case .llm(let m):
-            return "Ошибка локальной модели: \(m)"
+            return "Local model error: \(m)"
         case .write(let m):
-            return "Не удалось записать файл: \(m)"
+            return "Failed to write the file: \(m)"
         }
     }
 }
 
-// MARK: расположение конфигов/лога
+// MARK: location of configs/log
 
 enum ZBSEyeSupport {
-    /// Корень данных (та же папка, где zbseye.sqlite и media/) — через StorageLocation (учитывает relocate).
+    /// Data root (the same folder where zbseye.sqlite and media/ live) — via StorageLocation (accounts for relocate).
     static func directory() throws -> URL {
         StorageLocation.dataRoot()
     }

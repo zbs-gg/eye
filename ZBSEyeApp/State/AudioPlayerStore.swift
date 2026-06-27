@@ -2,13 +2,13 @@ import Foundation
 import Observation
 import AVFoundation
 
-/// Прослушивание m4a-сегмента из таймлайна (AVAudioPlayer: локальный файл, простой transport).
-/// Один плеер на приложение — открытие нового сегмента останавливает прежний.
+/// Playback of an m4a segment from the timeline (AVAudioPlayer: local file, simple transport).
+/// One player per app — opening a new segment stops the previous one.
 @MainActor
 @Observable
 final class AudioPlayerStore {
     private(set) var isPlaying = false
-    private(set) var progress: Double = 0      // 0...1 для прогресс-бара
+    private(set) var progress: Double = 0      // 0...1 for the progress bar
     private(set) var currentURL: URL?
 
     @ObservationIgnored private var player: AVAudioPlayer?
@@ -54,7 +54,7 @@ final class AudioPlayerStore {
                 try? await Task.sleep(for: .milliseconds(200))
                 guard let self, let p = self.player else { return }
                 self.progress = p.duration > 0 ? p.currentTime / p.duration : 0
-                if !p.isPlaying && self.isPlaying {          // дослушали до конца
+                if !p.isPlaying && self.isPlaying {          // finished playing to the end
                     self.isPlaying = false
                     self.progress = 0
                     return

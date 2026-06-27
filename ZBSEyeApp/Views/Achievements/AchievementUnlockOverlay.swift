@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Всплывающая награда при открытии достижения: бейдж + название + свечение в цвете тира.
-/// Reduce Motion уважается. Авто-дисмисс через 3.5с + тап.
+/// Pop-up reward when an achievement unlocks: badge + title + glow in the tier color.
+/// Reduce Motion is respected. Auto-dismisses after 3.5s + on tap.
 struct AchievementUnlockOverlay: View {
     let achievement: Achievement
     let onDismiss: () -> Void
@@ -10,25 +10,25 @@ struct AchievementUnlockOverlay: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            Text("Достижение открыто")
+            Text("Achievement unlocked")
                 .font(.caption.weight(.bold)).textCase(.uppercase).tracking(1.6)
-                .foregroundStyle(achievement.tint.color)          // акцент тира — контрастно
+                .foregroundStyle(achievement.tint.color)          // tier accent — high contrast
             AchievementBadgeView(achievement: achievement, unlocked: true, size: 132)
                 .scaleEffect(appear ? 1 : 0.55)
                 .rotationEffect(.degrees(appear || reduceMotion ? 0 : -8))
             Text(achievement.title).font(.title2.bold()).multilineTextAlignment(.center)
                 .foregroundStyle(.white)
             Text(achievement.detail).font(.callout)
-                .foregroundStyle(.white.opacity(0.82)).multilineTextAlignment(.center)   // не серый
+                .foregroundStyle(.white.opacity(0.82)).multilineTextAlignment(.center)   // not gray
             if let reward = achievement.reward.label {
-                Label("\(reward) — в «Оформлении»", systemImage: "gift.fill")
+                Label("\(reward) — in “Appearance”", systemImage: "gift.fill")
                     .font(.caption.bold()).foregroundStyle(achievement.tint.color)
                     .padding(.top, 2)
             }
         }
         .padding(28)
         .frame(maxWidth: 340)
-        // тёмная непрозрачная панель — всегда читаемо поверх любого (яркого) фото на таймлайне
+        // dark opaque panel — always readable over any (bright) photo on the timeline
         .background {
             ZStack {
                 RoundedRectangle(cornerRadius: 24, style: .continuous).fill(.ultraThinMaterial)
@@ -36,7 +36,7 @@ struct AchievementUnlockOverlay: View {
                     .fill(LinearGradient(colors: [Color(white: 0.11), Color(white: 0.04)],
                                          startPoint: .top, endPoint: .bottom).opacity(0.96))
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(achievement.tint.color.opacity(0.10))    // лёгкий тир-вош
+                    .fill(achievement.tint.color.opacity(0.10))    // light tier wash
             }
         }
         .overlay(

@@ -1,11 +1,11 @@
 import Foundation
 import GRDB
 
-/// Снимок статистики для проверки условий достижений. Sendable — считается на background, отдаётся
-/// на MainActor. Часть «за день» считается по СЕГОДНЯ (дёшево); персист открытий в AchievementStore
-/// делает разблокировку постоянной, даже если завтра дневное значение сбросится.
+/// Statistics snapshot for evaluating achievement conditions. Sendable — computed on a background thread, handed
+/// to the MainActor. The "today" part is computed for TODAY (cheap); persisting unlocks in AchievementStore
+/// keeps the unlock permanent even if tomorrow the daily value resets.
 struct AchievementStats: Sendable {
-    // lifetime (БД)
+    // lifetime (DB)
     var totalFrames = 0
     var activeDays = 0
     var streakDays = 0
@@ -17,11 +17,11 @@ struct AchievementStats: Sendable {
     var hadNightActivity = false
     var hadEarlyActivity = false
     var hadWeekendActivity = false
-    // сегодня (через DayActivityRepository)
+    // today (via DayActivityRepository)
     var maxSwitchesInDay = 0
     var hadFocusDay = false
     var maxSingleAppMinutes = 0
-    // счётчики событий (UserDefaults — взаимодействия)
+    // event counters (UserDefaults — interactions)
     var searches = 0
     var questions = 0
     var cartographerRuns = 0
@@ -31,7 +31,7 @@ struct AchievementStats: Sendable {
     var icloudBackup = false
 }
 
-/// Считает AchievementStats из БД + счётчиков. Actor: только read.
+/// Computes AchievementStats from the DB + counters. Actor: read-only.
 actor AchievementStatsService {
     private let db: ZBSEyeDatabase
     private let repo: DayActivityRepository
@@ -41,8 +41,8 @@ actor AchievementStatsService {
         self.repo = repo
     }
 
-    /// Sendable-результат БД-чтения (нельзя мутировать захваченную var внутри @Sendable read-замыкания —
-    /// возвращаем struct наружу, как в ProgressStore).
+    /// Sendable result of the DB read (can't mutate a captured var inside a @Sendable read closure —
+    /// we return a struct outward, as in ProgressStore).
     private struct DBDerived: Sendable {
         var totalFrames = 0, distinctAppsAllTime = 0, memoryAgeDays = 0
         var activeDays = 0, streakDays = 0
@@ -126,7 +126,7 @@ actor AchievementStatsService {
             s.hadWeekendActivity = d.hadWeekend
         }
 
-        // ── сегодня: переключения / фокус-день / самая длинная сессия одного app ──
+        // ── today: context switches / focus day / longest single-app session ──
         if let caps = try? await repo.captures(forDay: Date()), !caps.isEmpty {
             s.maxSwitchesInDay = DayActivityRepository.contextSwitches(caps)
             let sessions = DayActivityRepository.sessions(caps, grouping: .appOnly, gapMs: 180 * 1000)
@@ -135,7 +135,7 @@ actor AchievementStatsService {
             s.hadFocusDay = caps.count >= 1000 && s.maxSwitchesInDay <= 40
         }
 
-        // ── счётчики событий ──
+        // ── event counters ──
         s.searches = AchievementCounters.value(.searches)
         s.questions = AchievementCounters.value(.questions)
         s.cartographerRuns = AchievementCounters.value(.cartographerRuns)
@@ -148,8 +148,8 @@ actor AchievementStatsService {
     }
 }
 
-/// Счётчики/флаги взаимодействий в UserDefaults — инкрементятся из соответствующих сторов
-/// (поиск, «Спроси», Картограф, удаление/перенос/бэкап). Дёшево, persist между запусками.
+/// Interaction counters/flags in UserDefaults — incremented from the relevant stores
+/// (search, "Ask", Cartographer, delete/relocate/backup). Cheap, persists between launches.
 enum AchievementCounters {
     enum Counter: String { case searches, questions, cartographerRuns, activitiesOpened }
     enum Flag: String { case deletedPeriod, relocated, icloudBackup }

@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Первый запуск: consent («ZBS Eye записывает всё — локально») + выдача прав с live-статусом.
-/// Без онбординга юзер падал в пустой Timeline, жал «Запись», получал ложную зелёную точку и ноль
-/// кадров — первый опыт был тихим провалом. Права обновляются фоновым поллингом PermissionsStore.
+/// First run: consent ("ZBS Eye records everything — locally") + granting permissions with live status.
+/// Without onboarding the user landed in an empty Timeline, hit "Record", got a false green dot and zero
+/// frames — the first experience was a silent failure. Permissions are refreshed by PermissionsStore's background polling.
 struct OnboardingView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var step = 0
@@ -23,28 +23,28 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: шаг 1 — что это и согласие
+    // MARK: step 1 — what it is and consent
 
     private var welcome: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
                 Image(systemName: "clock.arrow.circlepath")
                     .font(.system(size: 40)).foregroundStyle(.tint)
-                Text("ZBS Eye — вечная память твоего Mac").font(.title2.bold())
+                Text("ZBS Eye — your Mac's perfect memory").font(.title2.bold())
             }
-            Text("ZBS Eye непрерывно записывает работу за компьютером, чтобы любой момент можно было найти и пересмотреть:")
+            Text("ZBS Eye continuously records your work on the computer so any moment can be found and replayed:")
                 .font(.callout)
             VStack(alignment: .leading, spacing: 10) {
-                bullet("display", "Экран и текст с него — каждое приложение, окно, вкладка")
-                bullet("mic", "Микрофон — твой голос (если включишь)")
-                bullet("speaker.wave.2", "Системный звук — звонки, встречи, видео (если включишь)")
+                bullet("display", "Your screen and its text — every app, window, tab")
+                bullet("mic", "Microphone — your voice (if you enable it)")
+                bullet("speaker.wave.2", "System audio — calls, meetings, video (if you enable it)")
             }
             Divider()
             VStack(alignment: .leading, spacing: 8) {
-                Label("Всё остаётся на этом Mac: без облака, аккаунтов и подписок.",
+                Label("Everything stays on this Mac: no cloud, accounts, or subscriptions.",
                       systemImage: "lock.shield.fill").font(.callout).bold()
-                Text("История хранится 7 дней или до 20 ГБ (настраивается). Запись собеседников в звонках — "
-                     + "под твою ответственность: macOS не показывает им индикатор.")
+                Text("History is kept for 7 days or up to 20 GB (configurable). Recording other people in calls is "
+                     + "your responsibility: macOS shows them no indicator.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -60,44 +60,44 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: шаг 2 — права с live-статусом
+    // MARK: step 2 — permissions with live status
 
     private var permissions: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Разрешения").font(.title2.bold())
-            Text("Статусы обновляются сами — выдай право и возвращайся.")
+            Text("Permissions").font(.title2.bold())
+            Text("Statuses update on their own — grant a permission and come back.")
                 .font(.callout).foregroundStyle(.secondary)
 
             permissionStep(
-                title: "Запись экрана", required: true,
+                title: "Screen Recording", required: true,
                 status: env.permissions.snapshot.screenRecording,
                 request: { PermissionChecker.requestScreenRecording() },
                 settingsPane: "Privacy_ScreenCapture")
             if env.permissions.snapshot.screenRecording == .needsRestart {
-                Label("Право выдано — нужен перезапуск ZBS Eye (так устроен macOS).",
+                Label("Permission granted — ZBS Eye needs a restart (that's how macOS works).",
                       systemImage: "arrow.clockwise").font(.caption).foregroundStyle(.orange)
-                Button("Перезапустить ZBS Eye") { AppRelauncher.relaunch() }
+                Button("Restart ZBS Eye") { AppRelauncher.relaunch() }
                     .buttonStyle(.borderedProminent).controlSize(.small)
             }
             permissionStep(
-                title: "Универсальный доступ (текст с экрана)", required: true,
+                title: "Accessibility (text from the screen)", required: true,
                 status: env.permissions.snapshot.accessibility,
                 request: { PermissionChecker.requestAccessibility() },
                 settingsPane: "Privacy_Accessibility")
             permissionStep(
-                title: "Микрофон (запись голоса)", required: false,
+                title: "Microphone (voice recording)", required: false,
                 status: env.permissions.snapshot.microphone,
                 request: { Task { await env.permissions.requestMicrophone() } },
                 settingsPane: "Privacy_Microphone")
             permissionStep(
-                title: "Распознавание речи (поиск по звонкам)", required: false,
+                title: "Speech Recognition (search across calls)", required: false,
                 status: env.permissions.snapshot.speech,
                 request: { Task { await env.permissions.requestSpeech() } },
                 settingsPane: "Privacy_SpeechRecognition")
 
             Spacer()
             if env.permissions.allCriticalGranted {
-                Label("Готово — можно записывать.", systemImage: "checkmark.circle.fill")
+                Label("Ready — you can start recording.", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green).font(.callout.bold())
             }
         }
@@ -112,34 +112,34 @@ struct OnboardingView: View {
                 .foregroundStyle(status == .granted ? Color.green : Color.secondary)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.callout)
-                if !required { Text("необязательно").font(.caption2).foregroundStyle(.secondary) }
+                if !required { Text("optional").font(.caption2).foregroundStyle(.secondary) }
             }
             Spacer()
             switch status {
             case .granted:
                 EmptyView()
             case .notDetermined:
-                Button("Запросить", action: request).controlSize(.small).buttonStyle(.borderedProminent)
+                Button("Request", action: request).controlSize(.small).buttonStyle(.borderedProminent)
             case .denied, .needsRestart:
-                Button("Открыть настройки") { PermissionChecker.openSettings(settingsPane) }
+                Button("Open Settings") { PermissionChecker.openSettings(settingsPane) }
                     .controlSize(.small)
             }
         }
     }
 
-    // MARK: футер
+    // MARK: footer
 
     private var footer: some View {
         HStack {
             if step > 0 {
-                Button("Назад") { step -= 1 }
+                Button("Back") { step -= 1 }
             }
             Spacer()
             if step == 0 {
-                Button("Продолжить") { step = 1 }.buttonStyle(.borderedProminent)
+                Button("Continue") { step = 1 }.buttonStyle(.borderedProminent)
             } else {
-                // Закрыть можно и без прав (онбординг не клетка), но запись включаем только при правах.
-                Button(env.permissions.allCriticalGranted ? "Включить запись" : "Позже") {
+                // You can close even without permissions (onboarding isn't a cage), but we only start recording when granted.
+                Button(env.permissions.allCriticalGranted ? "Start recording" : "Later") {
                     env.completeOnboarding(startRecording: env.permissions.allCriticalGranted)
                 }
                 .buttonStyle(.borderedProminent)

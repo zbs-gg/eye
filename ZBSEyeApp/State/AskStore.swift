@@ -1,9 +1,9 @@
 import Foundation
 import Observation
 
-/// UI-состояние раздела «Спроси» (@MainActor @Observable): лента диалога + ввод. Сам RAG-ответ считает
-/// AskService (actor); стор только оркеструет (гейт «настроена ли локальная LLM», busy, ошибки) и держит
-/// сообщения для ленты. Никакого egress — гейт на localhost внутри AskService/LocalLLMClient.
+/// UI state for the "Ask" section (@MainActor @Observable): the conversation feed + input. The RAG answer itself is
+/// computed by AskService (actor); the store only orchestrates (the gate "is a local LLM configured", busy, errors) and
+/// holds the messages for the feed. No egress — the localhost gate lives inside AskService/LocalLLMClient.
 @MainActor
 @Observable
 final class AskStore {
@@ -28,7 +28,7 @@ final class AskStore {
         self.connections = connections
     }
 
-    /// Настроена ли локальная LLM (иначе раздел показывает подсказку вместо ввода).
+    /// Whether a local LLM is configured (otherwise the section shows a hint instead of the input).
     var llmReady: Bool { connections.llm.isConfigured && connections.llm.isLocalOnly }
     var canSend: Bool { !busy && !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
@@ -37,14 +37,14 @@ final class AskStore {
         guard !busy, !q.isEmpty else { return }
         input = ""
         messages.append(Message(role: .user, text: q))
-        AchievementCounters.bump(.questions)                // ачивки «Первый вопрос»/«Дознаватель»
-        if let egg = Self.easterEgg(q) {                    // 🥚 пасхалка: личность Глаза, работает и без LLM
+        AchievementCounters.bump(.questions)                // achievements "First question"/"Interrogator"
+        if let egg = Self.easterEgg(q) {                    // 🥚 easter egg: the Eye's personality, works even without an LLM
             messages.append(Message(role: .assistant, text: egg))
             return
         }
-        guard llmReady else {                               // реальный вопрос без LLM → дружелюбная подсказка
-            messages.append(Message(role: .assistant, text: "Чтобы отвечать по твоей истории, нужна локальная "
-                + "LLM (Ollama / LM Studio / mlx_lm.server) — укажи endpoint в «Подключениях». Всё на устройстве, без облака. 👁"))
+        guard llmReady else {                               // a real question without an LLM → friendly hint
+            messages.append(Message(role: .assistant, text: "To answer from your history I need a local "
+                + "LLM (Ollama / LM Studio / mlx_lm.server) — set an endpoint in Connections. Everything stays on-device, no cloud. 👁"))
             return
         }
         busy = true
@@ -64,23 +64,23 @@ final class AskStore {
 
     func clear() { messages.removeAll() }
 
-    /// 🥚 Пасхалки — УЗКИЕ триггеры, чтобы не перехватывать реальные вопросы. Глаз с характером, и
-    /// каждый ответ тихо напоминает суть продукта: «вижу только для тебя, никуда не отправляю».
+    /// 🥚 Easter eggs — NARROW triggers, so they don't intercept real questions. An Eye with character, and
+    /// every reply quietly restates the product's point: "I see only for you, I send nothing anywhere".
     private static func easterEgg(_ q: String) -> String? {
         let s = q.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: " ?!.,…"))
         switch s {
-        case "кукареку", "ко-ко-ко":
-            return "Ко-ко-ко 🥚 Пасхалку нашёл. Я всё вижу — но только для тебя. 👁"
-        case "кто ты", "ты кто", "who are you":
-            return "Я — Глаз. Твоя память на этом Mac. У меня нет рук, нет облака и некуда что-то отправить — поэтому всё, что я вижу, остаётся только у тебя. 👁"
-        case "ты следишь за мной", "ты за мной следишь", "ты шпион", "ты шпионишь":
-            return "Слежка — это когда смотрят ЗА тебя для кого-то ещё. Я смотрю ТОЛЬКО для тебя и никому не докладываю: ноль исходящих, проверь в Little Snitch. 👁"
-        case "42", "смысл жизни", "в чём смысл жизни":
-            return "Ответ — где-то в твоей истории. Спроси конкретнее 👁"
-        case "👁", "глаз", "моргни":
-            return "👁 … 👁 (моргнул)"
-        case "люблю тебя", "i love you":
-            return "И я тебя помню. Каждый момент. 👁"
+        case "cock-a-doodle-doo", "cluck-cluck":
+            return "Cluck-cluck 🥚 You found the easter egg. I see everything — but only for you. 👁"
+        case "who are you", "who're you":
+            return "I'm the Eye. Your memory on this Mac. I have no hands, no cloud, and nowhere to send anything — so everything I see stays only with you. 👁"
+        case "are you watching me", "you're watching me", "you're a spy", "are you spying on me":
+            return "Surveillance is when someone watches FOR someone else. I watch ONLY for you and report to no one: zero outbound, check it in Little Snitch. 👁"
+        case "42", "the meaning of life", "what is the meaning of life":
+            return "The answer is somewhere in your history. Ask more specifically 👁"
+        case "👁", "eye", "blink":
+            return "👁 … 👁 (blinked)"
+        case "i love you", "love you":
+            return "And I remember you. Every moment. 👁"
         default:
             return nil
         }

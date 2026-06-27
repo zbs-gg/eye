@@ -1,31 +1,31 @@
 # Changelog
 
-Все заметные изменения ZBS Eye. Формат — по разделам Added / Changed / Fixed.
+All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
 ## [Unreleased] — 2026-06-25
 
 ### Fixed
-- **Краш живой записи (self-AX reentrancy).** При активной записи ZBS Eye оставался frontmost →
-  `CaptureCoordinator` инспектировал собственный процесс → `AXReader` читал наше же SwiftUI-дерево →
-  `kAXValue` у нашего `Slider` синхронно вызывал его `@MainActor Binding.get` (`TimelineView.swift:294`)
-  прямо на serial-очереди `AXReader` → `dispatch_assert_queue(main)` → `EXC_BREAKPOINT`. Падало внутри
-  `AXCore.perform`, до возврата из `await` — поэтому никакой executor-хоп не спасал. Диагноз — Pro-ревью.
-  Фикс: `guard pid != ownPID` в `runCycle` + защита в `AXReader.extract/titleOnly`; AX-чтение по роли
-  (text → value/title/selected, chrome → title/desc, иначе ничего — не дёргаем `kAXValue` у не-text);
-  `Bundle.main` исключён из ScreenCaptureKit (таймлайн не пишет сам себя); `MainActor.preconditionIsolated()`
-  после AX-ветки. Откачена тупиковая попытка с custom `SerialExecutor`.
+- **Live-recording crash (self-AX reentrancy).** While actively recording, ZBS Eye stayed frontmost →
+  `CaptureCoordinator` inspected its own process → `AXReader` read our own SwiftUI tree → `kAXValue` on our
+  `Slider` synchronously called its `@MainActor Binding.get` (`TimelineView.swift:294`) right on the
+  `AXReader` serial queue → `dispatch_assert_queue(main)` → `EXC_BREAKPOINT`. It crashed inside
+  `AXCore.perform`, before returning from `await` — so no executor hop helped. The diagnosis came from a Pro
+  review. Fix: `guard pid != ownPID` in `runCycle` + a guard in `AXReader.extract/titleOnly`; AX reading by
+  role (text → value/title/selected, chrome → title/desc, otherwise nothing — we don't poke `kAXValue` on
+  non-text); `Bundle.main` is excluded from ScreenCaptureKit (the timeline doesn't record itself);
+  `MainActor.preconditionIsolated()` after the AX branch. A dead-end attempt with a custom `SerialExecutor` was reverted.
 
 ### Added
-- **Выбор LLM-модели из LM Studio/Ollama.** В «Подключениях» поле «Модель» — теперь `Picker` из реально
-  загруженных моделей (`GET /v1/models`), а не свободный ввод. Авто-подгрузка при открытии, авто-выбор
-  первой доступной, fallback-ввод + ↻ если сервер молчит.
-- **Пайплайн нотаризации Developer ID** (`scripts/build-notarized.sh` + `docs/NOTARIZE.md`): сборка с
-  Hardened Runtime → Developer ID подпись + secure timestamp → `notarytool submit --wait` → `stapler
-  staple` → проверка Gatekeeper. На выходе нотаризованный `dist/ZBSEye-notarized-*.zip` (запуск двойным
-  кликом, без «Open Anyway»; подпись стабильна — ребилды не сбрасывают TCC-права).
+- **LLM model picker from LM Studio/Ollama.** In "Connections" the "Model" field is now a `Picker` from the
+  models actually loaded (`GET /v1/models`), not free text input. Auto-load on open, auto-select the first
+  available, fallback input + ↻ if the server is silent.
+- **Developer ID notarization pipeline** (`scripts/build-notarized.sh` + `docs/NOTARIZE.md`): build with
+  Hardened Runtime → Developer ID signature + a secure timestamp → `notarytool submit --wait` → `stapler
+  staple` → a Gatekeeper check. The output is a notarized `dist/ZBSEye-notarized-*.zip` (double-click to
+  launch, no "Open Anyway"; the signature is stable — rebuilds don't reset TCC permissions).
 
 ### Changed
-- **Решение по раздаче: Developer ID + нотаризация, НЕ Mac App Store.** App Store требует App Sandbox,
-  под которым невозможен cross-app Accessibility (ядро извлечения текста), а профиль «вечная память,
-  пишет всё» реджектится по приватности — как Rewind/screenpipe, раздача вне App Store. AGENTS.md/README
-  обновлены.
+- **Distribution decision: Developer ID + notarization, NOT the Mac App Store.** The App Store requires App
+  Sandbox, under which cross-app Accessibility is impossible (the core of text extraction), and an "eternal
+  memory, records everything" profile is rejected on privacy — so, like Rewind/screenpipe, distribution is
+  outside the App Store. AGENTS.md/README updated.

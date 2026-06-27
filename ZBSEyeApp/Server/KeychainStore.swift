@@ -1,16 +1,16 @@
 import Foundation
 import Security
 
-/// Минимальный Keychain-доступ (секреты — НЕ UserDefaults, по плану). Используется для API-токена и
-/// позже для секретов коннекторов.
+/// Minimal Keychain access (secrets — NOT UserDefaults, by plan). Used for the API token and
+/// later for connector secrets.
 enum KeychainStore {
     static let service = "gg.zbs.eye"
 
-    /// КРИТИЧНО: используем СОВРЕМЕННЫЙ data-protection keychain (как на iOS), а НЕ legacy file-keychain.
-    /// Legacy login.keychain гейтит доступ ACL'ом и при чтении item'а, созданного другой подписью
-    /// (ad-hoc Debug → «ZBS Eye Dev» Release после переустановки), ВЕШАЕТ main-thread на securityd-диалоге
-    /// → bootstrap зависает навечно (поймано sample: SecKeychainItemCopyContent → mach_msg). В data-
-    /// protection keychain item привязан к подписи приложения и читается СВОИМ приложением без промпта.
+    /// CRITICAL: we use the MODERN data-protection keychain (like on iOS), NOT the legacy file keychain.
+    /// The legacy login.keychain gates access with an ACL, and when reading an item created by a different
+    /// signature (ad-hoc Debug → "ZBS Eye Dev" Release after a reinstall), it HANGS the main thread on a
+    /// securityd dialog → bootstrap hangs forever (caught via sample: SecKeychainItemCopyContent → mach_msg).
+    /// In the data-protection keychain an item is tied to the app's signature and is read by its OWN app without a prompt.
     private static let useDataProtection = kSecUseDataProtectionKeychain as String
 
     static func get(_ account: String) -> String? {
@@ -44,7 +44,7 @@ enum KeychainStore {
         return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 
-    /// Токен локального API: берёт существующий или генерирует и сохраняет.
+    /// Local API token: takes the existing one or generates and stores it.
     static func apiToken() -> String {
         if let t = get("api-token"), !t.isEmpty { return t }
         let t = randomToken()

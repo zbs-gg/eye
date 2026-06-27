@@ -1,15 +1,15 @@
 import Foundation
 import Observation
 
-/// Настройки iCloud-бэкапа. Дефолт ON если iCloud доступен (директива Ника «по умолчанию в iCloud» —
-/// безопасно, потому что в iCloud уезжает только сжатый снапшот, живая база локальна). См. [[BackupManager]].
+/// iCloud backup settings. Default ON if iCloud is available (Nik’s directive “default to iCloud” —
+/// safe, because only a compressed snapshot goes to iCloud, the live database stays local). See [[BackupManager]].
 @MainActor
 @Observable
 final class BackupSettingsStore {
     var enabled: Bool {
         didSet {
             if enabled != oldValue { UserDefaults.standard.set(enabled, forKey: Self.enabledKey) }
-            if enabled { AchievementCounters.set(.icloudBackup) }   // ачивка «Облачный страж»
+            if enabled { AchievementCounters.set(.icloudBackup) }   // “Cloud Guardian” achievement
         }
     }
     var keepN: Int {
@@ -44,12 +44,12 @@ final class BackupSettingsStore {
         backupCount = BackupManager.listBackups().count
     }
 
-    /// Зафиксировать результат фонового (по расписанию) бэкапа в UI-состоянии.
+    /// Record the result of a background (scheduled) backup in the UI state.
     func noteScheduledBackup(_ r: BackupResult) {
         let now = Date()
         lastBackupAt = now
         UserDefaults.standard.set(now.timeIntervalSince1970, forKey: Self.lastKey)
-        lastResult = "\(StorageSettingsStore.format(r.compressedBytes)) (\(r.frames) кадров)"
+        lastResult = "\(StorageSettingsStore.format(r.compressedBytes)) (\(r.frames) frames)"
         backupCount = BackupManager.listBackups().count
     }
 
@@ -67,7 +67,7 @@ final class BackupSettingsStore {
             let now = Date()
             lastBackupAt = now
             UserDefaults.standard.set(now.timeIntervalSince1970, forKey: Self.lastKey)
-            lastResult = "\(StorageSettingsStore.format(r.compressedBytes)) (из \(StorageSettingsStore.format(r.sourceBytes)), \(r.frames) кадров)"
+            lastResult = "\(StorageSettingsStore.format(r.compressedBytes)) (from \(StorageSettingsStore.format(r.sourceBytes)), \(r.frames) frames)"
             backupCount = BackupManager.listBackups().count
             return true
         } catch {

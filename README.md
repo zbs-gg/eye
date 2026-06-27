@@ -1,101 +1,101 @@
 <div align="center">
 
-<img src="docs/hero.gif" alt="ZBS Eye — всевидящий глаз твоего Mac в ASCII" width="720">
+<img src="docs/hero.gif" alt="ZBS Eye — the all-seeing eye of your Mac, in ASCII" width="720">
 
 # ZBS Eye
 
-**Вечная память твоего Mac.** Непрерывно записывает, что происходит на компьютере, — и даёт найти
-любой момент за секунды. 100% локально, без облака, без аккаунта.
+**Eternal memory for your Mac.** Continuously records what happens on your computer — and lets you
+find any moment in seconds. 100% local, no cloud, no account.
 
-> 👁 **Один глаз, чтобы запомнить всё.**
-> Видит каждый экран. Слышит каждый звук. Хранит всё.
-> И никому не рассказывает — потому что всё остаётся у тебя.
+> 👁 **One Eye to remember them all.**
+> It sees every screen. It hears every sound. It keeps everything.
+> And it tells no one — because all of it stays with you.
 
 </div>
 
 ---
 
-## Что это
+## What it is
 
-ZBS Eye тихо ведёт «вечную память» работы за компьютером:
+ZBS Eye quietly keeps an "eternal memory" of your work at the computer:
 
-- **Экран** → accessibility-текст (точно и легко для батареи) + OCR где AX недоступен, кадры в HEIC.
-- **Аудио** → системный звук (звонки, встречи, видео) и микрофон → транскрипция на устройстве.
-- **Поиск** → гибрид полнотекстового + семантического (cross-lingual: ищешь по-русски — находит
-  английское), таймлайн с перемоткой, отдача кадров картинкой.
-- **Доступ для ИИ-агентов** → локальный REST + MCP, чтобы LLM/агенты работали с твоей памятью.
+- **Screen** → accessibility text (accurate and battery-friendly) + OCR where AX is unavailable, frames in HEIC.
+- **Audio** → system audio (calls, meetings, video) and microphone → on-device transcription.
+- **Search** → hybrid full-text + semantic (cross-lingual: search in one language, find another),
+  a scrubbable timeline, frames served as images.
+- **Access for AI agents** → a local REST + MCP surface so LLMs/agents can work with your memory.
 
-Всё остаётся на устройстве. Никакого egress, никакой подписки, никакого аккаунта.
+Everything stays on the device. No egress, no subscription, no account.
 
-## Почему
+## Why
 
-Категория «персональная память компьютера» осиротела: лидер ушёл к большой корпорации, а ближайшие
-аналоги — на подписку ($25–50/мес) + обязательное облако. ZBS Eye — лёгкая нативная альтернатива,
-которая **не уходит в облако никогда**: твоя история активности слишком личная, чтобы её куда-то отдавать.
+The "personal computer memory" category was orphaned: the leader was acquired by a big corporation, and
+the nearest alternatives moved to a subscription ($25–50/mo) plus a mandatory cloud. ZBS Eye is a light,
+native alternative that **never goes to the cloud** — your activity history is too personal to hand off.
 
-| | ZBS Eye | проприетарные аналоги |
+| | ZBS Eye | proprietary alternatives |
 |---|---|---|
-| Облако / аккаунт | ❌ не требуется | ✅ обязательно |
-| Подписка | ❌ бесплатно | $25–50/мес |
-| Накопленная память | твоя, локально | за пейволлом |
-| Стек | нативный Swift/SwiftUI | web-обёртка (Electron/Tauri) |
+| Cloud / account | ❌ not required | ✅ mandatory |
+| Subscription | ❌ free | $25–50/mo |
+| Accumulated memory | yours, local | behind a paywall |
+| Stack | native Swift/SwiftUI | web wrapper (Electron/Tauri) |
 
-## Возможности
+## Features
 
-- 🎥 **Захват экрана** — AX-текст + OCR, HEIC, perceptual-hash дедуп, adaptive per-app (AX где можно,
-  OCR где нет).
-- 🎙️ **Аудио + транскрипция** — система + микрофон, VAD, on-device речь, спикеры.
-- 🔍 **Гибрид-поиск** — FTS5 + multilingual-e5 (384-dim) через RRF; cross-lingual.
-- 🕰️ **Таймлайн** — перемотка по времени, кадр + текст + приложение/URL, плеер.
-- 🔌 **REST + MCP** — локальный API (127.0.0.1, Bearer-токен) для агентов; MCP stdio.
-- ♾️ **Хранилище** — по умолчанию вечно; **перенос на внешний SSD** одной кнопкой;
-  **автобэкап в iCloud** (сжатый снапшот, без выгрузки живой базы); трекинг размера.
-- 📥 **Импорт прежней истории** — забери накопленную историю (текст + метаданные) себе.
-- 📝 **Автоматизации** — daily-summary в файл/Obsidian; экспорт.
-- 🔒 **Приватность** — пауза по приложению, удаление по времени, всё локально.
+- 🎥 **Screen capture** — AX text + OCR, HEIC, perceptual-hash dedup, adaptive per-app (AX where it works,
+  OCR where it doesn't).
+- 🎙️ **Audio + transcription** — system + microphone, VAD, on-device speech, speakers.
+- 🔍 **Hybrid search** — FTS5 + multilingual-e5 (384-dim) via RRF; cross-lingual.
+- 🕰️ **Timeline** — scrub through time, frame + text + app/URL, a player.
+- 🔌 **REST + MCP** — a local API (127.0.0.1, Bearer token) for agents; MCP over stdio.
+- ♾️ **Storage** — forever by default; **move to an external SSD** in one click;
+  **iCloud auto-backup** (a compressed snapshot, without uploading the live database); size tracking.
+- 📥 **Import previous history** — bring your accumulated history (text + metadata) over.
+- 📝 **Automations** — daily summary to a file/Obsidian; export.
+- 🔒 **Privacy** — pause per app, delete by time range, all local.
 
-## Установка
+## Install
 
-**Релиз — нотаризован Developer ID (запуск двойным кликом, без «Open Anyway»):**
+**Release — notarized Developer ID (double-click to launch, no "Open Anyway"):**
 
-1. Собери: `bash scripts/build-notarized.sh` (нужны серт «Developer ID Application» + notarytool-профиль —
-   разовый сетап в [`docs/NOTARIZE.md`](docs/NOTARIZE.md)).
-2. Распакуй `dist/ZBSEye-notarized-*.zip` в `/Applications`, запусти **двойным кликом** (Gatekeeper
-   пропускает, в т.ч. оффлайн — тикет stapled).
-3. Выдай **Screen Recording** + **Accessibility** (опц. Microphone) — один раз. Нотаризованная подпись
-   стабильна: ребилды права НЕ сбрасывают.
+1. Build it: `bash scripts/build-notarized.sh` (needs a "Developer ID Application" certificate +
+   a notarytool profile — one-time setup in [`docs/NOTARIZE.md`](docs/NOTARIZE.md)).
+2. Unzip `dist/ZBSEye-notarized-*.zip` into `/Applications` and launch with a **double-click**
+   (Gatekeeper passes it, even offline — the ticket is stapled).
+3. Grant **Screen Recording** + **Accessibility** (optionally Microphone) once. The notarized signature
+   is stable: rebuilds do NOT reset permissions.
 
-**Dev-сборка без платного аккаунта (self-signed):** `bash scripts/make-signing-cert.sh` (один раз) →
-`bash scripts/build-release.sh` → распаковать в `/Applications` → запуск → **System Settings → Privacy &
-Security → «Open Anyway»**. Минус: смена подписи иногда сбрасывает TCC-права (нотаризация это убирает).
+**Dev build without a paid account (self-signed):** `bash scripts/make-signing-cert.sh` (once) →
+`bash scripts/build-release.sh` → unzip into `/Applications` → launch → **System Settings → Privacy &
+Security → "Open Anyway"**. Downside: changing the signature sometimes resets TCC permissions (notarization removes this).
 
-**Полное описание продукта** — [`docs/ABOUT.md`](docs/ABOUT.md). Детали сборки — [`BUILD.md`](BUILD.md).
-Архитектура и гид для контрибьюторов/агентов — [`AGENTS.md`](AGENTS.md). Раздача — [`docs/NOTARIZE.md`](docs/NOTARIZE.md).
+**Full product description** — [`docs/ABOUT.md`](docs/ABOUT.md). Build details — [`BUILD.md`](BUILD.md).
+Architecture and contributor/agent guide — [`AGENTS.md`](AGENTS.md). Distribution — [`docs/NOTARIZE.md`](docs/NOTARIZE.md).
 
-## Приватность
+## Privacy
 
-- Всё на устройстве. Сервер слушает только `127.0.0.1`, всё кроме `/health` требует Bearer-токен
-  (в Keychain). Никакого исходящего трафика.
-- iCloud-бэкап (опционально, по умолчанию вкл если iCloud есть) уезжает **сжатым снапшотом** — живая
-  база остаётся локальной (живую SQLite в iCloud Drive класть нельзя — corruption).
-- Случайно записанный пароль/чувствительный разговор стираются по времени или по приложению.
+- Everything on the device. The server listens only on `127.0.0.1`; everything except `/health` requires
+  a Bearer token (in the Keychain). No outbound traffic.
+- The iCloud backup (optional, on by default if iCloud is present) goes out as a **compressed snapshot** —
+  the live database stays local (you must not put a live SQLite file in iCloud Drive — corruption).
+- A password or sensitive conversation captured by accident can be wiped by time range or by app.
 
-## Технологии
+## Tech
 
 Swift 6 (strict concurrency), SwiftUI, macOS 15+ · GRDB (DatabasePool + WAL) + FTS5 + sqlite-vec ·
 ScreenCaptureKit · Accessibility API · Vision OCR · SFSpeech · multilingual-e5 (swift-embeddings) ·
-FlyingFox (REST) · MCP swift-sdk · Hardened Runtime без App Sandbox.
+FlyingFox (REST) · MCP swift-sdk · Hardened Runtime without App Sandbox.
 
-## Статус
+## Status
 
-Работает: захват (экран + аудио), гибрид-поиск, таймлайн, REST + MCP, импорт прежней истории,
-retention (вечно по умолчанию), relocatable хранилище, iCloud-бэкап, трекинг размера, daily-summary,
-экспорт, «Спроси» (RAG по локальной LLM — выбор модели из LM Studio/Ollama). Раздача — **нотаризованный
-Developer ID** (`scripts/build-notarized.sh`). Отложено: тест-таргет (XCTest).
+Working: capture (screen + audio), hybrid search, timeline, REST + MCP, import of previous history,
+retention (forever by default), relocatable storage, iCloud backup, size tracking, daily summary,
+export, "Ask" (RAG over a local LLM — model picker from LM Studio/Ollama). Distribution — **notarized
+Developer ID** (`scripts/build-notarized.sh`). Deferred: a test target (XCTest).
 
-## Лицензия
+## License
 
-Приватный проект `zbs-gg`. © 2026.
+Private project `zbs-gg`. © 2026.
 
 ---
 
@@ -121,6 +121,6 @@ Developer ID** (`scripts/build-notarized.sh`). Отложено: тест-тар
                 :-==++**++==-:
 ```
 
-**`Z B S   E Y E`** — _он всё видит. он всё помнит. и всё остаётся у тебя._ 👁
+**`Z B S   E Y E`** — _it sees everything. it remembers everything. and it all stays with you._ 👁
 
 </div>

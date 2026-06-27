@@ -6,16 +6,16 @@ enum AudioEngineError: LocalizedError {
     case engineStartFailed(String)
     var errorDescription: String? {
         switch self {
-        case .noInputDevice:          return "Нет входного аудио-устройства (микрофона)."
-        case .engineStartFailed(let m): return "Не удалось запустить аудио-движок: \(m)"
+        case .noInputDevice:          return "No audio input device (microphone)."
+        case .engineStartFailed(let m): return "Failed to start the audio engine: \(m)"
         }
     }
 }
 
-/// Захват микрофона: AVAudioEngine + tap на input. Tap даунмиксит в моно, считает RMS и отдаёт кадры в
-/// AsyncStream. Не actor (AVAudioEngine не Sendable, tap живёт на real-time потоке) — инкапсулируем,
-/// наружу только Sendable AudioFrame. @unchecked Sendable: continuation thread-safe (yield/finish),
-/// `running` — benign-гонка стоп/тап (removeTap гасит колбэки, yield после finish = no-op).
+/// Microphone capture: AVAudioEngine + a tap on the input. The tap downmixes to mono, computes RMS and yields frames into
+/// an AsyncStream. Not an actor (AVAudioEngine isn't Sendable, the tap lives on a real-time thread) — we encapsulate it,
+/// only the Sendable AudioFrame crosses the boundary. @unchecked Sendable: the continuation is thread-safe (yield/finish),
+/// `running` — a benign stop/tap race (removeTap silences callbacks, a yield after finish is a no-op).
 final class AudioCaptureEngine: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let config: AudioConfig
@@ -23,13 +23,13 @@ final class AudioCaptureEngine: @unchecked Sendable {
     private var running = false
     private var configObserver: NSObjectProtocol?
 
-    /// Смена аудио-конфигурации (подключили/сняли AirPods, сменился default input) — движок встал,
-    /// лента закрыта. Координатор перезапускает лег; без этого полдня звонков пропадало бы молча.
+    /// Audio configuration change (AirPods plugged/unplugged, default input switched) — the engine stopped,
+    /// the stream closed. The coordinator restarts the leg; without this, half a day of calls would vanish silently.
     var onConfigurationChange: (@Sendable () -> Void)?
 
     init(config: AudioConfig) { self.config = config }
 
-    /// Старт. Возвращает поток кадров. Бросает, если нет устройства/движок не стартанул.
+    /// Start. Returns the frame stream. Throws if there's no device / the engine didn't start.
     func start() throws -> AsyncStream<AudioFrame> {
         guard !running else { throw AudioEngineError.engineStartFailed("already running") }
         let input = engine.inputNode
@@ -42,9 +42,9 @@ final class AudioCaptureEngine: @unchecked Sendable {
                                                     bufferingPolicy: .bufferingNewest(64))
         self.continuation = cont
 
-        // Захватываем cont/ch/sr ЛОКАЛЬНО (не self.continuation): tap каждого цикла пишет в СВОЙ
-        // continuation — переустановка self не перенаправит хвост в чужой stream, и нет гонки чтения
-        // self.continuation с real-time потока (фикс data race на @unchecked Sendable-поле).
+        // We capture cont/ch/sr LOCALLY (not self.continuation): each cycle's tap writes into ITS OWN
+        // continuation — re-installing self won't redirect the tail into a foreign stream, and there's no race reading
+        // self.continuation from the real-time thread (fixes a data race on the @unchecked Sendable field).
         input.installTap(onBus: 0, bufferSize: config.tapBufferSize, format: format) { [cont, ch, sr] buffer, _ in
             guard let chData = buffer.floatChannelData else { return }
             let n = Int(buffer.frameLength)
@@ -76,12 +76,12 @@ final class AudioCaptureEngine: @unchecked Sendable {
             self.continuation = nil
             throw AudioEngineError.engineStartFailed(error.localizedDescription)
         }
-        // Подключение/смена аудио-устройства: останавливаем лег корректно (flushFinal дойдёт через
-        // finish) и сигналим координатору перезапустить с новым форматом устройства.
+        // Audio device connected/changed: we stop the leg cleanly (flushFinal arrives via
+        // finish) and signal the coordinator to restart with the new device format.
         configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-            // queue: .main — stop() и start()/stop() координатора сериализуются на главном потоке
-            // (без этого check-then-act на running гонялся бы с MainActor)
+            // queue: .main — the coordinator's stop() and start()/stop() are serialized on the main thread
+            // (without this, the check-then-act on running would race with MainActor)
             guard let self, self.running else { return }
             self.stop()
             self.onConfigurationChange?()
@@ -97,6 +97,6 @@ final class AudioCaptureEngine: @unchecked Sendable {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         continuation?.finish()
-        continuation = nil   // не держим cont прошлого цикла между stop и следующим start
+        continuation = nil   // don't hold the previous cycle's cont between stop and the next start
     }
 }

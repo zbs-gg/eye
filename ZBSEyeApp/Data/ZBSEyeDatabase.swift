@@ -2,35 +2,35 @@ import Foundation
 import GRDB
 import CSqliteVec
 
-/// Владелец DatabasePool + миграции. Sendable (только `let pool`). Пишут/читают через pool
-/// (он thread-safe). FTS5 external-content + триггеры — БЕЗ декартова бага старой версии.
+/// Owner of the DatabasePool + migrations. Sendable (only `let pool`). Writes/reads go through the pool
+/// (it's thread-safe). FTS5 external-content + triggers — WITHOUT the old version's Cartesian bug.
 final class ZBSEyeDatabase: Sendable {
     let pool: DatabasePool
 
-    /// Размерность эмбеддингов (multilingual-e5-small = 384). Фиксирована в vec0 DDL.
+    /// Embedding dimensionality (multilingual-e5-small = 384). Fixed in the vec0 DDL.
     static let embeddingDim = 384
 
-    /// `runMigrations: false` — для read-only потребителей (MCP-процесс), чтобы не брать exclusive
-    /// write-lock на grdb_migrations и не контендить с пишущим GUI-инстансом. Схемой владеет GUI.
+    /// `runMigrations: false` — for read-only consumers (the MCP process), to avoid taking an exclusive
+    /// write-lock on grdb_migrations and contending with the writing GUI instance. The GUI owns the schema.
     init(path: String, runMigrations: Bool = true) throws {
-        // mmap+WAL особенно склонны к порче БД на ВНЕШНИХ/сетевых томах (наш relocate на SSD!) — SQLite
-        // docs прямо предупреждают, screenpipe отключил mmap как топ-фикс corruption. «Вечная память» =
-        // целостность > скорость. На внутреннем APFS оставляем умеренный mmap; на внешнем/неизвестном — 0.
-        // Запрашиваем том по РОДИТЕЛЬСКОЙ папке: сам файл БД на первом старте ещё не создан
-        // (DatabasePool создаёт его ниже) → resourceValues по несуществующему пути вернул бы nil → mmap=0
-        // на всю первую сессию даже на внутреннем диске. Папка data-root уже создана StorageManager'ом.
+        // mmap+WAL are especially prone to DB corruption on EXTERNAL/network volumes (our relocate to SSD!) — SQLite
+        // docs warn about this directly, screenpipe disabled mmap as its top corruption fix. "Forever memory" =
+        // integrity > speed. On internal APFS we keep a moderate mmap; on external/unknown — 0.
+        // We query the volume by the PARENT folder: the DB file itself isn't created yet on the first launch
+        // (DatabasePool creates it below) → resourceValues on a nonexistent path would return nil → mmap=0
+        // for the entire first session even on an internal disk. The data-root folder is already created by StorageManager.
         let isInternal = (try? URL(fileURLWithPath: path).deletingLastPathComponent()
             .resourceValues(forKeys: [.volumeIsInternalKey]).volumeIsInternal) ?? false
-        let mmapBytes = isInternal ? 134_217_728 : 0   // 128 MB внутри, 0 на внешнем/неизвестном
+        let mmapBytes = isInternal ? 134_217_728 : 0   // 128 MB internal, 0 on external/unknown
         var config = Configuration()
         config.prepareDatabase { db in
             try db.execute(sql: "PRAGMA foreign_keys = ON")
-            try db.execute(sql: "PRAGMA recursive_triggers = ON")  // FK-каскад → DELETE на text_blocks → FTS-триггер
-            try db.execute(sql: "PRAGMA synchronous = NORMAL")    // WAL + NORMAL = безопасно+быстро
+            try db.execute(sql: "PRAGMA recursive_triggers = ON")  // FK cascade → DELETE on text_blocks → FTS trigger
+            try db.execute(sql: "PRAGMA synchronous = NORMAL")    // WAL + NORMAL = safe+fast
             try db.execute(sql: "PRAGMA busy_timeout = 5000")
-            try db.execute(sql: "PRAGMA mmap_size = \(mmapBytes)")   // 0 на внешнем томе — анти-corruption
-            // Регистрируем sqlite-vec (static, без loadable-extension) на каждом соединении пула.
-            // rc проверяем — иначе ошибка всплыла бы позже как «no such module: vec0».
+            try db.execute(sql: "PRAGMA mmap_size = \(mmapBytes)")   // 0 on an external volume — anti-corruption
+            // Register sqlite-vec (static, no loadable extension) on every pool connection.
+            // We check rc — otherwise the error would surface later as "no such module: vec0".
             if let conn = db.sqliteConnection {
                 var err: UnsafeMutablePointer<CChar>?
                 let rc = sqlite3_vec_init(conn, &err, nil)
@@ -45,14 +45,14 @@ final class ZBSEyeDatabase: Sendable {
         if runMigrations { try Self.migrator.migrate(pool) }
     }
 
-    /// Стандартное расположение БД — через единый StorageLocation (учитывает relocate). Медиа — отдельно.
+    /// Standard DB location — via the single StorageLocation (accounts for relocate). Media is separate.
     static func defaultURL() throws -> URL {
         StorageLocation.databaseURL()
     }
 
     static var migrator: DatabaseMigrator {
         var m = DatabaseMigrator()
-        // НЕ erase on schema change — это history-рекордер, данные пользователя ценны.
+        // NOT erase on schema change — this is a history recorder, the user's data is valuable.
 
         m.registerMigration("v1") { db in
             try db.create(table: "apps") { t in
@@ -72,7 +72,7 @@ final class ZBSEyeDatabase: Sendable {
                 t.column("height", .integer)
                 t.column("bytes", .integer)
                 t.column("axQuality", .text)
-                // телеметрия (план v2 — доказывать AX-first)
+                // telemetry (v2 plan — to prove AX-first)
                 t.column("usefulTextChars", .integer)
                 t.column("nodeCount", .integer)
                 t.column("treeWasEmpty", .boolean)
@@ -112,7 +112,7 @@ final class ZBSEyeDatabase: Sendable {
                 t.column("engine", .text).notNull()
             }
 
-            // FTS5 external-content: индекс без дублирования текста. Связь rowid→id строго 1:1.
+            // FTS5 external-content: index without duplicating text. The rowid→id relation is strictly 1:1.
             try db.execute(sql: """
                 CREATE VIRTUAL TABLE text_fts USING fts5(
                     text, content='text_blocks', content_rowid='id',
@@ -149,7 +149,7 @@ final class ZBSEyeDatabase: Sendable {
                 """)
         }
 
-        // v2: vec0-таблица для семантического поиска (legacy 512-dim, NLEmbedding).
+        // v2: vec0 table for semantic search (legacy 512-dim, NLEmbedding).
         m.registerMigration("v2_vector") { db in
             try db.execute(sql: """
                 CREATE VIRTUAL TABLE vec_screen USING vec0(
@@ -157,8 +157,8 @@ final class ZBSEyeDatabase: Sendable {
                 );
                 """)
         }
-        // v3: переход на multilingual-e5 (384-dim, cross-lingual). Пересоздаём vec0 — старые 512-векторы
-        // дропаются (новые ingest переиндексируются под e5; VectorBackfill доиндексирует).
+        // v3: switch to multilingual-e5 (384-dim, cross-lingual). Recreate vec0 — the old 512-vectors
+        // are dropped (new ingests are reindexed for e5; VectorBackfill back-indexes the rest).
         // bucket_month = temporal sharding.
         m.registerMigration("v3_vec_e5_384") { db in
             try db.execute(sql: "DROP TABLE IF EXISTS vec_screen")
@@ -168,8 +168,8 @@ final class ZBSEyeDatabase: Sendable {
                 );
                 """)
         }
-        // v4: semantic для аудио-транскриптов — ключевое обещание «ru-запрос находит en-звонок»
-        // работало только для экрана (транскрипты были FTS-only).
+        // v4: semantic for audio transcripts — the key promise "a ru query finds an en call"
+        // worked only for the screen (transcripts were FTS-only).
         m.registerMigration("v4_vec_transcripts") { db in
             try db.execute(sql: """
                 CREATE VIRTUAL TABLE vec_transcripts USING vec0(

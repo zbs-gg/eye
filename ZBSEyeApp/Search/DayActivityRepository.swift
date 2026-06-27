@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// Лёгкая строка кадра для агрегации активности дня (без текста). Sendable — ходит из actor наружу.
+/// Lightweight frame row for day-activity aggregation (no text). Sendable — passes out of the actor.
 struct CaptureLite: Sendable {
     let id: Int64
     let ts: Int64
@@ -12,13 +12,13 @@ struct CaptureLite: Sendable {
     let browserUrl: String?
 }
 
-/// Одна сессия активности: подряд идущие кадры одной группы (app или app+window) с допуском на паузу.
-/// Держит сами кадры (не только id) — потребитель берёт first/last/rep по месту.
+/// One activity session: consecutive frames of one group (app or app+window) with a pause tolerance.
+/// Holds the frames themselves (not just ids) — the consumer takes first/last/rep on the spot.
 struct ActivitySession: Sendable {
-    let captures: [CaptureLite]            // непустой, ts ASC
+    let captures: [CaptureLite]            // non-empty, ts ASC
     var first: CaptureLite { captures[0] }
     var last: CaptureLite { captures[captures.count - 1] }
-    var rep: CaptureLite { captures[captures.count / 2] }   // репрезентативный — середина по индексу
+    var rep: CaptureLite { captures[captures.count / 2] }   // representative — the middle by index
     var count: Int { captures.count }
     var startMs: Int64 { first.ts }
     var endMs: Int64 { last.ts }
@@ -26,8 +26,8 @@ struct ActivitySession: Sendable {
     var appId: Int64? { first.appId }
     var captureIds: [Int64] { captures.map(\.id) }
 
-    /// До `max` РАВНОМЕРНО распределённых по сессии captureId (не только начало) — чтобы выборка текста
-    /// не смещалась к старту длинной сессии (самый длинный текстовый блок может быть в любом месте).
+    /// Up to `max` captureIds spread EVENLY across the session (not just the start) — so the text selection
+    /// isn't skewed toward the start of a long session (the longest text block can be anywhere).
     func sampledCaptureIds(max: Int) -> [Int64] {
         let ids = captureIds
         guard max > 0, ids.count > max else { return ids }
@@ -36,22 +36,22 @@ struct ActivitySession: Sendable {
     }
 }
 
-/// Как группировать кадры в сессии.
+/// How to group frames into sessions.
 enum SessionGrouping: Sendable {
-    case appOnly        // сцена = одно приложение (Scenes; окно может меняться внутри)
-    case appAndWindow   // сессия = приложение + окно (DailySummary, Cartographer)
+    case appOnly        // scene = one app (Scenes; the window can change within)
+    case appAndWindow   // session = app + window (DailySummary, Cartographer)
 }
 
-/// Общий слой агрегации активности дня: ОДИН скан кадров + чистые функции сегментации / активного
-/// времени / переключений контекста + батч-текст. Дедуп логики, которая была размазана по
-/// SceneService / CartographerService / DailySummaryService (ревью Pro #9). Actor: только read, не writer.
+/// Shared day-activity aggregation layer: ONE frame scan + pure functions for segmentation / active
+/// time / context switches + batch text. Dedup of logic that was smeared across
+/// SceneService / CartographerService / DailySummaryService (Pro review #9). Actor: read only, not a writer.
 actor DayActivityRepository {
     private let db: ZBSEyeDatabase
     init(db: ZBSEyeDatabase) { self.db = db }
 
-    // MARK: — выборка (БД)
+    // MARK: — fetching (DB)
 
-    /// Один скан кадров диапазона (ts ASC). Лёгкие поля — без текста.
+    /// One scan of the range's frames (ts ASC). Lightweight fields — no text.
     func captures(fromMs: Int64, toMs: Int64) async throws -> [CaptureLite] {
         try await db.pool.read { dbc in
             try Row.fetchAll(dbc, sql: """
@@ -68,7 +68,7 @@ actor DayActivityRepository {
         }
     }
 
-    /// Кадры за один календарный день (`day` — любое время внутри).
+    /// Frames for a single calendar day (`day` — any time within it).
     func captures(forDay day: Date) async throws -> [CaptureLite] {
         let cal = Calendar.current
         let start = cal.startOfDay(for: day)
@@ -76,7 +76,7 @@ actor DayActivityRepository {
         return try await captures(fromMs: msFromDate(start), toMs: msFromDate(end) - 1)
     }
 
-    /// Текст кадров одним запросом (`group_concat` per capture) — без N+1.
+    /// Frame text in a single query (`group_concat` per capture) — no N+1.
     func batchText(captureIds: [Int64]) async throws -> [Int64: String] {
         let ids = Array(Set(captureIds))
         guard !ids.isEmpty else { return [:] }
@@ -92,9 +92,9 @@ actor DayActivityRepository {
         }
     }
 
-    // MARK: — чистые функции (без БД, тестируемы независимо)
+    // MARK: — pure functions (no DB, independently testable)
 
-    /// Сегментация кадров в сессии. Новая сессия при смене группы ИЛИ разрыве > gapMs.
+    /// Segment frames into sessions. A new session on a group change OR a gap > gapMs.
     static func sessions(_ caps: [CaptureLite], grouping: SessionGrouping, gapMs: Int64) -> [ActivitySession] {
         guard !caps.isEmpty else { return [] }
         func sameGroup(_ a: CaptureLite, _ b: CaptureLite) -> Bool {
@@ -119,9 +119,9 @@ actor DayActivityRepository {
         return sessions
     }
 
-    /// Активное время по приложениям (ms): дельта от предыдущего кадра отдаём предыдущему приложению,
-    /// cap на простой (дельта > activeGapCapMs = idle, засчитываем максимум cap). Число кадров ≠ время
-    /// (интервал захвата плавает: active≈3с, idle≈60с, bursts/dedup).
+    /// Active time per app (ms): the delta from the previous frame is credited to the previous app,
+    /// with an idle cap (delta > activeGapCapMs = idle, count at most cap). Frame count ≠ time
+    /// (the capture interval drifts: active≈3s, idle≈60s, bursts/dedup).
     static func appActiveMs(_ caps: [CaptureLite], activeGapCapMs: Int64) -> [Int64: Int64] {
         var dur: [Int64: Int64] = [:]
         var prev: CaptureLite? = nil
@@ -134,7 +134,7 @@ actor DayActivityRepository {
         return dur
     }
 
-    /// Смены контекста за день: соседние кадры с разным appId/windowTitle.
+    /// Context switches per day: adjacent frames with a different appId/windowTitle.
     static func contextSwitches(_ caps: [CaptureLite]) -> Int {
         var switches = 0, hasPrev = false
         var prevApp: Int64? = nil, prevWin: String? = nil

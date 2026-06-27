@@ -6,38 +6,38 @@ import Observation
 final class PermissionsStore {
     private(set) var snapshot = PermissionSnapshot()
 
-    /// SCK вернул ошибку при ВЫДАННОМ праве (классика -3801 после выдачи Screen Recording: TCC требует
-    /// перезапуск процесса). Ставится из capture-цикла; сбрасывается только рестартом приложения.
+    /// SCK returned an error while the permission was GRANTED (classic -3801 after granting Screen Recording: TCC
+    /// requires a process restart). Set from the capture loop; cleared only by restarting the app.
     private(set) var screenNeedsRestart = false
 
     @ObservationIgnored private var pollTask: Task<Void, Never>?
 
     func refreshAll() async {
         var snap = PermissionChecker.snapshot()
-        // право выдано, но захват фактически падает → честный статус «нужен перезапуск»
+        // permission granted but capture is actually failing → honest "restart required" status
         if screenNeedsRestart && snap.screenRecording == .granted {
             snap.screenRecording = .needsRestart
         }
         snapshot = snap
     }
 
-    /// Капчур упёрся в SCK-отказ при granted-праве — поднять needsRestart (UI покажет «Перезапуск»).
+    /// Capture hit an SCK denial despite a granted permission — raise needsRestart (UI shows "Restart").
     func flagScreenNeedsRestart() {
         guard !screenNeedsRestart else { return }
         screenNeedsRestart = true
         Task { await refreshAll() }
     }
 
-    /// Захват восстановился (сбой был транзиентным: wake, смена мониторов) — снять ratchet, иначе
-    /// «Нужен перезапуск» и блок повторного старта висели бы до релонча при живом захвате.
+    /// Capture recovered (the failure was transient: wake, monitor change) — release the ratchet, otherwise
+    /// "Restart required" and the re-start block would hang until relaunch even with capture alive.
     func clearScreenNeedsRestart() {
         guard screenNeedsRestart else { return }
         screenNeedsRestart = false
         Task { await refreshAll() }
     }
 
-    /// Фоновый поллинг прав: юзер выдаёт права в Системных настройках — UI подхватывает без «Повторить
-    /// проверку». Дёшево (TCC-пробы — локальные вызовы). Стартует один раз из bootstrap.
+    /// Background permission polling: the user grants permissions in System Settings — the UI picks it up without
+    /// "Re-check". Cheap (TCC probes are local calls). Started once from bootstrap.
     func startPolling(interval: TimeInterval = 3) {
         guard pollTask == nil else { return }
         pollTask = Task { [weak self] in
@@ -48,7 +48,7 @@ final class PermissionsStore {
         }
     }
 
-    /// Критичные для записи права: экран + accessibility (микрофон/речь — для аудио, опциональны).
+    /// Permissions critical for recording: screen + accessibility (microphone/speech — for audio, optional).
     var allCriticalGranted: Bool {
         snapshot.screenRecording == .granted && snapshot.accessibility == .granted
     }

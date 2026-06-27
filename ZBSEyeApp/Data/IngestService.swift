@@ -1,12 +1,12 @@
 import Foundation
 import GRDB
 
-/// Writer для capture-данных (actor). Capture/Transcription отдают сюда Sendable-записи; здесь — файл +
-/// одна транзакция (upsert app, insert screen_capture, insert text_blocks → триггеры наполняют FTS).
-/// Убирает Task.detached-гонки старой версии.
-/// NB: записи в БД сериализует GRDB DatabasePool через RetentionManager И IngestService (не один объект-
-/// writer, а один сериализованный writer-канал пула). Координация с retention — через grace-window в
-/// sweepOrphans (см. RetentionManager), чтобы orphan-sweep не удалил in-flight кадр.
+/// Writer for capture data (actor). Capture/Transcription hand Sendable records here; here — a file +
+/// one transaction (upsert app, insert screen_capture, insert text_blocks → triggers fill FTS).
+/// Removes the Task.detached races of the old version.
+/// NB: writes to the DB are serialized by the GRDB DatabasePool across RetentionManager AND IngestService (not one writer
+/// object, but one serialized writer channel of the pool). Coordination with retention — via a grace window in
+/// sweepOrphans (see RetentionManager), so the orphan sweep doesn't delete an in-flight frame.
 actor IngestService {
     private let db: ZBSEyeDatabase
     private let storage: StorageManager
@@ -20,8 +20,8 @@ actor IngestService {
 
     @discardableResult
     func ingest(_ rec: ScreenCaptureRecord) async throws -> Int64 {
-        // 1) Файл кадра пишем ДО транзакции (если capture отдал байты), путь — внутрь записи.
-        //    let (не var) — иначе Swift 6 не даёт захват в concurrent write-closure.
+        // 1) We write the frame file BEFORE the transaction (if capture handed over bytes), the path — into the record.
+        //    let (not var) — otherwise Swift 6 won't allow capturing it in the concurrent write closure.
         let relativePath: String?
         let bytes: Int?
         switch rec.image {
@@ -39,7 +39,7 @@ actor IngestService {
         let tsMs = Int64(rec.timestamp.timeIntervalSince1970 * 1000)
         let blocks = rec.textBlocks
 
-        // эмбеддинг — ДО транзакции (async). Embed только если есть текст (не дёргаем actor на пустом).
+        // embedding — BEFORE the transaction (async). Embed only if there's text (don't poke the actor on empty input).
         let fullText = blocks.map(\.text).joined(separator: " ")
         let embedding: [Float]? = fullText.isEmpty ? nil : await embedder.embed(fullText)
         let bucket = monthBucket(rec.timestamp)
@@ -68,11 +68,11 @@ actor IngestService {
                         text: b.text, confidence: b.confidence,
                         bboxX: b.bbox.map { Double($0.origin.x) }, bboxY: b.bbox.map { Double($0.origin.y) },
                         bboxW: b.bbox.map { Double($0.size.width) }, bboxH: b.bbox.map { Double($0.size.height) })
-                    try tb.insert(dbc)   // триггер text_blocks_ai наполнит text_fts
+                    try tb.insert(dbc)   // the text_blocks_ai trigger fills text_fts
                 }
-                // семантический вектор в vec0 (temporal-партиция по месяцу).
-                // Защита: пишем только при совпадении размерности (иначе vec0 бросит и откатит ВЕСЬ
-                // ingest — кадр потеряется; лучше тихо пропустить semantic, FTS останется).
+                // semantic vector into vec0 (temporal partition by month).
+                // Guard: write only when the dimension matches (otherwise vec0 throws and rolls back the WHOLE
+                // ingest — the frame is lost; better to silently skip semantic, FTS stays).
                 if let embedding, embedding.count == ZBSEyeDatabase.embeddingDim {
                     try dbc.execute(sql: "INSERT INTO vec_screen(capture_id, bucket_month, embedding) VALUES (?, ?, ?)",
                                     arguments: [captureId, bucket, floatBlob(embedding)])
@@ -80,8 +80,8 @@ actor IngestService {
                 return captureId
             }
         } catch {
-            // Транзакция упала — чистим файл, записанный ЭТИМ слоем (.heicData). Файлы .fileWritten
-            // принадлежат capture-слою — их при сбое подберёт sweepOrphans (после grace-window).
+            // The transaction failed — clean up the file written by THIS layer (.heicData). Files of .fileWritten
+            // belong to the capture layer — on failure sweepOrphans will pick them up (after the grace window).
             if case .heicData = rec.image, let p = relativePath { storage.deleteFile(relativePath: p) }
             throw error
         }
@@ -99,11 +99,11 @@ actor IngestService {
         }
     }
 
-    /// Транскрипт сегмента → transcriptions (триггер transcriptions_ai наполнит transcription_fts)
-    /// + semantic-вектор в vec_transcripts (cross-lingual «ru-запрос находит en-звонок»).
+    /// Segment transcript → transcriptions (the transcriptions_ai trigger fills transcription_fts)
+    /// + a semantic vector into vec_transcripts (cross-lingual "a ru query finds an en call").
     @discardableResult
     func ingest(_ rec: TranscriptionRecord) async throws -> Int64 {
-        // эмбеддинг ДО транзакции (async); недоступная модель не блокирует текст (FTS останется)
+        // embedding BEFORE the transaction (async); an unavailable model doesn't block the text (FTS stays)
         let embedding = await embedder.embed(passage: rec.text)
         let bucket = monthBucket(rec.ts)
         return try await db.pool.write { dbc -> Int64 in
@@ -121,7 +121,7 @@ actor IngestService {
         }
     }
 
-    /// upsert по уникальному bundleId, возвращает id.
+    /// upsert by the unique bundleId, returns the id.
     private static func upsertApp(_ db: Database, bundleId: String, name: String) throws -> Int64 {
         if let existing = try AppRow.filter(Column("bundleId") == bundleId).fetchOne(db) {
             return existing.id!

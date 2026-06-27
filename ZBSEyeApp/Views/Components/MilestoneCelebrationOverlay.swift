@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Тонкая аврора-анимация на достижении вехи.
-/// Уважает Reduce Motion: при включённом — простой fade без градиентного перелива.
-/// Показывается поверх всего окна через .overlay в RootWindow; dismisses сам через 3с.
+/// Subtle aurora animation when a milestone is reached.
+/// Respects Reduce Motion: when enabled — a simple fade without the gradient shimmer.
+/// Shown over the whole window via .overlay in RootWindow; dismisses itself after 3s.
 struct MilestoneCelebrationOverlay: View {
     let milestone: Int
     let onDismiss: () -> Void
@@ -35,11 +35,11 @@ struct MilestoneCelebrationOverlay: View {
                     .font(.system(size: 36, weight: .light))
                     .foregroundStyle(.white.opacity(0.9))
                     .shadow(color: .white.opacity(0.6), radius: 12)
-                Text("\(prettyNumber) моментов")
+                Text("\(prettyNumber) moments")
                     .font(.title2.bold())
                     .foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.4), radius: 4)
-                Text("всё — здесь, только для тебя")
+                Text("everything is here, just for you")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.8))
             }

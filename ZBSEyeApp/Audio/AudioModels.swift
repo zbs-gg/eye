@@ -1,9 +1,9 @@
 import Foundation
 
-/// Sendable-значения аудио-пайплайна. Не-Sendable (AVAudioPCMBuffer/AVAudioEngine) живут внутри своих
-/// доменов; наружу пересекают только эти типы.
+/// Sendable values of the audio pipeline. Non-Sendable types (AVAudioPCMBuffer/AVAudioEngine) live inside their
+/// own domains; only these types cross outward.
 
-/// Один кадр из микрофонного tap'а: моно-сэмплы (нормализованный float) + RMS-энергия для VAD.
+/// One frame from the microphone tap: mono samples (normalized float) + RMS energy for VAD.
 struct AudioFrame: Sendable {
     let samples: [Float]
     let rms: Float
@@ -11,24 +11,24 @@ struct AudioFrame: Sendable {
     let ts: Date
 }
 
-/// Завершённый сегмент речи: файл уже записан и строка audio_captures вставлена — готов к транскрипции.
+/// A completed speech segment: the file is already written and an audio_captures row inserted — ready for transcription.
 struct AudioSegment: Sendable {
     let audioId: Int64
     let fileURL: URL
     let ts: Date
     let durationSec: Double
-    let channel: String   // "mic" | "system" — для speaker-лейбла транскрипта (я/собеседник)
+    let channel: String   // "mic" | "system" — for the transcript's speaker label (me/other party)
 }
 
-/// Результат backend-транскрипции.
+/// Result of backend transcription.
 struct Transcript: Sendable {
     let text: String
     let language: String
     let engine: String
 }
 
-/// Здоровье транскрипции для UI: сколько распознано/провалено/дропнуто + тип последней ошибки
-/// (главное — отличить «нет on-device модели/нет прав» от транзиентных провалов).
+/// Transcription health for the UI: how many recognized/failed/dropped + the kind of the last error
+/// (the key thing — distinguish "no on-device model / no permission" from transient failures).
 struct TranscriptionHealth: Sendable, Equatable {
     var transcribed = 0
     var failed = 0
@@ -36,15 +36,15 @@ struct TranscriptionHealth: Sendable, Equatable {
     var lastErrorKind: String?   // "onDeviceUnavailable" | "notAuthorized" | "recognizerUnavailable" | nil
 }
 
-/// Sendable-вход для IngestService (транскрипт привязан к audioId). ts — момент сегмента
-/// (для bucket_month семантического вектора).
+/// Sendable input for IngestService (the transcript is tied to audioId). ts — the moment of the segment
+/// (for the bucket_month semantic vector).
 struct TranscriptionRecord: Sendable {
     let audioId: Int64
     let ts: Date
     let text: String
     let language: String
     let engine: String
-    let speaker: String?       // «я» (mic) / «собеседник» (system) — дешёвый прокси диаризации
+    let speaker: String?       // "me" (mic) / "other party" (system) — a cheap diarization proxy
     let startOffset: Double?
     let endOffset: Double?
     init(audioId: Int64, ts: Date, text: String, language: String, engine: String,

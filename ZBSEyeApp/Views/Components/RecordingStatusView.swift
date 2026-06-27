@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Честный per-source статус записи (экран / микрофон / системный звук) — общий для menubar и sidebar.
-/// Продукт-рекордер не имеет права показывать одну зелёную точку «всё ок», когда половина источников
-/// мертва: ложная зелёная точка = дыры в «вечной памяти», обнаруженные через неделю.
-/// Обёрнут в SwiftUI.TimelineView (1с) — возраст кадра и staleness живые, не замороженный Date() в body.
+/// Honest per-source recording status (screen / microphone / system audio) — shared by the menu bar and sidebar.
+/// A recorder product has no right to show a single green dot "all good" when half the sources are dead:
+/// a false green dot = holes in the "eternal memory" discovered a week later.
+/// Wrapped in SwiftUI.TimelineView (1s) — the frame age and staleness are live, not a frozen Date() in the body.
 struct RecordingStatusView: View {
     @Environment(AppEnvironment.self) private var env
     var compact = false
@@ -21,15 +21,15 @@ struct RecordingStatusView: View {
                 screenRow(now: now)
                 if env.recording.lowDiskPaused {
                     sourceRow(active: false, warn: true, icon: "externaldrive.badge.exclamationmark",
-                              text: "Мало места — захват приостановлен")
+                              text: "Low disk space — capture paused")
                 }
                 if micWanted || micOn {
                     sourceRow(active: micOn, warn: micWanted && !micOn, icon: "mic",
-                              text: micOn ? "Микрофон" : "Микрофон не запустился")
+                              text: micOn ? "Microphone" : "Microphone didn't start")
                 }
                 if systemWanted || systemOn {
                     sourceRow(active: systemOn, warn: systemWanted && !systemOn, icon: "speaker.wave.2",
-                              text: systemOn ? "Системный звук" : "Системный звук не запустился")
+                              text: systemOn ? "System audio" : "System audio didn't start")
                 }
                 if let degraded = env.recording.degradedReason {
                     Label(degraded, systemImage: "exclamationmark.triangle.fill")
@@ -38,13 +38,13 @@ struct RecordingStatusView: View {
             } else if let until = env.recording.pausedUntil {
                 HStack(spacing: 6) {
                     Circle().fill(Color.orange).frame(width: 8, height: 8)
-                    Text("Пауза до \(until.formatted(date: .omitted, time: .shortened))")
+                    Text("Paused until \(until.formatted(date: .omitted, time: .shortened))")
                         .font(.caption).foregroundStyle(.orange)
                 }
             } else {
                 HStack(spacing: 6) {
                     Circle().fill(Color.secondary).frame(width: 8, height: 8)
-                    Text("На паузе").font(.caption).foregroundStyle(.secondary)
+                    Text("Paused").font(.caption).foregroundStyle(.secondary)
                 }
             }
             if let reason = env.recording.blockedReason, !env.recording.isCapturing {
@@ -55,20 +55,20 @@ struct RecordingStatusView: View {
         }
     }
 
-    /// Строка «Экран»: warn по HEARTBEAT цикла (не по последнему кадру — статичный экран дедупится
-    /// часами и это здоровье) и по needsRestart. Warn виден и в compact (цвет/иконка).
+    /// The "Screen" row: warn by the cycle HEARTBEAT (not by the last frame — a static screen is deduped for
+    /// hours and that's healthy) and by needsRestart. The warning is visible in compact too (color/icon).
     private func screenRow(now: Date) -> some View {
         let needsRestart = env.permissions.screenNeedsRestart
-        // nil = первый цикл ещё не прошёл (первые секунды после старта) — не пугаем зря
+        // nil = the first cycle hasn't passed yet (the first seconds after start) — don't scare for nothing
         let stale = staleSeconds(now: now).map { $0 > 90 } ?? false
         let warn = needsRestart || stale
         let text: String
         if needsRestart {
-            text = "Экран: нужен перезапуск"
+            text = "Screen: needs restart"
         } else if stale {
-            text = "Экран: захват молчит"
+            text = "Screen: capture is silent"
         } else {
-            text = "Экран" + frameAgeSuffix(now: now)
+            text = "Screen" + frameAgeSuffix(now: now)
         }
         return sourceRow(active: !warn, warn: warn, icon: "display", text: text)
     }
@@ -78,7 +78,7 @@ struct RecordingStatusView: View {
     private var micWanted: Bool { env.recording.micEnabled() }
     private var systemWanted: Bool { env.recording.systemEnabled() }
 
-    /// Сколько секунд heartbeat молчит (nil = ещё не было ни одного цикла).
+    /// How many seconds the heartbeat has been silent (nil = there hasn't been a single cycle yet).
     private func staleSeconds(now: Date) -> Int? {
         env.recording.lastCycleOKAt.map { Int(now.timeIntervalSince($0)) }
     }
@@ -86,7 +86,7 @@ struct RecordingStatusView: View {
     private func frameAgeSuffix(now: Date) -> String {
         guard !compact, let t = env.recording.lastFrameAt else { return "" }
         let s = Int(now.timeIntervalSince(t))
-        return s < 120 ? " · кадр \(s)с назад" : ""   // давний кадр ≠ сбой (дедуп) — не пугаем
+        return s < 120 ? " · frame \(s)s ago" : ""   // an old frame ≠ a failure (dedup) — don't scare
     }
 
     private func sourceRow(active: Bool, warn: Bool, icon: String, text: String) -> some View {

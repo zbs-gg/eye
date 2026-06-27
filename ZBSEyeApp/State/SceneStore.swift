@@ -1,8 +1,8 @@
 import Foundation
 import Observation
 
-/// Стор «День в активностях»: сегментированные сцены для текущего дня.
-/// @MainActor @Observable — паттерн TimelineStore/AskStore.
+/// "Day in activities" store: segmented scenes for the current day.
+/// @MainActor @Observable — same pattern as TimelineStore/AskStore.
 @MainActor
 @Observable
 final class SceneStore {
@@ -13,12 +13,12 @@ final class SceneStore {
     var isLoading = false
     var error: String?
 
-    /// День, за который показываем активности (nil = сегодня/хвост истории).
+    /// The day whose activities we show (nil = today / tail of history).
     var selectedDay: Date = Calendar.current.startOfDay(for: Date())
 
-    /// Поколение загрузки: последний вызов load() выигрывает. Защищает от гонки, когда быстрый
-    /// повторный load() (смена дня / повторный appear) даёт двум запросам перезаписать друг друга
-    /// не по порядку — старый результат не должен затереть новый день.
+    /// Load generation: the latest load() call wins. Guards against a race where a fast
+    /// repeat load() (day change / repeat appear) lets two requests overwrite each other
+    /// out of order — an old result must not clobber the new day.
     @ObservationIgnored private var loadGeneration = 0
 
     init(service: SceneService, timeline: TimelineService) {
@@ -26,7 +26,7 @@ final class SceneStore {
         self.timeline = timeline
     }
 
-    /// Загружает сцены за `selectedDay`. Вызывается при смене дня и при появлении вью.
+    /// Loads scenes for `selectedDay`. Called on day change and on view appear.
     func load() async {
         loadGeneration += 1
         let gen = loadGeneration
@@ -35,7 +35,7 @@ final class SceneStore {
         error = nil
         do {
             let result = try await service.scenes(forDay: day)
-            guard gen == loadGeneration else { return }   // устарел — пришёл более новый load()
+            guard gen == loadGeneration else { return }   // stale — a newer load() arrived
             scenes = result
         } catch {
             guard gen == loadGeneration else { return }
@@ -45,7 +45,7 @@ final class SceneStore {
         if gen == loadGeneration { isLoading = false }
     }
 
-    /// Сцена, содержащая указанный момент времени (для правой панели таймлайна).
+    /// The scene containing the given moment in time (for the timeline's right panel).
     func scene(for time: Date) async -> ActivityScene? {
         try? await service.scene(containing: time)
     }

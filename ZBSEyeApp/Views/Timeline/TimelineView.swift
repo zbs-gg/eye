@@ -12,9 +12,9 @@ struct TimelineView: View {
                     .environment(env)
                     .task { await store.load(); store.startLive() }
             } else if let err = env.dataError {
-                ContentUnavailableView("Ошибка БД", systemImage: "exclamationmark.triangle", description: Text(err))
+                ContentUnavailableView("DB error", systemImage: "exclamationmark.triangle", description: Text(err))
             } else {
-                ProgressView("Инициализация…")
+                ProgressView("Initializing…")
             }
         }
     }
@@ -27,7 +27,7 @@ private struct TimelineBody: View {
     @State private var seekTask: Task<Void, Never>?
     @State private var jumpDate = Date()
     @FocusState private var searchFocused: Bool
-    /// Текущая сцена для правой панели (обновляется при смене cursor).
+    /// The current scene for the right panel (updates when the cursor changes).
     @State private var currentScene: ActivityScene?
     @State private var sceneLoadTask: Task<Void, Never>?
 
@@ -37,11 +37,11 @@ private struct TimelineBody: View {
         VStack(spacing: 0) {
             header
             Divider()
-            // Скруббер — всегда подложка; поиск выпадает Spotlight-оверлеем поверх (не mode-switch).
+            // The scrubber is always the backdrop; search drops in as a Spotlight overlay on top (not a mode-switch).
             ZStack(alignment: .top) {
                 scrubber
                 if showResults {
-                    // Диммер в потоке (не overlay-окно) → без .ignoresSafeArea; тап вне списка закрывает.
+                    // The dimmer is in the flow (not an overlay window) → no .ignoresSafeArea; a tap outside the list closes it.
                     Rectangle().fill(.black.opacity(0.12))
                         .onTapGesture { store.clearSearch() }
                     resultsOverlay
@@ -53,9 +53,9 @@ private struct TimelineBody: View {
         .background { shortcuts }
     }
 
-    /// Горячие клавиши: Space (плеер), ←/→ (шаг по кадрам), Cmd+F (поиск), Esc (закрыть поиск).
-    /// Невидимые кнопки — стандартный способ повесить шорткаты на вью. Space/стрелки отключены,
-    /// пока фокус в поисковом поле (иначе печатать невозможно).
+    /// Hotkeys: Space (player), ←/→ (step by frames), Cmd+F (search), Esc (close search).
+    /// Invisible buttons — the standard way to attach shortcuts to a view. Space/arrows are disabled
+    /// while focus is in the search field (otherwise typing is impossible).
     @ViewBuilder private var shortcuts: some View {
         Group {
             if !searchFocused {
@@ -78,31 +78,31 @@ private struct TimelineBody: View {
         .accessibilityHidden(true)
     }
 
-    // MARK: header (поиск + запись)
+    // MARK: header (search + recording)
 
     private var header: some View {
         HStack(spacing: 12) {
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Поиск по экрану и аудио…", text: $store.searchQuery)
+                TextField("Search across screen and audio…", text: $store.searchQuery)
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
-                    .onSubmit { searchFocused = true; Task { await store.runSearch() } }  // фокус остаётся → набор-уточнение
+                    .onSubmit { searchFocused = true; Task { await store.runSearch() } }  // focus stays → type-to-refine
                 if !store.searchQuery.isEmpty {
                     Button { store.clearSearch() } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.borderless).foregroundStyle(.secondary)
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
-                // Семантика не готова (качается ~300MB / нет сети) — честно говорим, что поиск пока FTS-only.
+                // Semantics not ready (downloading ~300MB / no network) — we honestly say search is FTS-only for now.
                 switch EmbeddingStatusStore.shared.status {
                 case .loading:
-                    Label("семантика качается", systemImage: "arrow.down.circle")
+                    Label("semantics downloading", systemImage: "arrow.down.circle")
                         .font(.caption2).foregroundStyle(.secondary)
-                        .help("Модель multilingual-e5 скачивается (~300 МБ, один раз). Пока — поиск по точным словам.")
+                        .help("The multilingual-e5 model is downloading (~300 MB, once). For now — search by exact words.")
                 case .failed:
-                    Label("поиск по словам", systemImage: "wifi.slash")
+                    Label("word search", systemImage: "wifi.slash")
                         .font(.caption2).foregroundStyle(.orange)
-                        .help("Семантическая модель не загрузилась (нет сети?). Поиск работает по точным словам; повторим автоматически.")
+                        .help("The semantic model didn't load (no network?). Search works by exact words; we'll retry automatically.")
                 case .idle, .ready:
                     EmptyView()
                 }
@@ -114,7 +114,7 @@ private struct TimelineBody: View {
             Button {
                 env.recording.toggle()
             } label: {
-                Label(env.recording.isCapturing ? "Стоп" : "Запись",
+                Label(env.recording.isCapturing ? "Stop" : "Record",
                       systemImage: env.recording.isCapturing ? "stop.circle.fill" : "record.circle")
             }
             .buttonStyle(.borderedProminent)
@@ -126,18 +126,18 @@ private struct TimelineBody: View {
                 .monospacedDigit()
                 .contentTransition(.numericText())
                 .animation(reduceMotion ? .none : .snappy(duration: 0.25), value: env.recording.screenFrameCount)
-                .help("Кадров за сессию")
+                .help("Frames this session")
         }
         .padding(16)
     }
 
-    // MARK: результаты поиска (Spotlight-оверлей)
+    // MARK: search results (Spotlight overlay)
 
     private var resultsOverlay: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 if store.isSearching { ProgressView().controlSize(.small) }
-                Text(store.isSearching ? "Поиск…" : "\(store.results.count) результатов")
+                Text(store.isSearching ? "Searching…" : "\(store.results.count) results")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button { store.clearSearch() } label: { Image(systemName: "xmark") }
@@ -182,15 +182,15 @@ private struct TimelineBody: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: скруббер
+    // MARK: scrubber
 
     private var scrubber: some View {
         VStack(spacing: 0) {
             if !store.hasData {
                 ContentUnavailableView {
-                    Label("История пуста", systemImage: "clock.badge.questionmark")
+                    Label("History is empty", systemImage: "clock.badge.questionmark")
                 } description: {
-                    Text("Нажми «Запись» и поработай в приложениях — здесь появится перематываемая лента экрана.")
+                    Text("Press \"Record\" and work in your apps — a scrubbable screen reel will appear here.")
                 }
             } else {
                 HSplitView {
@@ -225,27 +225,27 @@ private struct TimelineBody: View {
                             Text(c.ts.formatted(date: .abbreviated, time: .standard)).font(.caption).foregroundStyle(.secondary)
                             if let q = c.axQuality { StatusPill(text: Self.qualityLabel(q), color: Self.qualityColor(q)) }
                             if let s = Self.sourcePill(c) {
-                                // Источник ≠ ax_quality: показываем, откуда реально пришёл текст (AX/OCR/смесь).
+                                // Source ≠ ax_quality: we show where the text actually came from (AX/OCR/mixed).
                                 StatusPill(text: s.text, color: s.color, system: s.icon)
                             }
                         }
                         Divider()
-                        // Саммари сцены вместо RAW OCR-дампа; fallback на сырой текст, если сцены нет.
-                        // Гейт (Pro #4): показываем сцену ТОЛЬКО если её диапазон реально накрывает
-                        // текущий кадр — иначе (устаревшая/чужая сцена при дебаунсе) показываем RAW.
+                        // The scene summary instead of a RAW OCR dump; fallback to raw text if there's no scene.
+                        // Gate (Pro #4): we show the scene ONLY if its range actually covers
+                        // the current frame — otherwise (a stale/foreign scene during debounce) we show RAW.
                         if let scene = currentScene, scene.startTs <= c.ts, c.ts <= scene.endTs {
                             SceneSummaryCard(scene: scene) {
                                 Task { await store.seek(to: scene.startTs) }
                             }
                         } else {
-                            Text(c.text.isEmpty ? "(текст не извлечён)" : c.text)
+                            Text(c.text.isEmpty ? "(no text extracted)" : c.text)
                                 .font(.callout).textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                     .transition(.opacity)
                 } else {
-                    Text("Нет кадра на этот момент").foregroundStyle(.secondary)
+                    Text("No frame at this moment").foregroundStyle(.secondary)
                         .transition(.opacity)
                 }
             }
@@ -254,8 +254,8 @@ private struct TimelineBody: View {
             .animation(reduceMotion ? .none : .smooth(duration: 0.2), value: store.audioDetail?.id)
         }
         .onChange(of: store.cursor) { _, newCursor in
-            // При смене курсора подгружаем сцену для правой панели.
-            // Дебаунсим — только после settle (нет смысла грузить каждый кадр play).
+            // When the cursor changes we load the scene for the right panel.
+            // We debounce — only after it settles (no point loading every frame during play).
             sceneLoadTask?.cancel()
             sceneLoadTask = Task {
                 try? await Task.sleep(for: .milliseconds(300))
@@ -265,13 +265,13 @@ private struct TimelineBody: View {
         }
     }
 
-    /// Панель аудио-сегмента: транскрипт + прослушивание m4a (открывается кликом по аудио-хиту).
+    /// Audio segment panel: transcript + m4a playback (opens on a click on an audio hit).
     private func audioCard(_ a: AudioDetail) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: "waveform").foregroundStyle(.tint)
-                Text(a.channel == "system" ? "Системный звук" : "Микрофон").font(.headline)
-                Text("· \(Int(a.durationSec))с").font(.caption).foregroundStyle(.secondary)
+                Text(a.channel == "system" ? "System audio" : "Microphone").font(.headline)
+                Text("· \(Int(a.durationSec))s").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button { store.closeAudio() } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.borderless).foregroundStyle(.secondary)
@@ -294,7 +294,7 @@ private struct TimelineBody: View {
                 Text(t).font(.callout).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                Text("(транскрипта нет — найдено по времени)").font(.caption).foregroundStyle(.secondary)
+                Text("(no transcript — found by time)").font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding(10)
@@ -309,8 +309,8 @@ private struct TimelineBody: View {
     }
 
     private func scheduleSeek(toEpoch v: Double) {
-        if store.isPlaying { store.pause() }            // ручная перемотка останавливает плеер сразу
-        store.cursor = Date(timeIntervalSince1970: v)   // курсор следует мгновенно
+        if store.isPlaying { store.pause() }            // a manual scrub stops the player immediately
+        store.cursor = Date(timeIntervalSince1970: v)   // the cursor follows instantly
         seekTask?.cancel()
         seekTask = Task {
             try? await Task.sleep(for: .milliseconds(70))
@@ -319,7 +319,7 @@ private struct TimelineBody: View {
         }
     }
 
-    // MARK: транспорт + ось времени
+    // MARK: transport + time axis
 
     private var controls: some View {
         VStack(spacing: 8) {
@@ -347,10 +347,10 @@ private struct TimelineBody: View {
                     .contentTransition(.numericText())
                     .animation(reduceMotion ? .none : .snappy(duration: 0.2), value: store.cursor)
                 Spacer(minLength: 8)
-                // быстрые прыжки: «прошлый вторник 15:00» больше не требует возни со слайдером
-                Button("Сегодня") { Task { await store.jumpToNewest() } }
+                // quick jumps: "last Tuesday 3pm" no longer needs slider fiddling
+                Button("Today") { Task { await store.jumpToNewest() } }
                     .controlSize(.small)
-                Button("Вчера") {
+                Button("Yesterday") {
                     let y = Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
                     Task { await store.jump(to: y) }
                 }
@@ -358,7 +358,7 @@ private struct TimelineBody: View {
                 DatePicker("", selection: $jumpDate, displayedComponents: .date)
                     .labelsHidden().datePickerStyle(.compact).controlSize(.small)
                     .onChange(of: jumpDate) { _, d in Task { await store.jump(to: d) } }
-                    .help("Перейти к дате")
+                    .help("Go to a date")
                 Picker("", selection: Binding(get: { store.zoom },
                                               set: { z in Task { await store.setZoom(z) } })) {
                     ForEach(TimelineStore.Zoom.allCases) { Text($0.label).tag($0) }
@@ -374,7 +374,7 @@ private struct TimelineBody: View {
     private var transport: some View {
         HStack(spacing: 8) {
             TransportButton(systemImage: "backward.frame.fill",
-                            help: "Предыдущий кадр",
+                            help: "Previous frame",
                             reduceMotion: reduceMotion) {
                 Task { await store.stepBackward() }
             }
@@ -385,7 +385,7 @@ private struct TimelineBody: View {
             }
 
             TransportButton(systemImage: "forward.frame.fill",
-                            help: "Следующий кадр",
+                            help: "Next frame",
                             reduceMotion: reduceMotion) {
                 Task { await store.stepForward() }
             }
@@ -394,7 +394,7 @@ private struct TimelineBody: View {
                 ForEach(TimelineStore.speeds, id: \.self) { s in Text("\(Int(s))×").tag(s) }
             }
             .pickerStyle(.segmented).fixedSize()
-            .help("Скорость воспроизведения")
+            .help("Playback speed")
         }
     }
 
@@ -403,23 +403,23 @@ private struct TimelineBody: View {
         case "fullUseful": return .green
         case "partialUseful", "titleOnly": return .yellow
         case "ocr", "timedOut": return .orange
-        case "sickPID": return .purple   // диагностика: процесс завис/недоступен — это НЕ пустой кадр
+        case "sickPID": return .purple   // diagnostics: the process hung/is unavailable — this is NOT an empty frame
         default: return .red             // none
         }
     }
     static func qualityLabel(_ q: String) -> String {
         switch q {
-        case "fullUseful": return "AX полный"
-        case "partialUseful": return "AX частично"
-        case "titleOnly": return "заголовок"
+        case "fullUseful": return "AX full"
+        case "partialUseful": return "AX partial"
+        case "titleOnly": return "title"
         case "ocr": return "OCR"
-        case "timedOut": return "таймаут"
-        case "sickPID": return "AX недоступен"
-        default: return "пусто"
+        case "timedOut": return "timeout"
+        case "sickPID": return "AX unavailable"
+        default: return "empty"
         }
     }
 
-    /// Пилл источника текста (AX / OCR / AX+OCR). nil — если источников нет (context-only кадр).
+    /// The text source pill (AX / OCR / AX+OCR). nil — if there are no sources (a context-only frame).
     static func sourcePill(_ c: FrameDetail) -> (text: String, color: Color, icon: String)? {
         switch (c.hasAX, c.hasOCR) {
         case (true, true):  return ("AX+OCR", .teal, "rectangle.on.rectangle")
@@ -430,9 +430,9 @@ private struct TimelineBody: View {
     }
 }
 
-// MARK: - транспортные кнопки с hover-микроанимацией
+// MARK: - transport buttons with a hover micro-animation
 
-/// Bordered transport button с лёгким scale-эффектом при наведении.
+/// A bordered transport button with a slight scale effect on hover.
 private struct TransportButton: View {
     let systemImage: String
     let help: String
@@ -453,7 +453,7 @@ private struct TransportButton: View {
     }
 }
 
-/// Play/Pause кнопка с иконкой-crossfade при смене состояния.
+/// A Play/Pause button with an icon crossfade on state change.
 private struct PlayPauseButton: View {
     let isPlaying: Bool
     let reduceMotion: Bool
@@ -468,7 +468,7 @@ private struct PlayPauseButton: View {
                 .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace.downUp.wholeSymbol))
         }
         .buttonStyle(.borderedProminent)
-        .help(isPlaying ? "Пауза" : "Воспроизвести")
+        .help(isPlaying ? "Pause" : "Play")
         .scaleEffect(hovered && !reduceMotion ? 1.05 : 1.0)
         .animation(reduceMotion ? .none : .snappy(duration: 0.15), value: isPlaying)
         .animation(reduceMotion ? .none : .snappy(duration: 0.12), value: hovered)
@@ -476,13 +476,13 @@ private struct PlayPauseButton: View {
     }
 }
 
-// MARK: - кадр (crossfade при смене)
+// MARK: - frame (crossfade on change)
 
 private struct FramePreview: View {
     let frameID: Int64?
     let url: URL?
     let reduceMotion: Bool
-    @State private var loaded: LoadedFrame?     // что на экране — id+image атомарно (нет рассинхрона)
+    @State private var loaded: LoadedFrame?     // what's on screen — id+image atomically (no desync)
 
     private struct LoadedFrame { let id: Int64; let image: NSImage }
 
@@ -490,32 +490,32 @@ private struct FramePreview: View {
         ZStack {
             Color.black.opacity(0.04)
             if let loaded {
-                // .id(loaded.id)+transition: уходящий кадр держит снимок СТАРОГО struct, входящий — новый.
-                // id и image переключаются ОДНИМ присваиванием → фейд не ломается re-render'ом (фикс ревью).
+                // .id(loaded.id)+transition: the outgoing frame holds the snapshot of the OLD struct, the incoming — the new one.
+                // id and image switch in ONE assignment → the fade isn't broken by a re-render (review fix).
                 Image(nsImage: loaded.image).resizable().aspectRatio(contentMode: .fit)
                     .id(loaded.id)
                     .transition(.opacity)
             }
             if frameID != nil, url == nil {
-                // Кадр без снимка (context-only/дедуп) — бейдж ПОВЕРХ прошлого кадра, фейд не рвём.
-                ContentUnavailableView("Кадр без снимка", systemImage: "photo.badge.exclamationmark")
+                // A frame without a snapshot (context-only/dedup) — a badge OVER the previous frame, we don't break the fade.
+                ContentUnavailableView("Frame without a snapshot", systemImage: "photo.badge.exclamationmark")
                     .background(.ultraThinMaterial)
             } else if loaded == nil {
-                ContentUnavailableView("Нет кадра", systemImage: "photo")
+                ContentUnavailableView("No frame", systemImage: "photo")
             }
         }
-        // При reduceMotion — мгновенная смена (nil duration = no animation); при норме — плавный crossfade.
+        // With reduceMotion — an instant change (nil duration = no animation); when normal — a smooth crossfade.
         .animation(reduceMotion ? .none : .easeInOut(duration: 0.15), value: loaded?.id)
         .task(id: frameID) {
-            guard let u = url, let fid = frameID else { return }   // url==nil: держим прошлый loaded под бейджем
+            guard let u = url, let fid = frameID else { return }   // url==nil: keep the previous loaded under the badge
             let img = await Task.detached(priority: .userInitiated) { FramePreview.thumbnail(u, maxPixel: 2400) }.value
             if Task.isCancelled { return }
             if let img { loaded = LoadedFrame(id: fid, image: img) }
         }
     }
 
-    /// Даунскейл-thumbnail через ImageIO: не декодим полноразмерный HEIC на каждый кадр (память при play).
-    /// nonisolated — чистая функция, зовётся из Task.detached вне MainActor.
+    /// A downscaled thumbnail via ImageIO: we don't decode a full-size HEIC for every frame (memory during play).
+    /// nonisolated — a pure function, called from Task.detached off the MainActor.
     nonisolated static func thumbnail(_ url: URL, maxPixel: Int) -> NSImage? {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let opts: [CFString: Any] = [
@@ -532,7 +532,7 @@ private struct FramePreview: View {
 
 private struct DensityStrip: View {
     let buckets: [DensityBucket]
-    let audioBuckets: [DensityBucket]   // вторая дорожка (внизу): где в истории есть речь
+    let audioBuckets: [DensityBucket]   // the second track (at the bottom): where in history there's speech
     let start: Date
     let end: Date
     let cursor: Date
@@ -540,7 +540,7 @@ private struct DensityStrip: View {
     let reduceMotion: Bool
     let onSeek: (Date) -> Void
 
-    // Анимированная позиция плейхеда — обновляется вместе с cursor, но плавно.
+    // The animated playhead position — updates together with the cursor, but smoothly.
     @State private var animatedCursorFraction: Double = 0
 
     private var cursorFraction: Double {
@@ -551,10 +551,10 @@ private struct DensityStrip: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                // Canvas для баров — не перерисовывает плейхед при каждом cursor-тике.
+                // Canvas for the bars — doesn't redraw the playhead on every cursor tick.
                 Canvas { ctx, size in
                     let span = max(1, end.timeIntervalSince1970 - start.timeIntervalSince1970)
-                    // верхняя дорожка — экран; нижние 6pt — аудио-полоска
+                    // top track — screen; the bottom 6pt — the audio strip
                     let audioH: CGFloat = audioBuckets.isEmpty ? 0 : 6
                     let screenH = size.height - audioH
                     let maxCount = max(1, buckets.map(\.count).max() ?? 1)
@@ -565,7 +565,7 @@ private struct DensityStrip: View {
                         let rect = CGRect(x: x, y: screenH - h, width: max(1.5, size.width / 240), height: h)
                         ctx.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(.accentColor.opacity(0.7)))
                     }
-                    // аудио: оранжевые сегменты присутствия речи (бинарная полоска, не высота)
+                    // audio: orange segments of speech presence (a binary strip, not height)
                     for b in audioBuckets {
                         let x = (b.ts.timeIntervalSince1970 - start.timeIntervalSince1970) / span * size.width
                         guard x >= 0, x <= size.width else { continue }
@@ -574,8 +574,8 @@ private struct DensityStrip: View {
                     }
                 }
 
-                // Плейхед — отдельный слой, анимируется через animatedCursorFraction.
-                // При ручном скрабе анимация не включается (мгновенно), только при авто-плее.
+                // The playhead — a separate layer, animated via animatedCursorFraction.
+                // During a manual scrub the animation doesn't engage (instant), only during auto-play.
                 let cx = animatedCursorFraction * geo.size.width
                 Rectangle()
                     .fill(playing ? Color.accentColor : Color.primary.opacity(0.6))
@@ -593,7 +593,7 @@ private struct DensityStrip: View {
                 onSeek(Date(timeIntervalSince1970: start.timeIntervalSince1970 + frac * span))
             })
             .onChange(of: cursor) { _, _ in
-                // При воспроизведении — плавное движение плейхеда; при ручном скрабе — мгновенное.
+                // During playback — smooth playhead movement; during a manual scrub — instant.
                 if playing && !reduceMotion {
                     withAnimation(.linear(duration: 0.12)) {
                         animatedCursorFraction = cursorFraction

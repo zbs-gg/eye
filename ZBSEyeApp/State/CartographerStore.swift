@@ -1,8 +1,8 @@
 import Foundation
 import Observation
 
-/// UI-состояние раздела «Картограф»: инсайты дня + busy/ошибка. @MainActor @Observable — по
-/// паттерну AskStore/DaySummaryStore. Генерацию делегирует CartographerService (actor).
+/// UI state for the "Cartographer" section: insights of the day + busy/error. @MainActor @Observable — following
+/// the AskStore/DaySummaryStore pattern. Delegates generation to CartographerService (actor).
 @MainActor
 @Observable
 final class CartographerStore {
@@ -17,12 +17,12 @@ final class CartographerStore {
     private(set) var insights: CartographerService.Insights?
     private(set) var errorText: String?
 
-    /// Какой день выбран для анализа (по умолчанию — сегодня).
+    /// Which day is selected for analysis (today by default).
     var selectedDay: Date = Calendar.current.startOfDay(for: Date()) {
         didSet {
             guard Calendar.current.startOfDay(for: selectedDay)
                     != Calendar.current.startOfDay(for: oldValue) else { return }
-            // Смена дня → сбрасываем предыдущий результат (он был за другой день).
+            // Day changed → reset the previous result (it was for a different day).
             insights = nil; errorText = nil
             if phase != .loading { phase = .idle }
         }
@@ -30,14 +30,14 @@ final class CartographerStore {
 
     var isBusy: Bool { phase == .loading }
 
-    /// LLM настроена и локальная — показываем кнопку генерации, иначе подсказку.
+    /// The LLM is configured and local — show the generate button, otherwise a hint.
     var llmReady: Bool { connections.llm.isConfigured && connections.llm.isLocalOnly }
 
-    /// First-run consent (Pro #13): до явного согласия дневные фрагменты экрана НЕ уходят в локальную
-    /// LLM. UI показывает consent-карточку; генерация заблокирована.
+    /// First-run consent (Pro #13): until explicit consent, daily screen fragments do NOT go to the local
+    /// LLM. The UI shows a consent card; generation is blocked.
     private(set) var hasConsent: Bool = UserDefaults.standard.bool(forKey: "zbseye.cartographer.consent")
 
-    /// Пользователь согласился — фиксируем и сразу запускаем генерацию.
+    /// The user consented — record it and start generation right away.
     func grantConsentAndGenerate() {
         UserDefaults.standard.set(true, forKey: "zbseye.cartographer.consent")
         hasConsent = true
@@ -53,10 +53,10 @@ final class CartographerStore {
         self.connections = connections
     }
 
-    // MARK: — действия
+    // MARK: — actions
 
     func generate() {
-        guard hasConsent, !isBusy else { return }   // без явного согласия фрагменты в LLM не уходят
+        guard hasConsent, !isBusy else { return }   // without explicit consent, fragments don't go to the LLM
         generateTask?.cancel()
         generateTask = Task { [weak self] in await self?.run() }
     }
@@ -67,8 +67,8 @@ final class CartographerStore {
         if phase == .loading { phase = .idle }
     }
 
-    /// Privacy: сбросить инсайты целиком — историю, на которой они построены, удалили.
-    /// Вызывается из AppEnvironment.deleteHistory.
+    /// Privacy: reset the insights entirely — the history they were built on has been deleted.
+    /// Called from AppEnvironment.deleteHistory.
     func reset() {
         generateTask?.cancel()
         generateTask = nil
@@ -77,7 +77,7 @@ final class CartographerStore {
         phase = .idle
     }
 
-    // MARK: — внутреннее
+    // MARK: — internal
 
     private func run() async {
         errorText = nil; insights = nil
@@ -91,14 +91,14 @@ final class CartographerStore {
         let llm = connections.llm
         do {
             let result = try await service.generate(day: day, llm: llm)
-            // Гонка: пока генерили — мог смениться выбранный день или прийти отмена.
-            // Не перезаписываем результат чужого дня (иначе инсайты вчера показываются под сегодня).
+            // Race: while we were generating, the selected day could have changed or a cancellation arrived.
+            // Don't overwrite the result with another day's (otherwise yesterday's insights show under today).
             guard !Task.isCancelled,
                   Calendar.current.startOfDay(for: selectedDay)
                     == Calendar.current.startOfDay(for: day) else { phase = .idle; return }
             insights = result
             phase = .done
-            AchievementCounters.bump(.cartographerRuns)   // ачивки Картографа
+            AchievementCounters.bump(.cartographerRuns)   // Cartographer achievements
         } catch is CancellationError {
             phase = .idle
         } catch let urlErr as URLError where urlErr.code == .cancelled {

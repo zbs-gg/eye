@@ -2,14 +2,14 @@ import Foundation
 
 enum SearchKind: String, Sendable { case screen, audio }
 
-/// Фильтры поиска (UI, REST, MCP — один контракт): «что я видел про X на прошлой неделе в Safari».
+/// Search filters (UI, REST, MCP — one contract): "what did I see about X last week in Safari".
 struct SearchFilters: Sendable {
     var from: Date?
     var to: Date?
-    var app: String?          // подстрока bundleId или имени приложения (case-insensitive), только screen
-    var kind: SearchKind?     // nil = оба
+    var app: String?          // substring of bundleId or app name (case-insensitive), screen only
+    var kind: SearchKind?     // nil = both
     var limit: Int = 60
-    var offset: Int = 0       // пагинация поверх RRF-ранжирования
+    var offset: Int = 0       // pagination on top of RRF ranking
 
     init(from: Date? = nil, to: Date? = nil, app: String? = nil, kind: SearchKind? = nil,
          limit: Int = 60, offset: Int = 0) {
@@ -29,8 +29,8 @@ struct SearchResult: Sendable, Identifiable {
     let snippet: String
     let relativePath: String?
 
-    /// `id` (rowid) сам по себе не уникален между screen и audio — в ForEach это коллизия.
-    /// Композитный ключ kind:id уникален.
+    /// `id` (rowid) on its own is not unique between screen and audio — in a ForEach that's a collision.
+    /// The composite key kind:id is unique.
     var uniqueKey: String { "\(kind.rawValue):\(id)" }
 }
 
@@ -50,8 +50,8 @@ struct FrameDetail: Sendable, Identifiable {
     let browserURL: String?
     let text: String
     let axQuality: String?
-    /// Источники текста этого кадра (distinct по text_blocks.source): "ax" и/или "ocr".
-    /// ax_quality ≠ источник: кадр может быть fullUseful, а блоки — смесь ax+ocr.
+    /// Text sources for this frame (distinct over text_blocks.source): "ax" and/or "ocr".
+    /// ax_quality ≠ source: a frame can be fullUseful while its blocks are a mix of ax+ocr.
     var sources: [String] = []
 
     var hasAX: Bool { sources.contains("ax") }
@@ -63,8 +63,8 @@ struct TimeBounds: Sendable {
     let newest: Date?
 }
 
-/// Аудио-сегмент для таймлайна: транскрипт + файл для прослушивания. Раньше клик по аудио-хиту
-/// показывал ближайший ЭКРАННЫЙ кадр и транскрипт пропадал — найденный звонок был тупиком.
+/// Audio segment for the timeline: transcript + file to play back. Previously a click on an audio hit
+/// showed the nearest SCREEN frame and the transcript vanished — the call you found was a dead end.
 struct AudioDetail: Sendable, Identifiable {
     let id: Int64
     let ts: Date
@@ -73,7 +73,7 @@ struct AudioDetail: Sendable, Identifiable {
     let relativePath: String
     let transcript: String?
     let language: String?
-    let speaker: String?      // «я» / «собеседник» (channel-прокси диаризации)
+    let speaker: String?      // "me" / "other party" (channel-proxy diarization)
 }
 
 @inline(__always) func dateFromMs(_ ms: Int64) -> Date { Date(timeIntervalSince1970: Double(ms) / 1000) }

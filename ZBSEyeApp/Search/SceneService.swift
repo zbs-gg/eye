@@ -1,9 +1,9 @@
 import Foundation
 
-/// Одна сцена — непрерывная активность в одном приложении без разрыва > `gapThreshold`.
-/// Sendable: пересекает актор-границы (SceneService → SceneStore → SwiftUI).
+/// One scene — continuous activity in a single app with no gap > `gapThreshold`.
+/// Sendable: it crosses actor boundaries (SceneService → SceneStore → SwiftUI).
 struct ActivityScene: Sendable, Identifiable {
-    let id: String             // "appId-startTs" — стабильный ключ для ForEach
+    let id: String             // "appId-startTs" — a stable key for ForEach
     let appId: Int64?
     let bundleId: String?
     let appName: String?
@@ -13,36 +13,36 @@ struct ActivityScene: Sendable, Identifiable {
     let endTs: Date
     let durationSec: Double
     let frameCount: Int
-    let summary: String        // 1–2 строки осмысленного описания (эвристика без LLM)
+    let summary: String        // 1–2 lines of a meaningful description (heuristic, no LLM)
 }
 
-/// Сегментирует `screen_captures` в сцены на лету (без миграции схемы). Выборку/сегментацию/батч-текст
-/// делегирует общему DayActivityRepository — здесь только доменная сборка сцены + эвристическое саммари.
-/// Actor: только db-read (через repo), не writer.
+/// Segments `screen_captures` into scenes on the fly (no schema migration). Fetching/segmentation/batch text
+/// are delegated to the shared DayActivityRepository — here it's only the domain assembly of a scene + a heuristic summary.
+/// Actor: db-read only (via repo), not a writer.
 actor SceneService {
     private let repo: DayActivityRepository
 
-    /// Разрыв без кадров > порога = граница сцены. 3 минуты (180 с) по заданию.
+    /// A gap with no frames > the threshold = a scene boundary. 3 minutes (180 s) per the spec.
     private let gapMs: Int64 = 180 * 1000
 
     init(repo: DayActivityRepository) { self.repo = repo }
 
-    /// Список сцен за один календарный день. `day` — любое время внутри нужного дня.
+    /// List of scenes for a single calendar day. `day` — any time within the desired day.
     func scenes(forDay day: Date) async throws -> [ActivityScene] {
         let caps = try await repo.captures(forDay: day)
         return try await build(from: caps)
     }
 
-    /// Список сцен в произвольном диапазоне.
+    /// List of scenes within an arbitrary range.
     func scenes(from: Date, to: Date) async throws -> [ActivityScene] {
         let caps = try await repo.captures(fromMs: msFromDate(from), toMs: msFromDate(to))
         return try await build(from: caps)
     }
 
-    /// Сцена, в которую попадает момент времени (для правой панели таймлайна).
-    /// Расширенное окно (±90 мин) + ТОЧНОЕ содержание: возвращаем сцену, только если её диапазон реально
-    /// накрывает `time`. Курсор в «дыре» (нет активности) → nil (UI покажет RAW). Без fallback-«ближайшей»
-    /// (ревью Pro #4 — кадр чужой сцены не должен подменять текущий).
+    /// The scene that a moment in time falls into (for the timeline's right panel).
+    /// Widened window (±90 min) + EXACT containment: we return a scene only if its range actually
+    /// covers `time`. A cursor in a "gap" (no activity) → nil (the UI shows RAW). No fallback to "nearest"
+    /// (Pro review #4 — a frame from another scene must not stand in for the current one).
     func scene(containing time: Date) async throws -> ActivityScene? {
         let window: TimeInterval = 90 * 60
         let timeMs = msFromDate(time)
@@ -55,10 +55,10 @@ actor SceneService {
         return Self.buildScene(seg, repText: text[seg.rep.id] ?? "")
     }
 
-    // MARK: - сборка
+    // MARK: - assembly
 
-    /// Сегментирует кадры в сцены (app-only) и строит ActivityScene. Текст для саммари — ОДНИМ батч-
-    /// запросом по репрезентативным кадрам всех сцен (без N+1, ревью Pro #7).
+    /// Segments frames into scenes (app-only) and builds an ActivityScene. The text for the summary is fetched in
+    /// ONE batch query over the representative frames of all scenes (no N+1, Pro review #7).
     private func build(from caps: [CaptureLite]) async throws -> [ActivityScene] {
         guard !caps.isEmpty else { return [] }
         let sessions = DayActivityRepository.sessions(caps, grouping: .appOnly, gapMs: gapMs)
@@ -82,12 +82,12 @@ actor SceneService {
             frameCount: seg.count, summary: summary)
     }
 
-    // MARK: - эвристическое саммари (без LLM, без БД)
+    // MARK: - heuristic summary (no LLM, no DB)
 
     private static func buildSummary(appName: String?, bundleId: String?, windowTitle: String?,
                                      browserURL: String?, repText: String) -> String {
         var parts: [String] = []
-        let app = appName ?? bundleId.map { cleanBundleId($0) } ?? "Приложение"
+        let app = appName ?? bundleId.map { cleanBundleId($0) } ?? "App"
         parts.append(app)
 
         if let url = browserURL, !url.isEmpty, let host = URL(string: url)?.host {
@@ -102,14 +102,14 @@ actor SceneService {
         return parts.joined(separator: " · ")
     }
 
-    /// Топ-N осмысленных фраз из склеенного текста кадра. Фильтруем меню-шум и короткие токены.
+    /// Top-N meaningful phrases from the concatenated frame text. We filter out menu noise and short tokens.
     private static func topPhrases(from raw: String, maxPhrases: Int) -> [String] {
         guard !raw.isEmpty else { return [] }
         let menuNoise: Set<String> = [
-            "файл", "правка", "вид", "формат", "окно", "помощь", "справка", "инструменты",
-            "file", "edit", "view", "format", "window", "help", "tools", "insert",
-            "выбрать всё", "отменить", "копировать", "вставить",
-            "undo", "redo", "copy", "paste", "select", "all",
+            "file", "edit", "view", "format", "window", "help", "guide", "tools",
+            "insert",
+            "select all", "undo", "copy", "paste",
+            "redo", "select", "all",
         ]
         let tokens = raw
             .components(separatedBy: .whitespacesAndNewlines)

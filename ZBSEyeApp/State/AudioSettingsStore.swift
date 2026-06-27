@@ -1,8 +1,8 @@
 import Foundation
 import Observation
 
-/// Настройки аудио/транскрипции. План v1: ON по умолчанию («записывать всё»), но фактический старт
-/// всё равно гейтится правами (микрофон). Persist в UserDefaults.
+/// Audio/transcription settings. Plan v1: ON by default ("record everything"), but the actual start
+/// is still gated by permissions (microphone). Persisted in UserDefaults.
 @MainActor
 @Observable
 final class AudioSettingsStore {
@@ -10,13 +10,13 @@ final class AudioSettingsStore {
         didSet { if transcriptionEnabled != oldValue { UserDefaults.standard.set(transcriptionEnabled, forKey: Self.key) } }
     }
 
-    /// Отдельный тумблер системного звука (звонки/видео = голоса собеседников) — чтобы можно было писать
-    /// свой микрофон, но не чужой звук. Дефолт ON (план «записывать всё»), но это осознанный выбор.
+    /// A separate toggle for system audio (calls/video = other people's voices) — so you can record
+    /// your own microphone but not other people's audio. Default ON (the "record everything" plan), but it's a conscious choice.
     var recordSystemAudio: Bool {
         didSet { if recordSystemAudio != oldValue { UserDefaults.standard.set(recordSystemAudio, forKey: Self.sysKey) } }
     }
 
-    /// Здоровье транскрипции (обновляется при открытии Settings) — чтобы показать «нет on-device модели».
+    /// Transcription health (refreshed when Settings opens) — to show "no on-device model".
     var health: TranscriptionHealth?
     var micEngineFailed = false
     var systemEngineFailed = false

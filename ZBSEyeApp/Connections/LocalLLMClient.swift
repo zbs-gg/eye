@@ -1,8 +1,8 @@
 import Foundation
 
-/// Клиент локальной LLM по OpenAI-совместимому API (`/chat/completions`, `/models`). Actor —
-/// сетевые вызовы изолированы, наружу только Sendable (String/[String]). Non-streaming: для daily-summary
-/// нам нужен один цельный ответ, не поток токенов.
+/// Client for a local LLM over an OpenAI-compatible API (`/chat/completions`, `/models`). Actor —
+/// network calls are isolated, only Sendable types (String/[String]) cross the boundary. Non-streaming: for the
+/// daily summary we need one whole answer, not a token stream.
 actor LocalLLMClient {
 
     struct Message: Codable, Sendable {
@@ -10,34 +10,34 @@ actor LocalLLMClient {
         let content: String
     }
 
-    /// Итог пробы подключения. Своя enum, т.к. Result.Failure обязан быть Error, а нам нужен String.
+    /// Outcome of a connection probe. Custom enum, because Result.Failure must be an Error, and we need a String.
     enum ProbeResult: Sendable, Equatable {
         case ok([String])
         case failed(String)
     }
 
-    /// Ответ генерации + флаг обрезки по лимиту токенов (finish_reason="length").
+    /// Generation result + a flag for truncation by the token limit (finish_reason="length").
     struct ChatOutput: Sendable {
         let content: String
         let truncated: Bool
     }
 
-    // MARK: проверка подключения
+    // MARK: connection check
 
-    /// `GET {base}/models` — список доступных моделей. Лёгкая проба «жив ли сервер».
+    /// `GET {base}/models` — list of available models. A lightweight "is the server alive" probe.
     func listModels(_ cfg: LLMConfig) async -> ProbeResult {
         guard cfg.isLocalOnly else {
-            return .failed("endpoint не локальный (только 127.0.0.1/localhost в v1)")
+            return .failed("endpoint is not local (only 127.0.0.1/localhost in v1)")
         }
         guard let url = Self.endpoint(cfg.normalizedBaseURL, "models") else {
-            return .failed("некорректный baseURL")
+            return .failed("invalid baseURL")
         }
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.timeoutInterval = 10
         do {
             let (data, resp) = try await Self.session(timeout: 10).data(for: req)
-            guard let http = resp as? HTTPURLResponse else { return .failed("нет HTTP-ответа") }
+            guard let http = resp as? HTTPURLResponse else { return .failed("no HTTP response") }
             guard (200..<300).contains(http.statusCode) else {
                 return .failed("HTTP \(http.statusCode): \(Self.snippet(data))")
             }
@@ -48,14 +48,14 @@ actor LocalLLMClient {
         }
     }
 
-    // MARK: генерация
+    // MARK: generation
 
-    /// `POST {base}/chat/completions` без стрима. maxTokens cap'ает выход (AutomationSafety).
+    /// `POST {base}/chat/completions` without streaming. maxTokens caps the output (AutomationSafety).
     func chat(_ cfg: LLMConfig, system: String, user: String,
               maxTokens: Int, timeout: TimeInterval) async throws -> ChatOutput {
         guard cfg.isLocalOnly else { throw AutomationError.nonLocalLLM(URL(string: cfg.normalizedBaseURL)?.host ?? cfg.baseURL) }
         guard let url = Self.endpoint(cfg.normalizedBaseURL, "chat/completions") else {
-            throw AutomationError.llm("некорректный baseURL")
+            throw AutomationError.llm("invalid baseURL")
         }
         let body = ChatRequest(
             model: cfg.model,
@@ -70,14 +70,14 @@ actor LocalLLMClient {
 
         do {
             let (data, resp) = try await Self.session(timeout: timeout).data(for: req)
-            guard let http = resp as? HTTPURLResponse else { throw AutomationError.llm("нет HTTP-ответа") }
+            guard let http = resp as? HTTPURLResponse else { throw AutomationError.llm("no HTTP response") }
             guard (200..<300).contains(http.statusCode) else {
                 throw AutomationError.llm("HTTP \(http.statusCode): \(Self.snippet(data))")
             }
             let decoded = try JSONDecoder().decode(ChatResponse.self, from: data)
             guard let choice = decoded.choices.first,
                   !choice.message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                throw AutomationError.llm("пустой ответ модели")
+                throw AutomationError.llm("empty model response")
             }
             return ChatOutput(content: choice.message.content, truncated: choice.finish_reason == "length")
         } catch let e as AutomationError {
@@ -87,7 +87,7 @@ actor LocalLLMClient {
         }
     }
 
-    // MARK: внутреннее
+    // MARK: internals
 
     private struct ChatRequest: Encodable {
         let model: String
@@ -109,22 +109,22 @@ actor LocalLLMClient {
         let data: [M]
     }
 
-    /// Склейка baseURL + path. Прощаем хвостовой `/` и отсутствие `/v1` (добавим, если нет ни v1, ни иного
-    /// суффикса). `endpoint("http://127.0.0.1:11434/v1", "models")` → `.../v1/models`.
+    /// Joins baseURL + path. Forgives a trailing `/` and a missing `/v1` (we add it if there's neither v1 nor any other
+    /// suffix). `endpoint("http://127.0.0.1:11434/v1", "models")` → `.../v1/models`.
     static func endpoint(_ base: String, _ path: String) -> URL? {
         var b = base.trimmingCharacters(in: .whitespaces)
         while b.hasSuffix("/") { b.removeLast() }
         guard !b.isEmpty else { return nil }
-        // Если в base нет сегмента версии — допускаем «голый» хост и сами дописываем /v1.
+        // If base has no version segment — we allow a "bare" host and append /v1 ourselves.
         if let u = URL(string: b), (u.path.isEmpty || u.path == "") { b += "/v1" }
         return URL(string: b + "/" + path)
     }
 
     private static func session(timeout: TimeInterval) -> URLSession {
         let c = URLSessionConfiguration.ephemeral
-        // stream:false → сервер молчит до готовности всего ответа, поэтому idle-таймаут (timeoutIntervalForRequest)
-        // де-факто = времени полной генерации. Resource — щедрый общий потолок, чтобы холодная загрузка
-        // локальной модели не убивалась раньше времени. (Правильный долгосрочный фикс — stream:true.)
+        // stream:false → the server stays silent until the whole response is ready, so the idle timeout (timeoutIntervalForRequest)
+        // is de facto = the time of full generation. Resource — a generous overall ceiling, so that a cold load of
+        // the local model isn't killed prematurely. (The proper long-term fix is stream:true.)
         c.timeoutIntervalForRequest = timeout
         c.timeoutIntervalForResource = max(timeout, 600)
         c.waitsForConnectivity = false
@@ -141,9 +141,9 @@ actor LocalLLMClient {
         if ns.domain == NSURLErrorDomain {
             switch ns.code {
             case NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost:
-                return "сервер не отвечает — запущен ли Ollama / LM Studio / mlx_lm.server?"
+                return "server not responding — is Ollama / LM Studio / mlx_lm.server running?"
             case NSURLErrorTimedOut:
-                return "таймаут — модель долго отвечает или не загружена"
+                return "timeout — the model is slow to respond or isn't loaded"
             default: break
             }
         }

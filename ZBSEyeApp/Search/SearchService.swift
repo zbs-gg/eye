@@ -1,10 +1,10 @@
 import Foundation
 import GRDB
 
-/// Гибридный поиск: FTS5 (точные слова, bm25) + semantic (vec0, по смыслу, экран И транскрипты) →
-/// слияние Reciprocal Rank Fusion (RRF, k=60, без калибровки шкал). Дедуп кадров ROW_NUMBER.
-/// Фильтры (время/приложение/тип) применяются в SQL где дёшево и пост-фильтром для semantic-ног;
-/// пагинация — поверх итогового ранжирования (offset/limit).
+/// Hybrid search: FTS5 (exact words, bm25) + semantic (vec0, by meaning, screen AND transcripts) →
+/// Reciprocal Rank Fusion merge (RRF, k=60, no scale calibration). Frame dedup via ROW_NUMBER.
+/// Filters (time/app/kind) are applied in SQL where cheap and as a post-filter for the semantic legs;
+/// pagination sits on top of the final ranking (offset/limit).
 actor SearchService {
     private let db: ZBSEyeDatabase
     private let embedder: EmbeddingService
@@ -15,18 +15,18 @@ actor SearchService {
         self.embedder = embedder
     }
 
-    /// Совместимость со старыми вызовами (UI/MCP без фильтров).
+    /// Compatibility with old call sites (UI/MCP without filters).
     func search(query: String, limit: Int = 60) async throws -> [SearchResult] {
         try await search(query: query, filters: SearchFilters(limit: limit))
     }
 
     func search(query: String, filters: SearchFilters) async throws -> [SearchResult] {
-        // окно кандидатов: с запасом над offset+limit; app-фильтр режется ПОСТ-фильтром (Unicode),
-        // поэтому при нём окно шире — иначе редкое приложение утонет в чужих кандидатах
+        // candidate window: with headroom over offset+limit; the app filter is cut by a POST-filter (Unicode),
+        // so the window is wider when it's set — otherwise a rare app would drown among other candidates
         let baseWindow = min(filters.offset + filters.limit + 40, 400)
         let window = filters.app != nil ? min(baseWindow * 3, 600) : baseWindow
 
-        // FTS и эмбеддинг запроса — параллельно (не зависят друг от друга). query-префикс для e5.
+        // FTS and the query embedding — in parallel (they don't depend on each other). query prefix for e5.
         async let ftsTask = ftsSearch(query, filters: filters, limit: window)
         async let qvecTask = embedder.embed(query: query)
         let fts = try await ftsTask
@@ -35,8 +35,8 @@ actor SearchService {
         var score: [String: Double] = [:]
         func key(_ r: SearchResult) -> String { "\(r.kind.rawValue):\(r.id)" }
 
-        // screen-FTS и audio-FTS — НЕЗАВИСИМЫЕ RRF-ноги (как и semantic-пара): bm25 разных FTS-таблиц
-        // несравним, конкатенация занижала бы лучший аудио-хит на размер всей screen-выдачи.
+        // screen-FTS and audio-FTS are INDEPENDENT RRF legs (as is the semantic pair): bm25 of different FTS
+        // tables is incomparable, concatenation would underrate the best audio hit by the size of the whole screen set.
         for (i, r) in fts.screen.enumerated() {
             let k = key(r)
             score[k, default: 0] += 1.0 / (rrfK + Double(i + 1))
@@ -49,10 +49,10 @@ actor SearchService {
         }
 
         if let qvec = await qvecTask {
-            // Две semantic-ноги ПАРАЛЛЕЛЬНО (async let → DB-чтения перекрываются через pool): экран и
-            // транскрипты (cross-lingual, для звонков). kind-фильтр И app-фильтр гасят ненужную ногу
-            // целиком (у аудио нет appId — при app-фильтре оно всё равно отсеется в matches(), не жжём KNN).
-            // Recency-first: без time-фильтра KNN сначала по горячим шардам — на большой истории 37 vs 370мс.
+            // Two semantic legs IN PARALLEL (async let → DB reads overlap via the pool): screen and
+            // transcripts (cross-lingual, for calls). The kind filter AND app filter mute the unneeded leg
+            // entirely (audio has no appId — under an app filter it's dropped in matches() anyway, no KNN burned).
+            // Recency-first: with no time filter KNN starts on hot shards — on large history 37 vs 370ms.
             let appFiltered = !(filters.app?.isEmpty ?? true)
             async let semIdsTask: [Int64] = filters.kind == .audio ? [] :
                 recencyFirst(window) { try await self.semanticSearch(qvec, filters: filters, limit: window, buckets: $0) }
@@ -77,11 +77,11 @@ actor SearchService {
             }
         }
 
-        // Пост-фильтр закрывает semantic-ноги (vec-партиции месячные, app в vec нет вовсе)
-        // И app-фильтр целиком (Unicode-корректный, в отличие от SQLite lower()).
+        // The post-filter closes the semantic legs (vec partitions are monthly, app isn't in vec at all)
+        // AND the app filter entirely (Unicode-correct, unlike SQLite's lower()).
         let filtered = byKey.values.filter { matches($0, filters) }
-        // tiebreaker (ts↓, kind, id↓): равные RRF-score встречаются постоянно — без него пагинация
-        // не стыкуется между страницами (нестабильная сортировка)
+        // tiebreaker (ts↓, kind, id↓): equal RRF scores show up constantly — without it pagination
+        // doesn't line up between pages (unstable sort)
         let ranked = filtered.sorted { a, b in
             let sa = score[key(a)] ?? 0, sb = score[key(b)] ?? 0
             if sa != sb { return sa > sb }
@@ -92,13 +92,13 @@ actor SearchService {
         return Array(ranked.dropFirst(filters.offset).prefix(filters.limit))
     }
 
-    /// Точная проверка результата против фильтров (semantic-ноги фильтруются только грубо в SQL).
+    /// Exact check of a result against the filters (the semantic legs are only filtered coarsely in SQL).
     private func matches(_ r: SearchResult, _ f: SearchFilters) -> Bool {
         if let k = f.kind, r.kind != k { return false }
         if let from = f.from, r.ts < from { return false }
         if let to = f.to, r.ts > to { return false }
         if let app = f.app, !app.isEmpty {
-            guard r.kind == .screen else { return false }   // app-фильтр осмыслен только для экрана
+            guard r.kind == .screen else { return false }   // the app filter only makes sense for screen
             let needle = app.lowercased()
             let hay = [(r.bundleId ?? ""), (r.appName ?? "")].map { $0.lowercased() }
             if !hay.contains(where: { $0.contains(needle) }) { return false }
@@ -111,7 +111,7 @@ actor SearchService {
     private func semanticSearch(_ qvec: [Float], filters: SearchFilters, limit: Int,
                                 buckets: (Int, Int)? = nil) async throws -> [Int64] {
         let blob = floatBlob(qvec)
-        // temporal shard: месячные партиции vec0 режут KNN-скан. Явный time-фильтр главнее recency-окна.
+        // temporal shard: monthly vec0 partitions cut the KNN scan. An explicit time filter wins over the recency window.
         let (b0, b1) = (filters.from != nil || filters.to != nil) ? Self.bucketRange(filters)
                        : (buckets ?? Self.bucketRange(filters))
         return try await db.pool.read { db in
@@ -122,8 +122,8 @@ actor SearchService {
         }
     }
 
-    /// Semantic по транскриптам: vec_transcripts → transcription_id → audioId (ключ RRF — audio,
-    /// как у FTS-ноги: дедуп по аудио-сегменту, не по строке транскрипта).
+    /// Semantic over transcripts: vec_transcripts → transcription_id → audioId (the RRF key is audio,
+    /// like the FTS leg: dedup by audio segment, not by transcript line).
     private func semanticTranscripts(_ qvec: [Float], filters: SearchFilters, limit: Int,
                                      buckets: (Int, Int)? = nil) async throws -> [Int64] {
         let blob = floatBlob(qvec)
@@ -135,7 +135,7 @@ actor SearchService {
                 WHERE bucket_month BETWEEN ? AND ? AND embedding MATCH ? AND k = ? ORDER BY distance
                 """, arguments: [b0, b1, blob, limit])
             guard !tids.isEmpty else { return [] }
-            // сохранить порядок ранжирования: маппим по одному (короткий список)
+            // preserve the ranking order: map one by one (short list)
             var audioIds: [Int64] = []
             var seen = Set<Int64>()
             for tid in tids {
@@ -149,15 +149,15 @@ actor SearchService {
         }
     }
 
-    /// Диапазон месячных бакетов для vec-партиций (без фильтра — вся история).
+    /// Range of monthly buckets for the vec partitions (no filter — the whole history).
     private static func bucketRange(_ f: SearchFilters) -> (Int, Int) {
         let lo = f.from.map(monthBucket) ?? 0
         let hi = f.to.map(monthBucket) ?? 999_912
         return (lo, hi)
     }
 
-    /// Recency-first: прогон ноги по последним ~2 месяцам; мало кандидатов → добор по всей истории
-    /// (свежие ids идут первыми — recency-boost через порядок ранжирования RRF).
+    /// Recency-first: run the leg over the last ~2 months; too few candidates → top up over the whole history
+    /// (fresh ids come first — recency boost via the RRF ranking order).
     private func recencyFirst(_ want: Int, _ leg: ((Int, Int)?) async throws -> [Int64]) async -> [Int64] {
         let recentLo = monthBucket(Date().addingTimeInterval(-60 * 86_400))
         let recent = (try? await leg((recentLo, 999_912))) ?? []
@@ -167,9 +167,9 @@ actor SearchService {
         return recent + full.filter { seen.insert($0).inserted }
     }
 
-    /// Две независимые FTS-ноги. app-фильтр: needle резолвится в appId-список В SWIFT (Unicode-корректно;
-    /// SQLite lower() — ASCII-only и ломал кириллицу) и уходит в SQL как `appId IN (…)` — без потерь
-    /// (пост-фильтр поверх topN терял редкие приложения, тонущие за частыми словами).
+    /// Two independent FTS legs. app filter: the needle resolves to an appId list IN SWIFT (Unicode-correct;
+    /// SQLite lower() is ASCII-only and broke Cyrillic) and goes into SQL as `appId IN (…)` — lossless
+    /// (a post-filter over topN lost rare apps that drowned behind frequent words).
     private func ftsSearch(_ query: String, filters: SearchFilters,
                            limit: Int) async throws -> (screen: [SearchResult], audio: [SearchResult]) {
         let match = Self.ftsQuery(query)
@@ -177,9 +177,9 @@ actor SearchService {
         let fromMs = filters.from.map(msFromDate) ?? 0
         let toMs = filters.to.map(msFromDate) ?? Int64.max
         let wantScreen = filters.kind != .audio
-        // у аудио нет appId → при app-фильтре аудио-нога заведомо пуста, не делаем лишний FTS-скан
+        // audio has no appId → under an app filter the audio leg is guaranteed empty, skip the extra FTS scan
         let wantAudio = filters.kind != .screen && (filters.app?.isEmpty ?? true)
-        // app-needle → ids (таблица apps маленькая; contains по Unicode-lowercased)
+        // app needle → ids (the apps table is small; contains over Unicode-lowercased)
         let appIdsClause: String
         if let app = filters.app?.lowercased(), !app.isEmpty {
             let ids: [Int64] = try await db.pool.read { db in
@@ -189,7 +189,7 @@ actor SearchService {
                     return (b.contains(app) || n.contains(app)) ? row["id"] : nil
                 }
             }
-            guard !ids.isEmpty else { return ([], []) }   // такого приложения нет — честный ноль
+            guard !ids.isEmpty else { return ([], []) }   // no such app — an honest zero
             appIdsClause = "AND c.appId IN (\(ids.map(String.init).joined(separator: ",")))"
         } else {
             appIdsClause = ""
@@ -198,9 +198,9 @@ actor SearchService {
             var screen: [SearchResult] = []
             var audio: [SearchResult] = []
             if wantScreen {
-                // snippet()/bm25() считаются в подзапросе ЧИСТО по FTS-таблице (hits): доп-условия по
-                // joined-таблицам (ts BETWEEN) меняют план и SQLite теряет FTS-контекст —
-                // «unable to use function snippet» (пойман живым прогоном на 50k импортированных блоков).
+                // snippet()/bm25() are computed in the subquery PURELY over the FTS table (hits): extra conditions on
+                // joined tables (ts BETWEEN) change the plan and SQLite loses the FTS context —
+                // "unable to use function snippet" (caught by a live run on 50k imported blocks).
                 let screenSQL = """
                 WITH hits AS (
                     SELECT rowid AS tbid, snippet(text_fts, 0, '⟦', '⟧', '…', 12) AS snip,
@@ -232,7 +232,7 @@ actor SearchService {
                 }
             }
             if wantAudio {
-                // та же hits-схема, что и для экрана (см. комментарий выше)
+                // same hits scheme as for screen (see the comment above)
                 let audioSQL = """
                 WITH hits AS (
                     SELECT rowid AS trid, snippet(transcription_fts, 0, '⟦', '⟧', '…', 12) AS snip,
@@ -263,16 +263,16 @@ actor SearchService {
         }
     }
 
-    /// «Кто говорит» вместо безликого «Аудио»: канал записи = дешёвый прокси спикера.
+    /// "Who's speaking" instead of a faceless "Audio": the recording channel = a cheap speaker proxy.
     static func audioLabel(_ channel: String?) -> String {
         switch channel {
-        case "mic":    return "Микрофон (я)"
-        case "system": return "Системный звук (собеседник)"
-        default:       return "Аудио"
+        case "mic":    return "Microphone (me)"
+        case "system": return "System audio (other party)"
+        default:       return "Audio"
         }
     }
 
-    /// Для semantic-only хита (нашёлся по смыслу, без точных слов) — собрать SearchResult из БД.
+    /// For a semantic-only hit (found by meaning, without exact words) — assemble a SearchResult from the DB.
     private func fetchScreenResult(_ captureId: Int64) async throws -> SearchResult? {
         try await db.pool.read { db in
             guard let row = try Row.fetchOne(db, sql: """
@@ -291,7 +291,7 @@ actor SearchService {
         }
     }
 
-    /// Для semantic-only аудио-хита — собрать SearchResult из БД (как fetchScreenResult для экрана).
+    /// For a semantic-only audio hit — assemble a SearchResult from the DB (like fetchScreenResult for screen).
     private func fetchAudioResult(_ audioId: Int64) async throws -> SearchResult? {
         try await db.pool.read { db in
             guard let row = try Row.fetchOne(db, sql:
@@ -308,7 +308,7 @@ actor SearchService {
         }
     }
 
-    /// Пользовательский ввод → безопасный FTS5 prefix-MATCH (токены в кавычках + `*`, неявный AND).
+    /// User input → safe FTS5 prefix MATCH (quoted tokens + `*`, implicit AND).
     static func ftsQuery(_ q: String) -> String {
         let tokens = q.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
         guard !tokens.isEmpty else { return "" }

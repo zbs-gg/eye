@@ -1,14 +1,15 @@
 import Foundation
 
-/// Чистый VAD/сегментатор (без I/O — тестируется изолированно). По энергии кадров решает: копить ли
-/// сэмплы в текущий сегмент и когда его закрыть. Тишину ДО начала речи отбрасываем (не пишем пустые
-/// сегменты); музыку/фон режет порог энергии; затяжная тишина закрывает сегмент.
+/// Pure VAD/segmenter (no I/O — tested in isolation). Based on frame energy it decides whether to keep
+/// accumulating samples into the current segment and when to close it. Silence BEFORE speech begins is
+/// dropped (we don't write empty segments); the energy threshold cuts out music/background; prolonged
+/// silence closes the segment.
 struct VADSegmenter: Sendable {
-    /// Что делать потребителю с текущим кадром:
-    /// - ignore: тишина до речи — кадр НЕ копить;
-    /// - append: докопить кадр в сегмент;
-    /// - flush: докопить кадр и ЗАКРЫТЬ сегмент (речи накоплено достаточно → отдать на транскрипцию);
-    /// - discard: закрыть и ВЫБРОСИТЬ накопленное (речь оказалась слишком короткой).
+    /// What the consumer should do with the current frame:
+    /// - ignore: silence before speech — do NOT accumulate the frame;
+    /// - append: accumulate the frame into the segment;
+    /// - flush: accumulate the frame and CLOSE the segment (enough speech gathered → send to transcription);
+    /// - discard: close and THROW AWAY the accumulated audio (the speech turned out too short).
     enum Action: Equatable { case ignore, append, flush, discard }
 
     var energyThreshold: Float
@@ -17,9 +18,9 @@ struct VADSegmenter: Sendable {
     var maxSegmentSec: Double
 
     private var inSpeech = false
-    private var speechSec = 0.0     // суммарно «голосовых» секунд в сегменте
-    private var silenceSec = 0.0    // тишины подряд с последнего голоса
-    private var segSec = 0.0        // полная длина сегмента
+    private var speechSec = 0.0     // total "voiced" seconds in the segment
+    private var silenceSec = 0.0    // consecutive silence since the last voiced frame
+    private var segSec = 0.0        // full length of the segment
 
     init(config: AudioConfig) {
         energyThreshold = config.vadEnergyThreshold
@@ -47,7 +48,7 @@ struct VADSegmenter: Sendable {
         return .append
     }
 
-    /// Принудительно закрыть текущий сегмент (на стопе записи). Возвращает true, если было что отдавать.
+    /// Force-close the current segment (on recording stop). Returns true if there was something to emit.
     mutating func finishPending() -> Bool {
         let had = inSpeech && speechSec >= minSpeechSec
         reset()

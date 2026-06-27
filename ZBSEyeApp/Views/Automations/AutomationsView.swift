@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Автоматизация v1: «Саммари дня». collect → локальная LLM → запись в файл/Obsidian. Поток preview-then-write.
+/// Automation v1: "Day summary". collect → local LLM → write to a file/Obsidian. A preview-then-write flow.
 struct AutomationsView: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -9,10 +9,10 @@ struct AutomationsView: View {
             if let store = env.automations {
                 AutomationBody(store: store)
             } else {
-                ContentUnavailableView("Инициализация…", systemImage: "powerplug")
+                ContentUnavailableView("Initializing…", systemImage: "powerplug")
             }
         }
-        .navigationTitle("Автоматизации")
+        .navigationTitle("Automations")
     }
 }
 
@@ -42,14 +42,14 @@ private struct AutomationBody: View {
         .task { await store.refreshAudit() }
     }
 
-    // MARK: блоки
+    // MARK: blocks
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Label("Саммари дня", systemImage: "text.append")
+            Label("Day summary", systemImage: "text.append")
                 .font(.title2).bold()
-            Text("Собирает активность за день из истории, прогоняет через локальную модель и пишет "
-                 + "Markdown-конспект в выбранную папку. Ничего не уходит в облако.")
+            Text("Collects the day's activity from your history, runs it through a local model, and writes "
+                 + "a Markdown digest to a folder of your choice. Nothing leaves for the cloud.")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }
@@ -57,11 +57,11 @@ private struct AutomationBody: View {
     private var notReadyCard: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
-                Label("Нужно настроить подключения", systemImage: "exclamationmark.triangle.fill")
+                Label("Connections need to be set up", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange).font(.headline)
-                Text("Укажи локальную LLM и папку-назначение — без них автоматизация не запустится.")
+                Text("Set a local LLM and a destination folder — the automation won't run without them.")
                     .foregroundStyle(.secondary)
-                Button("Открыть «Подключения»") { env.selectedSection = .connections }
+                Button("Open Connections") { env.selectedSection = .connections }
                     .buttonStyle(.borderedProminent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -72,7 +72,7 @@ private struct AutomationBody: View {
     private var controls: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
-                DatePicker("День", selection: $store.selectedDay, in: ...Date(),
+                DatePicker("Day", selection: $store.selectedDay, in: ...Date(),
                            displayedComponents: .date)
                     .datePickerStyle(.compact)
                     .disabled(store.isBusy)
@@ -81,15 +81,15 @@ private struct AutomationBody: View {
                     Button {
                         store.startPreview()
                     } label: {
-                        Label("Собрать превью", systemImage: "sparkles")
+                        Label("Build preview", systemImage: "sparkles")
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(store.isBusy)
 
                     if store.phase == .summarizing {
                         ProgressView().controlSize(.small)
-                        Text("собираю историю и суммирую…").foregroundStyle(.secondary)
-                        Button("Отмена") { store.cancelPreview() }
+                        Text("collecting history and summarizing…").foregroundStyle(.secondary)
+                        Button("Cancel") { store.cancelPreview() }
                             .buttonStyle(.bordered)
                     }
                 }
@@ -102,19 +102,19 @@ private struct AutomationBody: View {
     private var scheduleCard: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                Toggle("Собирать конспект автоматически", isOn: $store.scheduleEnabled)
+                Toggle("Build the digest automatically", isOn: $store.scheduleEnabled)
                 if store.scheduleEnabled {
-                    Picker("Время", selection: $store.scheduleHour) {
+                    Picker("Time", selection: $store.scheduleHour) {
                         ForEach([17, 18, 19, 20, 21, 22, 23], id: \.self) { h in
                             Text(String(format: "%02d:00", h)).tag(h)
                         }
                     }
                     .fixedSize()
-                    Toggle("Сразу записывать без превью", isOn: $store.autoWriteEnabled)
+                    Toggle("Write immediately without a preview", isOn: $store.autoWriteEnabled)
                         .disabled(!store.hasWrittenManually)
                     Text(store.hasWrittenManually
-                         ? "Готовый конспект придёт уведомлением. Авто-запись кладёт его в папку без подтверждения."
-                         : "Авто-запись откроется после первой ручной записи — сначала проверь формат глазами (защита от мусора и инъекций из истории).")
+                         ? "The finished digest will arrive as a notification. Auto-write drops it into the folder without confirmation."
+                         : "Auto-write unlocks after the first manual write — check the format by eye first (protection against junk and injections from history).")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -127,17 +127,17 @@ private struct AutomationBody: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 12) {
-                    Text("Превью").font(.headline)
+                    Text("Preview").font(.headline)
                     Spacer()
-                    Text("\(p.sessions) сессий · \(p.totalCaptures) кадров · \(p.model)")
+                    Text("\(p.sessions) sessions · \(p.totalCaptures) frames · \(p.model)")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if p.truncated {
-                    Label("День длинный — в саммари вошли самые длинные сессии.",
+                    Label("Long day — only the longest sessions made it into the summary.",
                           systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
                 }
                 if p.outputTruncated {
-                    Label("Ответ модели обрезан по лимиту токенов — конспект может быть неполным.",
+                    Label("The model's answer was cut off by the token limit — the digest may be incomplete.",
                           systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
                 }
                 ScrollView {
@@ -157,7 +157,7 @@ private struct AutomationBody: View {
                         Label(writeButtonTitle, systemImage: "square.and.arrow.down")
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(store.phase == .writing || store.lastWrite != nil)   // не записать повторно тот же конспект
+                    .disabled(store.phase == .writing || store.lastWrite != nil)   // don't write the same digest twice
 
                     if store.phase == .writing {
                         ProgressView().controlSize(.small)
@@ -171,10 +171,10 @@ private struct AutomationBody: View {
 
     private var writeButtonTitle: String {
         let sub = store.connections.destination.subfolder
-        let folder = sub.isEmpty ? "папку" : sub
-        // Имя из preview.day, а не selectedDay — кнопка обязана обещать ровно то, что запишется.
+        let folder = sub.isEmpty ? "folder" : sub
+        // Name from preview.day, not selectedDay — the button must promise exactly what gets written.
         let day = store.preview?.day ?? store.selectedDay
-        return "Записать в \(folder)/\(DailySummaryService.ymd(day)).md"
+        return "Write to \(folder)/\(DailySummaryService.ymd(day)).md"
     }
 
     private func writeSuccess(_ w: WriteResult) -> some View {
@@ -182,12 +182,12 @@ private struct AutomationBody: View {
             HStack(spacing: 12) {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(w.overwritten ? "Перезаписано" : "Записано").font(.headline)
+                    Text(w.overwritten ? "Overwritten" : "Written").font(.headline)
                     Text(w.path).font(.caption).foregroundStyle(.secondary)
                         .textSelection(.enabled).lineLimit(2)
                 }
                 Spacer()
-                Button("Показать в Finder") { store.revealLastWrite() }
+                Button("Show in Finder") { store.revealLastWrite() }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(6)
@@ -204,9 +204,9 @@ private struct AutomationBody: View {
     }
 
     private var auditSection: some View {
-        DisclosureGroup("История запусков (\(store.audit.count))") {
+        DisclosureGroup("Run history (\(store.audit.count))") {
             if store.audit.isEmpty {
-                Text("Пока пусто.").foregroundStyle(.secondary).font(.callout)
+                Text("Nothing yet.").foregroundStyle(.secondary).font(.callout)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
@@ -214,9 +214,9 @@ private struct AutomationBody: View {
                         HStack(spacing: 8) {
                             Image(systemName: e.ok ? "checkmark.circle" : "xmark.circle")
                                 .foregroundStyle(e.ok ? .green : .red)
-                            Text(e.action == "write" ? "запись" : "превью").bold()
+                            Text(e.action == "write" ? "write" : "preview").bold()
                             Text(e.day).foregroundStyle(.secondary)
-                            Text("· \(e.sessions) сессий")
+                            Text("· \(e.sessions) sessions")
                                 .foregroundStyle(.secondary).font(.caption)
                             Spacer()
                             Text(auditTime(e.at)).font(.caption).foregroundStyle(.secondary)
@@ -230,7 +230,7 @@ private struct AutomationBody: View {
     }
 
     private func auditTime(_ d: Date) -> String {
-        let f = DateFormatter(); f.locale = Locale(identifier: "ru_RU"); f.dateFormat = "d MMM, HH:mm"
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US"); f.dateFormat = "d MMM, HH:mm"
         return f.string(from: d)
     }
 }
