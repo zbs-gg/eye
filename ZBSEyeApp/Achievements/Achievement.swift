@@ -113,59 +113,59 @@ enum AchievementCatalog {
     // ── тир-семьи (количественные, генерируются) ──
     private static let families: [Achievement] =
         fam("frames", "badge_star", .memory,
-            [1_000, 2_500, 5_000, 10_000, 20_000, 35_000, 50_000, 75_000, 100_000, 200_000, 350_000, 500_000, 750_000, 1_000_000, 2_500_000, 5_000_000],
+            [1_000, 2_500, 5_000, 10_000, 20_000, 35_000, 50_000, 75_000, 100_000, 150_000, 200_000, 350_000, 500_000, 750_000, 1_000_000, 1_500_000, 2_500_000, 5_000_000],
             name: { "\(fmt($0)) моментов" }, detail: { "В памяти \(fmt($0)) кадров" },
             cond: { .framesAtLeast($0) }, rewards: [100_000: .theme(.gold), 1_000_000: .theme(.magical)])
       + fam("streak", "badge_flame", .streak,
-            [3, 5, 7, 10, 14, 21, 30, 45, 60, 75, 100, 150, 200, 365],
+            [3, 5, 7, 10, 14, 21, 30, 45, 60, 75, 90, 100, 150, 200, 300, 365],
             name: { "\($0) дней подряд" }, detail: { "Запись \($0) дней подряд без пропусков" },
             cond: { .streakAtLeast($0) }, rewards: [7: .appIcon("icon_alt_glow"), 30: .theme(.frost), 100: .appIcon("icon_alt_gold")])
       + fam("days", "badge_calendar", .memory,
-            [1, 3, 7, 14, 30, 60, 100, 150, 200, 300, 365],
+            [1, 3, 5, 7, 14, 21, 30, 45, 60, 90, 120, 150, 200, 250, 300, 365],
             name: { "\($0) дней с памятью" }, detail: { "\($0) разных дней с записью" },
             cond: { .activeDaysAtLeast($0) })
       + fam("age", "badge_calendar", .memory,
-            [1, 7, 30, 90, 180, 365, 730],
+            [1, 3, 7, 14, 30, 60, 90, 180, 270, 365, 540, 730],
             name: { "Памяти \($0) дн." }, detail: { "Самый ранний кадр старше \($0) дней" },
             cond: { .memoryAgeDaysAtLeast($0) })
       + fam("burst", "badge_stopwatch", .focus,
-            [1_000, 2_500, 5_000, 10_000, 20_000, 40_000],
+            [1_000, 2_500, 5_000, 7_500, 10_000, 15_000, 20_000, 30_000, 40_000],
             name: { "\(fmt($0)) кадров за день" }, detail: { "За один день — \(fmt($0)) кадров" },
             cond: { .framesInDayAtLeast($0) }, rewards: [10_000: .appIcon("icon_alt_neon")])
       + fam("apps", "badge_apps", .breadth,
-            [5, 10, 25, 50, 75, 100, 150, 200],
+            [5, 10, 15, 25, 40, 50, 65, 75, 100, 125, 150, 200],
             name: { "\($0) приложений" }, detail: { "\($0) разных приложений за всё время" },
             cond: { .distinctAppsAllTimeAtLeast($0) }, rewards: [50: .appIcon("icon_alt_aurora")])
       + fam("appsday", "badge_apps", .breadth,
-            [5, 8, 12, 16, 20, 30],
+            [3, 5, 8, 12, 16, 20, 25, 30],
             name: { "\($0) приложений за день" }, detail: { "За один день — \($0) разных приложений" },
             cond: { .distinctAppsInDayAtLeast($0) })
       + fam("domains", "badge_tabs", .breadth,
-            [10, 25, 50, 100, 200, 400],
+            [10, 25, 50, 75, 100, 150, 200, 300, 400],
             name: { "\($0) сайтов" }, detail: { "\($0) разных доменов в истории" },
             cond: { .browserDomainsAtLeast($0) }, rewards: [50: .menuBarIcon("crown.fill")])
       + fam("search", "badge_magnifier", .ask,
-            [1, 10, 25, 50, 100, 250, 500, 1_000],
+            [1, 5, 10, 25, 50, 100, 200, 350, 500, 750, 1_000],
             name: { "\(fmt($0)) поисков" }, detail: { "\(fmt($0)) поисков по истории" },
             cond: { .searchesAtLeast($0) })
       + fam("ask", "badge_bubble", .ask,
-            [1, 10, 25, 50, 100, 250, 500],
+            [1, 5, 10, 25, 50, 100, 200, 350, 500],
             name: { "\(fmt($0)) вопросов" }, detail: { "\(fmt($0)) вопросов к своей памяти" },
             cond: { .questionsAtLeast($0) }, rewards: [50: .menuBarIcon("eye.fill")])
       + fam("carto", "badge_brain", .cartographer,
-            [1, 3, 7, 14, 30, 60, 100],
+            [1, 3, 7, 14, 21, 30, 45, 60, 90, 100],
             name: { "\($0) дней с Картографом" }, detail: { "Картограф давал инсайты \($0) раз" },
             cond: { .cartographerRunsAtLeast($0) }, rewards: [1: .theme(.neon), 7: .theme(.midnight)])
       + fam("switch", "badge_spiral", .fun,
-            [50, 100, 200, 400, 800],
+            [50, 100, 150, 200, 300, 500, 800],
             name: { "\($0) переключений за день" }, detail: { "\($0) смен контекста за день — белка в колесе" },
             cond: { .switchesInDayAtLeast($0) }, secret: true, rewards: [200: .menuBarIcon("bolt.fill")])
       + fam("deep", "badge_anchor", .focus,
-            [30, 60, 90, 120, 180, 300, 480],
+            [15, 30, 45, 60, 90, 120, 180, 240, 300, 480],
             name: { "\($0) мин в одном приложении" }, detail: { "Непрерывно \($0) минут в одном приложении" },
             cond: { .singleAppMinutesAtLeast($0) })
       + fam("acts", "badge_timeline", .cartographer,
-            [1, 10, 50, 100],
+            [1, 5, 10, 25, 50, 100],
             name: { "Активности ×\($0)" }, detail: { "Открыл «День в активностях» \($0) раз" },
             cond: { .activitiesOpenedAtLeast($0) })
 
@@ -186,6 +186,27 @@ enum AchievementCatalog {
         s("fun.marathon", "Без тормозов",    "40 000 кадров за сутки — ты вообще спал?","badge_stopwatch", .red, .fun,   .framesInDayAtLeast(40_000), secret: true),
         s("fun.hermit",   "Однолюб",         "8 часов в одном приложении — преданность","badge_anchor", .blue,   .fun,   .singleAppMinutesAtLeast(480), secret: true),
         s("fun.year",     "Под наблюдением год","365 дней подряд. Глаз гордится.",     "badge_flame",   .gold,    .fun,   .streakAtLeast(365), secret: true),
+        s("fun.plushkin", "Цифровой Плюшкин","300 000 кадров — всё в дом",           "badge_trophy",  .amber,   .fun,   .framesAtLeast(300_000), secret: true),
+        s("fun.terabyte", "Терабайт памяти", "3 миллиона кадров. Серьёзно?",         "badge_trophy",  .diamond, .fun,   .framesAtLeast(3_000_000), secret: true),
+        s("fun.streak11", "Чёртова дюжина",  "11 дней подряд — без суеверий",        "badge_flame",   .bronze,  .fun,   .streakAtLeast(11), secret: true),
+        s("fun.streak50", "Полста",          "50 дней подряд",                       "badge_flame",   .silver,  .fun,   .streakAtLeast(50), secret: true),
+        s("fun.search75", "Сыщик",           "75 поисков по истории",                "badge_magnifier", .teal,  .fun,   .searchesAtLeast(75), secret: true),
+        s("fun.search300","Архивный детектив","300 поисков",                         "badge_magnifier", .blue,  .fun,   .searchesAtLeast(300), secret: true),
+        s("fun.ask15",    "Любопытный",      "15 вопросов к памяти",                 "badge_bubble",  .green,   .fun,   .questionsAtLeast(15), secret: true),
+        s("fun.ask150",   "Допрос с пристрастием","150 вопросов",                    "badge_bubble",  .violet,  .fun,   .questionsAtLeast(150), secret: true),
+        s("fun.dom60",    "Серфингист",      "60 разных сайтов",                     "badge_tabs",    .teal,    .fun,   .browserDomainsAtLeast(60), secret: true),
+        s("fun.dom250",   "Интернет-всеяд",  "250 сайтов в истории",                 "badge_tabs",    .amber,   .fun,   .browserDomainsAtLeast(250), secret: true),
+        s("fun.apps30",   "Швейцарский нож", "30 приложений за всё время",           "badge_apps",    .green,   .fun,   .distinctAppsAllTimeAtLeast(30), secret: true),
+        s("fun.apps90",   "Цифровой кочевник","90 приложений",                       "badge_apps",    .blue,    .fun,   .distinctAppsAllTimeAtLeast(90), secret: true),
+        s("fun.deep200",  "Залип капитально","200 минут в одном приложении",         "badge_anchor",  .blue,    .fun,   .singleAppMinutesAtLeast(200), secret: true),
+        s("fun.deep360",  "6 часов кряду",   "360 минут не отрываясь",               "badge_anchor",  .violet,  .fun,   .singleAppMinutesAtLeast(360), secret: true),
+        s("fun.burst25k", "Конвейер",        "25 000 кадров за день",                "badge_stopwatch", .amber, .fun,   .framesInDayAtLeast(25_000), secret: true),
+        s("fun.burst50k", "Не остановить",   "50 000 кадров за день",                "badge_stopwatch", .red,   .fun,   .framesInDayAtLeast(50_000), secret: true),
+        s("fun.sw250",    "Расфокус-мастер", "250 переключений за день",             "badge_spiral",  .magenta, .fun,   .switchesInDayAtLeast(250), secret: true),
+        s("fun.sw1000",   "Тысяча окон",     "1000 переключений за день",            "badge_spiral",  .red,     .fun,   .switchesInDayAtLeast(1000), secret: true),
+        s("fun.carto25",  "Самокопатель",    "25 дней инсайтов Картографа",          "badge_brain",   .magenta, .fun,   .cartographerRunsAtLeast(25), secret: true),
+        s("fun.days100",  "Сотня дней памяти","100 разных дней с записью",           "badge_calendar", .gold,   .fun,   .activeDaysAtLeast(100), secret: true),
+        s("fun.age500",   "Древняя память",  "Памяти больше 500 дней",               "badge_calendar", .diamond, .fun,  .memoryAgeDaysAtLeast(500), secret: true),
     ]
 
     // MARK: — генератор семьи
