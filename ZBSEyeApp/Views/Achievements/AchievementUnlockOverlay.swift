@@ -11,14 +11,15 @@ struct AchievementUnlockOverlay: View {
     var body: some View {
         VStack(spacing: 14) {
             Text("Достижение открыто")
-                .font(.caption).textCase(.uppercase).tracking(1.5)
-                .foregroundStyle(.secondary)
+                .font(.caption.weight(.bold)).textCase(.uppercase).tracking(1.6)
+                .foregroundStyle(achievement.tint.color)          // акцент тира — контрастно
             AchievementBadgeView(achievement: achievement, unlocked: true, size: 132)
                 .scaleEffect(appear ? 1 : 0.55)
                 .rotationEffect(.degrees(appear || reduceMotion ? 0 : -8))
             Text(achievement.title).font(.title2.bold()).multilineTextAlignment(.center)
+                .foregroundStyle(.white)
             Text(achievement.detail).font(.callout)
-                .foregroundStyle(.secondary).multilineTextAlignment(.center)
+                .foregroundStyle(.white.opacity(0.82)).multilineTextAlignment(.center)   // не серый
             if let reward = achievement.reward.label {
                 Label("\(reward) — в «Оформлении»", systemImage: "gift.fill")
                     .font(.caption.bold()).foregroundStyle(achievement.tint.color)
@@ -27,12 +28,23 @@ struct AchievementUnlockOverlay: View {
         }
         .padding(28)
         .frame(maxWidth: 340)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        // тёмная непрозрачная панель — всегда читаемо поверх любого (яркого) фото на таймлайне
+        .background {
+            ZStack {
+                RoundedRectangle(cornerRadius: 24, style: .continuous).fill(.ultraThinMaterial)
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(LinearGradient(colors: [Color(white: 0.11), Color(white: 0.04)],
+                                         startPoint: .top, endPoint: .bottom).opacity(0.96))
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(achievement.tint.color.opacity(0.10))    // лёгкий тир-вош
+            }
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .strokeBorder(achievement.tint.color.opacity(0.55), lineWidth: 1)
+                .strokeBorder(achievement.tint.color.opacity(0.6), lineWidth: 1)
         )
-        .shadow(color: achievement.tint.color.opacity(0.45), radius: 34)
+        .shadow(color: .black.opacity(0.5), radius: 24, y: 8)
+        .shadow(color: achievement.tint.color.opacity(0.4), radius: 34)
         .scaleEffect(appear ? 1 : 0.9)
         .opacity(appear ? 1 : 0)
         .onAppear {
