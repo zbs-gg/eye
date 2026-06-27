@@ -39,7 +39,7 @@ enum AchievementTint: String, Sendable {
     }
 }
 
-// MARK: — условие открытия (data-driven, Sendable; вычисляется по AchievementStats)
+// MARK: — условие открытия
 
 enum AchievementCondition: Sendable {
     case framesAtLeast(Int)
@@ -52,10 +52,10 @@ enum AchievementCondition: Sendable {
     case browserDomainsAtLeast(Int)
     case switchesInDayAtLeast(Int)
     case singleAppMinutesAtLeast(Int)
-    case nightActivity            // активность 0:00–5:00
-    case earlyActivity            // активность 5:00–7:00
+    case nightActivity
+    case earlyActivity
     case weekendActivity
-    case focusDay                 // день с ≥1000 кадров и мало переключений
+    case focusDay
     case searchesAtLeast(Int)
     case questionsAtLeast(Int)
     case cartographerRunsAtLeast(Int)
@@ -96,77 +96,131 @@ enum AchievementCondition: Sendable {
 struct Achievement: Identifiable, Sendable {
     let id: String
     let title: String
-    let detail: String          // как открыть / что значит
-    let badge: String           // имя ассета-бейджа (сгенерированная иконка)
+    let detail: String
+    let badge: String
     let tint: AchievementTint
     let category: AchievementCategory
     let condition: AchievementCondition
-    let secret: Bool            // скрытое (показываем «???» пока закрыто) — для ироничных
-    let reward: AchievementReward   // что открывает (тема / иконка app / значок меню-бара)
+    let secret: Bool
+    let reward: AchievementReward
 }
 
-// MARK: — каталог
+// MARK: — каталог (тир-семьи + специалы ≈ 180)
 
 enum AchievementCatalog {
-    /// Текущий срез (~25). Расширяемо до 100 — добавляй строки. Тиры одной семьи делят бейдж,
-    /// различаются tint'ом. `badge` — имя ассета (генерится через Nano Banana Pro).
-    static let all: [Achievement] = [
-        // ── Память (объём) ──
-        a("memory.1k",   "Первая память",   "1 000 моментов в твоей памяти",        "badge_star",     .bronze,  .memory, .framesAtLeast(1_000)),
-        a("memory.10k",  "Архивариус",      "10 000 моментов",                       "badge_star",     .silver,  .memory, .framesAtLeast(10_000), reward: .menuBarIcon("sparkles")),
-        a("memory.100k", "Хранитель",       "100 000 моментов",                      "badge_star",     .gold,    .memory, .framesAtLeast(100_000), reward: .theme(.gold)),
-        a("memory.1m",   "Вечная память",   "1 000 000 моментов — ты не забываешь ничего", "badge_trophy", .diamond, .memory, .framesAtLeast(1_000_000), reward: .theme(.magical)),
+    static let all: [Achievement] = specials + families
 
-        // ── Постоянство (стрик) ──
-        a("streak.7",    "Неделя в потоке", "7 дней подряд с записью",               "badge_flame",    .bronze,  .streak, .streakAtLeast(7)),
-        a("streak.30",   "Месяц без пропусков", "30 дней подряд",                    "badge_flame",    .gold,    .streak, .streakAtLeast(30), reward: .theme(.frost)),
-        a("streak.100",  "Сотня дней",      "100 дней подряд — машина",              "badge_flame",    .blue,    .streak, .streakAtLeast(100), reward: .appIcon("icon_alt_gold")),
+    // ── тир-семьи (количественные, генерируются) ──
+    private static let families: [Achievement] =
+        fam("frames", "badge_star", .memory,
+            [1_000, 2_500, 5_000, 10_000, 20_000, 35_000, 50_000, 75_000, 100_000, 200_000, 350_000, 500_000, 750_000, 1_000_000, 2_500_000, 5_000_000],
+            name: { "\(fmt($0)) моментов" }, detail: { "В памяти \(fmt($0)) кадров" },
+            cond: { .framesAtLeast($0) }, rewards: [100_000: .theme(.gold), 1_000_000: .theme(.magical)])
+      + fam("streak", "badge_flame", .streak,
+            [3, 5, 7, 10, 14, 21, 30, 45, 60, 75, 100, 150, 200, 365],
+            name: { "\($0) дней подряд" }, detail: { "Запись \($0) дней подряд без пропусков" },
+            cond: { .streakAtLeast($0) }, rewards: [30: .theme(.frost), 100: .appIcon("icon_alt_gold")])
+      + fam("days", "badge_calendar", .memory,
+            [1, 3, 7, 14, 30, 60, 100, 150, 200, 300, 365],
+            name: { "\($0) дней с памятью" }, detail: { "\($0) разных дней с записью" },
+            cond: { .activeDaysAtLeast($0) })
+      + fam("age", "badge_calendar", .memory,
+            [1, 7, 30, 90, 180, 365, 730],
+            name: { "Памяти \($0) дн." }, detail: { "Самый ранний кадр старше \($0) дней" },
+            cond: { .memoryAgeDaysAtLeast($0) })
+      + fam("burst", "badge_stopwatch", .focus,
+            [1_000, 2_500, 5_000, 10_000, 20_000, 40_000],
+            name: { "\(fmt($0)) кадров за день" }, detail: { "За один день — \(fmt($0)) кадров" },
+            cond: { .framesInDayAtLeast($0) }, rewards: [10_000: .appIcon("icon_alt_neon")])
+      + fam("apps", "badge_apps", .breadth,
+            [5, 10, 25, 50, 75, 100, 150, 200],
+            name: { "\($0) приложений" }, detail: { "\($0) разных приложений за всё время" },
+            cond: { .distinctAppsAllTimeAtLeast($0) }, rewards: [50: .appIcon("icon_alt_aurora")])
+      + fam("appsday", "badge_apps", .breadth,
+            [5, 8, 12, 16, 20, 30],
+            name: { "\($0) приложений за день" }, detail: { "За один день — \($0) разных приложений" },
+            cond: { .distinctAppsInDayAtLeast($0) })
+      + fam("domains", "badge_tabs", .breadth,
+            [10, 25, 50, 100, 200, 400],
+            name: { "\($0) сайтов" }, detail: { "\($0) разных доменов в истории" },
+            cond: { .browserDomainsAtLeast($0) }, rewards: [50: .menuBarIcon("crown.fill")])
+      + fam("search", "badge_magnifier", .ask,
+            [1, 10, 25, 50, 100, 250, 500, 1_000],
+            name: { "\(fmt($0)) поисков" }, detail: { "\(fmt($0)) поисков по истории" },
+            cond: { .searchesAtLeast($0) })
+      + fam("ask", "badge_bubble", .ask,
+            [1, 10, 25, 50, 100, 250, 500],
+            name: { "\(fmt($0)) вопросов" }, detail: { "\(fmt($0)) вопросов к своей памяти" },
+            cond: { .questionsAtLeast($0) }, rewards: [50: .menuBarIcon("eye.fill")])
+      + fam("carto", "badge_brain", .cartographer,
+            [1, 3, 7, 14, 30, 60, 100],
+            name: { "\($0) дней с Картографом" }, detail: { "Картограф давал инсайты \($0) раз" },
+            cond: { .cartographerRunsAtLeast($0) }, rewards: [1: .theme(.neon), 7: .theme(.midnight)])
+      + fam("switch", "badge_spiral", .fun,
+            [50, 100, 200, 400, 800],
+            name: { "\($0) переключений за день" }, detail: { "\($0) смен контекста за день — белка в колесе" },
+            cond: { .switchesInDayAtLeast($0) }, secret: true, rewards: [200: .menuBarIcon("bolt.fill")])
+      + fam("deep", "badge_anchor", .focus,
+            [30, 60, 90, 120, 180, 300, 480],
+            name: { "\($0) мин в одном приложении" }, detail: { "Непрерывно \($0) минут в одном приложении" },
+            cond: { .singleAppMinutesAtLeast($0) })
+      + fam("acts", "badge_timeline", .cartographer,
+            [1, 10, 50, 100],
+            name: { "Активности ×\($0)" }, detail: { "Открыл «День в активностях» \($0) раз" },
+            cond: { .activitiesOpenedAtLeast($0) })
 
-        // ── Возраст памяти ──
-        a("age.1",       "День прожит",     "Твоей памяти больше суток",             "badge_calendar", .teal,    .memory, .memoryAgeDaysAtLeast(1)),
-        a("age.30",      "Ветеран памяти",  "Памяти больше месяца",                  "badge_calendar", .gold,    .memory, .memoryAgeDaysAtLeast(30)),
-
-        // ── Интенсивность ──
-        a("intense.day", "Марафонец",       "10 000 кадров за один день",            "badge_stopwatch", .amber,  .focus,  .framesInDayAtLeast(10_000), reward: .appIcon("icon_alt_neon")),
-
-        // ── Время суток ──
-        a("time.night",  "Ночная сова",     "Активность после полуночи",             "badge_owl",      .violet,  .time,   .nightActivity, reward: .menuBarIcon("moon.stars.fill")),
-        a("time.early",  "Ранняя пташка",   "Активность до 7 утра",                  "badge_sunrise",  .amber,   .time,   .earlyActivity),
-        a("time.weekend","Призрак выходного","Работал в выходной — отдыхать не пробовал?", "badge_ghost", .teal, .fun, .weekendActivity, secret: true),
-
-        // ── Широта ──
-        a("breadth.10",  "Многостаночник",  "10 разных приложений за день",          "badge_apps",     .green,   .breadth, .distinctAppsInDayAtLeast(10)),
-        a("breadth.50",  "Исследователь",   "50 разных приложений за всё время",     "badge_apps",     .blue,    .breadth, .distinctAppsAllTimeAtLeast(50), reward: .appIcon("icon_alt_aurora")),
-        a("breadth.tabs","Коллекционер вкладок","30 разных сайтов за день",          "badge_tabs",     .blue,    .breadth, .browserDomainsAtLeast(30), reward: .menuBarIcon("crown.fill")),
-
-        // ── Фокус / характер ──
-        a("focus.day",   "Глубокий фокус",  "День с кучей работы и почти без переключений", "badge_target", .red, .focus, .focusDay),
-        a("focus.switch","Карусель контекста","200 переключений за день — белка в колесе", "badge_spiral", .magenta, .fun, .switchesInDayAtLeast(200), secret: true, reward: .menuBarIcon("bolt.fill")),
-        a("focus.deep",  "Глубокая работа", "3 часа в одном приложении без отрыва",  "badge_anchor",   .blue,    .focus,  .singleAppMinutesAtLeast(180)),
-
-        // ── Поиск и вопросы ──
-        a("ask.first",   "Первый вопрос",   "Спросил свою память впервые",           "badge_bubble",   .teal,    .ask,    .questionsAtLeast(1)),
-        a("ask.50",      "Дознаватель",     "50 вопросов к памяти",                  "badge_bubble",   .violet,  .ask,    .questionsAtLeast(50), reward: .menuBarIcon("eye.fill")),
-        a("ask.search",  "Ищейка",          "100 поисков по истории",                "badge_magnifier", .blue,   .ask,    .searchesAtLeast(100)),
-
-        // ── Картограф ──
-        a("carto.first", "Картограф пробудился", "Первый дневной инсайт",            "badge_brain",    .violet,  .cartographer, .cartographerRunsAtLeast(1), reward: .theme(.neon)),
-        a("carto.7",     "Под наблюдением",  "7 дней с инсайтами Картографа",        "badge_brain",    .magenta, .cartographer, .cartographerRunsAtLeast(7), reward: .theme(.midnight)),
-
-        // ── Активности ──
-        a("act.first",   "Хронист дня",     "Открыл «День в активностях»",           "badge_timeline", .blue,    .cartographer, .activitiesOpenedAtLeast(1)),
-
-        // ── Контроль / приватность ──
-        a("ctrl.clean",  "Чистильщик",      "Стёр период истории — твоё право",      "badge_broom",    .lime,    .control, .deletedPeriod),
-        a("ctrl.disk",   "На свой диск",    "Перенёс память на внешний SSD",         "badge_drive",    .blue,    .control, .relocated),
-        a("ctrl.cloud",  "Облачный страж",  "Включил сжатый iCloud-бэкап",           "badge_cloud",    .teal,    .control, .icloudBackup, reward: .appIcon("icon_alt_frost")),
+    // ── специалы (флаги/ироничные/контроль/награды) ──
+    private static let specials: [Achievement] = [
+        s("time.night",   "Ночная сова",     "Активность после полуночи",            "badge_owl",     .violet,  .time,   .nightActivity, reward: .menuBarIcon("moon.stars.fill")),
+        s("time.early",   "Ранняя пташка",   "Активность до 7 утра",                 "badge_sunrise", .amber,   .time,   .earlyActivity),
+        s("time.weekend", "Призрак выходного","Работал в выходной — отдыхать не пробовал?", "badge_ghost", .teal, .fun, .weekendActivity, secret: true),
+        s("focus.zen",    "Дзен-фокус",      "День без суеты: много работы, почти без переключений", "badge_target", .red, .focus, .focusDay),
+        s("ctrl.clean",   "Чистильщик",      "Стёр период истории — твоё право",     "badge_broom",   .lime,    .control, .deletedPeriod),
+        s("ctrl.disk",    "На свой диск",    "Перенёс память на внешний SSD",        "badge_drive",   .blue,    .control, .relocated),
+        s("ctrl.cloud",   "Облачный страж",  "Включил сжатый iCloud-бэкап",          "badge_cloud",   .teal,    .control, .icloudBackup, reward: .appIcon("icon_alt_frost")),
+        // ироничные (используют те же сигналы, иные пороги/рамка — «характер»)
+        s("fun.insomniac","Бессонница",      "Опять не спишь? Кадры идут за полночь.", "badge_owl",   .magenta, .fun,   .nightActivity, secret: true),
+        s("fun.tabs",     "Вкладочный хомяк","Сайтов больше, чем здравого смысла",    "badge_tabs",    .amber,   .fun,   .browserDomainsAtLeast(100), secret: true),
+        s("fun.juggler",  "Многорукий",      "16 приложений за день — ты осьминог?",  "badge_apps",    .green,   .fun,   .distinctAppsInDayAtLeast(16), secret: true),
+        s("fun.machine",  "Машина памяти",   "Полмиллиона кадров. Тебя пора в музей.","badge_trophy",  .diamond, .fun,   .framesAtLeast(500_000), secret: true),
+        s("fun.marathon", "Без тормозов",    "40 000 кадров за сутки — ты вообще спал?","badge_stopwatch", .red, .fun,   .framesInDayAtLeast(40_000), secret: true),
+        s("fun.hermit",   "Однолюб",         "8 часов в одном приложении — преданность","badge_anchor", .blue,   .fun,   .singleAppMinutesAtLeast(480), secret: true),
+        s("fun.year",     "Под наблюдением год","365 дней подряд. Глаз гордится.",     "badge_flame",   .gold,    .fun,   .streakAtLeast(365), secret: true),
     ]
 
-    private static func a(_ id: String, _ title: String, _ detail: String, _ badge: String,
+    // MARK: — генератор семьи
+
+    private static func fam(_ key: String, _ badge: String, _ category: AchievementCategory,
+                            _ thresholds: [Int], name: (Int) -> String, detail: (Int) -> String,
+                            cond: (Int) -> AchievementCondition, secret: Bool = false,
+                            rewards: [Int: AchievementReward] = [:]) -> [Achievement] {
+        let n = thresholds.count
+        return thresholds.enumerated().map { i, t in
+            Achievement(id: "\(key).\(t)", title: name(t), detail: detail(t), badge: badge,
+                        tint: tierTint(i, n), category: category, condition: cond(t),
+                        secret: secret, reward: rewards[t] ?? .none)
+        }
+    }
+
+    private static func s(_ id: String, _ title: String, _ detail: String, _ badge: String,
                           _ tint: AchievementTint, _ category: AchievementCategory,
                           _ condition: AchievementCondition, secret: Bool = false,
                           reward: AchievementReward = .none) -> Achievement {
         Achievement(id: id, title: title, detail: detail, badge: badge, tint: tint,
                     category: category, condition: condition, secret: secret, reward: reward)
+    }
+
+    /// Эскалация цвета по индексу тира.
+    private static func tierTint(_ i: Int, _ count: Int) -> AchievementTint {
+        let ramp: [AchievementTint] = [.bronze, .silver, .teal, .green, .blue, .violet, .amber, .gold, .magenta, .diamond]
+        guard count > 1 else { return .gold }
+        let idx = Int(round(Double(i) / Double(count - 1) * Double(ramp.count - 1)))
+        return ramp[min(ramp.count - 1, idx)]
+    }
+
+    /// «1 000» / «1 200 000» с разрядкой.
+    private static func fmt(_ n: Int) -> String {
+        let f = NumberFormatter(); f.numberStyle = .decimal; f.groupingSeparator = " "
+        return f.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 }
