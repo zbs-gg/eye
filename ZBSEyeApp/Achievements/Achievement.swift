@@ -103,6 +103,7 @@ struct Achievement: Identifiable, Sendable {
     let condition: AchievementCondition
     let secret: Bool
     let reward: AchievementReward
+    let tierStars: Int          // 1–5 для тиров семьи (прогресс звёздами), 0 — без звёзд
 }
 
 // MARK: — каталог (тир-семьи + специалы ≈ 180)
@@ -217,9 +218,10 @@ enum AchievementCatalog {
                             rewards: [Int: AchievementReward] = [:]) -> [Achievement] {
         let n = thresholds.count
         return thresholds.enumerated().map { i, t in
-            Achievement(id: "\(key).\(t)", title: name(t), detail: detail(t), badge: badge,
+            let stars = n > 1 ? min(5, 1 + Int(round(Double(i) / Double(n - 1) * 4))) : 3
+            return Achievement(id: "\(key).\(t)", title: name(t), detail: detail(t), badge: badge,
                         tint: tierTint(i, n), category: category, condition: cond(t),
-                        secret: secret, reward: rewards[t] ?? .none)
+                        secret: secret, reward: rewards[t] ?? .none, tierStars: stars)
         }
     }
 
@@ -228,7 +230,8 @@ enum AchievementCatalog {
                           _ condition: AchievementCondition, secret: Bool = false,
                           reward: AchievementReward = .none) -> Achievement {
         Achievement(id: id, title: title, detail: detail, badge: badge, tint: tint,
-                    category: category, condition: condition, secret: secret, reward: reward)
+                    category: category, condition: condition, secret: secret, reward: reward,
+                    tierStars: 0)
     }
 
     /// Эскалация цвета по индексу тира.

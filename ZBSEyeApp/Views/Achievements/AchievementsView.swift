@@ -11,26 +11,46 @@ struct AchievementBadgeView: View {
     private var hasAsset: Bool { NSImage(named: achievement.badge) != nil }
 
     var body: some View {
-        ZStack {
-            if hasAsset {
-                Image(achievement.badge)
-                    .resizable().scaledToFit()
-                    .frame(width: size, height: size)
-                    .saturation(unlocked ? 1 : 0)
-                    .opacity(unlocked ? 1 : 0.30)
-            } else {
-                fallback
+        VStack(spacing: max(3, size * 0.05)) {
+            ZStack {
+                RoundedRectangle(cornerRadius: size * 0.2, style: .continuous)
+                    .fill(LinearGradient(colors: cardColors, startPoint: .top, endPoint: .bottom))
+                if hasAsset {
+                    Image(achievement.badge).resizable().scaledToFit()
+                        .padding(size * 0.02)
+                        .saturation(unlocked ? 1 : 0)
+                        .opacity(unlocked ? 1 : 0.5)
+                } else {
+                    fallback
+                }
+                if !unlocked {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: size * 0.22, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .shadow(color: .black.opacity(0.6), radius: 3)
+                }
             }
-            if !unlocked {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: size * 0.24, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.75))
-                    .shadow(color: .black.opacity(0.6), radius: 3)
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.2, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: size * 0.2, style: .continuous)
+                .strokeBorder(.white.opacity(unlocked ? 0.10 : 0.04), lineWidth: 1))
+            .shadow(color: unlocked ? achievement.tint.color.opacity(0.35) : .clear, radius: size * 0.09)
+
+            if achievement.tierStars > 0 {
+                HStack(spacing: size * 0.02) {
+                    ForEach(0..<min(5, achievement.tierStars), id: \.self) { _ in
+                        Image(systemName: "star.fill").font(.system(size: size * 0.085))
+                            .foregroundStyle(unlocked ? achievement.tint.color : Color.gray.opacity(0.4))
+                    }
+                }
             }
         }
-        .frame(width: size, height: size)
-        .shadow(color: unlocked ? achievement.tint.color.opacity(0.45) : .clear,
-                radius: unlocked ? size * 0.12 : 0)
+    }
+
+    private var cardColors: [Color] {
+        unlocked
+            ? [Color(white: 0.14), achievement.tint.color.opacity(0.18), Color(white: 0.06)]
+            : [Color(white: 0.12), Color(white: 0.05)]
     }
 
     /// Запасной бейдж в стиле иконки: тёмный squircle + кант + SF-символ в цвете (пока ассет не нарезан).
@@ -158,6 +178,12 @@ private struct AchievementsGallery: View {
                     .font(.caption).multilineTextAlignment(.center)
                     .foregroundStyle(unlocked ? .primary : .secondary)
                     .lineLimit(2).frame(height: 30)
+                if unlocked, let d = store.unlockedDate(a.id) {
+                    Text(d.formatted(date: .abbreviated, time: .omitted))
+                        .font(.caption2).foregroundStyle(a.tint.color.opacity(0.9))
+                } else if !hidden {
+                    Text(" ").font(.caption2)   // выравнивание высоты
+                }
             }
         }
         .buttonStyle(.plain)
