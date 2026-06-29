@@ -16,9 +16,9 @@ struct AchievementUnlockOverlay: View {
             AchievementBadgeView(achievement: achievement, unlocked: true, size: 132)
                 .scaleEffect(appear ? 1 : 0.55)
                 .rotationEffect(.degrees(appear || reduceMotion ? 0 : -8))
-            Text(achievement.title).font(.title2.bold()).multilineTextAlignment(.center)
+            Text(LocalizedStringKey(achievement.title)).font(.title2.bold()).multilineTextAlignment(.center)
                 .foregroundStyle(.white)
-            Text(achievement.detail).font(.callout)
+            Text(LocalizedStringKey(achievement.detail)).font(.callout)
                 .foregroundStyle(.white.opacity(0.82)).multilineTextAlignment(.center)   // not gray
             if let reward = achievement.reward.label {
                 Label("\(reward) — in “Appearance”", systemImage: "gift.fill")

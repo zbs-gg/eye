@@ -161,7 +161,7 @@ private struct AchievementsGallery: View {
                     let items = store.catalog.filter { $0.category == cat }
                     if !items.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
-                            Text(cat).font(.headline)
+                            Text(LocalizedStringKey(cat)).font(.headline)
                             LazyVGrid(columns: columns, alignment: .leading, spacing: 18) {
                                 ForEach(items) { a in cell(a) }
                             }
@@ -200,7 +200,7 @@ private struct AchievementsGallery: View {
         } label: {
             VStack(spacing: 8) {
                 AchievementBadgeView(achievement: a, unlocked: unlocked, size: 116)
-                Text(hidden ? "???" : a.title)
+                (hidden ? Text(verbatim: "???") : Text(LocalizedStringKey(a.title)))
                     .font(.caption).multilineTextAlignment(.center)
                     .foregroundStyle(unlocked ? .primary : .secondary)
                     .lineLimit(2).frame(height: 30)
@@ -221,8 +221,8 @@ private struct AchievementsGallery: View {
         return VStack(spacing: 18) {
             AchievementBadgeView(achievement: a, unlocked: unlocked, size: 160)
                 .padding(.top, 10)
-            Text(hidden ? "Secret achievement" : a.title).font(.title2.bold())
-            Text(hidden ? "Unlock it — and you'll find out what it's for." : a.detail)
+            (hidden ? Text("Secret achievement") : Text(LocalizedStringKey(a.title))).font(.title2.bold())
+            (hidden ? Text("Unlock it — and you'll find out what it's for.") : Text(LocalizedStringKey(a.detail)))
                 .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             if unlocked, let d = store.unlockedDate(a.id) {

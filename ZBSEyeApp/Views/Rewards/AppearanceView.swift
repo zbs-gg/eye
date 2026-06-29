@@ -95,7 +95,7 @@ struct AppearanceView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            Text(t.title).font(.callout.weight(selected ? .semibold : .regular))
+            Text(LocalizedStringKey(t.title)).font(.callout.weight(selected ? .semibold : .regular))
             if let lockHint { Text(lockHint).font(.caption2).foregroundStyle(.secondary).lineLimit(2) }
         }
         .contentShape(Rectangle())
@@ -139,7 +139,7 @@ struct AppearanceView: View {
             }
             .frame(width: 72, height: 72)
             .saturation(unlocked ? 1 : 0.2)
-            Text(title).font(.caption).foregroundStyle(unlocked ? .primary : .secondary).lineLimit(1)
+            Text(LocalizedStringKey(title)).font(.caption).foregroundStyle(unlocked ? .primary : .secondary).lineLimit(1)
             if let lockHint { Text(lockHint).font(.caption2).foregroundStyle(.secondary).lineLimit(2) }
         }
         .frame(width: 110)
@@ -167,7 +167,7 @@ struct AppearanceView: View {
                                 Image(systemName: "lock.fill").font(.caption).foregroundStyle(.white.opacity(0.8))
                             }
                         }
-                        Text(item.title).font(.caption2).foregroundStyle(unlocked ? .primary : .secondary).lineLimit(1)
+                        Text(LocalizedStringKey(item.title)).font(.caption2).foregroundStyle(unlocked ? .primary : .secondary).lineLimit(1)
                     }
                     .contentShape(Rectangle())
                     .onTapGesture { if unlocked { rewards.menuBarIcon = item.symbol } }
@@ -179,7 +179,7 @@ struct AppearanceView: View {
     // ── helpers ──
     private func section<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(title).font(.headline)
+            Text(LocalizedStringKey(title)).font(.headline)
             content()
         }
     }
