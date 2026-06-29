@@ -1,0 +1,2125 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    " ": {
+      "localizations": {}
+    },
+    "%1$@ media + %2$@ index": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ медиа + %2$@ индекс"
+          }
+        }
+      }
+    },
+    "%@ moments": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ моментов"
+          }
+        }
+      }
+    },
+    "%1$@ — %2$@": {
+      "localizations": {}
+    },
+    "%@ — in “Appearance”": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ — в «Оформлении»"
+          }
+        }
+      }
+    },
+    "%lld": {
+      "localizations": {}
+    },
+    "%1$lld  ·  live %2$lld, imported %3$lld": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld  ·  вживую %2$lld, импортировано %3$lld"
+          }
+        }
+      }
+    },
+    "%lld GB": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld ГБ"
+          }
+        }
+      }
+    },
+    "%1$lld activities · %2$@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld событий · %2$@"
+          }
+        }
+      }
+    },
+    "%lld d.": {
+      "localizations": {}
+    },
+    "%lld frames": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld кадров"
+          }
+        }
+      }
+    },
+    "%1$lld of %2$lld unlocked": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld из %2$lld открыто"
+          }
+        }
+      }
+    },
+    "%lld results": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld результатов"
+          }
+        }
+      }
+    },
+    "%1$lld sessions · %2$lld frames · %3$@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld сессий · %2$lld кадров · %3$@"
+          }
+        }
+      }
+    },
+    "%lld%%": {
+      "localizations": {}
+    },
+    "%lld×": {
+      "localizations": {}
+    },
+    "(no transcript — found by time)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(без расшифровки — найдено по времени)"
+          }
+        }
+      }
+    },
+    "A local LLM is required": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нужна локальная LLM"
+          }
+        }
+      }
+    },
+    "Achievement unlocked": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Достижение получено"
+          }
+        }
+      }
+    },
+    "Achievements": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Достижения"
+          }
+        }
+      }
+    },
+    "Address": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Адрес"
+          }
+        }
+      }
+    },
+    "All history": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вся история"
+          }
+        }
+      }
+    },
+    "All history (markdown + media)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вся история (markdown + медиа)"
+          }
+        }
+      }
+    },
+    "All history (markdown)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вся история (markdown)"
+          }
+        }
+      }
+    },
+    "All milestones passed — you're among the pioneers of forever memory.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Все вехи пройдены — вы среди пионеров вечной памяти."
+          }
+        }
+      }
+    },
+    "An accidentally recorded password or a sensitive conversation can be wiped forever (files, text, indexes).": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Случайно записанный пароль или личный разговор можно стереть навсегда (файлы, текст, индексы)."
+          }
+        }
+      }
+    },
+    "Answer cut off by the length limit — rephrase it shorter for the full one.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответ обрезан по лимиту длины — переформулируйте короче, чтобы получить полный."
+          }
+        }
+      }
+    },
+    "Appearance": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оформление"
+          }
+        }
+      }
+    },
+    "Ask": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Спросить"
+          }
+        }
+      }
+    },
+    "Ask about your history…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Спросите о своей истории…"
+          }
+        }
+      }
+    },
+    "Ask your memory": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Спросите свою память"
+          }
+        }
+      }
+    },
+    "Audio": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудио"
+          }
+        }
+      }
+    },
+    "Audio and transcription": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудио и расшифровка"
+          }
+        }
+      }
+    },
+    "Auth on everything except /health (token in Keychain), bind 127.0.0.1. MCP — the next step.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Авторизация на всём, кроме /health (токен в Keychain), привязка к 127.0.0.1. MCP — следующий шаг."
+          }
+        }
+      }
+    },
+    "Auto-backup to iCloud Drive": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автобэкап в iCloud Drive"
+          }
+        }
+      }
+    },
+    "Auto-write unlocks after the first manual write — check the format by eye first (protection against junk and injections from history).": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автозапись откроется после первой ручной записи — сначала проверьте формат глазами (защита от мусора и инъекций из истории)."
+          }
+        }
+      }
+    },
+    "Automations": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматизации"
+          }
+        }
+      }
+    },
+    "Back": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Назад"
+          }
+        }
+      }
+    },
+    "Back up now": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сделать бэкап"
+          }
+        }
+      }
+    },
+    "Backups folder in Finder": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Папка бэкапов в Finder"
+          }
+        }
+      }
+    },
+    "Build preview": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Собрать превью"
+          }
+        }
+      }
+    },
+    "Build the digest automatically": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Собирать дайджест автоматически"
+          }
+        }
+      }
+    },
+    "Cancel": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отмена"
+          }
+        }
+      }
+    },
+    "Cartographer": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Картограф"
+          }
+        }
+      }
+    },
+    "Choose folder…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрать папку…"
+          }
+        }
+      }
+    },
+    "Clear conversation": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очистить переписку"
+          }
+        }
+      }
+    },
+    "Close": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Закрыть"
+          }
+        }
+      }
+    },
+    "Connections": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключения"
+          }
+        }
+      }
+    },
+    "Connections need to be set up": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нужно настроить подключения"
+          }
+        }
+      }
+    },
+    "Continue": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Продолжить"
+          }
+        }
+      }
+    },
+    "Copy token": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скопировать токен"
+          }
+        }
+      }
+    },
+    "DB error": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка БД"
+          }
+        }
+      }
+    },
+    "Data folder": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Папка с данными"
+          }
+        }
+      }
+    },
+    "Database error": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка базы данных"
+          }
+        }
+      }
+    },
+    "Database not loaded yet": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "База данных ещё не загружена"
+          }
+        }
+      }
+    },
+    "Day": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "День"
+          }
+        }
+      }
+    },
+    "Day in activities": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "День в активностях"
+          }
+        }
+      }
+    },
+    "Day summary": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сводка за день"
+          }
+        }
+      }
+    },
+    "Day's activity": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Активность за день"
+          }
+        }
+      }
+    },
+    "Delete from memory": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить из памяти"
+          }
+        }
+      }
+    },
+    "Delete permanently": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить безвозвратно"
+          }
+        }
+      }
+    },
+    "Delete…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить…"
+          }
+        }
+      }
+    },
+    "Destination": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Назначение"
+          }
+        }
+      }
+    },
+    "Don't record for 15 minutes": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не записывать 15 минут"
+          }
+        }
+      }
+    },
+    "Each milestone is a piece of life saved locally, forever.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Каждая веха — это кусочек жизни, сохранённый локально и навсегда."
+          }
+        }
+      }
+    },
+    "Endpoint": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Адрес"
+          }
+        }
+      }
+    },
+    "Endpoint is not local — in v1 only 127.0.0.1/localhost is allowed.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Адрес не локальный — в v1 разрешён только 127.0.0.1/localhost."
+          }
+        }
+      }
+    },
+    "Error": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка"
+          }
+        }
+      }
+    },
+    "Everything stays on this Mac: no cloud, accounts, or subscriptions.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Всё остаётся на этом Mac: без облака, аккаунтов и подписок."
+          }
+        }
+      }
+    },
+    "Exclude an app…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исключить приложение…"
+          }
+        }
+      }
+    },
+    "Export": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспорт"
+          }
+        }
+      }
+    },
+    "Export…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспорт…"
+          }
+        }
+      }
+    },
+    "Fetch the model list from the server": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Получить список моделей с сервера"
+          }
+        }
+      }
+    },
+    "First set up a local LLM in Connections": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сначала настройте локальную LLM в Подключениях"
+          }
+        }
+      }
+    },
+    "Forever": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Навсегда"
+          }
+        }
+      }
+    },
+    "Frame without a snapshot": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Кадр без снимка"
+          }
+        }
+      }
+    },
+    "Frames": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Кадры"
+          }
+        }
+      }
+    },
+    "Frames this session": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Кадров за сессию"
+          }
+        }
+      }
+    },
+    "Free on disk": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Свободно на диске"
+          }
+        }
+      }
+    },
+    "Get insights": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Получить инсайты"
+          }
+        }
+      }
+    },
+    "Go to a date": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перейти к дате"
+          }
+        }
+      }
+    },
+    "Got it — analyze the day": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Понял — анализирую день"
+          }
+        }
+      }
+    },
+    "History deletion": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удаление истории"
+          }
+        }
+      }
+    },
+    "History is empty": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "История пуста"
+          }
+        }
+      }
+    },
+    "Import": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импорт"
+          }
+        }
+      }
+    },
+    "Import prior history": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импорт прошлой истории"
+          }
+        }
+      }
+    },
+    "Importing…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импорт…"
+          }
+        }
+      }
+    },
+    "Initializing…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Инициализация…"
+          }
+        }
+      }
+    },
+    "Insights of the day": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Инсайты дня"
+          }
+        }
+      }
+    },
+    "Keep copies": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранить копии"
+          }
+        }
+      }
+    },
+    "Keep history": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранить историю"
+          }
+        }
+      }
+    },
+    "Last 15 minutes": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Последние 15 минут"
+          }
+        }
+      }
+    },
+    "Last 24 hours": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Последние 24 часа"
+          }
+        }
+      }
+    },
+    "Last hour": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Последний час"
+          }
+        }
+      }
+    },
+    "Later": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Позже"
+          }
+        }
+      }
+    },
+    "Launch": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запуск"
+          }
+        }
+      }
+    },
+    "Launch ZBS Eye at login": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запускать ZBS Eye при входе"
+          }
+        }
+      }
+    },
+    "Local API": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальный API"
+          }
+        }
+      }
+    },
+    "Local LLM": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальная LLM"
+          }
+        }
+      }
+    },
+    "Long day — only the longest sessions made it into the summary.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Длинный день — в сводку попали только самые длинные сессии."
+          }
+        }
+      }
+    },
+    "Media limit": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Лимит медиа"
+          }
+        }
+      }
+    },
+    "Memory milestones": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вехи памяти"
+          }
+        }
+      }
+    },
+    "Memory unavailable": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Память недоступна"
+          }
+        }
+      }
+    },
+    "Microphone": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон"
+          }
+        }
+      }
+    },
+    "Model": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель"
+          }
+        }
+      }
+    },
+    "Move…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Переместить…"
+          }
+        }
+      }
+    },
+    "No activity": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет активности"
+          }
+        }
+      }
+    },
+    "No exclusions.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Без исключений."
+          }
+        }
+      }
+    },
+    "No frame": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет кадра"
+          }
+        }
+      }
+    },
+    "No frame at this moment": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет кадра на этот момент"
+          }
+        }
+      }
+    },
+    "No frames recorded for this day. Pick a different day.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "За этот день нет записанных кадров. Выберите другой день."
+          }
+        }
+      }
+    },
+    "No limit": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Без ограничений"
+          }
+        }
+      }
+    },
+    "No microphone access — only system audio is recorded.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет доступа к микрофону — записывается только системный звук."
+          }
+        }
+      }
+    },
+    "No speech recognition — audio is recorded, but without text for search (you'll find it by time and play it back).": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Без распознавания речи — звук записывается, но без текста для поиска (найдёте по времени и прослушаете)."
+          }
+        }
+      }
+    },
+    "Nothing yet.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пока ничего."
+          }
+        }
+      }
+    },
+    "OK": {
+      "localizations": {}
+    },
+    "One-time consent": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разовое согласие"
+          }
+        }
+      }
+    },
+    "Open Connections": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть подключения"
+          }
+        }
+      }
+    },
+    "Open Settings": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть настройки"
+          }
+        }
+      }
+    },
+    "Open ZBS Eye": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть ZBS Eye"
+          }
+        }
+      }
+    },
+    "Open this moment in the timeline": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть этот момент на таймлайне"
+          }
+        }
+      }
+    },
+    "Overwritten": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перезаписано"
+          }
+        }
+      }
+    },
+    "Pause": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пауза"
+          }
+        }
+      }
+    },
+    "Paused": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приостановлено"
+          }
+        }
+      }
+    },
+    "Paused until %@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приостановлено до %@"
+          }
+        }
+      }
+    },
+    "Period": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Период"
+          }
+        }
+      }
+    },
+    "Permission granted — ZBS Eye needs a restart (that's how macOS works).": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ предоставлен — нужно перезапустить ZBS Eye (так устроен macOS)."
+          }
+        }
+      }
+    },
+    "Permissions": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешения"
+          }
+        }
+      }
+    },
+    "Permissions and diagnostics": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешения и диагностика"
+          }
+        }
+      }
+    },
+    "Play": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Воспроизвести"
+          }
+        }
+      }
+    },
+    "Playback speed": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скорость воспроизведения"
+          }
+        }
+      }
+    },
+    "Press \"Record\" and work in your apps — a scrubbable screen reel will appear here.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нажмите «Запись» и работайте в своих приложениях — здесь появится перематываемая лента экрана."
+          }
+        }
+      }
+    },
+    "Preview": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Предпросмотр"
+          }
+        }
+      }
+    },
+    "Privacy": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Конфиденциальность"
+          }
+        }
+      }
+    },
+    "Progress": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Прогресс"
+          }
+        }
+      }
+    },
+    "Quit ZBS Eye": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выйти из ZBS Eye"
+          }
+        }
+      }
+    },
+    "Re-check": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверить снова"
+          }
+        }
+      }
+    },
+    "Ready — you can start recording.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готово — можно начинать запись."
+          }
+        }
+      }
+    },
+    "Record": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись"
+          }
+        }
+      }
+    },
+    "Record and transcribe audio": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записывать и расшифровывать звук"
+          }
+        }
+      }
+    },
+    "Record system audio (calls, video, meetings)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записывать системный звук (звонки, видео, встречи)"
+          }
+        }
+      }
+    },
+    "Request": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запросить"
+          }
+        }
+      }
+    },
+    "Restart ZBS Eye": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перезапустить ZBS Eye"
+          }
+        }
+      }
+    },
+    "Resume now": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Возобновить сейчас"
+          }
+        }
+      }
+    },
+    "Resumes at %@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Возобновится в %@"
+          }
+        }
+      }
+    },
+    "Return to the default folder": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вернуться к папке по умолчанию"
+          }
+        }
+      }
+    },
+    "Run history (%lld)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "История запусков (%lld)"
+          }
+        }
+      }
+    },
+    "Scene": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сцена"
+          }
+        }
+      }
+    },
+    "Search across screen and audio…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поиск по экрану и звуку…"
+          }
+        }
+      }
+    },
+    "Searching…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поиск…"
+          }
+        }
+      }
+    },
+    "Segmenting…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сегментация…"
+          }
+        }
+      }
+    },
+    "Server is starting…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сервер запускается…"
+          }
+        }
+      }
+    },
+    "Set a local LLM and a destination folder — the automation won't run without them.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Укажите локальную LLM и папку назначения — без них автоматизация не запустится."
+          }
+        }
+      }
+    },
+    "Settings": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройки"
+          }
+        }
+      }
+    },
+    "Show in Finder": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Показать в Finder"
+          }
+        }
+      }
+    },
+    "Sources": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Источники"
+          }
+        }
+      }
+    },
+    "Start": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Старт"
+          }
+        }
+      }
+    },
+    "Start recording": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Начать запись"
+          }
+        }
+      }
+    },
+    "Statuses update on their own — grant a permission and come back.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Статусы обновляются сами — выдайте разрешение и вернитесь."
+          }
+        }
+      }
+    },
+    "Still locked": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Всё ещё заблокировано"
+          }
+        }
+      }
+    },
+    "Stop": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стоп"
+          }
+        }
+      }
+    },
+    "Storage": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранилище"
+          }
+        }
+      }
+    },
+    "Subfolder": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подпапка"
+          }
+        }
+      }
+    },
+    "System audio": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук"
+          }
+        }
+      }
+    },
+    "System audio didn't start — check Screen Recording access.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук не запустился — проверьте доступ к записи экрана."
+          }
+        }
+      }
+    },
+    "Take your memory with you: markdown by day (activity + conversations), optionally frames and audio.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Берите память с собой: markdown по дням (активность + разговоры), при желании — кадры и звук."
+          }
+        }
+      }
+    },
+    "Test connection": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверить соединение"
+          }
+        }
+      }
+    },
+    "The finished digest will arrive as a notification. Auto-write drops it into the folder without confirmation.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готовый дайджест придёт уведомлением. Автозапись кладёт его в папку без подтверждения."
+          }
+        }
+      }
+    },
+    "The microphone didn't start (the device was unavailable at the last launch).": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон не запустился (при последнем запуске устройство было недоступно)."
+          }
+        }
+      }
+    },
+    "The model returned no insights — try again or switch the model.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель не вернула выводов — попробуйте снова или смените модель."
+          }
+        }
+      }
+    },
+    "The model's answer was cut off by the token limit — the digest may be incomplete.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответ модели обрезан лимитом токенов — дайджест может быть неполным."
+          }
+        }
+      }
+    },
+    "The model's response was truncated by the token limit.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответ модели обрезан лимитом токенов."
+          }
+        }
+      }
+    },
+    "The multilingual-e5 model is downloading (~300 MB, once). For now — search by exact words.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель multilingual-e5 загружается (~300 МБ, один раз). Пока — поиск по точным словам."
+          }
+        }
+      }
+    },
+    "The semantic model didn't load (no network?). Search works by exact words; we'll retry automatically.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Семантическая модель не загрузилась (нет сети?). Поиск работает по точным словам; повторим попытку автоматически."
+          }
+        }
+      }
+    },
+    "Thinking about your history…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Анализируем вашу историю…"
+          }
+        }
+      }
+    },
+    "Time": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Время"
+          }
+        }
+      }
+    },
+    "To the %@ milestone": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "До рубежа %@"
+          }
+        }
+      }
+    },
+    "Today": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сегодня"
+          }
+        }
+      }
+    },
+    "Today (markdown + media)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сегодня (markdown + медиа)"
+          }
+        }
+      }
+    },
+    "Today (markdown)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сегодня (markdown)"
+          }
+        }
+      }
+    },
+    "Token": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Токен"
+          }
+        }
+      }
+    },
+    "Unlocked %@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыто %@"
+          }
+        }
+      }
+    },
+    "Used": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовано"
+          }
+        }
+      }
+    },
+    "Write immediately without a preview": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записывать сразу без предпросмотра"
+          }
+        }
+      }
+    },
+    "Written": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записано"
+          }
+        }
+      }
+    },
+    "Yesterday": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вчера"
+          }
+        }
+      }
+    },
+    "Your memory": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ваша память"
+          }
+        }
+      }
+    },
+    "ZBS Eye": {
+      "localizations": {}
+    },
+    "ZBS Eye continuously records your work on the computer so any moment can be found and replayed:": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZBS Eye непрерывно записывает вашу работу за компьютером, чтобы любой момент можно было найти и воспроизвести:"
+          }
+        }
+      }
+    },
+    "ZBS Eye reads the screen via Accessibility (precise and easy on the battery), OCR — only where AX is unavailable.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZBS Eye читает экран через Универсальный доступ (точно и бережно к батарее), OCR — только там, где AX недоступен."
+          }
+        }
+      }
+    },
+    "ZBS Eye — your Mac's perfect memory": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZBS Eye — идеальная память вашего Mac"
+          }
+        }
+      }
+    },
+    "[%lld]": {
+      "localizations": {}
+    },
+    "analyzing the day…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "анализ дня…"
+          }
+        }
+      }
+    },
+    "collecting history and summarizing…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "собираю историю и подвожу итоги…"
+          }
+        }
+      }
+    },
+    "connected": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "подключено"
+          }
+        }
+      }
+    },
+    "connected · %lld models": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "подключено · %lld моделей"
+          }
+        }
+      }
+    },
+    "curl -H 'Authorization: Bearer <token>' '%@/v1/search?q=test'": {
+      "localizations": {}
+    },
+    "everything is here, just for you": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "всё здесь, только для вас"
+          }
+        }
+      }
+    },
+    "http://127.0.0.1:1234/v1 (LM Studio)": {
+      "localizations": {}
+    },
+    "iCloud backup": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резервная копия в iCloud"
+          }
+        }
+      }
+    },
+    "llama3.2 / qwen2.5 / …": {
+      "localizations": {}
+    },
+    "optional": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "необязательно"
+          }
+        }
+      }
+    },
+    "preview": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "предпросмотр"
+          }
+        }
+      }
+    },
+    "reached": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "достигнуто"
+          }
+        }
+      }
+    },
+    "semantics downloading": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "загрузка семантики"
+          }
+        }
+      }
+    },
+    "testing…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "проверка…"
+          }
+        }
+      }
+    },
+    "word search": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "поиск по словам"
+          }
+        }
+      }
+    },
+    "write": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "записать"
+          }
+        }
+      }
+    },
+    "~%lld min": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~%lld мин"
+          }
+        }
+      }
+    },
+    "· %@": {
+      "localizations": {}
+    },
+    "· %lld sessions": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "· %lld сессий"
+          }
+        }
+      }
+    },
+    "· %llds": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "· %lld с"
+          }
+        }
+      }
+    },
+    "ZBS Eye records and transcribes audio locally, to make conversations searchable.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZBS Eye записывает и расшифровывает звук локально, чтобы по разговорам можно было искать."
+          }
+        }
+      }
+    },
+    "ZBS Eye recognizes speech on-device to make audio searchable.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZBS Eye распознаёт речь на устройстве, чтобы по звуку можно было искать."
+          }
+        }
+      }
+    },
+    "Language": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Язык"
+          }
+        }
+      }
+    },
+    "Interface language": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Язык интерфейса"
+          }
+        }
+      }
+    },
+    "System": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный"
+          }
+        }
+      }
+    },
+    "Changing the language restarts ZBS Eye.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Смена языка перезапустит ZBS Eye."
+          }
+        }
+      }
+    },
+    "Restart ZBS Eye to change the language?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перезапустить ZBS Eye для смены языка?"
+          }
+        }
+      }
+    },
+    "Restart now": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перезапустить сейчас"
+          }
+        }
+      }
+    },
+    "The interface language is applied after a restart.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Язык интерфейса применяется после перезапуска."
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

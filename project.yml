@@ -1,7 +1,7 @@
 name: ZBSEye                 # internal codename of the target/scheme. Product brand — "ZBS Eye" (display name + bundle id below)
 options:
   bundleIdPrefix: gg.zbs
-  developmentLanguage: ru
+  developmentLanguage: en
   deploymentTarget:
     macOS: "15.0"
 
@@ -10,6 +10,8 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     MACOSX_DEPLOYMENT_TARGET: "15.0"
+    SWIFT_EMIT_LOC_STRINGS: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
 
 packages:
   GRDB:

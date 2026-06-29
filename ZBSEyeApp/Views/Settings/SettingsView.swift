@@ -12,12 +12,14 @@ struct SettingsView: View {
     @State private var exportResult: String?
     @State private var importing = false
     @State private var importStatus: String?
+    @State private var pendingLang: AppLanguage?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Settings").font(.largeTitle.bold())
                 permissionsCard
+                languageCard
                 launchCard
                 storageCard
                 backupCard
@@ -33,6 +35,32 @@ struct SettingsView: View {
         .task {
             await env.permissions.refreshAll()
             await env.audioSettings.refreshHealth(env.audio)
+        }
+        .confirmationDialog("Restart ZBS Eye to change the language?",
+                            isPresented: Binding(get: { pendingLang != nil },
+                                                 set: { if !$0 { pendingLang = nil } }),
+                            titleVisibility: .visible) {
+            Button("Restart now") { if let l = pendingLang { LanguageManager.set(l) } }
+            Button("Cancel", role: .cancel) { pendingLang = nil }
+        } message: {
+            Text("The interface language is applied after a restart.")
+        }
+    }
+
+    private var languageCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Language").font(.headline)
+                Picker("Interface language", selection: Binding(
+                    get: { LanguageManager.current },
+                    set: { if $0 != LanguageManager.current { pendingLang = $0 } })) {
+                    Text("System").tag(AppLanguage.system)
+                    Text(verbatim: "English").tag(AppLanguage.en)
+                    Text(verbatim: "Русский").tag(AppLanguage.ru)
+                }
+                Text("Changing the language restarts ZBS Eye.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 

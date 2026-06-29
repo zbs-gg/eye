@@ -5,6 +5,7 @@ import Foundation
 @main
 struct ZBSEyeMain {
     static func main() {
+        LanguageManager.applyAtLaunch()   // apply the in-app language override before any UI loads
         if CommandLine.arguments.contains("--mcp") {
             // MCP stdio: dispatchMain() keeps the process alive and lets the concurrency pool work
             // (DispatchSemaphore.wait would dead-block the main thread and Task would never run).
