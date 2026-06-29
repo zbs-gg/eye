@@ -35,10 +35,10 @@ native alternative that **never goes to the cloud** — your activity history is
 
 | | ZBS Eye | proprietary alternatives |
 |---|---|---|
-| Cloud / account | ❌ not required | ✅ mandatory |
-| Subscription | ❌ free | $25–50/mo |
-| Accumulated memory | yours, local | behind a paywall |
-| Stack | native Swift/SwiftUI | web wrapper (Electron/Tauri) |
+| Cloud / account | ✅ not required | ❌ mandatory |
+| Subscription | ✅ free | ❌ $25–50/mo |
+| Accumulated memory | ✅ yours, local | ❌ behind a paywall |
+| Stack | ✅ native Swift/SwiftUI | ❌ web wrapper (Electron/Tauri) |
 
 ## Features
 
@@ -55,6 +55,16 @@ native alternative that **never goes to the cloud** — your activity history is
 - 🔒 **Privacy** — pause per app, delete by time range, all local.
 
 ## Install
+
+<div align="center">
+<img src="docs/open-anyway.png" alt="macOS Gatekeeper — click Open Anyway" width="640">
+</div>
+
+**ZBS Eye is not in the Mac App Store — and can't be.** Reading other apps' screens (cross-app
+Accessibility) and a "record everything" profile don't fit the App Sandbox the App Store requires. So
+macOS may show the dialog above on first launch. **It's expected and safe — click "Open Anyway"**
+(it's outside the App Store, not malware). Want certainty? **Ask your own agent to read the source and
+do a security review first** — it's all here, nothing to hide.
 
 **Release — notarized Developer ID (double-click to launch, no "Open Anyway"):**
 
