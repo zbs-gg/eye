@@ -63,6 +63,9 @@ final class RecordingStore {
     }
     @ObservationIgnored var micEnabled: @MainActor () -> Bool = { false }
     @ObservationIgnored var systemEnabled: @MainActor () -> Bool = { false }
+    /// Called when recording truly stops/pauses (NOT on syncAudio re-sync) — clears the session-scoped
+    /// manual audio override. Set from AppEnvironment.
+    @ObservationIgnored var onSessionStop: @MainActor () -> Void = {}
 
     @ObservationIgnored private static let enabledKey = "zbseye.recording.enabled"
 
@@ -85,6 +88,7 @@ final class RecordingStore {
         if isCapturing {
             coordinator.stop()
             audio?.stop()
+            onSessionStop()
             isCapturing = false
             degradedReason = nil
             UserDefaults.standard.set(false, forKey: Self.enabledKey)
@@ -128,6 +132,7 @@ final class RecordingStore {
         guard isCapturing, let coordinator else { return }
         coordinator.stop()
         audio?.stop()
+        onSessionStop()
         isCapturing = false
         degradedReason = nil
     }
@@ -146,6 +151,7 @@ final class RecordingStore {
         guard isCapturing, let coordinator else { return }
         coordinator.stop()
         audio?.stop()
+        onSessionStop()
         isCapturing = false
         degradedReason = nil
         let until = Date().addingTimeInterval(Double(minutes) * 60)

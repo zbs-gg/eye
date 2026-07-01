@@ -58,6 +58,8 @@ final class AppEnvironment {
     @ObservationIgnored private var backupTask: Task<Void, Never>?
     @ObservationIgnored private(set) var backupManager: BackupManager?
     @ObservationIgnored private var autostartTask: Task<Void, Never>?
+    @ObservationIgnored private var meetingDetector: MeetingDetector?
+    @ObservationIgnored private var meetingTask: Task<Void, Never>?
     @ObservationIgnored private var emergencyPruneInFlight = false
     @ObservationIgnored private var lastEmergencyPruneAt: Date?
     /// Minimum free space: below this — capture is paused + emergency prune (we don't fill the disk to the brim).
@@ -219,18 +221,34 @@ final class AppEnvironment {
             // The microphone requires mic access; system audio — Screen Recording (already granted for screen) + its own toggle.
             recording.micEnabled = { [weak self] in
                 guard let self else { return false }
-                return self.audioSettings.transcriptionEnabled
-                    && !self.recording.lowDiskPaused        // disk-guard gates audio too (not just screen)
+                return self.audioSettings.audioShouldCapture()   // mode/meeting/override gate
+                    && !self.recording.lowDiskPaused             // disk-guard gates audio too (not just screen)
                     && self.permissions.snapshot.microphone == .granted
             }
             recording.systemEnabled = { [weak self] in
                 guard let self else { return false }
-                return self.audioSettings.transcriptionEnabled
+                return self.audioSettings.audioShouldCapture()
                     && self.audioSettings.recordSystemAudio
                     && !self.recording.lowDiskPaused
                     && self.permissions.snapshot.screenRecording == .granted
             }
             self.audio = audioCoordinator
+            // Clear the session-scoped manual audio override when recording truly stops (NOT on every
+            // syncAudio re-sync — that fires each meeting edge and would wipe the override).
+            recording.onSessionStop = { [weak self] in self?.audioSettings.clearManualOverride() }
+
+            // Meeting detection → drives meetings-only capture. On-device (CoreAudio mic-in-use +
+            // frontmost call app), no new permission. Runs for the app's lifetime; the consumer only
+            // re-syncs audio while recording, and syncAudio() itself no-ops when not capturing.
+            let detector = MeetingDetector()
+            self.meetingDetector = detector
+            self.meetingTask = Task { [weak self] in
+                for await active in await detector.start() {
+                    guard let self else { return }
+                    self.audioSettings.meetingActive = active
+                    if self.recording.isCapturing { self.recording.syncAudio() }
+                }
+            }
             // Transcribe the segments left without text (crash/fail) — a minute after start.
             Task { [weak audioCoordinator] in
                 try? await Task.sleep(for: .seconds(60))

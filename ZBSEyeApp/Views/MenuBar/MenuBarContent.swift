@@ -31,6 +31,13 @@ struct MenuBarContent: View {
             if env.recording.isCapturing {
                 // privacy micro-pause: «something sensitive is coming — don't record for 15 minutes»
                 Button("Don't record for 15 minutes") { env.recording.pauseFor(minutes: 15) }
+                // manual audio override — force ON/OFF at any moment (wins over the mode for this session)
+                if env.audioSettings.audioMode != .off {
+                    Button(audioOverrideTitle) {
+                        env.audioSettings.cycleManualOverride()
+                        env.recording.syncAudio()
+                    }
+                }
             }
             if let until = env.recording.pausedUntil {
                 Text("Resumes at \(until.formatted(date: .omitted, time: .shortened))")
@@ -45,5 +52,13 @@ struct MenuBarContent: View {
         }
         .padding(12)
         .frame(width: 260)
+    }
+
+    private var audioOverrideTitle: String {
+        switch env.audioSettings.manualAudioOverride {
+        case nil: "Force audio on"
+        case .some(true): "Audio forced on — tap to force off"
+        case .some(false): "Audio forced off — tap for auto"
+        }
     }
 }
