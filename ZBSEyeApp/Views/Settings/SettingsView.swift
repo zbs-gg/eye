@@ -446,15 +446,35 @@ struct SettingsView: View {
 
     private var transcriptionCard: some View {
         @Bindable var settings = env.audioSettings
+        let audioCaption: String = switch settings.audioMode {
+        case .off:
+            "Audio is never recorded (the screen still is). Transcription and audio search are off."
+        case .meetingsOnly:
+            "Records audio only during detected calls/meetings — the engine is fully off otherwise, "
+            + "so no files and no disk are used. On-device (Apple Speech, ru+en); VAD cuts silence; nothing goes to the cloud."
+        case .always:
+            "Records audio continuously while recording is on. On-device (Apple Speech, ru+en); "
+            + "VAD cuts silence; nothing goes to the cloud."
+        }
         return GlassCard {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Audio and transcription").font(.headline)
-                Toggle("Record and transcribe audio", isOn: $settings.transcriptionEnabled)
-                    .onChange(of: settings.transcriptionEnabled) { _, _ in env.recording.syncAudio() }
-                Text("Locally, on-device (Apple Speech, ru+en auto-detect). VAD cuts out silence — only "
-                     + "speech segments are recorded, then they're searched by words. Audio doesn't go to the cloud.")
+                Picker("Audio capture", selection: $settings.audioMode) {
+                    ForEach(AudioMode.allCases, id: \.self) { m in Text(m.label).tag(m) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .onChange(of: settings.audioMode) { _, _ in
+                    settings.migrationNudgeSeen = true
+                    env.recording.syncAudio()
+                }
+                Text(audioCaption)
                     .font(.caption).foregroundStyle(.secondary)
-                if settings.transcriptionEnabled {
+                if !settings.migrationNudgeSeen {
+                    Label("New: audio now records only during calls by default — to save disk. Choose “Always” for continuous, or “Off” for none.",
+                          systemImage: "sparkles").font(.caption).foregroundStyle(.secondary)
+                }
+                if settings.audioMode != .off {
                     Toggle("Record system audio (calls, video, meetings)", isOn: $settings.recordSystemAudio)
                         .onChange(of: settings.recordSystemAudio) { _, _ in env.recording.syncAudio() }
                         .font(.callout)

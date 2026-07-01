@@ -31,6 +31,7 @@ struct RecordingStatusView: View {
                     sourceRow(active: systemOn, warn: systemWanted && !systemOn, icon: "speaker.wave.2",
                               text: systemOn ? "System audio" : "System audio didn't start")
                 }
+                audioModeRow
                 if let degraded = env.recording.degradedReason {
                     Label(degraded, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption2).foregroundStyle(.orange).lineLimit(2)
@@ -87,6 +88,27 @@ struct RecordingStatusView: View {
         guard !compact, let t = env.recording.lastFrameAt else { return "" }
         let s = Int(now.timeIntervalSince(t))
         return s < 120 ? " · frame \(s)s ago" : ""   // an old frame ≠ a failure (dedup) — don't scare
+    }
+
+    /// Audio-mode line: what the tri-state / manual override is doing right now. In `.always` the
+    /// mic/system rows already tell the story, so this row stays quiet there.
+    @ViewBuilder
+    private var audioModeRow: some View {
+        let mode = env.audioSettings.audioMode
+        let override = env.audioSettings.manualAudioOverride
+        if let override {
+            sourceRow(active: override, warn: false,
+                      icon: override ? "waveform" : "speaker.slash",
+                      text: override ? "Audio: forced on" : "Audio: forced off")
+        } else if mode == .off {
+            sourceRow(active: false, warn: false, icon: "speaker.slash", text: "Audio: off")
+        } else if mode == .meetingsOnly {
+            if env.audioSettings.meetingActive {
+                sourceRow(active: true, warn: false, icon: "waveform", text: "Recording this meeting")
+            } else {
+                sourceRow(active: false, warn: false, icon: "ear", text: "Listening for meetings")
+            }
+        }
     }
 
     private func sourceRow(active: Bool, warn: Bool, icon: String, text: String) -> some View {

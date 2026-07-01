@@ -2,6 +2,21 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
+## [Unreleased] — 2026-07-01
+
+### Added
+- **Meetings-only audio (new default).** Audio capture is now a tri-state mode — **off /
+  meetings-only (default) / always**. In meetings-only the capture engine is fully stopped when no
+  call is detected and auto-starts when one begins, so no audio files are written outside meetings
+  (disk saved). A call is detected on-device when a known meeting app (Zoom, Teams, FaceTime, Discord,
+  Slack, Webex, Skype) is actively using the microphone — no new permission. A menu-bar **Force audio
+  on/off** overrides the mode for the session. Existing installs move to meetings-only; anyone who had
+  audio turned off stays off. Known limit: a call that lives only in a browser tab (Google Meet /
+  Zoom web) isn't auto-detected — use Force audio on for those.
+
+### Changed
+- Screen capture is unaffected — it still records continuously; only audio is gated by the mode.
+
 ## [Unreleased] — 2026-06-25
 
 ### Fixed

@@ -21,6 +21,9 @@ ZBS Eye quietly keeps an "eternal memory" of your work at the computer:
 
 - **Screen** → accessibility text (accurate and battery-friendly) + OCR where AX is unavailable, frames in HEIC.
 - **Audio** → system audio (calls, meetings, video) and microphone → on-device transcription.
+  **Meetings-only by default**: audio is captured only while a call is detected (a meeting app is
+  using the mic), the engine is fully off otherwise — saving disk. Switch to always / off, or force
+  it on/off from the menu bar.
 - **Search** → hybrid full-text + semantic (cross-lingual: search in one language, find another),
   a scrubbable timeline, frames served as images.
 - **Access for AI agents** → a local REST + MCP surface so LLMs/agents can work with your memory.
@@ -44,7 +47,9 @@ native alternative that **never goes to the cloud** — your activity history is
 
 - 🎥 **Screen capture** — AX text + OCR, HEIC, perceptual-hash dedup, adaptive per-app (AX where it works,
   OCR where it doesn't).
-- 🎙️ **Audio + transcription** — system + microphone, VAD, on-device speech, speakers.
+- 🎙️ **Audio + transcription** — system + microphone, VAD, on-device speech. **Meetings-only by
+  default** (auto-detected on-device) — records during calls, off otherwise to save disk; always / off
+  modes + a menu-bar force on/off.
 - 🔍 **Hybrid search** — FTS5 + multilingual-e5 (384-dim) via RRF; cross-lingual.
 - 🕰️ **Timeline** — scrub through time, frame + text + app/URL, a player.
 - 🔌 **REST + MCP** — a local API (127.0.0.1, Bearer token) for agents; MCP over stdio.
