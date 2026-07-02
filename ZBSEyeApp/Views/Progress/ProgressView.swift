@@ -3,63 +3,20 @@ import SwiftUI
 /// Compact progress panel: streak, milestones, memory age, progress bar to the next milestone.
 struct MemoryProgressView: View {
     @Environment(AppEnvironment.self) private var env
-    @State private var usage: UsageStatsService.Snapshot?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Progress").font(.largeTitle.bold())
                 statsCard
-                usageCard
+                UsageStatsCard()
                 milestonesCard
             }
             .padding(28)
             .frame(maxWidth: 680, alignment: .leading)
         }
         .frame(maxWidth: .infinity)
-        .task {
-            await env.progress?.refresh()
-            usage = await env.usageStats?.compute(days: 7)
-        }
-    }
-
-    // MARK: — Usage card (last 7 days, site-aware)
-
-    @ViewBuilder
-    private var usageCard: some View {
-        if let u = usage, !u.topApps.isEmpty {
-            GlassCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("How you spent the last \(u.days) days").font(.headline)
-                    HStack(spacing: 20) {
-                        statCell(label: "Active/day", value: "\(u.avgMinutesPerActiveDay) min")
-                        statCell(label: "Context switches/day", value: "\(u.contextSwitchesPerDay)")
-                        if let h = u.busiestHour {
-                            statCell(label: "Busiest hour", value: String(format: "%02d:00", h))
-                        }
-                    }
-                    Divider()
-                    Text("Where the time went").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-                    let maxM = max(1, u.topApps.map(\.minutes).max() ?? 1)
-                    ForEach(u.topApps) { item in
-                        HStack(spacing: 10) {
-                            Text(item.label).font(.callout).lineLimit(1)
-                                .frame(width: 190, alignment: .leading)
-                            GeometryReader { geo in
-                                RoundedRectangle(cornerRadius: 3)
-                                    .fill(env.rewards.theme.accent.opacity(0.55))
-                                    .frame(width: max(4, geo.size.width * CGFloat(item.minutes) / CGFloat(maxM)))
-                            }
-                            .frame(height: 10)
-                            Text("\(item.minutes)m").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                                .frame(width: 48, alignment: .trailing)
-                        }
-                    }
-                    Text("Browsers are split by site (real host from your own history), not lumped as one app. On-device.")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-            }
-        }
+        .task { await env.progress?.refresh() }
     }
 
     // MARK: — Stats card

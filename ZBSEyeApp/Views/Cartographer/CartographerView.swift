@@ -34,6 +34,7 @@ private struct CartographerBody: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+                UsageStatsCard()
                 if !store.llmReady {
                     noLLMCard
                 } else if !store.hasConsent {

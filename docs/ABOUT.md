@@ -39,9 +39,15 @@ a temporary marketing position, it's an architectural principle (see §4).
 - **Scenes / "Day in activities"** — frames are grouped into **activity scenes**: "VS Code, 14:00–14:25,
   editing AXReader" instead of a thousand separate frames. You see how the day breaks into blocks. Instead of
   a raw OCR dump on the right — a **clean scene summary** (app, window/URL, key topics; LLM enhancement optional).
-- **Cartographer** — a daily AI insight: a local LLM looks at the day's activity (top apps, context switches,
-  topics) and gives **2–3 concrete observations/tips** (self-improvement). On-device only. In the future — a
-  single loop with Pulse/Atlas.
+- **Daily Insights** (formerly "Cartographer") — a daily AI insight: a local LLM looks at the day's activity
+  (top apps, context switches, topics) and gives **2–3 concrete observations/tips** (self-improvement).
+  On-device only. In the future — a single loop with Pulse/Atlas.
+- **Usage stats** — an on-device breakdown of the last 7 days, front-and-center on the Daily Insights screen:
+  where the time went (browsers split by **real site**, recovered from your own imported history, not lumped
+  as one app), active minutes/day, context switches/day, busiest hour.
+- **Self-repair** — because the source is public and you have your own agent, a broken thing isn't a dead end.
+  Describe the problem → Eye collects on-device diagnostics and copies a ready-to-run repair prompt for your
+  coding agent (read the source, reproduce, fix), or opens a pre-filled GitHub issue.
 
 ### Search and navigation
 - **Hybrid search** — full-text (FTS5) + semantic (multilingual-e5, 384-dim) via RRF.

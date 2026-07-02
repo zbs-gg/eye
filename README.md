@@ -58,6 +58,12 @@ native alternative that **never goes to the cloud** — your activity history is
 - 📥 **Import previous history** — bring your accumulated history (text + metadata) over.
 - 📝 **Automations** — daily summary to a file/Obsidian; export.
 - 🔒 **Privacy** — pause per app, delete by time range, all local.
+- 📊 **Usage stats** — an on-device breakdown of the last 7 days: where the time actually went (browsers
+  split by **real site**, not lumped as one app), active minutes/day, context switches, busiest hour.
+  Front-and-center on the Daily Insights screen.
+- 🧭 **Daily Insights** — a daily local-LLM read of your activity (2–3 concrete observations), on-device.
+- 🛠️ **Self-repair** — something broke? Describe it and Eye hands **your own AI agent** a ready-to-run
+  fix prompt (it reads the public source and fixes it), or opens a pre-filled GitHub issue. No dead ends.
 
 ## Install
 
