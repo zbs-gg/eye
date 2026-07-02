@@ -495,7 +495,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case timeline = "Timeline"
     case activities = "Activities"
     case ask = "Ask"
-    case cartographer = "Cartographer"
+    case cartographer = "Daily Insights"
     case automations = "Automations"
     case connections = "Connections"
     case progress = "Progress"

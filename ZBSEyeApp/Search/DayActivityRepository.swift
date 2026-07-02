@@ -134,6 +134,71 @@ actor DayActivityRepository {
         return dur
     }
 
+    /// Browser bundle ids — for these, a single "app" is meaningless (a browser is like the OS); time is
+    /// attributed per site/page instead. company.thebrowser.dia = Dia, .arc = Arc.
+    static let browserBundleIds: Set<String> = [
+        "com.apple.Safari", "com.google.Chrome", "company.thebrowser.dia", "company.thebrowser.arc",
+        "org.mozilla.firefox", "com.microsoft.edgemac", "com.brave.Browser", "com.operasoftware.Opera",
+    ]
+
+    /// A site/page label for a browser frame; nil for non-browsers. Prefers the URL host (accurate);
+    /// falls back to the window/tab title (Dia/Arc don't expose the URL via AX, so title is all we have).
+    static func browserSite(_ cap: CaptureLite) -> String? {
+        guard let bid = cap.bundleId, browserBundleIds.contains(bid) else { return nil }
+        if let url = cap.browserUrl, let host = hostFromURL(url) { return host }
+        if let wt = cap.windowTitle, case let page = cleanPageTitle(wt), !page.isEmpty { return page }
+        return nil
+    }
+
+    /// host("https://github.com/x/y?z") -> "github.com". nil if unusable.
+    static func hostFromURL(_ url: String) -> String? {
+        var s = url
+        for p in ["https://", "http://"] where s.hasPrefix(p) { s.removeFirst(p.count) }
+        if let slash = s.firstIndex(of: "/") { s = String(s[s.startIndex..<slash]) }
+        s = s.split(separator: "@").last.map(String.init) ?? s          // strip user:pass@
+        s = s.split(separator: ":").first.map(String.init) ?? s         // strip :port
+        s = s.hasPrefix("www.") ? String(s.dropFirst(4)) : s
+        return (s.contains(".") && !s.isEmpty) ? s : nil
+    }
+
+    /// Clean a browser window/tab title into a compact page label: drop the "Profile N: " Chromium prefix
+    /// and any trailing " - <Browser>" suffix, collapse whitespace, cap length.
+    static func cleanPageTitle(_ title: String) -> String {
+        var t = title.replacingOccurrences(of: #"^Profile \d+:\s*"#, with: "", options: .regularExpression)
+        t = t.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        if let dash = t.range(of: " - ", options: .backwards) { t = String(t[t.startIndex..<dash.lowerBound]) }
+        return String(t.prefix(48)).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Group key + display label for a frame: browsers roll up per site/page ("Dia · github.com"),
+    /// everything else per app.
+    static func groupKeyLabel(_ cap: CaptureLite) -> (key: String, label: String) {
+        let app = cap.appName ?? "—"
+        if let site = browserSite(cap) {
+            return ("b:\(cap.appId ?? -1):\(site)", "\(app) · \(site)")
+        }
+        return ("a:\(cap.appId ?? -1)", app)
+    }
+
+    /// Active time per site-aware group (ms) + frame count + display label. Same delta-crediting as
+    /// `appActiveMs`, but the key splits browsers by site so "Dia" becomes "Dia · github.com" etc.
+    static func appSiteActiveMs(_ caps: [CaptureLite], activeGapCapMs: Int64)
+        -> (ms: [String: Int64], count: [String: Int], label: [String: String]) {
+        var dur: [String: Int64] = [:], count: [String: Int] = [:], label: [String: String] = [:]
+        var prev: CaptureLite? = nil
+        for cap in caps {
+            let (k, l) = groupKeyLabel(cap)
+            count[k, default: 0] += 1
+            label[k] = l
+            if let p = prev {
+                let pk = groupKeyLabel(p).key
+                dur[pk, default: 0] += min(cap.ts - p.ts, activeGapCapMs)
+            }
+            prev = cap
+        }
+        return (dur, count, label)
+    }
+
     /// Context switches per day: adjacent frames with a different appId/windowTitle.
     static func contextSwitches(_ caps: [CaptureLite]) -> Int {
         var switches = 0, hasPrev = false
