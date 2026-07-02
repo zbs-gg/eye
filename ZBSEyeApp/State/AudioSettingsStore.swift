@@ -27,7 +27,13 @@ enum AudioMode: String, CaseIterable, Codable, Sendable {
 final class AudioSettingsStore {
     /// The capture mode (persisted). Source of truth for whether audio should be recorded.
     var audioMode: AudioMode {
-        didSet { if audioMode != oldValue { UserDefaults.standard.set(audioMode.rawValue, forKey: Self.modeKey) } }
+        didSet {
+            guard audioMode != oldValue else { return }
+            UserDefaults.standard.set(audioMode.rawValue, forKey: Self.modeKey)
+            // an explicit mode change wins over a stale session override — otherwise "force on" + switch
+            // to Off would keep recording while the UI says Off (a privacy trap). Off = hard stop.
+            manualAudioOverride = nil
+        }
     }
 
     /// A separate toggle for system audio (calls/video = other people's voices) — so you can record

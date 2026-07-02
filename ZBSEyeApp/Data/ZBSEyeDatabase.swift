@@ -42,7 +42,25 @@ final class ZBSEyeDatabase: Sendable {
             }
         }
         pool = try DatabasePool(path: path, configuration: config)
-        if runMigrations { try Self.migrator.migrate(pool) }
+        if runMigrations {
+            try Self.migrator.migrate(pool)
+            Self.warnIfNewerSchema(pool)
+        }
+    }
+
+    /// Defensive downgrade guard: if the DB carries migration identifiers this binary doesn't know, it
+    /// was written by a NEWER ZBS Eye. We never erase (the history is precious) — just log, so a
+    /// downgrade is visible instead of silently mis-reading a future schema.
+    private static let knownMigrations: Set<String> =
+        ["v1", "v2_vector", "v3_vec_e5_384", "v4_vec_transcripts", "v5_browser_visits"]
+    private static func warnIfNewerSchema(_ pool: DatabasePool) {
+        let applied = (try? pool.read { db in
+            try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations")
+        }) ?? []
+        let unknown = applied.filter { !knownMigrations.contains($0) }
+        if !unknown.isEmpty {
+            Log.app.error("DB created by a newer ZBS Eye (unknown migrations: \(unknown.joined(separator: ", "))) — running without schema changes.")
+        }
     }
 
     /// Standard DB location — via the single StorageLocation (accounts for relocate). Media is separate.

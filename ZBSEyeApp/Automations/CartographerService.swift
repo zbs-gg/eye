@@ -42,8 +42,11 @@ actor CartographerService {
         let caps = try await repo.captures(forDay: day)
         guard !caps.isEmpty else { throw AutomationError.noData(day: start) }
 
-        // Active time per site-aware group (browsers split per site/page, not lumped as one "app").
-        let usage = DayActivityRepository.appSiteActiveMs(caps, activeGapCapMs: 120 * 1000)
+        // Active time per site-aware group (browsers split per site, not lumped as one "app"). For
+        // browsers that hide the URL from AX (Dia/Arc), recover the real host from imported browser
+        // history near each frame's timestamp — so they split by site, not by page title.
+        let hostOverrides = (try? await repo.browserHostOverrides(caps)) ?? [:]
+        let usage = DayActivityRepository.appSiteActiveMs(caps, activeGapCapMs: 120 * 1000, hosts: hostOverrides)
         let rankedApps = usage.ms.sorted { $0.value > $1.value }.prefix(8)
         let topApps: [DayActivity.AppUsage] = rankedApps.map { entry in
             DayActivity.AppUsage(app: usage.label[entry.key] ?? "—",

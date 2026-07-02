@@ -157,6 +157,9 @@ final class RecordingStore {
         let until = Date().addingTimeInterval(Double(minutes) * 60)
         pausedUntil = until
         UserDefaults.standard.set(until, forKey: Self.pausedKey)
+        // remember the window so a retroactive importer (browser history) never backfills it
+        PrivacyPauseLog.record(startMs: Int64(Date().timeIntervalSince1970 * 1000),
+                               endMs: Int64(until.timeIntervalSince1970 * 1000))
         resumeTask?.cancel()
         resumeTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Double(minutes) * 60))
@@ -169,6 +172,7 @@ final class RecordingStore {
     /// Clear the pause early (the "Resume now" button).
     func resumeNow() {
         resumeTask?.cancel(); resumeTask = nil
+        PrivacyPauseLog.closeLast(atMs: Int64(Date().timeIntervalSince1970 * 1000))
         clearPause()
         startIfWanted()
     }

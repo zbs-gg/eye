@@ -92,6 +92,40 @@ actor DayActivityRepository {
         }
     }
 
+    /// For browser frames that have NO usable URL (Dia/Arc hide it from AX), recover the real host from
+    /// imported `browser_visits` by matching the same browser near the frame's timestamp. capId → host.
+    /// One range query + in-memory nearest-match (no N+1). Falls back to nothing when no visit is near.
+    func browserHostOverrides(_ caps: [CaptureLite], toleranceMs: Int64 = 90_000) async throws -> [Int64: String] {
+        let targets = caps.filter { c in
+            guard let b = c.bundleId, Self.browserBundleIds.contains(b) else { return false }
+            if let u = c.browserUrl, Self.hostFromURL(u) != nil { return false }   // already has a host
+            return true
+        }
+        guard !targets.isEmpty, let lo = caps.first?.ts, let hi = caps.last?.ts else { return [:] }
+        let rows = try await db.pool.read { dbc in
+            try Row.fetchAll(dbc, sql: """
+                SELECT browser, ts, host FROM browser_visits
+                WHERE ts BETWEEN ? AND ? AND host IS NOT NULL ORDER BY ts
+                """, arguments: [lo - toleranceMs, hi + toleranceMs])
+        }
+        var byBrowser: [String: [(ts: Int64, host: String)]] = [:]
+        for r in rows {
+            let b: String = r["browser"]; let ts: Int64 = r["ts"]; let host: String = r["host"]
+            byBrowser[b, default: []].append((ts, host))
+        }
+        var out: [Int64: String] = [:]
+        for c in targets {
+            guard let b = c.bundleId, let visits = byBrowser[b] else { continue }
+            var best: (d: Int64, host: String)? = nil
+            for v in visits {
+                let d = abs(v.ts - c.ts)
+                if d <= toleranceMs && (best == nil || d < best!.d) { best = (d, v.host) }
+            }
+            if let best { out[c.id] = best.host }
+        }
+        return out
+    }
+
     // MARK: — pure functions (no DB, independently testable)
 
     /// Segment frames into sessions. A new session on a group change OR a gap > gapMs.
@@ -150,15 +184,14 @@ actor DayActivityRepository {
         return nil
     }
 
-    /// host("https://github.com/x/y?z") -> "github.com". nil if unusable.
+    /// host("https://github.com/x/y?z") -> "github.com". Uses URLComponents so ports, credentials,
+    /// uppercase schemes, IPv6, query-only URLs and IDNs are handled correctly. Only http(s).
     static func hostFromURL(_ url: String) -> String? {
-        var s = url
-        for p in ["https://", "http://"] where s.hasPrefix(p) { s.removeFirst(p.count) }
-        if let slash = s.firstIndex(of: "/") { s = String(s[s.startIndex..<slash]) }
-        s = s.split(separator: "@").last.map(String.init) ?? s          // strip user:pass@
-        s = s.split(separator: ":").first.map(String.init) ?? s         // strip :port
-        s = s.hasPrefix("www.") ? String(s.dropFirst(4)) : s
-        return (s.contains(".") && !s.isEmpty) ? s : nil
+        guard let comps = URLComponents(string: url),
+              let scheme = comps.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              var host = comps.host?.lowercased(), !host.isEmpty else { return nil }
+        if host.hasPrefix("www.") { host = String(host.dropFirst(4)) }
+        return host
     }
 
     /// Clean a browser window/tab title into a compact page label: drop the "Profile N: " Chromium prefix
@@ -172,9 +205,12 @@ actor DayActivityRepository {
 
     /// Group key + display label for a frame: browsers roll up per site/page ("Dia · github.com"),
     /// everything else per app.
-    static func groupKeyLabel(_ cap: CaptureLite) -> (key: String, label: String) {
+    /// `hostOverride` (from `browserHostOverrides`) recovers the real host for browsers that hide the URL
+    /// from AX (Dia/Arc) — so their time rolls up by SITE, not by page title. Falls back to the URL host
+    /// / cleaned title only when there's no history match.
+    static func groupKeyLabel(_ cap: CaptureLite, hostOverride: String? = nil) -> (key: String, label: String) {
         let app = cap.appName ?? "—"
-        if let site = browserSite(cap) {
+        if let site = hostOverride ?? browserSite(cap) {
             return ("b:\(cap.appId ?? -1):\(site)", "\(app) · \(site)")
         }
         return ("a:\(cap.appId ?? -1)", app)
@@ -182,16 +218,17 @@ actor DayActivityRepository {
 
     /// Active time per site-aware group (ms) + frame count + display label. Same delta-crediting as
     /// `appActiveMs`, but the key splits browsers by site so "Dia" becomes "Dia · github.com" etc.
-    static func appSiteActiveMs(_ caps: [CaptureLite], activeGapCapMs: Int64)
+    /// `hosts` (capId → host, from browserHostOverrides) supplies real hosts for URL-hiding browsers.
+    static func appSiteActiveMs(_ caps: [CaptureLite], activeGapCapMs: Int64, hosts: [Int64: String] = [:])
         -> (ms: [String: Int64], count: [String: Int], label: [String: String]) {
         var dur: [String: Int64] = [:], count: [String: Int] = [:], label: [String: String] = [:]
         var prev: CaptureLite? = nil
         for cap in caps {
-            let (k, l) = groupKeyLabel(cap)
+            let (k, l) = groupKeyLabel(cap, hostOverride: hosts[cap.id])
             count[k, default: 0] += 1
             label[k] = l
             if let p = prev {
-                let pk = groupKeyLabel(p).key
+                let pk = groupKeyLabel(p, hostOverride: hosts[p.id]).key
                 dur[pk, default: 0] += min(cap.ts - p.ts, activeGapCapMs)
             }
             prev = cap
