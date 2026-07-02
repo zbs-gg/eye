@@ -314,7 +314,9 @@ enum ZBSEyeMCPServer {
         if let db {
             let info = try? await db.pool.read { d -> (String, Int, Int, Int, Int, Int) in
                 func c(_ t: String) -> Int { (try? Int.fetchOne(d, sql: "SELECT COUNT(*) FROM \(t)")) ?? 0 }
-                let migs = (try? String.fetchAll(d, sql: "SELECT identifier FROM grdb_migrations ORDER BY 1")) ?? []
+                // ORDER BY rowid = application order (ORDER BY identifier sorts v10 before v2 once two-digit
+                // migrations exist, misreporting the schema sequence to an agent).
+                let migs = (try? String.fetchAll(d, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid")) ?? []
                 return (migs.joined(separator: ", "), c("screen_captures"), c("text_blocks"),
                         c("audio_captures"), c("transcriptions"), c("browser_visits"))
             }
