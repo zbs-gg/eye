@@ -52,6 +52,7 @@ final class AppEnvironment {
     private(set) var historyImporter: HistoryImporter?
     private(set) var dataError: String?
     private(set) var progress: ProgressStore?
+    @ObservationIgnored private(set) var usageStats: UsageStatsService?
     private(set) var achievements: AchievementStore?
 
     @ObservationIgnored private var retentionTask: Task<Void, Never>?
@@ -266,6 +267,7 @@ final class AppEnvironment {
             // Shared aggregation layer for the day's activity (one scan + segmentation + active time + batch text).
             // Reused by scenes, the cartographer, and the summary — deduping logic (Pro review #9).
             let activityRepo = DayActivityRepository(db: db)
+            self.usageStats = UsageStatsService(db: db, repo: activityRepo)
 
             // Achievements: stats from the DB + counters → the achievement catalog (unlocks persist).
             self.achievements = AchievementStore(service: AchievementStatsService(db: db, repo: activityRepo))
