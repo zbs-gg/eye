@@ -26,6 +26,17 @@ struct RootWindow: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 900, minHeight: 600)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { env.showSelfRepair = true } label: {
+                    Label("Something wrong?", systemImage: "wrench.and.screwdriver")
+                }
+                .help("Something not working? Describe it and have your own agent fix it — or file a GitHub issue.")
+            }
+        }
+        .sheet(isPresented: $env.showSelfRepair) {
+            SelfRepairView(onClose: { env.showSelfRepair = false }).environment(env)
+        }
         .background(ThemeAuraView(theme: env.rewards.theme).ignoresSafeArea())   // theme aura background
         .tint(env.rewards.theme.accent)                                          // accent for the whole UI
         .animation(.easeInOut(duration: 0.5), value: env.rewards.theme)
