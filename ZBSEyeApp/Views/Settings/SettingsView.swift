@@ -13,6 +13,8 @@ struct SettingsView: View {
     @State private var importing = false
     @State private var importStatus: String?
     @State private var pendingLang: AppLanguage?
+    @AppStorage("zbseye.browserHistory.enabled") private var browserHistoryEnabled = true
+    @State private var browserImportStatus: String?
 
     var body: some View {
         ScrollView {
@@ -24,6 +26,7 @@ struct SettingsView: View {
                 storageCard
                 backupCard
                 privacyCard
+                browserHistoryCard
                 if HistoryImporter.sourceExists { importCard }
                 transcriptionCard
                 serverCard
@@ -440,6 +443,33 @@ struct SettingsView: View {
                     Label("Exclude an app…", systemImage: "plus")
                 }
                 .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private var browserHistoryCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Browser history").font(.headline)
+                Toggle("Import browser history", isOn: $browserHistoryEnabled)
+                Text("Pulls the real URLs and visit times from your browsers' own history "
+                     + "(Dia, Arc, Chrome, Edge, Brave, Safari). Dia and Arc don't expose the URL on screen, so "
+                     + "this is the only way to attribute and search them. On-device only — nothing leaves your "
+                     + "Mac. Safari needs Full Disk Access.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    Button("Import now") {
+                        browserImportStatus = "Importing…"
+                        Task {
+                            let r = try? await env.browserHistoryImporter?.run()
+                            browserImportStatus = r.map { "Imported \($0.imported) new visits" } ?? "Import failed"
+                        }
+                    }
+                    .font(.callout)
+                    if let s = browserImportStatus {
+                        Text(s).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
         }
     }

@@ -4,6 +4,14 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 
 ## [Unreleased] — 2026-07-02
 
+### Added
+- **Browser history import.** ZBS Eye now reads each browser's own local history DB (Dia, Arc, Chrome,
+  Edge, Brave — Chromium format; Safari — needs Full Disk Access) and imports the **real URLs + visit
+  times + titles** into a `browser_visits` table (FTS-searchable). This fills a gap: Dia/Arc don't
+  expose the URL via Accessibility, so screen capture had no URL for them at all. 100% on-device (reads
+  a WAL-safe copy of the browser's DB, writes only to your local DB — nothing leaves the machine),
+  incremental (per-source cursor), toggle + "Import now" in Settings.
+
 ### Fixed
 - **Browser is no longer shown as your "top app".** Activity time in a browser (Dia, Safari, Chrome,
   Arc…) is now attributed per **site/page**, not lumped under the browser — "Dia" becomes "Dia ·
