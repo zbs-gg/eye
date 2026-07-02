@@ -177,6 +177,37 @@ final class ZBSEyeDatabase: Sendable {
                 );
                 """)
         }
+        // v5: real browser history (imported from each browser's own local DB). Dia/Arc don't expose the
+        // URL via AX, so screen_captures.browserUrl is empty for them — this pulls the actual URLs + visit
+        // times straight from the browser. On-device only; FTS on title+url so you can recall a site you
+        // opened even without a screen frame.
+        m.registerMigration("v5_browser_visits") { db in
+            try db.create(table: "browser_visits") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("ts", .integer).notNull().indexed()     // visit time, epoch ms
+                t.column("url", .text).notNull()
+                t.column("host", .text)
+                t.column("title", .text)
+                t.column("browser", .text).notNull()             // bundle id of the source browser
+                t.column("visitCount", .integer)
+            }
+            // one row per (browser, url, ts) — a re-import can't duplicate a visit
+            try db.execute(sql: "CREATE UNIQUE INDEX idx_browser_visits_uniq ON browser_visits(browser, ts, url)")
+            try db.create(indexOn: "browser_visits", columns: ["host", "ts"])
+            try db.execute(sql: """
+                CREATE VIRTUAL TABLE browser_visits_fts USING fts5(
+                    title, url, content='browser_visits', content_rowid='id',
+                    tokenize="unicode61 remove_diacritics 2");
+                """)
+            try db.execute(sql: """
+                CREATE TRIGGER browser_visits_ai AFTER INSERT ON browser_visits BEGIN
+                    INSERT INTO browser_visits_fts(rowid, title, url) VALUES (new.id, new.title, new.url);
+                END;
+                CREATE TRIGGER browser_visits_ad AFTER DELETE ON browser_visits BEGIN
+                    INSERT INTO browser_visits_fts(browser_visits_fts, rowid, title, url) VALUES('delete', old.id, old.title, old.url);
+                END;
+                """)
+        }
         return m
     }
 }

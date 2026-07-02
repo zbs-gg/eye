@@ -60,6 +60,8 @@ final class AppEnvironment {
     @ObservationIgnored private var autostartTask: Task<Void, Never>?
     @ObservationIgnored private var meetingDetector: MeetingDetector?
     @ObservationIgnored private var meetingTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var browserHistoryImporter: BrowserHistoryImporter?
+    @ObservationIgnored private var browserHistoryTask: Task<Void, Never>?
     @ObservationIgnored private var emergencyPruneInFlight = false
     @ObservationIgnored private var lastEmergencyPruneAt: Date?
     /// Minimum free space: below this — capture is paused + emergency prune (we don't fill the disk to the brim).
@@ -341,6 +343,19 @@ final class AppEnvironment {
                         }
                     }
                     try? await Task.sleep(for: .seconds(1800))
+                }
+            }
+
+            // Browser history: pull each browser's real URLs + visit times (Dia/Arc hide the URL from AX).
+            // On-device only. Immediately + every 15 min, gated by a Settings toggle (default on) + pause.
+            let browserHistoryImporter = BrowserHistoryImporter(db: db)
+            self.browserHistoryImporter = browserHistoryImporter
+            browserHistoryTask = Task.detached(priority: .background) { [weak self] in
+                while !Task.isCancelled {
+                    let on = UserDefaults.standard.object(forKey: "zbseye.browserHistory.enabled") as? Bool ?? true
+                    let paused = await MainActor.run { self?.recording.pausedUntil != nil }
+                    if on && !paused { _ = try? await browserHistoryImporter.run() }
+                    try? await Task.sleep(for: .seconds(900))
                 }
             }
 
