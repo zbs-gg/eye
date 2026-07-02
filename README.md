@@ -64,6 +64,8 @@ native alternative that **never goes to the cloud** — your activity history is
 - 🧭 **Daily Insights** — a daily local-LLM read of your activity (2–3 concrete observations), on-device.
 - 🛠️ **Self-repair** — something broke? Describe it and Eye hands **your own AI agent** a ready-to-run
   fix prompt (it reads the public source and fixes it), or opens a pre-filled GitHub issue. No dead ends.
+  Reachable from a **main-window button**, the **menu bar**, and Settings; agents can also pull live state
+  over MCP (`get_diagnostics`).
 
 ## Install
 

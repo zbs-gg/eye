@@ -143,6 +143,9 @@ enum ZBSEyeMCPServer {
             case "get_status":
                 return .init(content: [.text(await Self.formatStatus(db: db))])
 
+            case "get_diagnostics":
+                return .init(content: [.text(await Self.formatDiagnostics(db: db))])
+
             case "toggle_recording":
                 let enable = args["enable"]?.boolValue
                 if let now = await Self.proxyToggle(enable: enable) {
@@ -213,6 +216,9 @@ enum ZBSEyeMCPServer {
                                        "required": .array([.string("frame_id")])])),
             Tool(name: "get_status",
                  description: "ZBS Eye status: number of frames/texts/audio, history range, whether recording is on.",
+                 inputSchema: .object(["type": .string("object"), "properties": .object([:])])),
+            Tool(name: "get_diagnostics",
+                 description: "Diagnostics for self-repair: app version, macOS, DB migrations + table counts, recording state. Read github.com/zbs-gg/eye with this context to debug/fix ZBS Eye.",
                  inputSchema: .object(["type": .string("object"), "properties": .object([:])])),
             Tool(name: "toggle_recording",
                  description: "Turn recording on/off in the running ZBS Eye GUI instance.",
@@ -296,6 +302,32 @@ enum ZBSEyeMCPServer {
     private static func mainInstanceCapturing() async -> Bool? {
         guard let port = readPort(), let obj = await healthOK(port: port) else { return nil }
         return obj["capturing"] as? Bool
+    }
+
+    /// Diagnostics for the self-repair flow — an agent connected over MCP calls this to get live state,
+    /// then reads the public source and fixes the app. Nothing egresses; it's the machine's own state.
+    private static func formatDiagnostics(db: ZBSEyeDatabase?) async -> String {
+        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        var out = "ZBS Eye \(v) · \(ProcessInfo.processInfo.operatingSystemVersionString)\n"
+        out += "Source: https://github.com/zbs-gg/eye — read README.md / AGENTS.md / BUILD.md, reproduce, "
+        out += "fix (local-first, Swift 6 strict concurrency), rebuild with scripts/build-notarized.sh.\n"
+        if let db {
+            let info = try? await db.pool.read { d -> (String, Int, Int, Int, Int, Int) in
+                func c(_ t: String) -> Int { (try? Int.fetchOne(d, sql: "SELECT COUNT(*) FROM \(t)")) ?? 0 }
+                // ORDER BY rowid = application order (ORDER BY identifier sorts v10 before v2 once two-digit
+                // migrations exist, misreporting the schema sequence to an agent).
+                let migs = (try? String.fetchAll(d, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid")) ?? []
+                return (migs.joined(separator: ", "), c("screen_captures"), c("text_blocks"),
+                        c("audio_captures"), c("transcriptions"), c("browser_visits"))
+            }
+            if let (migs, frames, texts, audio, tr, bv) = info {
+                out += "DB migrations: \(migs)\n"
+                out += "Counts: frames=\(frames) text=\(texts) audio=\(audio) transcripts=\(tr) browser_visits=\(bv)\n"
+            } else { out += "DB read error.\n" }
+        } else { out += "DB unavailable (run the GUI to initialize it).\n" }
+        let cap = await mainInstanceCapturing()
+        out += "Recording: \(cap.map { $0 ? "on" : "paused" } ?? "GUI not running")."
+        return out
     }
 
     private static func proxyToggle(enable: Bool?) async -> Bool? {

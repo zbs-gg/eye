@@ -45,6 +45,11 @@ struct MenuBarContent: View {
                 Button("Resume now") { env.recording.resumeNow() }
             }
             Button("Open ZBS Eye") { openWindow(id: "main") }
+            Button("Something not working?") {
+                env.showSelfRepair = true
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
+            }
 
             Divider()
 

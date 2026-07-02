@@ -22,6 +22,8 @@ final class AppEnvironment {
 
     /// First launch → onboarding (consent "everything gets recorded" + permissions). Persist: shown until completed.
     var showOnboarding = !UserDefaults.standard.bool(forKey: "zbseye.onboarding.done")
+    /// Self-repair sheet trigger — shared by the main-window toolbar button and the menu-bar item.
+    var showSelfRepair = false
 
     func completeOnboarding(startRecording: Bool) {
         UserDefaults.standard.set(true, forKey: "zbseye.onboarding.done")

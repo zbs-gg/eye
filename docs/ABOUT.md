@@ -47,7 +47,9 @@ a temporary marketing position, it's an architectural principle (see §4).
   as one app), active minutes/day, context switches/day, busiest hour.
 - **Self-repair** — because the source is public and you have your own agent, a broken thing isn't a dead end.
   Describe the problem → Eye collects on-device diagnostics and copies a ready-to-run repair prompt for your
-  coding agent (read the source, reproduce, fix), or opens a pre-filled GitHub issue.
+  coding agent (read the source, reproduce, fix), or opens a pre-filled GitHub issue. Reachable from a
+  main-window toolbar button, the menu bar, and Settings; an agent can also pull live state over MCP via the
+  `get_diagnostics` tool.
 
 ### Search and navigation
 - **Hybrid search** — full-text (FTS5) + semantic (multilingual-e5, 384-dim) via RRF.

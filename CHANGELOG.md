@@ -5,6 +5,10 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 ## [Unreleased] — 2026-07-02
 
 ### Added
+- **Self-repair, everywhere + over MCP.** The "Something not working?" flow is now first-class: a
+  main-window toolbar button + a menu-bar item + Settings, all opening a shared `SelfRepairView`. An
+  agent connected to Eye's MCP server can also pull live state with the new **`get_diagnostics`** tool
+  (version, macOS, DB migrations + counts, recording state) → read the public source and fix it.
 - **Usage stats (Progress tab).** A personal, on-device breakdown of how you spent the last 7 days —
   where the time went (browsers split by real site, not lumped), minutes/active day, context switches,
   busiest hour. Dogfoods the same site-aware attribution as Daily Insights.
