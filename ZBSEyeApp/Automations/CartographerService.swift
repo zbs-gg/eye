@@ -42,22 +42,13 @@ actor CartographerService {
         let caps = try await repo.captures(forDay: day)
         guard !caps.isEmpty else { throw AutomationError.noData(day: start) }
 
-        // Active time per app + frame count and names.
-        let activeMs = DayActivityRepository.appActiveMs(caps, activeGapCapMs: 120 * 1000)
-        var nameByApp: [Int64: String] = [:]
-        var countByApp: [Int64: Int] = [:]
-        for c in caps {
-            guard let a = c.appId else { continue }
-            countByApp[a, default: 0] += 1
-            if let n = c.appName { nameByApp[a] = n }
-        }
-        let rankedApps = activeMs.sorted { $0.value > $1.value }.prefix(8)
+        // Active time per site-aware group (browsers split per site/page, not lumped as one "app").
+        let usage = DayActivityRepository.appSiteActiveMs(caps, activeGapCapMs: 120 * 1000)
+        let rankedApps = usage.ms.sorted { $0.value > $1.value }.prefix(8)
         let topApps: [DayActivity.AppUsage] = rankedApps.map { entry in
-            let appId: Int64 = entry.key
-            let ms: Int64 = entry.value
-            return DayActivity.AppUsage(app: nameByApp[appId] ?? "—",
-                                        minutes: max(1, Int(ms / 60000)),
-                                        captures: countByApp[appId] ?? 0)
+            DayActivity.AppUsage(app: usage.label[entry.key] ?? "—",
+                                 minutes: max(1, Int(entry.value / 60000)),
+                                 captures: usage.count[entry.key] ?? 0)
         }
 
         let switches = DayActivityRepository.contextSwitches(caps)

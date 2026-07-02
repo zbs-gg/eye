@@ -20,7 +20,7 @@ struct CartographerView: View {
                 ContentUnavailableView("Initializing…", systemImage: "map")
             }
         }
-        .navigationTitle("Cartographer")
+        .navigationTitle("Daily Insights")
     }
 }
 
@@ -54,7 +54,7 @@ private struct CartographerBody: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Label("Cartographer", systemImage: "map")
+            Label("Daily Insights", systemImage: "map")
                 .font(.title2).bold()
             Text("Looks at your activity for the day and gives 2–3 concrete observations: "
                  + "where your time goes, where you could focus better. "
@@ -70,7 +70,7 @@ private struct CartographerBody: View {
                 Label("A local LLM is required", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange).font(.headline)
                 Text("Set an endpoint (Ollama / LM Studio / mlx_lm.server) and a model in Connections — "
-                     + "Cartographer works strictly on-device, your history never goes to the cloud.")
+                     + "Daily Insights works strictly on-device, your history never goes to the cloud.")
                     .foregroundStyle(.secondary)
                 Button("Open Connections") { env.selectedSection = .connections }
                     .buttonStyle(.borderedProminent)
@@ -86,7 +86,7 @@ private struct CartographerBody: View {
             VStack(alignment: .leading, spacing: 12) {
                 Label("One-time consent", systemImage: "hand.raised.fill")
                     .foregroundStyle(.tint).font(.headline)
-                Text("To produce insights, Cartographer will send compact fragments of activity for the chosen day "
+                Text("To produce insights, Daily Insights will send compact fragments of activity for the chosen day "
                      + "(app names, window titles, short snippets of on-screen text) to your local "
                      + "LLM — a localhost-only endpoint. No cloud; nothing is written to disk — only "
                      + "a request to the model on this Mac.")

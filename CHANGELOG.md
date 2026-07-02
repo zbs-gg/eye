@@ -2,6 +2,18 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
+## [Unreleased] — 2026-07-02
+
+### Fixed
+- **Browser is no longer shown as your "top app".** Activity time in a browser (Dia, Safari, Chrome,
+  Arc…) is now attributed per **site/page**, not lumped under the browser — "Dia" becomes "Dia ·
+  github.com", "Dia · Google Gemini", etc. Uses the URL host when available, and the tab/window title
+  when the browser doesn't expose a URL (Dia/Arc). Surfaces in Daily Insights' top-apps.
+
+### Changed
+- Renamed the in-app **"Cartographer"** feature to **"Daily Insights"** (nav + view), to disambiguate
+  from the standalone Cartographer person-mapping project.
+
 ## [Unreleased] — 2026-07-01
 
 ### Added
