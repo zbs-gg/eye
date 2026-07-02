@@ -1,6 +1,7 @@
 import Foundation
 import CoreAudio
 import AppKit   // NSRunningApplication
+import Darwin   // proc_pidinfo — resolve a helper/renderer pid up to its owning app
 
 /// Detects whether a call/meeting is happening right now — on-device, with NO new permission.
 ///
@@ -25,17 +26,18 @@ import AppKit   // NSRunningApplication
 /// Emits a DEBOUNCED Bool over an AsyncStream: start is immediate; stop waits a 10s grace (absorbs
 /// Zoom reconnects / network blips); only settled state changes are emitted. Sendable actor.
 actor MeetingDetector {
-    /// Apps that hold the mic only during an actual call (not resident background mic use).
-    static let meetingBundles: Set<String> = [
-        "us.zoom.xos",                  // Zoom
-        "com.microsoft.teams",          // Teams (classic)
-        "com.microsoft.teams2",         // Teams (new)
-        "com.apple.FaceTime",           // FaceTime
-        "com.hnc.Discord",              // Discord
-        "com.tinyspeck.slackmacgpu",    // Slack
-        "com.cisco.webexmeetingsapp",   // Webex Meetings
-        "com.webex.meetingmanager",     // Webex (older)
-        "com.skype.skype",              // Skype
+    /// Bundle-id PREFIXES of apps that hold the mic only during an actual call. Prefixes (not exact ids)
+    /// so audio helper/XPC processes — e.g. "us.zoom.helper", "com.tinyspeck.slack.helper2" — still match
+    /// once we resolve them to their owning app.
+    static let meetingPrefixes: [String] = [
+        "us.zoom",                 // Zoom (+ helpers)
+        "com.microsoft.teams",     // Teams classic + new (teams2)
+        "com.apple.FaceTime",      // FaceTime
+        "com.hnc.Discord",         // Discord
+        "com.tinyspeck.slack",     // Slack (+ helpers)
+        "com.cisco.webex",         // Webex
+        "com.webex",               // Webex (older)
+        "com.skype",               // Skype
     ]
 
     private let stopGrace: TimeInterval = 10
@@ -99,10 +101,31 @@ actor MeetingDetector {
         for obj in processObjects() where isRunningInput(obj) {
             let pid = pidOf(obj)
             if pid == mine || pid <= 0 { continue }
-            guard let bid = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier else { continue }
-            if meetingBundles.contains(bid) { return true }
+            guard let bid = owningBundleId(for: pid) else { continue }
+            if meetingPrefixes.contains(where: { bid.hasPrefix($0) }) { return true }
         }
         return false
+    }
+
+    /// Bundle id of the app that OWNS `pid`, walking up the parent chain — a mic-holding process is often
+    /// an audio helper/renderer whose own bundle id is nil; its owning app is what we match against.
+    @MainActor
+    private static func owningBundleId(for pid: pid_t) -> String? {
+        var p = pid
+        for _ in 0..<5 {
+            if let b = NSRunningApplication(processIdentifier: p)?.bundleIdentifier { return b }
+            let parent = parentPid(of: p)
+            if parent <= 1 || parent == p { break }
+            p = parent
+        }
+        return nil
+    }
+
+    private static func parentPid(of pid: pid_t) -> pid_t {
+        var info = proc_bsdshortinfo()
+        let size = Int32(MemoryLayout<proc_bsdshortinfo>.size)
+        let r = proc_pidinfo(pid, PROC_PIDT_SHORTBSDINFO, 0, &info, size)
+        return r == size ? pid_t(info.pbsi_ppid) : -1
     }
 
     private static func processObjects() -> [AudioObjectID] {

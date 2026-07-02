@@ -13,6 +13,17 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   incremental (per-source cursor), toggle + "Import now" in Settings.
 
 ### Fixed
+- **Browser-history hardening (Pro review).** Stable per-source cursor (was a per-process-random
+  `hashValue` that re-imported every launch); consistent DB snapshot via SQLite backup API (+
+  integrity-checked file-copy fallback, not a torn WAL copy); per-format cursor precision (Safari
+  fractional seconds no longer dup-loop); cursor never stalls on an all-filtered batch; **never
+  backfills a privacy-pause window** (`PrivacyPauseLog`) and "Import now" is gated by the toggle/pause;
+  honest inserted-count; Full-Disk-Access failures surfaced in Settings. Audio: an explicit mode change
+  now clears a stale manual override, so **"Off" is a hard stop** (no recording-while-UI-says-off trap).
+  MeetingDetector resolves a mic-holding helper/renderer pid up to its owning app (fewer missed calls).
+  `hostFromURL` uses URLComponents (ports/creds/IPv6/IDN/uppercase-scheme). Daily Insights recovers the
+  real host for URL-hiding browsers (Dia/Arc) from imported history, so they split by site not page
+  title. Downgrade guard: a DB written by a newer build is detected, never erased.
 - **Browser is no longer shown as your "top app".** Activity time in a browser (Dia, Safari, Chrome,
   Arc…) is now attributed per **site/page**, not lumped under the browser — "Dia" becomes "Dia ·
   github.com", "Dia · Google Gemini", etc. Uses the URL host when available, and the tab/window title

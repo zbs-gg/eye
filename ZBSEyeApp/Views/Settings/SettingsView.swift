@@ -461,13 +461,18 @@ struct SettingsView: View {
                     Button("Import now") {
                         browserImportStatus = "Importing…"
                         Task {
-                            let r = try? await env.browserHistoryImporter?.run()
-                            browserImportStatus = r.map { "Imported \($0.imported) new visits" } ?? "Import failed"
+                            guard let r = try? await env.browserHistoryImporter?.run() else {
+                                browserImportStatus = "Import failed"; return
+                            }
+                            var msg = "Imported \(r.imported) new visits from \(r.sources) browser(s)"
+                            if let first = r.errors.first { msg += " · " + first }
+                            browserImportStatus = msg
                         }
                     }
                     .font(.callout)
+                    .disabled(!browserHistoryEnabled || env.recording.pausedUntil != nil)
                     if let s = browserImportStatus {
-                        Text(s).font(.caption).foregroundStyle(.secondary)
+                        Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     }
                 }
             }
