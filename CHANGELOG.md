@@ -5,6 +5,13 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 ## [Unreleased] — 2026-07-02
 
 ### Added
+- **Usage stats (Progress tab).** A personal, on-device breakdown of how you spent the last 7 days —
+  where the time went (browsers split by real site, not lumped), minutes/active day, context switches,
+  busiest hour. Dogfoods the same site-aware attribution as Daily Insights.
+- **Self-repair (Settings → "Something not working?").** Since the source is public and yours, a broken
+  thing has a path: describe the problem → Eye collects on-device diagnostics and copies a ready-to-run
+  **repair prompt for your own AI agent** (read the source, reproduce, fix), or opens a **pre-filled
+  GitHub issue** in one click. No more dead end when something breaks.
 - **Browser history import.** ZBS Eye now reads each browser's own local history DB (Dia, Arc, Chrome,
   Edge, Brave — Chromium format; Safari — needs Full Disk Access) and imports the **real URLs + visit
   times + titles** into a `browser_visits` table (FTS-searchable). This fills a gap: Dia/Arc don't

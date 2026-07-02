@@ -15,6 +15,8 @@ struct SettingsView: View {
     @State private var pendingLang: AppLanguage?
     @AppStorage("zbseye.browserHistory.enabled") private var browserHistoryEnabled = true
     @State private var browserImportStatus: String?
+    @State private var problemText = ""
+    @State private var repairCopied = false
 
     var body: some View {
         ScrollView {
@@ -30,6 +32,7 @@ struct SettingsView: View {
                 if HistoryImporter.sourceExists { importCard }
                 transcriptionCard
                 serverCard
+                supportCard
             }
             .padding(28)
             .frame(maxWidth: 680, alignment: .leading)
@@ -477,6 +480,79 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private var supportCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Something not working?").font(.headline)
+                Text("ZBS Eye is open to read and yours to fix. Describe what's wrong — Eye collects the "
+                     + "diagnostics and hands your own AI agent a ready-to-run repair prompt (it reads the "
+                     + "source and fixes it). If that doesn't do it, file a GitHub issue with one click.")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("What went wrong? (e.g. audio doesn't record during calls)",
+                          text: $problemText, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(2...4)
+                    .onChange(of: problemText) { _, _ in repairCopied = false }
+                HStack(spacing: 10) {
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(buildRepairPrompt(), forType: .string)
+                        repairCopied = true
+                    } label: {
+                        Label(repairCopied ? "Copied — paste into your agent" : "Ask your agent to fix it",
+                              systemImage: repairCopied ? "checkmark" : "wand.and.stars")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button { openGitHubIssue() } label: {
+                        Label("Open a GitHub issue", systemImage: "ladybug")
+                    }
+                }
+                .font(.callout)
+            }
+        }
+    }
+
+    /// A ready-to-paste prompt for the user's own coding agent (Claude Code / Codex): read the public
+    /// source, reproduce, fix. Includes auto-collected on-device diagnostics + the user's description.
+    private func buildRepairPrompt() -> String {
+        """
+        You are my coding agent. Something isn't working in ZBS Eye — a local macOS app I run. The full \
+        source is public: https://github.com/zbs-gg/eye . Please read the repo, reproduce, and fix it.
+
+        ## What's wrong (my words)
+        \(problemText.isEmpty ? "(describe the problem here)" : problemText)
+
+        ## Diagnostics (auto-collected, on-device)
+        \(diagnosticsBlock())
+
+        ## Do this
+        1. Open github.com/zbs-gg/eye — read README.md, AGENTS.md, BUILD.md (written for agents).
+        2. Reproduce and fix the issue above. Keep it local-first (no cloud/egress), Swift 6 strict concurrency.
+        3. Rebuild: `bash scripts/build-notarized.sh` (or `scripts/build-release.sh` for a self-signed dev build).
+        4. If you can't fix it, open a GitHub issue at github.com/zbs-gg/eye/issues/new with this whole message.
+        """
+    }
+
+    private func diagnosticsBlock() -> String {
+        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        let p = env.permissions.snapshot
+        let rec = env.recording
+        return """
+        - App: ZBS Eye \(v) · \(ProcessInfo.processInfo.operatingSystemVersionString)
+        - Permissions: screen=\(p.screenRecording) accessibility=\(p.accessibility) mic=\(p.microphone) speech=\(p.speech)
+        - Recording: capturing=\(rec.isCapturing) blocked=\(rec.blockedReason ?? "—") degraded=\(rec.degradedReason ?? "—")
+        - Audio mode: \(env.audioSettings.audioMode.rawValue) · frames this session: \(rec.screenFrameCount)
+        """
+    }
+
+    private func openGitHubIssue() {
+        let title = problemText.isEmpty ? "Bug report" : String(problemText.prefix(70))
+        let body = "## What's wrong\n\(problemText)\n\n## Diagnostics\n\(diagnosticsBlock())"
+        var comps = URLComponents(string: "https://github.com/zbs-gg/eye/issues/new")!
+        comps.queryItems = [.init(name: "title", value: title), .init(name: "body", value: body)]
+        if let url = comps.url { NSWorkspace.shared.open(url) }
     }
 
     private var transcriptionCard: some View {
