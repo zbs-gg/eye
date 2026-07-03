@@ -67,6 +67,21 @@ native alternative that **never goes to the cloud** — your activity history is
   Reachable from a **main-window button**, the **menu bar**, and Settings; agents can also pull live state
   over MCP (`get_diagnostics`).
 
+## Own it: fix and extend Eye with your agent
+
+ZBS Eye assumes you have your own coding agent (Claude Code, Cursor, …) — so a broken or missing
+thing is never a dead end. The flow:
+
+1. Something breaks → click **"Something wrong?"** (toolbar / menu bar / Settings), describe it.
+2. Eye collects on-device diagnostics and copies a prompt for your agent — a **quick repair prompt**,
+   or **"Set up a dev workspace"** for a longer job.
+3. The workspace prompt has your agent clone this repo — which ships with a **ready-made harness**:
+   `CLAUDE.md` + [`AGENTS.md`](AGENTS.md) (rules, invariants, gotchas), `.claude/skills/`
+   (`eye-build`, `eye-diagnose`, `eye-db-validate`, `eye-review-loop`, `eye-release`), a hostile
+   `swift6-reviewer` subagent, and a find→verify review workflow.
+4. Your agent reproduces the bug, fixes it, self-reviews, and opens a PR — or just builds you a
+   feature nobody else needs. Your recorder, your rules.
+
 ## Install
 
 <div align="center">
