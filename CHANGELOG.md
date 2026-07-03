@@ -2,9 +2,20 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
-## [Unreleased] — 2026-07-02
+## [Unreleased] — 2026-07-03
 
-### Added
+### Changed
+- **Much lighter at runtime (RAM/CPU).** Measured live, Eye sat at ~740 MB (peaking ~1.35 GB) and spiked
+  CPU on launch. Root causes fixed, none touching the local-first design:
+  - **Capture memory.** The shared `CIContext` was never cleared, piling up ~550 MB of stale GPU frame
+    surfaces (IOSurface). Now `cacheIntermediates:false` + `clearCaches()` per frame reclaim it.
+  - **Capture resolution.** Frames were captured at full native Retina/5K resolution. They're now capped
+    to a 2560 px longest side (SCK renders smaller directly) — a ~2–4× smaller surface **and** HEIC, so
+    the DB grows slower too. OCR already downscaled, so recognized text is unaffected.
+  - **Embedding off the hot path.** Ingest used to embed **every** captured frame inline, keeping the
+    ~150 MB e5 model resident 24/7. Embedding now runs in a single continuous background indexer that
+    **unloads the model when idle**; a fresh frame gets its semantic vector within ~20 s (full-text
+    search is instant regardless).
 - **Self-repair, everywhere + over MCP.** The "Something not working?" flow is now first-class: a
   main-window toolbar button + a menu-bar item + Settings, all opening a shared `SelfRepairView`. An
   agent connected to Eye's MCP server can also pull live state with the new **`get_diagnostics`** tool

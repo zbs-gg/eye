@@ -165,17 +165,16 @@ final class AppEnvironment {
             }
             ZBSEyeHTTPServer.log("bootstrap: db ok")
             self.database = db
-            // Separate embedders for ingest and search — otherwise a heavy embed on capture blocks
-            // the embedding of a search query (head-of-line, per review). The model download is still
-            // ONE per process (E5ModelProvider serializes; cache in Application Support).
-            let ingestEmbedder = EmbeddingService()
-            let ingestService = IngestService(db: db, storage: storage, embedder: ingestEmbedder)
+            // Ingest does NOT embed anymore (that kept the e5 model resident 24/7 and burned CPU per capture).
+            let ingestService = IngestService(db: db, storage: storage)
             self.ingest = ingestService
 
-            // Backfill of the semantic index (frames without a vector: dropped v3 migration / offline first-run).
-            // The same embedder as ingest — we don't load a third copy of the model into RAM. Start delayed,
-            // so it doesn't compete with launch.
-            let backfill = VectorBackfill(db: db, embedder: ingestEmbedder)
+            // The continuous semantic indexer owns ALL embedding: it fills vectors for frames/transcripts off the
+            // hot path and UNLOADS the model when the backlog is drained. Its own EmbeddingService (search keeps a
+            // separate one so an index batch never blocks a search-query embed). Started delayed @ .utility so the
+            // 449MB model load stays off the launch path.
+            let indexerEmbedder = EmbeddingService()
+            let backfill = VectorBackfill(db: db, embedder: indexerEmbedder)
             Task.detached(priority: .utility) {
                 try? await Task.sleep(for: .seconds(30))
                 await backfill.run()

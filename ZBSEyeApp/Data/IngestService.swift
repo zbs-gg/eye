@@ -10,12 +10,14 @@ import GRDB
 actor IngestService {
     private let db: ZBSEyeDatabase
     private let storage: StorageManager
-    private let embedder: EmbeddingService
 
-    init(db: ZBSEyeDatabase, storage: StorageManager, embedder: EmbeddingService) {
+    // NB: ingest deliberately does NOT embed. Frames/transcripts are written without a vector; the continuous
+    // VectorBackfill indexer fills vectors in the background (off the hot path, model unloaded on idle). FTS is
+    // instant regardless; semantic search catches up within ~20s. This is what keeps the e5 model out of the
+    // per-frame path (it used to be loaded 24/7 and embed every capture).
+    init(db: ZBSEyeDatabase, storage: StorageManager) {
         self.db = db
         self.storage = storage
-        self.embedder = embedder
     }
 
     @discardableResult
@@ -38,11 +40,6 @@ actor IngestService {
 
         let tsMs = Int64(rec.timestamp.timeIntervalSince1970 * 1000)
         let blocks = rec.textBlocks
-
-        // embedding — BEFORE the transaction (async). Embed only if there's text (don't poke the actor on empty input).
-        let fullText = blocks.map(\.text).joined(separator: " ")
-        let embedding: [Float]? = fullText.isEmpty ? nil : await embedder.embed(fullText)
-        let bucket = monthBucket(rec.timestamp)
 
         do {
             return try await db.pool.write { dbc -> Int64 in
@@ -70,13 +67,7 @@ actor IngestService {
                         bboxW: b.bbox.map { Double($0.size.width) }, bboxH: b.bbox.map { Double($0.size.height) })
                     try tb.insert(dbc)   // the text_blocks_ai trigger fills text_fts
                 }
-                // semantic vector into vec0 (temporal partition by month).
-                // Guard: write only when the dimension matches (otherwise vec0 throws and rolls back the WHOLE
-                // ingest — the frame is lost; better to silently skip semantic, FTS stays).
-                if let embedding, embedding.count == ZBSEyeDatabase.embeddingDim {
-                    try dbc.execute(sql: "INSERT INTO vec_screen(capture_id, bucket_month, embedding) VALUES (?, ?, ?)",
-                                    arguments: [captureId, bucket, floatBlob(embedding)])
-                }
+                // No vector here — the continuous VectorBackfill indexer fills vec_screen off the hot path.
                 return captureId
             }
         } catch {
@@ -103,21 +94,13 @@ actor IngestService {
     /// + a semantic vector into vec_transcripts (cross-lingual "a ru query finds an en call").
     @discardableResult
     func ingest(_ rec: TranscriptionRecord) async throws -> Int64 {
-        // embedding BEFORE the transaction (async); an unavailable model doesn't block the text (FTS stays)
-        let embedding = await embedder.embed(passage: rec.text)
-        let bucket = monthBucket(rec.ts)
+        // No vector here — the continuous VectorBackfill indexer fills vec_transcripts off the hot path (FTS stays instant).
         return try await db.pool.write { dbc -> Int64 in
             var row = TranscriptionRow(
                 id: nil, audioId: rec.audioId, text: rec.text, language: rec.language,
                 speaker: rec.speaker, startOffset: rec.startOffset, endOffset: rec.endOffset, engine: rec.engine)
             try row.insert(dbc)
-            let id = row.id!
-            if let embedding, embedding.count == ZBSEyeDatabase.embeddingDim {
-                try dbc.execute(
-                    sql: "INSERT INTO vec_transcripts(transcription_id, bucket_month, embedding) VALUES (?, ?, ?)",
-                    arguments: [id, bucket, floatBlob(embedding)])
-            }
-            return id
+            return row.id!
         }
     }
 
