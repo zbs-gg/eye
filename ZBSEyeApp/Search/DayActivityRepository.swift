@@ -129,7 +129,12 @@ actor DayActivityRepository {
     // MARK: — pure functions (no DB, independently testable)
 
     /// Segment frames into sessions. A new session on a group change OR a gap > gapMs.
-    static func sessions(_ caps: [CaptureLite], grouping: SessionGrouping, gapMs: Int64) -> [ActivitySession] {
+    /// `excludeSystem` (default ON): system-shell frames (SystemAppFilter — loginwindow, screen saver…)
+    /// are dropped BEFORE segmentation, so a lock screen reads as a gap, not an "activity".
+    /// Pass false only for debug surfaces that must show the filtered entries too.
+    static func sessions(_ caps: [CaptureLite], grouping: SessionGrouping, gapMs: Int64,
+                         excludeSystem: Bool = true) -> [ActivitySession] {
+        let caps = excludeSystem ? SystemAppFilter.userCaptures(caps) : caps
         guard !caps.isEmpty else { return [] }
         func sameGroup(_ a: CaptureLite, _ b: CaptureLite) -> Bool {
             switch grouping {
