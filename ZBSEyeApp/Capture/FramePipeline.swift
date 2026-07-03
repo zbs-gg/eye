@@ -3,6 +3,7 @@ import ScreenCaptureKit
 import CoreImage
 import CoreVideo
 import CoreGraphics
+import ImageIO
 import Vision
 import Metal
 
@@ -135,7 +136,11 @@ actor FramePipeline {
     // ── HEIC via the hardware codec ──
     private func encodeHEIC(_ image: CIImage) -> Data? {
         let cs = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-        return ciContext.heifRepresentation(of: image, format: .RGBA8, colorSpace: cs, options: [:])
+        // Lossy quality (was untuned = near-lossless/fat). Frames are only viewed on the timeline; OCR already ran
+        // on the live frame, so a lower quality shrinks storage with no recognition cost.
+        let opts: [CIImageRepresentationOption: Any] =
+            [.init(rawValue: kCGImageDestinationLossyCompressionQuality as String): config.heicQuality]
+        return ciContext.heifRepresentation(of: image, format: .RGBA8, colorSpace: cs, options: opts)
     }
 
     /// Hashes: [whole frame, top-left, top-right, bottom-left, bottom-right].
