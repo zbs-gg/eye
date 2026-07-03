@@ -46,10 +46,21 @@ with a durable work queue so nothing can be stranded and idle cost is O(pending)
 - `EmbeddingService`: add `func unload()` (`bundle = nil`) to release the model from RAM on idle.
 - `VectorBackfill` → a **queue drainer**: `run()` loops; each round drains the queue newest-first (batches of 300,
   2 s between), embedding each item and, in ONE idempotent transaction, replacing any existing vector + deleting the
-  queue row. An item that can't be embedded because the **model is unavailable** stays queued (retried next round);
-  one that's **un-embeddable text** (too short / untokenizable, `isReady` is true) is dropped so it can't stall the
-  queue. The model is unloaded only after `unloadAfterIdleRounds = 15` consecutive empty rounds (~5 min) so the
-  once-a-minute idle-capture trickle doesn't thrash the 449 MB load. `idleRescanSec = 20 s`.
+  queue row. `drainQueue` returns `.embedded / .idle / .blocked`; the model is unloaded after
+  `unloadAfterIdleRounds = 15` idle rounds (~5 min, so the once-a-minute idle-capture trickle doesn't thrash the
+  449 MB load) **and always on `.blocked`** (never pinned during an outage, which then backs off `blockedBackoffSec = 120 s`).
+- **Never-lose semantics (after 3 review rounds).** A row that can't be embedded — offline, a transient DB blip, or
+  genuinely un-embeddable text — is **never deleted** (history is precious). It stays queued with an `attempts`
+  counter (`embed_queue.attempts`); after `maxAttempts = 5` it sinks out of rotation (`WHERE attempts < max`) so it
+  can neither head-of-line-block newer rows nor waste cycles, yet is preserved. `attempts` is reset each launch so a
+  fixed model / past blip auto-recovers. Only a source row that is genuinely gone/empty is dequeued (and delete
+  triggers drop queue rows whose capture/transcript was pruned). A whole-DB read error (batch fetch) → `.blocked`,
+  not `.idle`.
+- **`reconcile()` runs once** (persisted `reconciledKey` flag), in the background, reading gaps WAL-friendly then
+  enqueuing in batches — it seeds pre-v6 gaps without a full-history scan on every launch (all live write sites
+  enqueue, so the queue stays complete after the first pass).
+- **`HistoryImporter`** also enqueues imported frames/transcripts (they're written outside `IngestService`), else an
+  import would get FTS but no semantic vector.
 
 ### 4. Launch smoothing [S]
 - Backfill/indexer already starts 30 s post-launch @ `.utility` — keep. The unconditional warmup embed becomes

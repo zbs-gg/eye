@@ -236,9 +236,11 @@ final class ZBSEyeDatabase: Sendable {
         m.registerMigration("v6_embed_queue") { db in
             try db.execute(sql: """
                 CREATE TABLE embed_queue (
-                    row_id INTEGER NOT NULL,      -- screen_captures.id or transcriptions.id
-                    kind   INTEGER NOT NULL,      -- 0 = screen frame, 1 = transcript
-                    ts     INTEGER NOT NULL,      -- epoch ms (for bucket_month + newest-first ordering)
+                    row_id   INTEGER NOT NULL,    -- screen_captures.id or transcriptions.id
+                    kind     INTEGER NOT NULL,    -- 0 = screen frame, 1 = transcript
+                    ts       INTEGER NOT NULL,    -- epoch ms (for bucket_month + newest-first ordering)
+                    attempts INTEGER NOT NULL DEFAULT 0,  -- failed embed tries; a row that can't be embedded sinks
+                                                          -- out of rotation (never deleted — history is precious)
                     PRIMARY KEY (row_id, kind)
                 ) WITHOUT ROWID;
                 """)

@@ -5,11 +5,12 @@ import GRDB
 /// (that kept the ~150MB e5 model resident 24/7 and burned CPU on every capture); instead every text-bearing frame /
 /// transcript is enqueued atomically with its text, and this actor drains the queue off the capture path @ .utility.
 ///
-/// Because the queue IS the source of truth, nothing is stranded: an item stays queued until it is successfully
-/// vectored, so an interruption / offline period / migration just resumes later. Idle cost is O(pending) — a tiny
-/// indexed read of an (usually empty) queue — not a full-history scan. The model is released on idle AND on any
-/// outage (it is never pinned resident). `reconcile()` (background, at start) seeds pre-existing gaps and re-enqueues
-/// anything missing a vector, so even a bad batch is recoverable on the next launch.
+/// The queue IS the source of truth, so nothing is stranded and idle cost is O(pending). A row that can't be
+/// embedded right now (offline, DB blip, or genuinely un-embeddable text) is **never deleted** — it stays queued
+/// with an `attempts` counter and sinks out of rotation after `maxAttempts`, so it can't head-of-line-block newer
+/// rows yet is preserved (history is precious). Attempts reset each launch (so a fixed model / transient blip
+/// auto-recovers), and `reconcile()` seeds pre-existing gaps once. The model is released on idle AND on any outage —
+/// it is never pinned resident.
 actor VectorBackfill {
     private let db: ZBSEyeDatabase
     private let embedder: EmbeddingService
@@ -21,6 +22,10 @@ actor VectorBackfill {
     /// trickle doesn't reload the 449MB model each time.
     private let unloadAfterIdleRounds = 15
     private let batchSize = 300
+    /// A row that fails to embed this many times sinks out of rotation (kept in the queue, just not retried this
+    /// session) — it can neither block the queue nor be lost. Reset on the next launch.
+    private let maxAttempts = 5
+    private let reconciledKey = "zbseye.embedQueueReconciled"
 
     private enum Kind: Int64 { case screen = 0, transcript = 1 }
     private enum DrainStatus { case embedded, idle, blocked }
@@ -37,7 +42,8 @@ actor VectorBackfill {
         running = true
         defer { running = false }
 
-        await reconcile()   // seed pre-v6 gaps / anything missing a vector — background, off the launch migration
+        await resetAttempts()   // give every queued row a fresh set of tries (a fixed model / past blip recovers)
+        await reconcileOnce()   // seed pre-existing gaps once — background, off the launch migration
 
         var idleRounds = 0
         while !Task.isCancelled {
@@ -58,37 +64,42 @@ actor VectorBackfill {
         }
     }
 
-    /// Drain the queue newest-first until empty (or blocked). `.embedded` = made progress, `.idle` = nothing to do,
-    /// `.blocked` = an outage (model unavailable / DB read or write failing) — leave items queued and back off.
+    /// Drain retryable queue rows newest-first until empty (or blocked). `.embedded` = made progress, `.idle` =
+    /// nothing left to embed, `.blocked` = an outage (model unavailable / whole-DB read or write failing) — back off.
     private func drainQueue() async -> DrainStatus {
         var didWork = false
         var failStreak = 0
         while !Task.isCancelled {
-            guard let batch = try? await nextBatch(limit: batchSize), !batch.isEmpty else {
-                return didWork ? .embedded : .idle
+            let batch: [QueueItem]
+            do { batch = try await nextBatch(limit: batchSize) }
+            catch {
+                // Whole-DB read outage (not one bad row) — back off, leave everything queued.
+                Log.app.error("embed-queue batch read failed: \(String(describing: error), privacy: .public)")
+                return .blocked
             }
+            if batch.isEmpty { return didWork ? .embedded : .idle }
+
             for item in batch where !Task.isCancelled {
                 let text: String?
                 do { text = try await textFor(item) }
                 catch {
-                    // Transient DB read error — do NOT drop the item (it may still have text); back off and retry.
-                    Log.app.error("embed-queue read failed: \(String(describing: error), privacy: .public)")
-                    return didWork ? .embedded : .blocked
+                    // Transient read error on THIS row — don't drop it; bump so it sinks and can't block the head.
+                    await bumpAttempts(item)
+                    continue
                 }
                 guard let text, !text.isEmpty else {
-                    // The source row genuinely has no text (deleted / empty) — drop it so the queue can't stall.
+                    // Source row genuinely has no text (deleted / empty) — safe to drop from the queue.
                     try? await dequeue(item)
                     continue
                 }
                 guard let vec = await embedder.embed(passage: text), vec.count == ZBSEyeDatabase.embeddingDim else {
                     if await embedder.isReady {
-                        // Model is loaded but THIS text can't be embedded (too short / untokenizable) — drop it so
-                        // it can't block the queue. If a systematic model fault dropped good rows, reconcile()
-                        // re-enqueues them (they still lack a vector) on the next launch — nothing is lost forever.
-                        try? await dequeue(item)
+                        // Model loaded but THIS text can't be embedded (too short / untokenizable). Keep it queued —
+                        // bump so it sinks after maxAttempts. Never delete: a systematic fault must stay recoverable.
+                        await bumpAttempts(item)
                         continue
                     }
-                    return didWork ? .embedded : .blocked   // offline / provider backoff — leave queued, retry later
+                    return .blocked   // offline / provider backoff — leave queued, retry after the backoff
                 }
                 let blob = floatBlob(vec)
                 do {
@@ -98,7 +109,7 @@ actor VectorBackfill {
                 } catch {
                     failStreak += 1
                     Log.app.error("embed-queue write failed: \(String(describing: error), privacy: .public)")
-                    if failStreak >= 10 { return didWork ? .embedded : .blocked }
+                    if failStreak >= 10 { return .blocked }
                 }
             }
             try? await Task.sleep(for: .seconds(2))   // pause between batches — background, not a load spike
@@ -106,11 +117,27 @@ actor VectorBackfill {
         return didWork ? .embedded : .idle
     }
 
+    /// Newest-first among rows still worth retrying this session (attempts under the cap). Rows at the cap are
+    /// excluded (preserved in the queue, just not re-attempted) so they can't block or waste cycles.
     private func nextBatch(limit: Int) async throws -> [QueueItem] {
-        try await db.pool.read { dbc in
-            try Row.fetchAll(dbc, sql: "SELECT row_id, kind, ts FROM embed_queue ORDER BY ts DESC LIMIT ?",
-                             arguments: [limit])
+        try await db.pool.read { [maxAttempts] dbc in
+            try Row.fetchAll(dbc, sql:
+                "SELECT row_id, kind, ts FROM embed_queue WHERE attempts < ? ORDER BY ts DESC LIMIT ?",
+                arguments: [maxAttempts, limit])
                 .map { QueueItem(rowId: $0["row_id"], kind: $0["kind"], ts: $0["ts"]) }
+        }
+    }
+
+    private func bumpAttempts(_ item: QueueItem) async {
+        try? await db.pool.write { dbc in
+            try dbc.execute(sql: "UPDATE embed_queue SET attempts = attempts + 1 WHERE row_id = ? AND kind = ?",
+                            arguments: [item.rowId, item.kind])
+        }
+    }
+
+    private func resetAttempts() async {
+        try? await db.pool.write { dbc in
+            try dbc.execute(sql: "UPDATE embed_queue SET attempts = 0 WHERE attempts > 0")
         }
     }
 
@@ -158,11 +185,11 @@ actor VectorBackfill {
         }
     }
 
-    /// Enqueue every text-bearing frame / transcript that lacks a vector and isn't already queued — gaps from before
-    /// v6, rows written by a path that forgot to enqueue, or rows a systematic fault dropped. Reads gaps first (WAL
-    /// reads don't block capture writes), then enqueues in small batches (short write locks) so a large store-forever
-    /// history can't stall capture. Idempotent; runs once per launch.
-    private func reconcile() async {
+    /// One-time seed of pre-existing gaps (rows from before v6, or any written by a path that forgot to enqueue).
+    /// Guarded by a persisted flag so it does NOT re-scan the full history on every launch — all live write sites
+    /// (IngestService, HistoryImporter) enqueue at write time, so after the first pass the queue stays complete.
+    private func reconcileOnce() async {
+        if UserDefaults.standard.bool(forKey: reconciledKey) { return }
         await reconcileGaps(kind: Kind.screen.rawValue, sql: """
             SELECT c.id AS id, c.ts AS ts FROM screen_captures c
             WHERE EXISTS (SELECT 1 FROM text_blocks tb WHERE tb.captureId = c.id)
@@ -174,9 +201,12 @@ actor VectorBackfill {
             WHERE t.id NOT IN (SELECT transcription_id FROM vec_transcripts)
               AND t.id NOT IN (SELECT row_id FROM embed_queue WHERE kind = 1)
             """)
+        guard !Task.isCancelled else { return }   // interrupted → leave the flag unset so it finishes next launch
+        UserDefaults.standard.set(true, forKey: reconciledKey)
     }
 
     private func reconcileGaps(kind: Int64, sql: String) async {
+        // Read gaps first (WAL reads don't block capture writes), then enqueue in small batches (short write locks).
         let gaps: [(Int64, Int64)] = (try? await db.pool.read { dbc in
             try Row.fetchAll(dbc, sql: sql).map { row -> (Int64, Int64) in (row["id"], row["ts"]) }
         }) ?? []
