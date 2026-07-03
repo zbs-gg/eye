@@ -12,6 +12,9 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   - **Capture resolution.** Frames were captured at full native Retina/5K resolution. They're now capped
     to a 2560 px longest side (SCK renders smaller directly) — a ~2–4× smaller surface **and** HEIC, so
     the DB grows slower too. OCR already downscaled, so recognized text is unaffected.
+  - **HEIC quality tuned.** The stored-frame HEIC quality was untuned (≈0.8, near-lossless). Now a
+    configurable `heicQuality` (default 0.6) — ~19% smaller frames on real captures, no visible loss
+    (OCR runs on the live frame before encode, so recognition is unaffected).
   - **Embedding off the hot path.** Ingest used to embed **every** captured frame inline, keeping the
     ~150 MB e5 model resident 24/7. Embedding now runs in a single continuous background indexer that
     **unloads the model when idle**; a fresh frame gets its semantic vector within ~20 s (full-text
