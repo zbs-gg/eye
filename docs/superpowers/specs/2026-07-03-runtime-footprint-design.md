@@ -56,9 +56,11 @@ with a durable work queue so nothing can be stranded and idle cost is O(pending)
   fixed model / past blip auto-recovers. Only a source row that is genuinely gone/empty is dequeued (and delete
   triggers drop queue rows whose capture/transcript was pruned). A whole-DB read error (batch fetch) → `.blocked`,
   not `.idle`.
-- **`reconcile()` runs once** (persisted `reconciledKey` flag), in the background, reading gaps WAL-friendly then
-  enqueuing in batches — it seeds pre-v6 gaps without a full-history scan on every launch (all live write sites
-  enqueue, so the queue stays complete after the first pass).
+- **`reconcile()` runs every launch** (self-healing — no fragile "done" flag; a flag set on a swallowed read error
+  would strand pre-v6 history forever), in the background, reading gaps WAL-friendly then enqueuing in batches. It's a
+  cheap no-op once the queue is complete (the steady state, since all live write sites enqueue). A whole-DB read
+  fault during a drain (≥20 consecutive per-row read errors, or a batch-fetch throw) → `.blocked`, not a per-row
+  bump-out. `attempts` reset each launch is batched too.
 - **`HistoryImporter`** also enqueues imported frames/transcripts (they're written outside `IngestService`), else an
   import would get FTS but no semantic vector.
 
