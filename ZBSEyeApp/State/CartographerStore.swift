@@ -30,8 +30,8 @@ final class CartographerStore {
 
     var isBusy: Bool { phase == .loading }
 
-    /// The LLM is configured and local — show the generate button, otherwise a hint.
-    var llmReady: Bool { connections.llm.isConfigured && connections.llm.isLocalOnly }
+    /// A processing model is active in "AI Models" — show the generate button, otherwise a hint.
+    var llmReady: Bool { ai.activeConfig != nil }
 
     /// First-run consent (Pro #13): until explicit consent, daily screen fragments do NOT go to the local
     /// LLM. The UI shows a consent card; generation is blocked.
@@ -45,12 +45,12 @@ final class CartographerStore {
     }
 
     @ObservationIgnored private let service: CartographerService
-    @ObservationIgnored private let connections: ConnectionStore
+    @ObservationIgnored private let ai: AIProviderStore
     @ObservationIgnored private var generateTask: Task<Void, Never>?
 
-    init(service: CartographerService, connections: ConnectionStore) {
+    init(service: CartographerService, ai: AIProviderStore) {
         self.service = service
-        self.connections = connections
+        self.ai = ai
     }
 
     // MARK: — actions
@@ -81,14 +81,13 @@ final class CartographerStore {
 
     private func run() async {
         errorText = nil; insights = nil
-        guard connections.llm.isConfigured, connections.llm.isLocalOnly else {
+        guard let llm = ai.activeConfig else {
             errorText = AutomationError.noLLM.errorDescription
             phase = .failed
             return
         }
         phase = .loading
         let day = selectedDay
-        let llm = connections.llm
         do {
             let result = try await service.generate(day: day, llm: llm)
             // Race: while we were generating, the selected day could have changed or a cancellation arrived.

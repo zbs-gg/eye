@@ -12,7 +12,8 @@ final class DaySummaryStore {
     enum Phase: Sendable, Equatable { case idle, summarizing, writing, done, failed }
 
     @ObservationIgnored private let service: DailySummaryService
-    @ObservationIgnored let connections: ConnectionStore
+    @ObservationIgnored let connections: ConnectionStore   // destination folder (the card lives in Automations)
+    @ObservationIgnored private let ai: AIProviderStore    // the active processing model ("AI Models")
     @ObservationIgnored private let safety: AutomationSafety = .default
     @ObservationIgnored private var previewTask: Task<Void, Never>?
 
@@ -58,13 +59,17 @@ final class DaySummaryStore {
     var errorText: String?
     var audit: [AuditEntry] = []
 
-    init(service: DailySummaryService, connections: ConnectionStore) {
+    init(service: DailySummaryService, connections: ConnectionStore, ai: AIProviderStore) {
         self.service = service
         self.connections = connections
+        self.ai = ai
     }
 
     var isBusy: Bool { phase == .summarizing || phase == .writing }
-    var isReady: Bool { connections.isReady }
+    /// A processing model is active in "AI Models".
+    var llmReady: Bool { ai.activeConfig != nil }
+    /// Ready to run the automation: a processing model AND a destination folder.
+    var isReady: Bool { llmReady && connections.destination.isConfigured }
 
     /// Start the preview while holding onto the Task — so a long local-model call can be cancelled.
     func startPreview() {
@@ -89,12 +94,12 @@ final class DaySummaryStore {
     func buildPreview() async {
         guard !isBusy else { return }
         errorText = nil; lastWrite = nil; preview = nil
-        guard connections.llm.isConfigured, connections.llm.isLocalOnly else {
+        guard let llm = ai.activeConfig else {
             errorText = AutomationError.noLLM.errorDescription; phase = .failed; return
         }
         phase = .summarizing
         do {
-            let p = try await service.preview(day: selectedDay, llm: connections.llm, safety: safety)
+            let p = try await service.preview(day: selectedDay, llm: llm, safety: safety)
             if Task.isCancelled { phase = .idle; return }   // cancelled during the request — no error
             preview = p; phase = .done
         } catch is CancellationError {

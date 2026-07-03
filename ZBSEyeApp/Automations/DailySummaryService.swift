@@ -1,15 +1,16 @@
 import Foundation
 
 /// Engine for the single v1 automation: "day summary". Three stages — collect (history from the DB → compact
-/// sessions) → summarize (local LLM) → write (Markdown into a folder/Obsidian). Actor: all DB, network, and
-/// file work is isolated; only Sendable crosses out. Egress is strictly local (file), preview is
+/// sessions) → summarize (the active processing model from "AI Models") → write (Markdown into a
+/// folder/Obsidian). Actor: all DB, network, and file work is isolated; only Sendable crosses out.
+/// Egress is gated by LLMConfig.validate() (local by default, cloud only with the explicit opt-in), preview is
 /// mandatory before write (see DaySummaryStore) — protection from prompt injection out of private history.
 /// Delegates day aggregation to the shared DayActivityRepository (one scan + segmentation + batch text).
 actor DailySummaryService {
     private let repo: DayActivityRepository
-    private let client: LocalLLMClient
+    private let client: LLMClient
 
-    init(repo: DayActivityRepository, client: LocalLLMClient) {
+    init(repo: DayActivityRepository, client: LLMClient) {
         self.repo = repo
         self.client = client
     }
@@ -51,8 +52,7 @@ actor DailySummaryService {
 
     /// collect + LLM. Does NOT write — this is a preview. Writes audit("preview").
     func preview(day: Date, llm: LLMConfig, safety: AutomationSafety) async throws -> SummaryPreview {
-        guard llm.isConfigured else { throw AutomationError.noLLM }
-        guard llm.isLocalOnly else { throw AutomationError.nonLocalLLM(URL(string: llm.baseURL)?.host ?? llm.baseURL) }
+        try llm.validate()   // egress gate: local by default, cloud only with consent + pinned host
 
         let collected = try await collect(day: day, safety: safety)
         let (system, user) = Self.buildPrompt(collected)

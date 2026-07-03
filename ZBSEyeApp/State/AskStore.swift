@@ -2,8 +2,9 @@ import Foundation
 import Observation
 
 /// UI state for the "Ask" section (@MainActor @Observable): the conversation feed + input. The RAG answer itself is
-/// computed by AskService (actor); the store only orchestrates (the gate "is a local LLM configured", busy, errors) and
-/// holds the messages for the feed. No egress — the localhost gate lives inside AskService/LocalLLMClient.
+/// computed by AskService (actor); the store only orchestrates (the gate "is a processing model active", busy, errors)
+/// and holds the messages for the feed. Egress is gated inside LLMConfig.validate()/LLMClient: local by default,
+/// a cloud provider only after the explicit opt-in in "AI Models".
 @MainActor
 @Observable
 final class AskStore {
@@ -21,15 +22,15 @@ final class AskStore {
     private(set) var busy = false
 
     @ObservationIgnored private let service: AskService
-    @ObservationIgnored private let connections: ConnectionStore
+    @ObservationIgnored private let ai: AIProviderStore
 
-    init(service: AskService, connections: ConnectionStore) {
+    init(service: AskService, ai: AIProviderStore) {
         self.service = service
-        self.connections = connections
+        self.ai = ai
     }
 
-    /// Whether a local LLM is configured (otherwise the section shows a hint instead of the input).
-    var llmReady: Bool { connections.llm.isConfigured && connections.llm.isLocalOnly }
+    /// Whether a processing model is active (otherwise the section shows a hint instead of the input).
+    var llmReady: Bool { ai.activeConfig != nil }
     var canSend: Bool { !busy && !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     func send() {
@@ -42,13 +43,13 @@ final class AskStore {
             messages.append(Message(role: .assistant, text: egg))
             return
         }
-        guard llmReady else {                               // a real question without an LLM → friendly hint
-            messages.append(Message(role: .assistant, text: "To answer from your history I need a local "
-                + "LLM (Ollama / LM Studio / mlx_lm.server) — set an endpoint in Connections. Everything stays on-device, no cloud. 👁"))
+        guard let llm = ai.activeConfig else {              // a real question without a model → friendly hint
+            messages.append(Message(role: .assistant, text: "To answer from your history I need a processing "
+                + "model — pick one in AI Models. Local (LM Studio / Ollama) by default; excerpts go to a cloud "
+                + "provider only if you explicitly opt in. 👁"))
             return
         }
         busy = true
-        let llm = connections.llm
         Task {
             defer { busy = false }
             do {
