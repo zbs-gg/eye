@@ -52,7 +52,7 @@ final class ZBSEyeDatabase: Sendable {
     /// was written by a NEWER ZBS Eye. We never erase (the history is precious) — just log, so a
     /// downgrade is visible instead of silently mis-reading a future schema.
     private static let knownMigrations: Set<String> =
-        ["v1", "v2_vector", "v3_vec_e5_384", "v4_vec_transcripts", "v5_browser_visits"]
+        ["v1", "v2_vector", "v3_vec_e5_384", "v4_vec_transcripts", "v5_browser_visits", "v6_embed_queue"]
     private static func warnIfNewerSchema(_ pool: DatabasePool) {
         let applied = (try? pool.read { db in
             try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations")
@@ -223,6 +223,34 @@ final class ZBSEyeDatabase: Sendable {
                 END;
                 CREATE TRIGGER browser_visits_ad AFTER DELETE ON browser_visits BEGIN
                     INSERT INTO browser_visits_fts(browser_visits_fts, rowid, title, url) VALUES('delete', old.id, old.title, old.url);
+                END;
+                """)
+        }
+        // v6: durable embedding queue. Ingest no longer embeds on the hot path (that kept the e5 model resident
+        // 24/7). Instead every text-bearing frame / transcript is enqueued here (atomically with its text), and the
+        // background indexer drains it — so nothing is ever stranded (a queue is the source of truth, no positional
+        // "caught-up" guessing) and idle cost is O(pending), not a full-history scan. The one-time seeding of
+        // pre-existing gaps is done by VectorBackfill.reconcile() in the BACKGROUND (not here) so a large
+        // store-forever history can't stall the synchronous launch migration. Delete-triggers keep the queue from
+        // accumulating orphan rows when a capture/transcript is pruned (retention/privacy) before it's embedded.
+        m.registerMigration("v6_embed_queue") { db in
+            try db.execute(sql: """
+                CREATE TABLE embed_queue (
+                    row_id   INTEGER NOT NULL,    -- screen_captures.id or transcriptions.id
+                    kind     INTEGER NOT NULL,    -- 0 = screen frame, 1 = transcript
+                    ts       INTEGER NOT NULL,    -- epoch ms (for bucket_month + newest-first ordering)
+                    attempts INTEGER NOT NULL DEFAULT 0,  -- failed embed tries; a row that can't be embedded sinks
+                                                          -- out of rotation (never deleted — history is precious)
+                    PRIMARY KEY (row_id, kind)
+                ) WITHOUT ROWID;
+                """)
+            try db.execute(sql: "CREATE INDEX idx_embed_queue_ts ON embed_queue(ts DESC)")
+            try db.execute(sql: """
+                CREATE TRIGGER embed_queue_screen_ad AFTER DELETE ON screen_captures BEGIN
+                    DELETE FROM embed_queue WHERE row_id = old.id AND kind = 0;
+                END;
+                CREATE TRIGGER embed_queue_transcript_ad AFTER DELETE ON transcriptions BEGIN
+                    DELETE FROM embed_queue WHERE row_id = old.id AND kind = 1;
                 END;
                 """)
         }

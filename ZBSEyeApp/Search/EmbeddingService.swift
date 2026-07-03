@@ -100,6 +100,14 @@ actor EmbeddingService {
 
     var isReady: Bool { bundle != nil }
 
+    /// Release the model from RAM (the indexer calls this once the backlog is drained — the e5 model is ~150MB
+    /// resident that we don't need while idle). The next embed reloads it lazily via ready().
+    func unload() {
+        guard bundle != nil else { return }
+        bundle = nil
+        Log.app.info("e5: model unloaded (idle)")
+    }
+
     private func ready() async -> XLMRoberta.ModelBundle? {
         if let bundle { return bundle }
         if loading { return nil }   // a parallel embed during loading — don't duplicate

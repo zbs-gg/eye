@@ -38,10 +38,14 @@ actor FramePipeline {
 
     init(config: CaptureConfig) {
         self.config = config
+        // cacheIntermediates:false — the biggest steady-RAM win: a shared CIContext otherwise piles up GPU
+        // texture caches across frames (measured: ~550MB of stale IOSurface). We render each frame once and
+        // don't reuse intermediates, so caching only costs memory. clearCaches() after each frame reclaims the rest.
+        let opts: [CIContextOption: Any] = [.cacheIntermediates: false, .name: "ZBSEyeFramePipeline"]
         if let dev = MTLCreateSystemDefaultDevice() {
-            self.ciContext = CIContext(mtlDevice: dev)
+            self.ciContext = CIContext(mtlDevice: dev, options: opts)
         } else {
-            self.ciContext = CIContext()
+            self.ciContext = CIContext(options: opts)
         }
     }
 
@@ -63,6 +67,8 @@ actor FramePipeline {
         guard let display = content.displays.first(where: { displayID == nil || $0.displayID == displayID })
                 ?? content.displays.first else { throw CaptureError.noDisplay }
         let dedupKey = Int(display.displayID)
+        // Reclaim the CIContext's per-frame GPU caches on every exit path — otherwise IOSurface piles up (measured ~550MB).
+        defer { ciContext.clearCaches() }
 
         // Privacy exclusions natively via SCK: the pixels of excluded apps' windows don't make it
         // into the frame AT ALL (and there's physically nothing for OCR to leak) — even when the window is visible behind another in the background.
@@ -70,9 +76,12 @@ actor FramePipeline {
             content.applications.filter { excludedBundleIds.contains($0.bundleIdentifier) }
         let filter = SCContentFilter(display: display, excludingApplications: excludedApps,
                                      exceptingWindows: [])
+        // Cap the captured size to maxCaptureDim on the longest side: SCK renders the smaller frame directly, so the
+        // IOSurface (and the HEIC we store) shrink ~2–4× on Retina/5K. OCR downscales further; text stays legible.
+        let (capW, capH) = Self.cappedSize(display.width, display.height, maxDim: config.maxCaptureDim)
         let cfg = SCStreamConfiguration()
-        cfg.width = display.width
-        cfg.height = display.height
+        cfg.width = capW
+        cfg.height = capH
         cfg.pixelFormat = kCVPixelFormatType_32BGRA
         cfg.showsCursor = false
         let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: cfg)
@@ -90,7 +99,7 @@ actor FramePipeline {
 
         if isDup {
             return ProcessedFrame(heicData: Data(), phash: phash, isDuplicate: true,
-                                  width: display.width, height: display.height, ocr: [],
+                                  width: capW, height: capH, ocr: [],
                                   displayID: display.displayID)
         }
 
@@ -102,8 +111,16 @@ actor FramePipeline {
             ocr = await Self.runOCR(SendableCGImage(image: small), languages: config.ocrLanguages)
         }
         return ProcessedFrame(heicData: heic, phash: phash, isDuplicate: false,
-                              width: display.width, height: display.height, ocr: ocr,
+                              width: capW, height: capH, ocr: ocr,
                               displayID: display.displayID)
+    }
+
+    /// Longest-side cap preserving aspect ratio (integer pixels). No upscaling — returns the input if already within.
+    static func cappedSize(_ w: Int, _ h: Int, maxDim: CGFloat) -> (Int, Int) {
+        let longest = CGFloat(max(w, h))
+        guard longest > maxDim, longest > 0 else { return (w, h) }
+        let scale = maxDim / longest
+        return (max(1, Int((CGFloat(w) * scale).rounded())), max(1, Int((CGFloat(h) * scale).rounded())))
     }
 
     /// Downscale to ocrDownscaleMaxDim (Pro: don't OCR a full Retina frame). Rendered via Metal.

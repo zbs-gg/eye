@@ -13,6 +13,8 @@ struct CaptureConfig: Sendable {
     var ocrMinContentChars = 24            // below this + empty AX → OCR
     var ocrLanguages = ["ru-RU", "en-US"]
     var ocrDownscaleMaxDim: CGFloat = 1800 // downscale before OCR (Pro: don't OCR a full Retina frame)
+    var maxCaptureDim: CGFloat = 2560      // cap capture to this longest side: a full 5K frame is a ~59MB IOSurface —
+                                           // capping to 2560 cuts the per-frame surface & HEIC ~2–4× (OCR downscales anyway)
     var activeTickSeconds = 3.0            // active-text fallback tick (single-flight + dedup protect it)
     var idleThresholdSec = 180.0           // no input for longer → rare idle mode (not a full stop)
     var idleCaptureIntervalSec = 60.0      // in idle: one frame per minute — "incoming without input" isn't lost
