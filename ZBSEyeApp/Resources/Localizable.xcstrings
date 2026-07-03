@@ -469,6 +469,36 @@
         }
       }
     },
+    "Copied — paste into your agent": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скопировано — вставьте вашему агенту"
+          }
+        }
+      }
+    },
+    "Set up a dev workspace (for your agent)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Развернуть dev-окружение (для вашего агента)"
+          }
+        }
+      }
+    },
+    "Bigger job? This longer prompt has your agent clone the public source with a ready-made harness (build, diagnose, and review skills) — fix this bug properly, then keep improving Eye for you.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Задача побольше? Этот промпт длиннее: ваш агент клонирует открытый исходный код с готовой обвязкой (скиллы сборки, диагностики и ревью) — как следует чинит этот баг, а дальше продолжает улучшать Eye для вас."
+          }
+        }
+      }
+    },
     "DB error": {
       "localizations": {
         "ru": {
