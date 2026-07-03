@@ -35,16 +35,21 @@ launch. The bundled 449 MB model on **disk** is NOT the problem (that's static).
   proportionally so SCK renders a smaller frame directly (smaller IOSurface **and** smaller HEIC → DB grows slower).
 - Store the actual captured (scaled) width/height in `ProcessedFrame` / DB. phash + dedup run on the scaled image.
 
-### 3. Move embedding out of the hot path + continuous indexer + unload-on-idle [S/M]
-- `IngestService`: stop embedding on ingest. Screen frames and transcripts are written **without** a vector; drop
-  the `embedder` dependency from `IngestService`. (Vectors are filled by the indexer below.)
+### 3. Move embedding out of the hot path + durable queue indexer + unload-on-idle [M]
+**(Revised after code review — the first cut used a newest-first positional "caught-up" heuristic
+`if fresh.isEmpty { break }`, which strands older un-vectored frames on any interruption/offline/migration. Replaced
+with a durable work queue so nothing can be stranded and idle cost is O(pending), not a full scan.)**
+- New DB migration **`v6_embed_queue`**: `embed_queue(row_id, kind, ts)` (kind 0=frame, 1=transcript), seeded with
+  the current gaps (frames-with-text / transcripts lacking a vector).
+- `IngestService`: stop embedding on ingest; instead `INSERT OR IGNORE INTO embed_queue` **atomically with the text**
+  (frame: only if it has text blocks; transcript: always). Drop the `embedder` dependency.
 - `EmbeddingService`: add `func unload()` (`bundle = nil`) to release the model from RAM on idle.
-- Repurpose `VectorBackfill` → a **continuous indexer**: `run()` loops until cancelled. Each round drains
-  frames-with-text-without-vector newest-first (pages of 300, 2 s between pages), then transcripts; when a page
-  reaches already-indexed territory (`fresh.isEmpty`) the backlog is caught up → **`embedder.unload()`** and sleep
-  `idleRescanSec = 20 s`, then rescan. During active use it keeps finding work and stays hot; when the user goes
-  idle it releases the model. Remove the `maxTs` snapshot gate (the indexer now owns ALL embedding, including new
-  frames). Keep the `WHERE EXISTS` guards + incremental `have` set.
+- `VectorBackfill` → a **queue drainer**: `run()` loops; each round drains the queue newest-first (batches of 300,
+  2 s between), embedding each item and, in ONE idempotent transaction, replacing any existing vector + deleting the
+  queue row. An item that can't be embedded because the **model is unavailable** stays queued (retried next round);
+  one that's **un-embeddable text** (too short / untokenizable, `isReady` is true) is dropped so it can't stall the
+  queue. The model is unloaded only after `unloadAfterIdleRounds = 15` consecutive empty rounds (~5 min) so the
+  once-a-minute idle-capture trickle doesn't thrash the 449 MB load. `idleRescanSec = 20 s`.
 
 ### 4. Launch smoothing [S]
 - Backfill/indexer already starts 30 s post-launch @ `.utility` — keep. The unconditional warmup embed becomes
@@ -54,8 +59,9 @@ launch. The bundled 449 MB model on **disk** is NOT the problem (that's static).
 - `ZBSEyeApp/Capture/FramePipeline.swift` (#1, #2)
 - `ZBSEyeApp/Capture/CaptureConfig.swift` (#2)
 - `ZBSEyeApp/Search/EmbeddingService.swift` (#3 — `unload()`)
-- `ZBSEyeApp/Search/VectorBackfill.swift` (#3 — continuous indexer)
-- `ZBSEyeApp/Data/IngestService.swift` (#3 — drop inline embed)
+- `ZBSEyeApp/Search/VectorBackfill.swift` (#3 — durable-queue drainer)
+- `ZBSEyeApp/Data/IngestService.swift` (#3 — enqueue instead of inline embed)
+- `ZBSEyeApp/Data/ZBSEyeDatabase.swift` (#3 — v6_embed_queue migration)
 - `ZBSEyeApp/App/AppEnvironment.swift` (#3/#4 — wiring)
 
 ## Verification

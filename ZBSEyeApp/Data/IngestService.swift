@@ -67,7 +67,12 @@ actor IngestService {
                         bboxW: b.bbox.map { Double($0.size.width) }, bboxH: b.bbox.map { Double($0.size.height) })
                     try tb.insert(dbc)   // the text_blocks_ai trigger fills text_fts
                 }
-                // No vector here — the continuous VectorBackfill indexer fills vec_screen off the hot path.
+                // No vector here — enqueue for the background indexer (off the hot path). Only if there's text
+                // to embed; enqueued atomically with the text so the indexer can never miss a frame.
+                if !blocks.isEmpty {
+                    try dbc.execute(sql: "INSERT OR IGNORE INTO embed_queue(row_id, kind, ts) VALUES (?, 0, ?)",
+                                    arguments: [captureId, tsMs])
+                }
                 return captureId
             }
         } catch {
@@ -94,13 +99,18 @@ actor IngestService {
     /// + a semantic vector into vec_transcripts (cross-lingual "a ru query finds an en call").
     @discardableResult
     func ingest(_ rec: TranscriptionRecord) async throws -> Int64 {
-        // No vector here — the continuous VectorBackfill indexer fills vec_transcripts off the hot path (FTS stays instant).
+        // No vector here — enqueue for the background indexer (off the hot path). FTS stays instant; the
+        // cross-lingual vector ('a ru query finds an en call') is filled by the indexer shortly after.
+        let tsMs = Int64(rec.ts.timeIntervalSince1970 * 1000)
         return try await db.pool.write { dbc -> Int64 in
             var row = TranscriptionRow(
                 id: nil, audioId: rec.audioId, text: rec.text, language: rec.language,
                 speaker: rec.speaker, startOffset: rec.startOffset, endOffset: rec.endOffset, engine: rec.engine)
             try row.insert(dbc)
-            return row.id!
+            let id = row.id!
+            try dbc.execute(sql: "INSERT OR IGNORE INTO embed_queue(row_id, kind, ts) VALUES (?, 1, ?)",
+                            arguments: [id, tsMs])
+            return id
         }
     }
 
