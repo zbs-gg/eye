@@ -118,6 +118,10 @@ actor HistoryImporter {
                                               text: String(text.prefix(20_000)), confidence: 1.0,
                                               bboxX: nil, bboxY: nil, bboxW: nil, bboxH: nil)
                         try tb.insert(dbc)
+                        // Imported rows are written directly (not via IngestService) — enqueue them for the
+                        // background indexer too, else the whole import gets FTS but no semantic vector.
+                        try dbc.execute(sql: "INSERT OR IGNORE INTO embed_queue(row_id, kind, ts) VALUES (?, 0, ?)",
+                                        arguments: [cap.id!, f.tsMs])
                     }
                 }
             }
@@ -190,6 +194,9 @@ actor HistoryImporter {
                                               startOffset: 0, endOffset: a.dur,
                                               engine: "imported/(a.engine)")
                     try tr.insert(dbc)
+                    // enqueue the imported transcript for the background indexer (same reason as frames above)
+                    try dbc.execute(sql: "INSERT OR IGNORE INTO embed_queue(row_id, kind, ts) VALUES (?, 1, ?)",
+                                    arguments: [tr.id!, a.tsMs])
                 }
             }
             total += page.count

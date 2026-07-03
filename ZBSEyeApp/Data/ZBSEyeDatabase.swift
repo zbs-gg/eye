@@ -229,8 +229,10 @@ final class ZBSEyeDatabase: Sendable {
         // v6: durable embedding queue. Ingest no longer embeds on the hot path (that kept the e5 model resident
         // 24/7). Instead every text-bearing frame / transcript is enqueued here (atomically with its text), and the
         // background indexer drains it — so nothing is ever stranded (a queue is the source of truth, no positional
-        // "caught-up" guessing) and idle cost is O(pending), not a full-history scan. Seed the queue with the
-        // current gaps so the indexer picks up everything already missing a vector.
+        // "caught-up" guessing) and idle cost is O(pending), not a full-history scan. The one-time seeding of
+        // pre-existing gaps is done by VectorBackfill.reconcile() in the BACKGROUND (not here) so a large
+        // store-forever history can't stall the synchronous launch migration. Delete-triggers keep the queue from
+        // accumulating orphan rows when a capture/transcript is pruned (retention/privacy) before it's embedded.
         m.registerMigration("v6_embed_queue") { db in
             try db.execute(sql: """
                 CREATE TABLE embed_queue (
@@ -241,18 +243,13 @@ final class ZBSEyeDatabase: Sendable {
                 ) WITHOUT ROWID;
                 """)
             try db.execute(sql: "CREATE INDEX idx_embed_queue_ts ON embed_queue(ts DESC)")
-            // seed: frames that have text but no vector yet
             try db.execute(sql: """
-                INSERT OR IGNORE INTO embed_queue(row_id, kind, ts)
-                SELECT c.id, 0, c.ts FROM screen_captures c
-                WHERE EXISTS (SELECT 1 FROM text_blocks tb WHERE tb.captureId = c.id)
-                  AND c.id NOT IN (SELECT capture_id FROM vec_screen)
-                """)
-            // seed: transcripts without a vector
-            try db.execute(sql: """
-                INSERT OR IGNORE INTO embed_queue(row_id, kind, ts)
-                SELECT t.id, 1, a.ts FROM transcriptions t JOIN audio_captures a ON a.id = t.audioId
-                WHERE t.id NOT IN (SELECT transcription_id FROM vec_transcripts)
+                CREATE TRIGGER embed_queue_screen_ad AFTER DELETE ON screen_captures BEGIN
+                    DELETE FROM embed_queue WHERE row_id = old.id AND kind = 0;
+                END;
+                CREATE TRIGGER embed_queue_transcript_ad AFTER DELETE ON transcriptions BEGIN
+                    DELETE FROM embed_queue WHERE row_id = old.id AND kind = 1;
+                END;
                 """)
         }
         return m
