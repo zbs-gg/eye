@@ -4,16 +4,16 @@ import Foundation
 /// Follows the CartographerService pattern exactly: localhost-only gate, screen-derived fields go to
 /// the model ONLY as JSON values (structurally cannot break the prompt), output sanitized + capped.
 /// The heuristic label always exists — any failure here just means the UI keeps the heuristic
-/// (graceful fallback, no error surface). Read-only consumer of LocalLLMClient's current interface.
+/// (graceful fallback, no error surface). Read-only consumer of LLMClient's current interface.
 actor BlockLabelService {
-    private let client: LocalLLMClient
+    private let client: LLMClient
     /// Cache per block-content+model: a re-render / repeat visit never re-asks the model. The value is
     /// optional — a stored `nil` is a NEGATIVE cache entry (the call errored or the output sanitized to
     /// empty), so a bad block isn't re-sent to the local model on every Activities re-appearance.
     /// Session-lifetime is enough — labels are cosmetic and cheap to lose on relaunch.
     private var cache: [String: String?] = [:]
 
-    init(client: LocalLLMClient) { self.client = client }
+    init(client: LLMClient) { self.client = client }
 
     /// Key = block's epoch-ms range + model id + a fingerprint of its apps and topics. The ms range is
     /// absolute (globally unique across days, so no day prefix is needed); the model id + content

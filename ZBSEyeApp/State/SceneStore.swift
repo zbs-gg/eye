@@ -10,7 +10,7 @@ final class SceneStore {
     @ObservationIgnored private let service: SceneService
     @ObservationIgnored private let timeline: TimelineService
     @ObservationIgnored private let labeler: BlockLabelService
-    @ObservationIgnored private let connections: ConnectionStore
+    @ObservationIgnored private let ai: AIProviderStore
 
     var scenes: [ActivityScene] = []          // all scenes of the day (system ones flagged)
     var blocks: [ActivityBlock] = []          // merged user activity — the top-level UI unit
@@ -34,11 +34,11 @@ final class SceneStore {
     @ObservationIgnored private var labelTask: Task<Void, Never>?
 
     init(service: SceneService, timeline: TimelineService,
-         labeler: BlockLabelService, connections: ConnectionStore) {
+         labeler: BlockLabelService, ai: AIProviderStore) {
         self.service = service
         self.timeline = timeline
         self.labeler = labeler
-        self.connections = connections
+        self.ai = ai
     }
 
     /// Loads scenes for `selectedDay`. Called on day change and on view appear.
@@ -78,9 +78,11 @@ final class SceneStore {
     /// cached per (day, block-range) inside BlockLabelService — a re-render never re-asks.
     private func requestLLMLabels(day: Date, blocks: [ActivityBlock], gen: Int) {
         labelTask?.cancel()
-        guard connections.llm.isConfigured, connections.llm.isLocalOnly,
+        // Local-only for Activities labels: don't send activity titles/phrases to a cloud provider even if
+        // one is the active processing model — cosmetic labels aren't worth cloud egress. Gated by the same
+        // Cartographer consent (screen fragments → local LLM).
+        guard let llm = ai.activeConfig, llm.isLocalOnly,
               UserDefaults.standard.bool(forKey: "zbseye.cartographer.consent") else { return }
-        let llm = connections.llm
         labelTask = Task { [weak self] in
             for block in blocks {
                 guard let self, !Task.isCancelled, gen == self.loadGeneration else { return }

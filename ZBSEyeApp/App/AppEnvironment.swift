@@ -279,8 +279,8 @@ final class AppEnvironment {
             // grouped into blocks; optional local-LLM block labels (own stateless client, cached).
             let sceneSvc = SceneService(repo: activityRepo)
             self.sceneStore = SceneStore(service: sceneSvc, timeline: timelineSvc,
-                                         labeler: BlockLabelService(client: LocalLLMClient()),
-                                         connections: connections)
+                                         labeler: BlockLabelService(client: LLMClient()),
+                                         ai: ai)
 
             // "Ask your memory": a RAG answer through the same hybrid search + the active processing model
             // (its own LLMClient, a stateless actor). The egress gate is inside — local by default,
