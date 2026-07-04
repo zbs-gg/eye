@@ -4,6 +4,22 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 
 ## [Unreleased] — 2026-07-03
 
+### Added
+- **AI Models + Connections overhaul (local-first, bring-your-own-AI).** A new sidebar section
+  **"AI Models"** picks WHICH model processes history excerpts (Ask / Daily Insights / day summary):
+  one-click Connect for **LM Studio / Ollama** (+ any custom localhost OpenAI-compatible server), and
+  cloud providers — **OpenRouter / Anthropic / OpenAI** — as an explicit opt-in: API key in the
+  Keychain, "Get a key…" links, model pickers from each provider's live `/models`, a CLOUD badge and a
+  consent alert ("excerpts of your screen history leave this Mac; recordings and index stay local")
+  that must be confirmed before a cloud provider can become active. Exactly ONE active processing
+  model across providers; the legacy local-LLM config migrates automatically. Egress stays
+  default-deny: local providers must be localhost, a consented cloud provider is allowed exactly one
+  host (its official API), keys are never attached to localhost requests and never logged.
+  **Connections** is now agent access only: Local REST API (status, real port, Bearer token
+  reveal/copy, ready-made curl examples) + MCP (exact command, Claude Desktop / Cursor config
+  snippets, tool list). The summaries **Destination** folder moved to Automations. README/ABOUT
+  updated to the local-first + BYO-AI framing; RU translations for all new strings.
+
 ### Changed
 - **Much lighter at runtime (RAM/CPU).** Measured live, Eye sat at ~740 MB (peaking ~1.35 GB) and spiked
   CPU on launch. Root causes fixed, none touching the local-first design:

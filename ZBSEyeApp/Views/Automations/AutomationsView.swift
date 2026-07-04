@@ -1,6 +1,8 @@
 import SwiftUI
 
-/// Automation v1: "Day summary". collect → local LLM → write to a file/Obsidian. A preview-then-write flow.
+/// Automation v1: "Day summary". collect → the processing model from "AI Models" → write to a
+/// file/Obsidian. A preview-then-write flow. The destination-folder card lives here too (it belongs
+/// to export, not to agent access).
 struct AutomationsView: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -24,9 +26,9 @@ private struct AutomationBody: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
-                if !store.isReady {
-                    notReadyCard
-                } else {
+                destinationCard
+                if !store.llmReady { modelHintCard }
+                if store.isReady {
                     controls
                     scheduleCard
                     if let p = store.preview { previewCard(p) }
@@ -48,20 +50,53 @@ private struct AutomationBody: View {
         VStack(alignment: .leading, spacing: 4) {
             Label("Day summary", systemImage: "text.append")
                 .font(.title2).bold()
-            Text("Collects the day's activity from your history, runs it through a local model, and writes "
-                 + "a Markdown digest to a folder of your choice. Nothing leaves for the cloud.")
+            Text("Collects the day's activity from your history, runs it through your processing model (AI Models — local by default), and writes a Markdown digest to a folder of your choice.")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }
 
-    private var notReadyCard: some View {
+    /// Where summaries land (moved here from Connections — it belongs to export, not to agent access).
+    private var destinationCard: some View {
+        GroupBox {
+            @Bindable var conn = env.connections
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("Destination", systemImage: "folder").font(.headline)
+                    Spacer()
+                    if conn.destination.isConfigured {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    }
+                }
+                HStack {
+                    Button {
+                        conn.pickDestination()
+                    } label: {
+                        Label("Choose folder…", systemImage: "folder.badge.plus")
+                    }
+                    if let path = conn.destination.displayPath {
+                        Text(verbatim: path).font(.callout).foregroundStyle(.secondary)
+                            .textSelection(.enabled).lineLimit(1).truncationMode(.middle)
+                    }
+                }
+                TextField("Subfolder", text: $conn.destination.subfolder, prompt: Text(verbatim: "ZBS Eye"))
+                    .autocorrectionDisabled()
+                Text("Where to write summaries. For Obsidian, pick the vault folder — files land in "
+                     + "`<vault>/<subfolder>/YYYY-MM-DD.md`.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(6)
+        }
+    }
+
+    private var modelHintCard: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
-                Label("Connections need to be set up", systemImage: "exclamationmark.triangle.fill")
+                Label("A processing model is required", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange).font(.headline)
-                Text("Set a local LLM and a destination folder — the automation won't run without them.")
+                Text("Pick a model in AI Models — local (LM Studio / Ollama) by default; the automation won't run without one.")
                     .foregroundStyle(.secondary)
-                Button("Open Connections") { env.selectedSection = .connections }
+                Button("Open AI Models") { env.selectedSection = .aiModels }
                     .buttonStyle(.borderedProminent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

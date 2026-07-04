@@ -39,9 +39,9 @@ a temporary marketing position, it's an architectural principle (see §4).
 - **Scenes / "Day in activities"** — frames are grouped into **activity scenes**: "VS Code, 14:00–14:25,
   editing AXReader" instead of a thousand separate frames. You see how the day breaks into blocks. Instead of
   a raw OCR dump on the right — a **clean scene summary** (app, window/URL, key topics; LLM enhancement optional).
-- **Daily Insights** (formerly "Cartographer") — a daily AI insight: a local LLM looks at the day's activity
-  (top apps, context switches, topics) and gives **2–3 concrete observations/tips** (self-improvement).
-  On-device only. In the future — a single loop with Pulse/Atlas.
+- **Daily Insights** (formerly "Cartographer") — a daily AI insight: the model you chose in "AI Models"
+  looks at the day's activity (top apps, context switches, topics) and gives **2–3 concrete
+  observations/tips** (self-improvement). Local model by default. In the future — a single loop with Pulse/Atlas.
 - **Usage stats** — an on-device breakdown of the last 7 days, front-and-center on the Daily Insights screen:
   where the time went (browsers split by **real site**, recovered from your own imported history, not lumped
   as one app), active minutes/day, context switches/day, busiest hour.
@@ -56,9 +56,10 @@ a temporary marketing position, it's an architectural principle (see §4).
   **Cross-lingual**: search in one language, find another (and vice versa).
 - **Timeline** — scrub through time, activity density, a 1×/2×/4× player, day/hour/10-min zoom, frames served
   as images. Smooth: frame crossfade, a soft scrubber, micro-animations (respecting Reduce Motion).
-- **"Ask"** — ask your memory a question → hybrid search finds fragments → a **local LLM** answers with
-  citation links (click → jump on the timeline). A local equivalent of "Ask Rewind". The model is chosen from
-  what's actually loaded in **LM Studio / Ollama** (the list comes from `/v1/models`).
+- **"Ask"** — ask your memory a question → hybrid search finds fragments → your **processing model**
+  answers with citation links (click → jump on the timeline). A local equivalent of "Ask Rewind".
+  The model is picked in **"AI Models"**: local (**LM Studio / Ollama**, the list comes from
+  `/v1/models`) by default; a cloud provider only with an explicit opt-in.
 
 ### Rewards and progress
 - **Gamification** — day streaks, milestones (1k/5k/10k/… frames), "memory age", progress to the next
@@ -80,9 +81,13 @@ a temporary marketing position, it's an architectural principle (see §4).
 
 ## 3. Principles (never broken)
 
-- **Zero egress.** The server listens only on `127.0.0.1`; everything except `/health` is behind a Bearer token (in the Keychain).
+- **Zero egress for capture, index and storage.** The server listens only on `127.0.0.1`; everything except `/health` is behind a Bearer token (in the Keychain). Recordings never leave the Mac.
 - **Zero accounts, zero subscription, zero telemetry.** That IS the product.
-- **AI is local only** (LM Studio / Ollama / mlx_lm.server on localhost). No cloud presets.
+- **AI is local-first, bring-your-own.** Local providers (LM Studio / Ollama / any OpenAI-compatible
+  localhost server) are the default and need no key. Cloud providers (OpenRouter / Anthropic / OpenAI)
+  exist only behind an explicit per-provider opt-in with a clear warning: they receive prompt
+  **excerpts** of history for Ask/Insights/summaries — never recordings, never the index. Keys live in
+  the Keychain; a consented cloud provider may reach exactly one host (its official API).
 - **The default is to record everything**, but the human is in charge: pause, app exclusions, delete a range.
 - **Native and lightweight.** Swift/SwiftUI, Apple Silicon hardware acceleration, minimal dependencies —
   as opposed to heavy web wrappers (Electron/Tauri).
@@ -132,9 +137,10 @@ staying faithful to the "everything on-device" principle.
 ## 7. Status
 
 **Working and verified live:** capture (screen + audio), hybrid search (cross-lingual), timeline (smooth),
-scenes/"Day in activities", "Ask" (RAG over a local LLM with a model picker from LM Studio), Cartographer
-(daily insights), progress/milestones, REST + MCP, history import, retention (forever), relocatable storage,
-iCloud backup, daily summary, export. A notarized Developer ID release exists.
+scenes/"Day in activities", "Ask" (RAG over the model picked in "AI Models" — LM Studio/Ollama by default,
+cloud as an explicit opt-in), Cartographer (daily insights), progress/milestones, REST + MCP, history
+import, retention (forever), relocatable storage, iCloud backup, daily summary, export. A notarized
+Developer ID release exists.
 
 **Deferred:** a test target (XCTest), Sparkle auto-updates, deep integration of Cartographer with Pulse/Atlas,
 the v1.5 "live prompter" (a real-time overlay).

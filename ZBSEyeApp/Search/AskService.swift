@@ -1,17 +1,18 @@
 import Foundation
 import GRDB
 
-/// "Ask your memory" (actor): a retrieval-augmented answer ENTIRELY on-device. Takes a question →
-/// hybrid search (FTS+semantic, cross-lingual) over screen and conversation history → assembles
-/// numbered context with dates/sources → a local LLM answers STRICTLY from the context with
-/// [n] citations. No egress: the same local-only LLM the automations use (AutomationError
-/// gates non-localhost). Sources are returned to the caller — a click jumps to that moment in the timeline.
+/// "Ask your memory" (actor): a retrieval-augmented answer. Takes a question → hybrid search
+/// (FTS+semantic, cross-lingual) over screen and conversation history → assembles numbered context
+/// with dates/sources → the ACTIVE processing model ("AI Models") answers STRICTLY from the context
+/// with [n] citations. Egress: local by default; a cloud provider only after the explicit opt-in
+/// (LLMConfig.validate() gates every request). Sources are returned to the caller — a click jumps
+/// to that moment in the timeline.
 actor AskService {
     private let search: SearchService
-    private let client: LocalLLMClient
+    private let client: LLMClient
     private let db: ZBSEyeDatabase
 
-    init(search: SearchService, client: LocalLLMClient, db: ZBSEyeDatabase) {
+    init(search: SearchService, client: LLMClient, db: ZBSEyeDatabase) {
         self.search = search
         self.client = client
         self.db = db
@@ -23,13 +24,12 @@ actor AskService {
         let sources: [SearchResult]  // what made it into the context (for [n] citations and jumping into the timeline)
     }
 
-    /// One question → answer. Throws AutomationError (.noLLM/.nonLocalLLM/.llm) — the UI shows them as-is.
+    /// One question → answer. Throws AutomationError (.noLLM/.nonLocalLLM/.llm/…) — the UI shows them as-is.
     func answer(question: String, llm: LLMConfig,
                 safety: AutomationSafety = .default) async throws -> Answer {
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return Answer(text: "", truncated: false, sources: []) }
-        guard llm.isConfigured else { throw AutomationError.noLLM }
-        guard llm.isLocalOnly else { throw AutomationError.nonLocalLLM(URL(string: llm.normalizedBaseURL)?.host ?? llm.baseURL) }
+        try llm.validate()   // egress gate: local by default, cloud only with consent + pinned host
 
         // Retrieval window: the top dozen hits — enough to answer, fits in the model's context.
         let hits = try await search.search(query: q, filters: SearchFilters(limit: 10))

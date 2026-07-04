@@ -16,6 +16,7 @@ struct RootWindow: View {
                 case .ask:          AskView()
                 case .cartographer: CartographerView()
                 case .automations:  AutomationsView()
+                case .aiModels:     AIModelsView()
                 case .connections:  ConnectionsView()
                 case .progress:     MemoryProgressView()
                 case .achievements: AchievementsView()
