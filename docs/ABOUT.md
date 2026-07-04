@@ -63,7 +63,8 @@ a temporary marketing position, it's an architectural principle (see §4).
 - **"Ask"** — ask your memory a question → hybrid search finds fragments → your **processing model**
   answers with citation links (click → jump on the timeline). A local equivalent of "Ask Rewind".
   The model is picked in **"AI Models"**: local (**LM Studio / Ollama**, the list comes from
-  `/v1/models`) by default; a cloud provider only with an explicit opt-in.
+  `/v1/models`) by default, **your installed Claude Code** (run as a local subprocess, no API key), or
+  **one-click OpenRouter** (OAuth); a cloud provider only with an explicit opt-in, keys optional.
 
 ### Rewards and progress
 - **Gamification** — day streaks, milestones (1k/5k/10k/… frames), "memory age", progress to the next
@@ -87,11 +88,14 @@ a temporary marketing position, it's an architectural principle (see §4).
 
 - **Zero egress for capture, index and storage.** The server listens only on `127.0.0.1`; everything except `/health` is behind a Bearer token (in the Keychain). Recordings never leave the Mac.
 - **Zero accounts, zero subscription, zero telemetry.** That IS the product.
-- **AI is local-first, bring-your-own.** Local providers (LM Studio / Ollama / any OpenAI-compatible
-  localhost server) are the default and need no key. Cloud providers (OpenRouter / Anthropic / OpenAI)
-  exist only behind an explicit per-provider opt-in with a clear warning: they receive prompt
-  **excerpts** of history for Ask/Insights/summaries — never recordings, never the index. Keys live in
-  the Keychain; a consented cloud provider may reach exactly one host (its official API).
+- **AI is local-first, bring-your-own — keys optional.** Local providers (LM Studio / Ollama / any
+  OpenAI-compatible localhost server) are the default and need no key. You can also **use the Claude
+  Code you're already signed into** (run as a local subprocess — no API key) or connect **OpenRouter in
+  one click** (OAuth); pasting an OpenAI / Anthropic key is an Advanced fallback. Cloud providers —
+  including Claude Code, whose CLI egresses to Anthropic via your login — exist only behind an explicit
+  per-provider opt-in with a clear warning: they receive prompt **excerpts** of history for
+  Ask/Insights/summaries — never recordings, never the index. Keys live in the Keychain; a consented
+  key-based cloud provider may reach exactly one host (its official API).
 - **The default is to record everything**, but the human is in charge: pause, app exclusions, delete a range.
 - **Native and lightweight.** Swift/SwiftUI, Apple Silicon hardware acceleration, minimal dependencies —
   as opposed to heavy web wrappers (Electron/Tauri).
