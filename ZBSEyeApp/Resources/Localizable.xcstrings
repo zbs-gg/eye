@@ -1312,6 +1312,16 @@
         }
       }
     },
+    "Connect OpenRouter": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключить OpenRouter"
+          }
+        }
+      }
+    },
     "Connected Frames": {
       "localizations": {
         "ru": {
@@ -1422,12 +1432,42 @@
         }
       }
     },
+    "Couldn't complete sign-in (%@).": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось завершить вход (%@)."
+          }
+        }
+      }
+    },
+    "Couldn't open your browser to sign in.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось открыть браузер для входа."
+          }
+        }
+      }
+    },
     "Couldn't save the API key to the Keychain. Try again.": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Не удалось сохранить API-ключ в Связку ключей. Попробуйте ещё раз."
+          }
+        }
+      }
+    },
+    "Couldn't start the local sign-in listener. Try again.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось запустить локальный слушатель входа. Попробуйте ещё раз."
           }
         }
       }
@@ -2988,6 +3028,26 @@
         }
       }
     },
+    "OpenRouter didn't return a key.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenRouter не вернул ключ."
+          }
+        }
+      }
+    },
+    "OpenRouter sign-in failed: %@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось войти через OpenRouter: %@"
+          }
+        }
+      }
+    },
     "Oracle": {
       "localizations": {
         "ru": {
@@ -3544,6 +3604,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Показывать системные события"
+          }
+        }
+      }
+    },
+    "Sign-in cancelled.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вход отменён."
+          }
+        }
+      }
+    },
+    "Sign-in timed out. Try again.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Время входа истекло. Попробуйте ещё раз."
           }
         }
       }
@@ -4308,6 +4388,16 @@
         }
       }
     },
+    "Unexpected response from OpenRouter.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неожиданный ответ от OpenRouter."
+          }
+        }
+      }
+    },
     "Unlocked %@": {
       "localizations": {
         "ru": {
@@ -4334,6 +4424,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Использовано"
+          }
+        }
+      }
+    },
+    "Waiting for your browser…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ждём ваш браузер…"
           }
         }
       }
@@ -4673,6 +4773,26 @@
     "llama3.2 / qwen2.5 / …": {
       "localizations": {}
     },
+    "network error": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ошибка сети"
+          }
+        }
+      }
+    },
+    "no internet connection": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "нет подключения к интернету"
+          }
+        }
+      }
+    },
     "not running": {
       "localizations": {
         "ru": {
@@ -4792,6 +4912,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "· %lld с"
+          }
+        }
+      }
+    },
+    "…or paste a key": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "…или вставьте ключ"
           }
         }
       }

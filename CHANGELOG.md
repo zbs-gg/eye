@@ -5,6 +5,13 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 ## [Unreleased] — 2026-07-03
 
 ### Added
+- **One-click Connect for OpenRouter (real OAuth, PKCE, no key pasting).** The OpenRouter card now has a
+  prominent **"Connect OpenRouter"** button: it runs a genuine OAuth 2.0 Authorization Code + PKCE flow
+  (SHA-256 `S256`), catches the callback on a temporary loopback listener bound to 127.0.0.1 on an
+  ephemeral port, exchanges the code for an `sk-or-…` key and stores it in the Keychain — the same slot
+  the manual field uses, so the model list loads and the card goes green automatically. The flow is
+  cancellable, times out cleanly, always tears the listener down, and never logs the code/verifier/key.
+  Pasting a key by hand stays as a fallback ("…or paste a key"). EN + RU strings.
 - **Self-repair bootstrap: a dev workspace for your agent + a harness that ships in the repo.**
   "Something wrong?" now has a second action — **"Set up a dev workspace (for your agent)"** — which
   copies a long bootstrap prompt (with your problem description + on-device diagnostics): the agent
