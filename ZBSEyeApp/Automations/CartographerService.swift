@@ -1,9 +1,10 @@
 import Foundation
 
-/// "Cartographer" — on-device AI advisor: looks at the day's activity → produces 2-3 concrete observations/tips.
+/// "Cartographer" — AI advisor: looks at the day's activity → produces 2-3 concrete observations/tips.
 /// Pattern: like DailySummaryService, but without the write stage — all the value is in the insight lines.
-/// Egress: strictly localhost only (LLMConfig.isLocalOnly gate). If the LLM isn't configured — a friendly
-/// hint, no attempt, no crash. Delegates day aggregation to the shared DayActivityRepository.
+/// Egress: LLMConfig.validate() gate — local by default, a cloud provider only after the explicit opt-in
+/// in "AI Models". If no model is active — a friendly hint, no attempt, no crash. Delegates day
+/// aggregation to the shared DayActivityRepository.
 ///
 /// Privacy/injection (Pro review, NO-GO fix): the screen is untrusted input. All screen-derived fields
 /// (app names, text fragments) go to the LLM ONLY as JSON values (structurally cannot break the prompt)
@@ -11,9 +12,9 @@ import Foundation
 /// length/line-count cap). Each run writes an audit with no content.
 actor CartographerService {
     private let repo: DayActivityRepository
-    private let client: LocalLLMClient
+    private let client: LLMClient
 
-    init(repo: DayActivityRepository, client: LocalLLMClient) {
+    init(repo: DayActivityRepository, client: LLMClient) {
         self.repo = repo
         self.client = client
     }
@@ -83,13 +84,10 @@ actor CartographerService {
         let truncated: Bool
     }
 
-    /// Collect + LLM → insights. Only if the LLM is configured and isLocalOnly. Writes audit (no content).
+    /// Collect + LLM → insights. Only through the egress gate (validate). Writes audit (no content).
     func generate(day: Date, llm: LLMConfig,
                   safety: AutomationSafety = .default) async throws -> Insights {
-        guard llm.isConfigured else { throw AutomationError.noLLM }
-        guard llm.isLocalOnly  else {
-            throw AutomationError.nonLocalLLM(URL(string: llm.normalizedBaseURL)?.host ?? llm.baseURL)
-        }
+        try llm.validate()   // local by default, cloud only with consent + pinned host
         let activity = try await collect(day: day, safety: safety)
         let (system, user) = Self.buildPrompt(activity)
         do {
