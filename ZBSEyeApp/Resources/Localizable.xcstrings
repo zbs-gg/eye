@@ -1958,6 +1958,16 @@
         }
       }
     },
+    "Show system events": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Показывать системные события"
+          }
+        }
+      }
+    },
     "Sources": {
       "localizations": {
         "ru": {
@@ -2044,6 +2054,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Подпапка"
+          }
+        }
+      }
+    },
+    "System event": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системное событие"
           }
         }
       }

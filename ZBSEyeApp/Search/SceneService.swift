@@ -14,6 +14,7 @@ struct ActivityScene: Sendable, Identifiable {
     let durationSec: Double
     let frameCount: Int
     let summary: String        // 1–2 lines of a meaningful description (heuristic, no LLM)
+    let isSystem: Bool         // system shell (loginwindow…) — hidden from blocks, debug toggle only
 }
 
 /// Segments `screen_captures` into scenes on the fly (no schema migration). Fetching/segmentation/batch text
@@ -49,7 +50,10 @@ actor SceneService {
         let caps = try await repo.captures(fromMs: msFromDate(time.addingTimeInterval(-window)),
                                            toMs: msFromDate(time.addingTimeInterval(window)))
         guard !caps.isEmpty else { return nil }
-        let sessions = DayActivityRepository.sessions(caps, grouping: .appOnly, gapMs: gapMs)
+        // excludeSystem: false — MUST match build()'s segmentation so the scene under the cursor is the
+        // same one the user tapped in a block's session list (Pro review: panel vs card consistency).
+        let sessions = DayActivityRepository.sessions(caps, grouping: .appOnly, gapMs: gapMs,
+                                                      excludeSystem: false)
         guard let seg = sessions.first(where: { $0.startMs <= timeMs && $0.endMs >= timeMs }) else { return nil }
         let text = try await repo.batchText(captureIds: [seg.rep.id])
         return Self.buildScene(seg, repText: text[seg.rep.id] ?? "")
@@ -59,9 +63,12 @@ actor SceneService {
 
     /// Segments frames into scenes (app-only) and builds an ActivityScene. The text for the summary is fetched in
     /// ONE batch query over the representative frames of all scenes (no N+1, Pro review #7).
+    /// System shells are KEPT here but flagged (`isSystem`) — the Activities debug toggle shows them;
+    /// blocks and the timeline panel filter downstream.
     private func build(from caps: [CaptureLite]) async throws -> [ActivityScene] {
         guard !caps.isEmpty else { return [] }
-        let sessions = DayActivityRepository.sessions(caps, grouping: .appOnly, gapMs: gapMs)
+        let sessions = DayActivityRepository.sessions(caps, grouping: .appOnly, gapMs: gapMs,
+                                                      excludeSystem: false)
         let repIds = sessions.map { $0.rep.id }
         let textByCapture = try await repo.batchText(captureIds: repIds)
         return sessions.map { Self.buildScene($0, repText: textByCapture[$0.rep.id] ?? "") }
@@ -79,7 +86,8 @@ actor SceneService {
             repWindowTitle: repTitle, browserURL: repURL,
             startTs: dateFromMs(seg.startMs), endTs: dateFromMs(seg.endMs),
             durationSec: max(1, Double(seg.durationMs) / 1000.0),
-            frameCount: seg.count, summary: summary)
+            frameCount: seg.count, summary: summary,
+            isSystem: SystemAppFilter.isSystem(first))
     }
 
     // MARK: - heuristic summary (no LLM, no DB)
