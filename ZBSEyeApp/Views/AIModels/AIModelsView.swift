@@ -68,6 +68,8 @@ private struct ProviderSection: View {
     var body: some View {
         Section {
             if provider == .custom { endpointField }
+            // OpenRouter: one-click "Sign in" (real OAuth + PKCE) ABOVE the manual key field.
+            if provider == .openrouter && !ai.hasKey(provider) { openRouterOAuthRow }
             if provider.isCloud { keyRow }
             connectRow
             if !ai.fetchedModels(provider).isEmpty { modelPicker }
@@ -132,12 +134,43 @@ private struct ProviderSection: View {
                 Button("Remove key") { ai.removeKey(for: provider) }
                     .buttonStyle(.borderless).foregroundStyle(.red)
             } else {
-                SecureField("API key", text: $keyDraft, prompt: Text(verbatim: "sk-…"))
+                // For OpenRouter the OAuth button above is the primary path; the key field is a fallback.
+                SecureField(provider == .openrouter ? "…or paste a key" : "API key",
+                            text: $keyDraft, prompt: Text(verbatim: "sk-…"))
                     .onSubmit { saveKey() }
                 Button("Save") { saveKey() }
                     .disabled(keyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 if let url = provider.keyConsoleURL {
                     Link("Get a key…", destination: url)
+                }
+            }
+        }
+    }
+
+    // MARK: OpenRouter one-click sign-in (OAuth + PKCE)
+
+    @ViewBuilder
+    private var openRouterOAuthRow: some View {
+        switch ai.openRouterOAuthPhase {
+        case .running:
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("Waiting for your browser…").foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { ai.cancelOpenRouterOAuth() }
+                    .buttonStyle(.borderless)
+            }
+        case .idle, .failed:
+            VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    ai.connectOpenRouterOAuth()
+                } label: {
+                    Label("Connect OpenRouter", systemImage: "person.badge.key.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                if case .failed(let msg) = ai.openRouterOAuthPhase {
+                    Label(msg, systemImage: "xmark.octagon.fill")
+                        .font(.caption).foregroundStyle(.red).lineLimit(3).help(msg)
                 }
             }
         }

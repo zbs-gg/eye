@@ -17,6 +17,15 @@ final class AIProviderStore {
         case error(String)
     }
 
+    /// State of the OpenRouter "Sign in" (OAuth + PKCE) flow. `running` = browser opened, waiting for the
+    /// callback / exchanging the code; `failed` carries a user-facing message. On success we fall back to
+    /// `idle` after the key is saved and the normal connect()/probe runs.
+    enum OAuthPhase: Sendable, Equatable {
+        case idle
+        case running
+        case failed(String)
+    }
+
     var settings: AIProviderSettings {
         didSet { if settings != oldValue { persist() } }
     }
@@ -25,7 +34,10 @@ final class AIProviderStore {
     private(set) var models: [String: [String]] = [:]
     /// Whether a Keychain key exists per cloud provider (the key itself never enters observable state).
     private(set) var keyPresent: [String: Bool] = [:]
+    /// OpenRouter one-click sign-in progress (nothing else here observes the key material).
+    private(set) var openRouterOAuthPhase: OAuthPhase = .idle
 
+    @ObservationIgnored private var oauthTask: Task<Void, Never>?
     @ObservationIgnored private let client = LLMClient()
     @ObservationIgnored private let defaults = UserDefaults.standard
     private static let key = "zbseye.ai.provider"
@@ -199,6 +211,49 @@ final class AIProviderStore {
         models[p.rawValue] = []
         statuses[p.rawValue] = .notConfigured
         if isActive(p) { settings.active = nil }   // no key → the provider can't process anything
+    }
+
+    // MARK: OpenRouter one-click sign-in (OAuth + PKCE)
+
+    /// Kick off the real OpenRouter OAuth flow: opens the system browser, waits for the loopback
+    /// callback, exchanges the code for an `sk-or-…` key and stores it in the SAME Keychain slot the
+    /// manual key field uses — so the existing "key saved → connect()" path loads the model list and
+    /// flips the card to connected. The async flow runs off this @MainActor store (OpenRouterOAuth is an
+    /// actor); only the final Sendable outcome hops back here to mutate observable state.
+    func connectOpenRouterOAuth() {
+        guard oauthTask == nil else { return }   // already running — ignore a double-tap
+        openRouterOAuthPhase = .running
+        let service = OpenRouterOAuth()
+        oauthTask = Task { [weak self] in   // inherits @MainActor; only the actor call below awaits
+            let outcome: Result<String, Error>
+            do { outcome = .success(try await service.authorize()) }
+            catch { outcome = .failure(error) }
+            self?.finishOpenRouterOAuth(outcome)
+        }
+    }
+
+    /// User closed the browser / clicked Cancel — tear the flow down and go quiet.
+    func cancelOpenRouterOAuth() {
+        oauthTask?.cancel()
+        oauthTask = nil
+        openRouterOAuthPhase = .idle
+    }
+
+    private func finishOpenRouterOAuth(_ outcome: Result<String, Error>) {
+        oauthTask = nil
+        switch outcome {
+        case .success(let key):
+            openRouterOAuthPhase = .idle
+            saveKey(key, for: .openrouter)   // Keychain write + keyPresent + connect()/probe (green + models)
+        case .failure(let error):
+            // A user-initiated cancel is not an error to shout about.
+            if (error as? OpenRouterOAuth.OAuthError)?.isCancellation == true || error is CancellationError {
+                openRouterOAuthPhase = .idle
+            } else {
+                let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                openRouterOAuthPhase = .failed(msg)
+            }
+        }
     }
 
     private static func storedKeyExists(_ p: AIProvider) -> Bool {
