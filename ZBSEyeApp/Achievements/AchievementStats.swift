@@ -129,7 +129,10 @@ actor AchievementStatsService {
         // ── today: context switches / focus day / longest single-app session ──
         if let caps = try? await repo.captures(forDay: Date()), !caps.isEmpty {
             s.maxSwitchesInDay = DayActivityRepository.contextSwitches(caps)
-            let sessions = DayActivityRepository.sessions(caps, grouping: .appOnly, gapMs: 180 * 1000)
+            // excludeSystem: false — this achievement (longest single-app run) is out of the Activities/
+            // usage-stats scope; keep counting all frames so its value doesn't silently change.
+            let sessions = DayActivityRepository.sessions(caps, grouping: .appOnly, gapMs: 180 * 1000,
+                                                          excludeSystem: false)
             let longest = sessions.map(\.durationMs).max() ?? 0
             s.maxSingleAppMinutes = Int(longest / 60000)
             s.hadFocusDay = caps.count >= 1000 && s.maxSwitchesInDay <= 40

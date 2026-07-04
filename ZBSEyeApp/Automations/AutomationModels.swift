@@ -6,14 +6,15 @@ import Foundation
 
 // MARK: connections
 
-/// Local LLM over the OpenAI-compatible `/chat/completions` (Ollama, LM Studio, mlx_lm.server,
-/// llama.cpp server). One interface for all of them — they differ only in baseURL/port and model name.
-/// NO cloud egress: the default is hard-pinned to 127.0.0.1.
-struct LLMConfig: Codable, Sendable, Equatable {
+/// Request config for the active AI provider (built by AIProviderStore, not persisted itself).
+/// Egress is default-deny: local providers must resolve to localhost; a cloud provider is allowed
+/// exactly ONE host — its official API host — and sends history excerpts only after explicit consent.
+struct LLMConfig: Sendable, Equatable {
+    var provider: AIProvider
     var baseURL: String
     var model: String
-
-    static let `default` = LLMConfig(baseURL: "http://127.0.0.1:11434/v1", model: "llama3.2")
+    /// Persisted per-provider consent snapshot ("excerpts may leave this Mac"). Meaningless for local providers.
+    var cloudConsented: Bool = false
 
     var isConfigured: Bool {
         !baseURL.trimmingCharacters(in: .whitespaces).isEmpty &&
@@ -28,11 +29,32 @@ struct LLMConfig: Codable, Sendable, Equatable {
         return "http://" + b
     }
 
-    /// Only localhost is allowed in v1 (privacy — private history must not leak to the cloud).
+    /// Localhost whitelist (privacy — a local provider must never point off-box).
     /// host lowercased — DNS is case-insensitive (LOCALHOST → localhost).
     var isLocalOnly: Bool {
         guard let host = URL(string: normalizedBaseURL)?.host?.lowercased() else { return false }
         return ["127.0.0.1", "localhost", "::1", "0.0.0.0"].contains(host)
+    }
+
+    /// Local provider → localhost only; cloud provider → exactly its pinned API host over https.
+    var isEndpointAllowed: Bool {
+        guard let url = URL(string: normalizedBaseURL), let host = url.host?.lowercased() else { return false }
+        if let pinned = provider.apiHost { return host == pinned && url.scheme == "https" }
+        return isLocalOnly
+    }
+
+    /// The single egress gate every request and every service goes through.
+    /// requireModel=false for `/models` probes (no model chosen yet); requireConsent=false likewise —
+    /// listing models sends no history, actual chat (history excerpts) always requires consent.
+    func validate(requireModel: Bool = true, requireConsent: Bool = true) throws {
+        let base = baseURL.trimmingCharacters(in: .whitespaces)
+        guard !base.isEmpty, !requireModel || isConfigured else { throw AutomationError.noLLM }
+        guard isEndpointAllowed else {
+            throw AutomationError.nonLocalLLM(URL(string: normalizedBaseURL)?.host ?? baseURL)
+        }
+        if provider.isCloud, requireConsent, !cloudConsented {
+            throw AutomationError.cloudConsentRequired(provider.displayName)
+        }
     }
 }
 
@@ -127,6 +149,8 @@ struct AuditEntry: Codable, Sendable, Identifiable {
 enum AutomationError: LocalizedError {
     case noLLM
     case nonLocalLLM(String)
+    case cloudConsentRequired(String)
+    case noAPIKey(String)
     case noDestination
     case noData(day: Date)
     case llm(String)
@@ -135,16 +159,20 @@ enum AutomationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noLLM:
-            return "Local LLM is not configured. Open \"Connections\" and specify an endpoint + model."
+            return "No processing model. Open \"AI Models\" and pick one — local (LM Studio / Ollama) by default."
         case .nonLocalLLM(let host):
-            return "Endpoint \"\(host)\" is not local. In v1 only 127.0.0.1/localhost is allowed — private history does not leave for the cloud."
+            return "Endpoint \"\(host)\" is not allowed. Local providers must stay on 127.0.0.1/localhost; a cloud provider is reachable only via its official API host."
+        case .cloudConsentRequired(let name):
+            return "\(name) is a cloud provider. Confirm in \"AI Models\" that excerpts of your screen history may be sent to it."
+        case .noAPIKey(let name):
+            return "\(name) needs an API key — add it in \"AI Models\" (stored in the Keychain)."
         case .noDestination:
-            return "No folder selected for writing. Open \"Connections\" → \"Destination\"."
+            return "No folder selected for writing. Open \"Automations\" → \"Destination\"."
         case .noData(let day):
             let f = DateFormatter(); f.dateStyle = .medium; f.locale = Locale(identifier: "en_US")
             return "No recorded activity for \(f.string(from: day))."
         case .llm(let m):
-            return "Local model error: \(m)"
+            return "Model error: \(m)"
         case .write(let m):
             return "Failed to write the file: \(m)"
         }

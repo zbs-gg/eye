@@ -44,6 +44,17 @@ enum KeychainStore {
         return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 
+    /// Removes a stored secret (e.g. a cloud provider's API key the user revokes).
+    static func delete(_ account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            useDataProtection: true,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
     /// Local API token: takes the existing one or generates and stores it.
     static func apiToken() -> String {
         if let t = get("api-token"), !t.isEmpty { return t }

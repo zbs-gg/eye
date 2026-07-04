@@ -1,8 +1,9 @@
 import SwiftUI
 import AppKit
 
-/// "Day in activities" — a vertical list of scene blocks.
-/// Tapping a scene → jump to the timeline at startTs.
+/// "Day in activities" — a vertical list of activity BLOCKS ("what was I plausibly doing"),
+/// each expandable into the underlying app sessions. System shells (loginwindow…) are hidden
+/// behind a debug toggle. Tapping a session → jump to the timeline at startTs.
 struct ActivitiesView: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -27,6 +28,25 @@ struct ActivitiesView: View {
     }
 }
 
+/// One row of the day list: a user-activity block or (debug toggle) a filtered system scene.
+private enum ActivityRow: Identifiable {
+    case block(ActivityBlock)
+    case system(ActivityScene)
+
+    var id: String {
+        switch self {
+        case .block(let b):  return "b-\(b.id)"
+        case .system(let s): return "s-\(s.id)"
+        }
+    }
+    var startTs: Date {
+        switch self {
+        case .block(let b):  return b.startTs
+        case .system(let s): return s.startTs
+        }
+    }
+}
+
 private struct ActivitiesBody: View {
     @Bindable var store: SceneStore
     @Bindable var timelineStore: TimelineStore
@@ -45,6 +65,10 @@ private struct ActivitiesBody: View {
             Text("Day in activities")
                 .font(.headline)
             Spacer()
+            // Debug: reveal the filtered system shells (loginwindow, screen saver…) as dimmed cards.
+            Toggle("Show system events", isOn: $store.showSystemEvents)
+                .toggleStyle(.checkbox)
+                .controlSize(.small)
             Button("Today") {
                 store.selectedDay = Calendar.current.startOfDay(for: Date())
                 Task { await store.load() }
@@ -60,6 +84,13 @@ private struct ActivitiesBody: View {
         .padding(.vertical, 12)
     }
 
+    /// Blocks + (when the toggle is on) system scenes, interleaved chronologically.
+    private var rows: [ActivityRow] {
+        var out: [ActivityRow] = store.blocks.map { .block($0) }
+        if store.showSystemEvents { out += store.systemScenes.map { .system($0) } }
+        return out.sorted { $0.startTs < $1.startTs }
+    }
+
     @ViewBuilder
     private var content: some View {
         if store.isLoading {
@@ -70,7 +101,7 @@ private struct ActivitiesBody: View {
             // as "no activity" (Pro review #11).
             ContentUnavailableView("Error", systemImage: "exclamationmark.triangle",
                                    description: Text(err))
-        } else if store.scenes.isEmpty {
+        } else if rows.isEmpty {
             ContentUnavailableView {
                 Label("No activity", systemImage: "calendar.badge.clock")
             } description: {
@@ -79,9 +110,9 @@ private struct ActivitiesBody: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    let totalTime = totalDurationLabel(store.scenes)
+                    let totalTime = totalDurationLabel(store.blocks)
                     HStack {
-                        Text("\(store.scenes.count) activities · \(totalTime)")
+                        Text("\(store.blocks.count) activities · \(totalTime)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -89,11 +120,18 @@ private struct ActivitiesBody: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
 
-                    ForEach(store.scenes) { scene in
-                        SceneCard(scene: scene) {
-                            // Tap → jump to the timeline at the scene's startTs.
-                            env.selectedSection = .timeline
-                            Task { await timelineStore.seek(to: scene.startTs) }
+                    ForEach(rows) { row in
+                        Group {
+                            switch row {
+                            case .block(let block):
+                                BlockCard(block: block,
+                                          llmLabel: store.llmLabels[block.id]) { scene in
+                                    jump(to: scene)
+                                }
+                            case .system(let scene):
+                                SceneCard(scene: scene) { jump(to: scene) }
+                                    .opacity(0.6)
+                            }
                         }
                         .padding(.horizontal, 16)
                     }
@@ -103,8 +141,14 @@ private struct ActivitiesBody: View {
         }
     }
 
-    private func totalDurationLabel(_ scenes: [ActivityScene]) -> String {
-        let total = scenes.reduce(0) { $0 + $1.durationSec }
+    /// Tap on a session → jump to the timeline at the scene's startTs.
+    private func jump(to scene: ActivityScene) {
+        env.selectedSection = .timeline
+        Task { await timelineStore.seek(to: scene.startTs) }
+    }
+
+    private func totalDurationLabel(_ blocks: [ActivityBlock]) -> String {
+        let total = blocks.reduce(0) { $0 + $1.durationSec }
         let hours = Int(total) / 3600
         let minutes = (Int(total) % 3600) / 60
         if hours > 0 { return "\(hours) h \(minutes) min" }
@@ -112,7 +156,100 @@ private struct ActivitiesBody: View {
     }
 }
 
-// MARK: - scene card
+// MARK: - block card (top-level unit)
+
+/// Collapsed: "14:00–15:30 · Working on X · Xcode, Chrome". Expanded: the underlying app sessions.
+private struct BlockCard: View {
+    let block: ActivityBlock
+    let llmLabel: String?              // arrives async; heuristic label until (and unless) it does
+    let onSelectScene: (ActivityScene) -> Void
+
+    @State private var expanded = false
+    @State private var appIcon: NSImage?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            } label: {
+                header
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(block.scenes) { scene in
+                        SceneCard(scene: scene) { onSelectScene(scene) }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+            }
+        }
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.06)))
+        .task(id: block.topApps.first?.bundleId) {
+            appIcon = await loadAppIcon(bundleId: block.topApps.first?.bundleId)
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Group {
+                if let icon = appIcon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    Image(systemName: "square.stack.3d.up")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 32, height: 32)
+            .cornerRadius(7)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(timeRangeLabel(start: block.startTs, end: block.endTs))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                    Spacer()
+                    Text(durationLabel(block.durationSec))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text(llmLabel ?? block.heuristicLabel)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 4) {
+                    Text(block.topAppsLine)
+                        .lineLimit(1)
+                    Text("· \(block.scenes.count) sessions")
+                }
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            }
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(expanded ? 90 : 0))
+                .padding(.top, 4)
+        }
+        .padding(12)
+        .contentShape(Rectangle())
+    }
+
+    private func timeRangeLabel(start: Date, end: Date) -> String {
+        "\(cardTimeFormatter.string(from: start))–\(cardTimeFormatter.string(from: end))"
+    }
+}
+
+// MARK: - scene card (one app session)
 
 private struct SceneCard: View {
     let scene: ActivityScene
@@ -144,6 +281,13 @@ private struct SceneCard: View {
                         Text(scene.appName ?? scene.bundleId ?? "App")
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
+                        if scene.isSystem {
+                            Text("System event")
+                                .font(.caption2)
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(.quaternary, in: Capsule())
+                                .foregroundStyle(.secondary)
+                        }
                         Spacer()
                         Text(timeRangeLabel(scene))
                             .font(.caption)
@@ -178,33 +322,43 @@ private struct SceneCard: View {
         }
         .buttonStyle(.plain)
         .task(id: scene.bundleId) {
-            appIcon = await loadIcon(bundleId: scene.bundleId)
+            appIcon = await loadAppIcon(bundleId: scene.bundleId)
         }
     }
 
     private func timeRangeLabel(_ scene: ActivityScene) -> String {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "HH:mm"
-        return "\(fmt.string(from: scene.startTs))–\(fmt.string(from: scene.endTs))"
+        "\(cardTimeFormatter.string(from: scene.startTs))–\(cardTimeFormatter.string(from: scene.endTs))"
     }
+}
 
-    private func durationLabel(_ sec: Double) -> String {
-        let s = Int(sec)
-        if s < 60 { return "\(s) s" }
-        if s < 3600 { return "\(s / 60) min" }
-        return "\(s / 3600) h \((s % 3600) / 60) min"
-    }
+// MARK: - shared helpers
 
-    /// Icon via NSWorkspace by bundleId. Async-friendly: doesn't block the main actor for long.
-    private func loadIcon(bundleId: String?) async -> NSImage? {
-        guard let bid = bundleId else { return nil }
-        return await Task.detached(priority: .userInitiated) {
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) {
-                return NSWorkspace.shared.icon(forFile: url.path)
-            }
-            return nil
-        }.value
-    }
+/// One shared "HH:mm" formatter for the card time ranges. A DateFormatter is relatively expensive to
+/// build; allocating one per card per body evaluation shows up on the scroll hot path. Formatting is
+/// read-only and we never mutate it after init, so a single reused instance is safe
+/// (`nonisolated(unsafe)` — the cards read it from the MainActor render path).
+nonisolated(unsafe) private let cardTimeFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "HH:mm"
+    return f
+}()
+
+private func durationLabel(_ sec: Double) -> String {
+    let s = Int(sec)
+    if s < 60 { return "\(s) s" }
+    if s < 3600 { return "\(s / 60) min" }
+    return "\(s / 3600) h \((s % 3600) / 60) min"
+}
+
+/// Icon via NSWorkspace by bundleId. Async-friendly: doesn't block the main actor for long.
+private func loadAppIcon(bundleId: String?) async -> NSImage? {
+    guard let bid = bundleId else { return nil }
+    return await Task.detached(priority: .userInitiated) {
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) {
+            return NSWorkspace.shared.icon(forFile: url.path)
+        }
+        return nil
+    }.value
 }
 
 // MARK: - scene summary card for the timeline's right panel
@@ -252,24 +406,7 @@ struct SceneSummaryCard: View {
         .padding(10)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
         .task(id: scene.bundleId) {
-            appIcon = await loadIcon(bundleId: scene.bundleId)
+            appIcon = await loadAppIcon(bundleId: scene.bundleId)
         }
-    }
-
-    private func durationLabel(_ sec: Double) -> String {
-        let s = Int(sec)
-        if s < 60 { return "\(s) s" }
-        if s < 3600 { return "\(s / 60) min" }
-        return "\(s / 3600) h \((s % 3600) / 60) min"
-    }
-
-    private func loadIcon(bundleId: String?) async -> NSImage? {
-        guard let bid = bundleId else { return nil }
-        return await Task.detached(priority: .userInitiated) {
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) {
-                return NSWorkspace.shared.icon(forFile: url.path)
-            }
-            return nil
-        }.value
     }
 }

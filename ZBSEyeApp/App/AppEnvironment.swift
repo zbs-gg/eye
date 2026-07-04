@@ -11,7 +11,8 @@ final class AppEnvironment {
     let permissions = PermissionsStore()
     let recording = RecordingStore()
     let server = ServerStore()
-    let connections = ConnectionStore()   // LLM/destination config persists itself, no db needed
+    let connections = ConnectionStore()   // destination-folder config persists itself, no db needed
+    let ai = AIProviderStore()            // "AI Models": the active processing model (local-first, BYO-AI)
     let audioSettings = AudioSettingsStore()
     let storageSettings = StorageSettingsStore()
     let backupSettings = BackupSettingsStore()
@@ -274,22 +275,26 @@ final class AppEnvironment {
             self.achievements = AchievementStore(service: AchievementStatsService(db: db, repo: activityRepo))
             rewards.achievements = self.achievements   // the rewards know what's unlocked
 
-            // "The day in activities": scenes on top of screen_captures (without a new table).
+            // "The day in activities": scenes on top of screen_captures (without a new table),
+            // grouped into blocks; optional local-LLM block labels (own stateless client, cached).
             let sceneSvc = SceneService(repo: activityRepo)
-            self.sceneStore = SceneStore(service: sceneSvc, timeline: timelineSvc)
+            self.sceneStore = SceneStore(service: sceneSvc, timeline: timelineSvc,
+                                         labeler: BlockLabelService(client: LLMClient()),
+                                         ai: ai)
 
-            // "Ask your memory": a RAG answer through the same hybrid search + a local LLM (its own
-            // LocalLLMClient, a stateless actor). The localhost-only gate is inside — private history doesn't leave.
-            let askService = AskService(search: searchSvc, client: LocalLLMClient(), db: db)
-            self.ask = AskStore(service: askService, connections: connections)
+            // "Ask your memory": a RAG answer through the same hybrid search + the active processing model
+            // (its own LLMClient, a stateless actor). The egress gate is inside — local by default,
+            // a cloud provider only after the explicit opt-in in "AI Models".
+            let askService = AskService(search: searchSvc, client: LLMClient(), db: db)
+            self.ask = AskStore(service: askService, ai: ai)
 
-            // Cartographer: AI insights for the day (on-device, read-only). Its own LocalLLMClient (stateless actor).
-            let cartographerSvc = CartographerService(repo: activityRepo, client: LocalLLMClient())
-            self.cartographer = CartographerStore(service: cartographerSvc, connections: connections)
+            // Cartographer: AI insights for the day (read-only). Its own LLMClient (stateless actor).
+            let cartographerSvc = CartographerService(repo: activityRepo, client: LLMClient())
+            self.cartographer = CartographerStore(service: cartographerSvc, ai: ai)
 
-            // Automation v1 "day summary": collect→LLM→write. Its own LocalLLMClient (stateless actor).
-            let summarySvc = DailySummaryService(repo: activityRepo, client: LocalLLMClient())
-            let automationsStore = DaySummaryStore(service: summarySvc, connections: connections)
+            // Automation v1 "day summary": collect→LLM→write. Its own LLMClient (stateless actor).
+            let summarySvc = DailySummaryService(repo: activityRepo, client: LLMClient())
+            let automationsStore = DaySummaryStore(service: summarySvc, connections: connections, ai: ai)
             automationsStore.startScheduler()   // "a recap by itself at the end of the day" (5-min tick, gates inside)
             self.automations = automationsStore
 
@@ -515,6 +520,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case ask = "Ask"
     case cartographer = "Daily Insights"
     case automations = "Automations"
+    case aiModels = "AI Models"
     case connections = "Connections"
     case progress = "Progress"
     case achievements = "Achievements"
@@ -530,6 +536,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .ask:          return "questionmark.bubble"
         case .cartographer: return "map"
         case .automations:  return "powerplug"
+        case .aiModels:     return "brain.head.profile"
         case .connections:  return "app.connected.to.app.below.fill"
         case .progress:     return "chart.bar.fill"
         case .achievements: return "rosette"

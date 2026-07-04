@@ -36,7 +36,11 @@ actor UsageStatsService {
         let fromMs = Int64(start.timeIntervalSince1970 * 1000)
         let toMs = Int64(now.timeIntervalSince1970 * 1000)
 
-        guard let caps = try? await repo.captures(fromMs: fromMs, toMs: toMs), !caps.isEmpty else { return s }
+        // System shells (loginwindow, screen saver, Dock…) are not usage: drop them ONCE here, so every
+        // aggregation below (top apps, active minutes, switches, hour histogram) treats them as idle gaps.
+        guard let raw = try? await repo.captures(fromMs: fromMs, toMs: toMs) else { return s }
+        let caps = SystemAppFilter.userCaptures(raw)
+        guard !caps.isEmpty else { return s }
 
         // Site-aware top apps (browsers split by site, real host recovered from browser history).
         let hosts = (try? await repo.browserHostOverrides(caps)) ?? [:]

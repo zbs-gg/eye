@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// "Cartographer" — AI insights for the day: what actually took up time and concrete advice.
-/// Fully on-device (localhost LLM). Writes no files — insights live only in the UI.
+/// Processed by the model chosen in "AI Models" (local by default). Writes no files — insights live only in the UI.
 struct CartographerView: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -57,10 +57,7 @@ private struct CartographerBody: View {
         VStack(alignment: .leading, spacing: 4) {
             Label("Daily Insights", systemImage: "map")
                 .font(.title2).bold()
-            Text("Looks at your activity for the day and gives 2–3 concrete observations: "
-                 + "where your time goes, where you could focus better. "
-                 + "Daily fragments go only into your local LLM (localhost-only endpoint) — "
-                 + "no cloud.")
+            Text("Looks at your activity for the day and gives 2–3 concrete observations: where your time goes, where you could focus better. Daily fragments go only to the processing model you chose in AI Models — local by default.")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }
@@ -68,12 +65,11 @@ private struct CartographerBody: View {
     private var noLLMCard: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
-                Label("A local LLM is required", systemImage: "exclamationmark.triangle.fill")
+                Label("A processing model is required", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange).font(.headline)
-                Text("Set an endpoint (Ollama / LM Studio / mlx_lm.server) and a model in Connections — "
-                     + "Daily Insights works strictly on-device, your history never goes to the cloud.")
+                Text("Pick a model in AI Models — local (LM Studio / Ollama) by default; a cloud provider only with your explicit opt-in. Your recordings and index stay local.")
                     .foregroundStyle(.secondary)
-                Button("Open Connections") { env.selectedSection = .connections }
+                Button("Open AI Models") { env.selectedSection = .aiModels }
                     .buttonStyle(.borderedProminent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -87,10 +83,7 @@ private struct CartographerBody: View {
             VStack(alignment: .leading, spacing: 12) {
                 Label("One-time consent", systemImage: "hand.raised.fill")
                     .foregroundStyle(.tint).font(.headline)
-                Text("To produce insights, Daily Insights will send compact fragments of activity for the chosen day "
-                     + "(app names, window titles, short snippets of on-screen text) to your local "
-                     + "LLM — a localhost-only endpoint. No cloud; nothing is written to disk — only "
-                     + "a request to the model on this Mac.")
+                Text("To produce insights, Daily Insights will send compact fragments of activity for the chosen day (app names, window titles, short snippets of on-screen text) to the processing model you chose in AI Models. Nothing is written to disk — only a request to that model.")
                     .foregroundStyle(.secondary)
                 Button {
                     store.grantConsentAndGenerate()

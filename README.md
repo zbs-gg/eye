@@ -27,8 +27,13 @@ ZBS Eye quietly keeps an "eternal memory" of your work at the computer:
 - **Search** → hybrid full-text + semantic (cross-lingual: search in one language, find another),
   a scrubbable timeline, frames served as images.
 - **Access for AI agents** → a local REST + MCP surface so LLMs/agents can work with your memory.
+- **Bring your own AI** → you pick the model that processes history excerpts (Ask, Daily Insights,
+  day summary): local (LM Studio / Ollama) by default, cloud (OpenRouter / Anthropic / OpenAI) only
+  as an explicit opt-in.
 
-Everything stays on the device. No egress, no subscription, no account.
+Capture, index and storage stay on the device — zero egress, no subscription, no account. AI is
+local-first: cloud providers exist only behind an explicit per-provider opt-in and receive prompt
+excerpts, never your recordings.
 
 ## Why
 
@@ -53,6 +58,9 @@ native alternative that **never goes to the cloud** — your activity history is
 - 🔍 **Hybrid search** — FTS5 + multilingual-e5 (384-dim) via RRF; cross-lingual.
 - 🕰️ **Timeline** — scrub through time, frame + text + app/URL, a player.
 - 🔌 **REST + MCP** — a local API (127.0.0.1, Bearer token) for agents; MCP over stdio.
+- 🧠 **Bring your own AI** — the "AI Models" section: one-click connect for LM Studio / Ollama (or any
+  local OpenAI-compatible server) as the default; OpenRouter / Anthropic / OpenAI as an explicit
+  opt-in with a clear warning (excerpts of screen history leave the Mac — capture/index/storage never do).
 - ♾️ **Storage** — forever by default; **move to an external SSD** in one click;
   **iCloud auto-backup** (a compressed snapshot, without uploading the live database); size tracking.
 - 📥 **Import previous history** — bring your accumulated history (text + metadata) over.
@@ -113,7 +121,11 @@ Architecture and contributor/agent guide — [`AGENTS.md`](AGENTS.md). Distribut
 ## Privacy
 
 - Everything on the device. The server listens only on `127.0.0.1`; everything except `/health` requires
-  a Bearer token (in the Keychain). No outbound traffic.
+  a Bearer token (in the Keychain). No outbound traffic by default.
+- AI is local-first, bring-your-own. If you explicitly connect a cloud provider (OpenRouter / Anthropic /
+  OpenAI) in "AI Models" — after a per-provider consent warning — only prompt excerpts for Ask / Daily
+  Insights / summaries go to that one provider's API host. Recordings, the index, and storage never
+  leave the Mac; API keys live in the Keychain.
 - The iCloud backup (optional, on by default if iCloud is present) goes out as a **compressed snapshot** —
   the live database stays local (you must not put a live SQLite file in iCloud Drive — corruption).
 - A password or sensitive conversation captured by accident can be wiped by time range or by app.
@@ -128,7 +140,8 @@ FlyingFox (REST) · MCP swift-sdk · Hardened Runtime without App Sandbox.
 
 Working: capture (screen + audio), hybrid search, timeline, REST + MCP, import of previous history,
 retention (forever by default), relocatable storage, iCloud backup, size tracking, daily summary,
-export, "Ask" (RAG over a local LLM — model picker from LM Studio/Ollama). Distribution — **notarized
+export, "Ask" (RAG over the model you pick in "AI Models" — LM Studio/Ollama by default, cloud
+providers as an explicit opt-in). Distribution — **notarized
 Developer ID** (`scripts/build-notarized.sh`). Deferred: a test target (XCTest).
 
 ## License

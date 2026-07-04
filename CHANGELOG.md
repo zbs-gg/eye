@@ -16,8 +16,32 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   `eye-release`), a hostile `swift6-reviewer` subagent, and a find→verify
   `eye-adversarial-review` workflow. README gets an "Own it" section; both prompts and the new UI
   strings are localized (EN + RU).
+- **AI Models + Connections overhaul (local-first, bring-your-own-AI).** A new sidebar section
+  **"AI Models"** picks WHICH model processes history excerpts (Ask / Daily Insights / day summary):
+  one-click Connect for **LM Studio / Ollama** (+ any custom localhost OpenAI-compatible server), and
+  cloud providers — **OpenRouter / Anthropic / OpenAI** — as an explicit opt-in: API key in the
+  Keychain, "Get a key…" links, model pickers from each provider's live `/models`, a CLOUD badge and a
+  consent alert ("excerpts of your screen history leave this Mac; recordings and index stay local")
+  that must be confirmed before a cloud provider can become active. Exactly ONE active processing
+  model across providers; the legacy local-LLM config migrates automatically. Egress stays
+  default-deny: local providers must be localhost, a consented cloud provider is allowed exactly one
+  host (its official API), keys are never attached to localhost requests and never logged.
+  **Connections** is now agent access only: Local REST API (status, real port, Bearer token
+  reveal/copy, ready-made curl examples) + MCP (exact command, Claude Desktop / Cursor config
+  snippets, tool list). The summaries **Destination** folder moved to Automations. README/ABOUT
+  updated to the local-first + BYO-AI framing; RU translations for all new strings.
 
 ### Changed
+- **Activities are now meaningful blocks, not raw app sessions.** The day reads as "what you were
+  plausibly doing": consecutive app sessions less than 15 minutes apart merge into one block with a
+  time range, top apps by share and a label — dominant app + dominant topic (browser host / cleaned
+  window title), plus an optional local-LLM one-liner ("Working on ZBS Eye: Xcode, GitHub, docs")
+  when a model is connected and consented — cached per block, heuristic-only otherwise. System shells
+  (loginwindow, screen saver, Dock, Control Center, Notification Center…) no longer count as
+  "activity" in Activities or usage stats: Activities, top apps, active minutes, context switches and
+  the busiest-hour histogram all treat them as idle gaps via one shared `SystemAppFilter`. Blocks expand into the
+  underlying app sessions; a "Show system events" toggle (default off) reveals the filtered entries
+  for debugging.
 - **Much lighter at runtime (RAM/CPU).** Measured live, Eye sat at ~740 MB (peaking ~1.35 GB) and spiked
   CPU on launch. Root causes fixed, none touching the local-first design:
   - **Capture memory.** The shared `CIContext` was never cleared, piling up ~550 MB of stale GPU frame
