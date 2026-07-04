@@ -26,6 +26,16 @@ final class AIProviderStore {
         case failed(String)
     }
 
+    /// Presence of the `claude` CLI for the Claude Code provider. `unknown` = not yet probed;
+    /// `found` carries the resolved absolute path; `notFound` = the card shows an install hint and
+    /// can't be activated. The path is never shown in the UI — only whether it exists.
+    enum ClaudeCodeState: Sendable, Equatable {
+        case unknown
+        case checking
+        case found(String)
+        case notFound
+    }
+
     var settings: AIProviderSettings {
         didSet { if settings != oldValue { persist() } }
     }
@@ -36,8 +46,13 @@ final class AIProviderStore {
     private(set) var keyPresent: [String: Bool] = [:]
     /// OpenRouter one-click sign-in progress (nothing else here observes the key material).
     private(set) var openRouterOAuthPhase: OAuthPhase = .idle
+    /// Whether the user's Claude Code CLI is installed (drives the Claude Code card's dot + activation).
+    private(set) var claudeCode: ClaudeCodeState = .unknown
 
     @ObservationIgnored private var oauthTask: Task<Void, Never>?
+    /// Monotonically-increasing token that identifies the current OAuth attempt. A completion (or a late
+    /// cancel) only mutates state if it still matches — so a superseded flow can't clobber a newer one.
+    @ObservationIgnored private var oauthAttempt = 0
     @ObservationIgnored private let client = LLMClient()
     @ObservationIgnored private let defaults = UserDefaults.standard
     private static let key = "zbseye.ai.provider"
@@ -88,8 +103,9 @@ final class AIProviderStore {
     func fetchedModels(_ p: AIProvider) -> [String] { models[p.rawValue] ?? [] }
 
     /// Picker options: models from the server + the currently selected one (don't lose the choice).
+    /// Claude Code has no live `/models` — it offers a fixed preset list for the `--model` flag.
     func modelOptions(_ p: AIProvider) -> [String] {
-        var opts = models[p.rawValue] ?? []
+        var opts = p == .claudeCode ? AIProvider.claudeCodeModels : (models[p.rawValue] ?? [])
         let sel = model(for: p)
         if !sel.isEmpty, !opts.contains(sel) { opts.insert(sel, at: 0) }
         return opts
@@ -103,9 +119,14 @@ final class AIProviderStore {
 
     /// Make this provider THE processing model. Cloud requires prior consent (the view shows the
     /// warning alert and calls grantConsent first) — refuse silently otherwise, never flip by accident.
+    /// A key-based cloud provider also needs its key; Claude Code (no key) only needs the CLI present.
     func activate(_ p: AIProvider) {
         guard !model(for: p).isEmpty else { return }
-        if p.isCloud { guard hasConsent(p), hasKey(p) else { return } }
+        if p.isCloud {
+            guard hasConsent(p) else { return }
+            if p.usesAPIKey { guard hasKey(p) else { return } }
+            if p == .claudeCode { guard case .found = claudeCode else { return } }
+        }
         settings.active = p.rawValue
     }
 
@@ -115,7 +136,11 @@ final class AIProviderStore {
         let cfg = LLMConfig(provider: p, baseURL: endpoint(for: p), model: model(for: p),
                             cloudConsented: hasConsent(p))
         guard cfg.isConfigured, cfg.isEndpointAllowed else { return nil }
-        if p.isCloud { guard hasConsent(p), hasKey(p) else { return nil } }
+        if p.isCloud {
+            guard hasConsent(p) else { return nil }
+            if p.usesAPIKey { guard hasKey(p) else { return nil } }
+            if p == .claudeCode { guard case .found = claudeCode else { return nil } }
+        }
         return cfg
     }
 
@@ -173,6 +198,26 @@ final class AIProviderStore {
         }
     }
 
+    /// Detect the user's Claude Code CLI when "AI Models" opens (or on an explicit re-check). Found →
+    /// seed a default `--model` preset so "Use this model" works immediately; not found → the card shows
+    /// an install hint. `force` re-runs discovery even if it was already checked (user just installed it).
+    func probeClaudeCode(force: Bool = false) async {
+        if case .checking = claudeCode { return }
+        if !force, case .found = claudeCode { return }
+        claudeCode = .checking
+        if force { await ClaudeCodeLocator.shared.refresh() }
+        if let path = await ClaudeCodeLocator.shared.resolve() {
+            claudeCode = .found(path)
+            if model(for: .claudeCode).isEmpty {
+                setModel(AIProvider.claudeCodeDefaultModel, for: .claudeCode)
+            }
+        } else {
+            claudeCode = .notFound
+            // A previously-active Claude Code provider is no longer usable without the CLI.
+            if isActive(.claudeCode) { settings.active = nil }
+        }
+    }
+
     /// Fill the model selection so "Use this model" works right away — WITHOUT clobbering the user's
     /// persisted choice. When there is no stored model, take the first available. When `fetched` is true
     /// (a real, freshly-fetched server list) also replace a stored model that's genuinely gone from it;
@@ -193,6 +238,10 @@ final class AIProviderStore {
         guard let account = p.keychainAccount else { return }
         let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
+        // A MANUAL key save must win over any in-flight OpenRouter OAuth: cancel it first so a late
+        // OAuth success can't overwrite the pasted key and the "Cancel" row can't linger. (When this is
+        // called by finishOpenRouterOAuth() on OAuth success, oauthTask is already nil → no-op.)
+        if p == .openrouter, oauthTask != nil { cancelOpenRouterOAuth() }
         // A failed Keychain write must NOT look saved: keep keyPresent=false so the SecureField stays
         // visible for re-entry, surface the error, and do not auto-connect with a key that isn't stored.
         guard KeychainStore.set(key, account: account) else {
@@ -211,6 +260,9 @@ final class AIProviderStore {
         models[p.rawValue] = []
         statuses[p.rawValue] = .notConfigured
         if isActive(p) { settings.active = nil }   // no key → the provider can't process anything
+        // Removing the OpenRouter key also tears down any in-flight OAuth and clears a stale .failed
+        // banner, so it can't resurface the next time the card is shown.
+        if p == .openrouter { cancelOpenRouterOAuth() }
     }
 
     // MARK: OpenRouter one-click sign-in (OAuth + PKCE)
@@ -222,24 +274,36 @@ final class AIProviderStore {
     /// actor); only the final Sendable outcome hops back here to mutate observable state.
     func connectOpenRouterOAuth() {
         guard oauthTask == nil else { return }   // already running — ignore a double-tap
-        openRouterOAuthPhase = .running
+        oauthAttempt &+= 1
+        let attempt = oauthAttempt               // this flow's identity — checked when it completes
+        openRouterOAuthPhase = .running          // a fresh attempt also clears any stale .failed banner
         let service = OpenRouterOAuth()
         oauthTask = Task { [weak self] in   // inherits @MainActor; only the actor call below awaits
             let outcome: Result<String, Error>
             do { outcome = .success(try await service.authorize()) }
             catch { outcome = .failure(error) }
-            self?.finishOpenRouterOAuth(outcome)
+            self?.finishOpenRouterOAuth(attempt, outcome)
         }
     }
 
-    /// User closed the browser / clicked Cancel — tear the flow down and go quiet.
+    /// User closed the browser / clicked Cancel — tear the flow down and go quiet. Bumping the attempt
+    /// token invalidates any completion still in flight, so it can't reset a newer attempt's state.
     func cancelOpenRouterOAuth() {
+        oauthAttempt &+= 1
         oauthTask?.cancel()
         oauthTask = nil
         openRouterOAuthPhase = .idle
     }
 
-    private func finishOpenRouterOAuth(_ outcome: Result<String, Error>) {
+    /// Clear a leftover `.failed` banner when the OpenRouter card next appears — the store is an
+    /// app-lifetime singleton, so without this a past failure would stick across view revisits.
+    func resetOpenRouterOAuthPhaseIfStale() {
+        if oauthTask == nil, case .failed = openRouterOAuthPhase { openRouterOAuthPhase = .idle }
+    }
+
+    private func finishOpenRouterOAuth(_ attempt: Int, _ outcome: Result<String, Error>) {
+        // Only the CURRENT attempt may mutate state — a superseded/cancelled flow completing late is a no-op.
+        guard attempt == oauthAttempt else { return }
         oauthTask = nil
         switch outcome {
         case .success(let key):

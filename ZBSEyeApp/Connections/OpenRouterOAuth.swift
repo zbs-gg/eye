@@ -29,6 +29,7 @@ actor OpenRouterOAuth {
         case browserOpenFailed
         case timedOut
         case cancelled
+        case entropyFailed             // the system RNG failed — refuse rather than use weak entropy
         case providerError(String)     // OpenRouter redirected back with ?error=…
         case exchangeFailed(String)    // non-2xx from /auth/keys
         case invalidResponse
@@ -44,6 +45,8 @@ actor OpenRouterOAuth {
                 return String(localized: "Sign-in timed out. Try again.")
             case .cancelled:
                 return String(localized: "Sign-in cancelled.")
+            case .entropyFailed:
+                return String(localized: "Couldn't generate secure sign-in credentials. Try again.")
             case .providerError(let m):
                 return String(localized: "OpenRouter sign-in failed: \(m)")
             case .exchangeFailed(let m):
@@ -64,13 +67,15 @@ actor OpenRouterOAuth {
     /// `timeout` is the overall ceiling; the caller can also cancel the enclosing Task at any point
     /// (user closed the browser / clicked Cancel) — either way the listener is always torn down.
     func authorize(timeout: TimeInterval = 180) async throws -> String {
-        let verifier = Self.makeCodeVerifier()
+        let verifier = try Self.makeCodeVerifier()
         let challenge = Self.codeChallenge(for: verifier)
+        // CSRF/anti-injection nonce: the callback MUST echo this exact `state`, or we ignore it.
+        let state = try Self.makeStateNonce()
 
         let listener = LoopbackListener()
         let port: UInt16
         do {
-            port = try await listener.start()
+            port = try await listener.start(expectedState: state)
         } catch {
             await listener.stop()
             throw Self.mapped(error)
@@ -87,6 +92,7 @@ actor OpenRouterOAuth {
                 URLQueryItem(name: "callback_url", value: callback),
                 URLQueryItem(name: "code_challenge", value: challenge),
                 URLQueryItem(name: "code_challenge_method", value: "S256"),
+                URLQueryItem(name: "state", value: state),
             ]
             guard let authURL = comps.url else { throw OAuthError.invalidResponse }
 
@@ -149,10 +155,22 @@ actor OpenRouterOAuth {
     // MARK: PKCE
 
     /// 64 random bytes → base64url without padding (a 43…128-char verifier, per RFC 7636).
-    static func makeCodeVerifier() -> String {
-        var bytes = [UInt8](repeating: 0, count: 64)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        return base64URL(Data(bytes))
+    /// Throws on RNG failure — NEVER proceed with weak/zero entropy (that would defeat PKCE).
+    static func makeCodeVerifier() throws -> String {
+        try base64URL(randomBytes(64))
+    }
+
+    /// A random `state` nonce (32 bytes → base64url) tying the browser round-trip to this flow.
+    static func makeStateNonce() throws -> String {
+        try base64URL(randomBytes(32))
+    }
+
+    /// `count` cryptographically-secure random bytes, or throw `.entropyFailed` if the system RNG fails.
+    private static func randomBytes(_ count: Int) throws -> Data {
+        var bytes = [UInt8](repeating: 0, count: count)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        guard status == errSecSuccess else { throw OAuthError.entropyFailed }
+        return Data(bytes)
     }
 
     /// S256: base64url(SHA256(verifier)) without padding.
@@ -237,11 +255,19 @@ private actor LoopbackListener {
     private var pending: Result<String, Error>?   // callback arrived before waitForCode() was awaited
     private var delivered = false
     private var stopped = false
+    private var expectedState: String?            // the `state` nonce the callback must echo (CSRF guard)
 
     private static let queue = DispatchQueue(label: "gg.zbs.eye.openrouter.oauth.loopback")
+    /// Binding a loopback socket is near-instant; if it hasn't reached `.ready` within this window the
+    /// bind is wedged — fail cleanly instead of suspending forever on the port continuation.
+    private static let bindTimeout: TimeInterval = 10
 
     /// Bind 127.0.0.1 on an ephemeral port; resolves with the assigned port once listening.
-    func start() async throws -> UInt16 {
+    /// `expectedState` is the nonce the OAuth callback must echo. Bounded by `bindTimeout` and
+    /// cancellation-safe: a wedged bind, a cancelled task, or a terminal `.failed`/`.cancelled` state
+    /// all resume the waiter (and tear the socket down) rather than leaking it.
+    func start(expectedState: String) async throws -> UInt16 {
+        self.expectedState = expectedState
         let params = NWParameters.tcp
         // requiredLocalEndpoint pins the bind to loopback ONLY (never 0.0.0.0); .any = ephemeral port.
         params.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: .any)
@@ -259,10 +285,37 @@ private actor LoopbackListener {
             Task { await self?.onConnection(conn) }
         }
 
-        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<UInt16, Error>) in
-            portCont = cont
-            l.start(queue: Self.queue)
+        // Watchdog: fail the port wait if the socket never reaches a terminal state in time.
+        let watchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.bindTimeout * 1_000_000_000))
+            await self?.failPortWait(.timedOut)
         }
+        defer { watchdog.cancel() }
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<UInt16, Error>) in
+                // If teardown already happened (cancel/timeout), don't suspend — resume immediately.
+                if stopped {
+                    cont.resume(throwing: OpenRouterOAuth.OAuthError.cancelled)
+                    return
+                }
+                portCont = cont
+                l.start(queue: Self.queue)
+            }
+        } onCancel: {
+            Task { await self.failPortWait(.cancelled) }
+        }
+    }
+
+    /// Resume a still-pending port continuation with an error and tear the half-open socket down.
+    /// Idempotent — whichever of {ready, failed, watchdog, cancel} lands first wins; the rest no-op.
+    private func failPortWait(_ error: OpenRouterOAuth.OAuthError) {
+        guard let cont = portCont else { return }
+        portCont = nil
+        stopped = true
+        listener?.cancel()
+        listener = nil
+        cont.resume(throwing: error)
     }
 
     /// Await the authorization code (or a typed error). Cancellation-safe: cancelling the awaiting task
@@ -310,11 +363,11 @@ private actor LoopbackListener {
             portCont = nil
             cont.resume(returning: listener?.port?.rawValue ?? 0)
         case .failed:
-            if let cont = portCont {
-                portCont = nil
-                cont.resume(throwing: OpenRouterOAuth.OAuthError.listenerFailed)
-            }
+            failPortWait(.listenerFailed)
             deliver(.failure(OpenRouterOAuth.OAuthError.listenerFailed))
+        case .cancelled:
+            // Terminal: the socket is gone. Resume a still-pending port waiter so it can't hang.
+            failPortWait(.cancelled)
         default:
             break
         }
@@ -366,6 +419,14 @@ private actor LoopbackListener {
         let items = comps.queryItems ?? []
         let code = items.first { $0.name == "code" }?.value
         let providerErr = items.first { $0.name == "error" }?.value
+        let gotState = items.first { $0.name == "state" }?.value
+
+        // CSRF/anti-injection: the callback MUST echo our `state`. A missing/mismatched nonce is IGNORED
+        // (400, single-use guard untouched) so the legitimate callback can still land — never delivered.
+        if let expectedState, gotState != expectedState {
+            respondAndClose(conn, status: "400 Bad Request", html: "Bad request")
+            return
+        }
 
         respondAndClose(conn, status: "200 OK", html: Self.pageHTML)
 
