@@ -662,6 +662,16 @@
         }
       }
     },
+    "Couldn't save the API key to the Keychain. Try again.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сохранить API-ключ в Связку ключей. Попробуйте ещё раз."
+          }
+        }
+      }
+    },
     "Cursor — ~/.cursor/mcp.json (same JSON)": {
       "localizations": {
         "ru": {

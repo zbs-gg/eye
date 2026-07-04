@@ -41,21 +41,30 @@ actor LLMClient {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.timeoutInterval = timeout
+        let data: Data
+        let resp: URLResponse
         do {
             try Self.applyAuth(&req, cfg)
-            let (data, resp) = try await Self.session(timeout: timeout).data(for: req)
-            guard let http = resp as? HTTPURLResponse else { return .failed("no HTTP response") }
-            guard (200..<300).contains(http.statusCode) else {
-                return .failed("HTTP \(http.statusCode): \(Self.snippet(data))")
-            }
-            // OpenAI-compatible AND Anthropic /v1/models share the {data:[{id}]} shape.
-            let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
-            var ids = decoded.data.map(\.id)
-            if cfg.provider == .openai { ids = ids.filter(AIProvider.isChatCapableOpenAIModel) }
-            return .ok(ids)
+            (data, resp) = try await Self.session(timeout: timeout).data(for: req)
         } catch {
+            // Transport error / auth-header build failure → the probe did NOT succeed.
             return .failed(Self.humanError(error))
         }
+        guard let http = resp as? HTTPURLResponse else { return .failed("no HTTP response") }
+        guard (200..<300).contains(http.statusCode) else {
+            // Non-2xx (e.g. 401 bad key) is a real failure — callers must NOT mask it as connected.
+            return .failed("HTTP \(http.statusCode): \(Self.snippet(data))")
+        }
+        // 2xx: the server is reachable and the key (if any) is accepted. Parse the model list, but an
+        // empty OR unparseable body (older API shape) still counts as a SUCCESSFUL probe — return .ok([])
+        // so a caller can fall back to a static list rather than reporting a connection failure.
+        // OpenAI-compatible AND Anthropic /v1/models share the {data:[{id}]} shape.
+        guard let decoded = try? JSONDecoder().decode(ModelsResponse.self, from: data) else {
+            return .ok([])
+        }
+        var ids = decoded.data.map(\.id)
+        if cfg.provider == .openai { ids = ids.filter(AIProvider.isChatCapableOpenAIModel) }
+        return .ok(ids)
     }
 
     // MARK: generation
@@ -211,6 +220,21 @@ actor LLMClient {
         return URL(string: b + "/" + path)
     }
 
+    /// Blocks ALL HTTP redirects. A 3xx from a probed/pinned host must NEVER make URLSession silently
+    /// re-send the request — whose body is a history excerpt and whose headers carry the API key
+    /// (x-api-key / Authorization) — to an arbitrary host. That would defeat LLMConfig's host pin.
+    /// Passing nil to the completion handler cancels the redirect and delivers the 3xx response as-is.
+    /// One shared, stateless instance backs every session this client creates (chat + /models probe).
+    private final class NoRedirect: NSObject, URLSessionTaskDelegate, Sendable {
+        static let shared = NoRedirect()
+        func urlSession(_ session: URLSession, task: URLSessionTask,
+                        willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest,
+                        completionHandler: @escaping (URLRequest?) -> Void) {
+            completionHandler(nil)
+        }
+    }
+
     private static func session(timeout: TimeInterval) -> URLSession {
         let c = URLSessionConfiguration.ephemeral
         // stream:false → the server stays silent until the whole response is ready, so the idle timeout (timeoutIntervalForRequest)
@@ -219,7 +243,8 @@ actor LLMClient {
         c.timeoutIntervalForRequest = timeout
         c.timeoutIntervalForResource = max(timeout, 600)
         c.waitsForConnectivity = false
-        return URLSession(configuration: c)
+        // NoRedirect is attached to EVERY session — this is the zero-egress guarantee (no redirect leak).
+        return URLSession(configuration: c, delegate: NoRedirect.shared, delegateQueue: nil)
     }
 
     private static func snippet(_ data: Data) -> String {

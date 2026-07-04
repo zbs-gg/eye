@@ -70,8 +70,10 @@ private struct ProviderSection: View {
             if provider == .custom { endpointField }
             if provider.isCloud { keyRow }
             connectRow
-            if !ai.modelOptions(provider).isEmpty { modelPicker }
-            if provider == .custom && ai.modelOptions(provider).isEmpty { manualModelField }
+            if !ai.fetchedModels(provider).isEmpty { modelPicker }
+            // No server-provided list yet (empty /v1/models, JIT loading, or not probed) → let any LOCAL
+            // provider's model be typed in by hand, so a valid model id is always selectable/activatable.
+            if ai.fetchedModels(provider).isEmpty && !provider.isCloud { manualModelField }
             useRow
         } header: {
             header
@@ -188,7 +190,8 @@ private struct ProviderSection: View {
         }
     }
 
-    /// Custom servers may not implement /v1/models — manual model entry as a fallback.
+    /// A local server may not implement /v1/models (or return an empty list while a model JIT-loads) —
+    /// manual model entry as a fallback so LM Studio / Ollama / custom are never picker-only.
     private var manualModelField: some View {
         TextField("Model", text: Binding(
             get: { ai.model(for: provider) },
