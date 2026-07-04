@@ -5,6 +5,19 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 ## [Unreleased] — 2026-07-03
 
 ### Added
+- **Use your own Claude Code (no API key) + one-click OpenRouter; API keys demoted to Advanced.** The
+  "AI Models" screen is reordered by least friction: **Local** (LM Studio / Ollama) first, then
+  **Claude Code** — a new provider that runs the `claude` CLI you're *already signed into* as a local
+  subprocess (`claude -p --output-format json`), so there's no key to paste. The binary is resolved at
+  runtime (a GUI app doesn't inherit the shell `PATH`: well-known locations, then a login-shell
+  `command -v`); the prompt goes in on stdin (never argv, never logged) and the request timeout is
+  enforced by killing a runaway process. Because the CLI egresses to Anthropic via your login, it sits
+  behind the **same cloud-consent gate** as the other cloud providers. Then **OpenRouter** (one-click
+  Connect), and finally an **"Advanced — API keys & custom server"** disclosure (collapsed by default)
+  holding the OpenAI / Anthropic key-paste cards and the custom-localhost endpoint. Key-pasting is no
+  longer the front door. Each card gets a one-line "what this is" + a status dot. EN + RU strings.
+  _(Deferred: a Codex provider — its exec mode is agentic/heavyweight and unfit as a plain completion
+  backend, so no Codex UI ships here.)_
 - **One-click Connect for OpenRouter (real OAuth, PKCE, no key pasting).** The OpenRouter card now has a
   prominent **"Connect OpenRouter"** button: it runs a genuine OAuth 2.0 Authorization Code + PKCE flow
   (SHA-256 `S256`), catches the callback on a temporary loopback listener bound to 127.0.0.1 on an
@@ -82,6 +95,13 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   incremental (per-source cursor), toggle + "Import now" in Settings.
 
 ### Fixed
+- **OpenRouter OAuth hardening (review).** The callback now carries a random `state` nonce that the
+  loopback must echo (mismatches are ignored, single-use guard intact); the PKCE verifier throws on an
+  RNG failure instead of silently using zero entropy; the loopback bind has a timeout + cancellation +
+  terminal-state handling so it can't hang or leak the socket; a late/cancelled sign-in can no longer
+  clobber a newer attempt (monotonic attempt token); pasting a manual key cancels any in-flight OAuth
+  (and a late success no-ops); and a stale `.failed` banner is cleared on card re-appear and on
+  removing the key.
 - **Browser-history hardening (Pro review).** Stable per-source cursor (was a per-process-random
   `hashValue` that re-imported every launch); consistent DB snapshot via SQLite backup API (+
   integrity-checked file-copy fallback, not a torn WAL copy); per-format cursor precision (Safari

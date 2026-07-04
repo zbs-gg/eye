@@ -739,6 +739,16 @@
         }
       }
     },
+    "Advanced — API keys & custom server": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дополнительно — API-ключи и свой сервер"
+          }
+        }
+      }
+    },
     "Agents and scripts on this Mac can read your history over HTTP. The server listens on 127.0.0.1 only; every endpoint except /health requires the Bearer token (it lives in the Keychain).": {
       "localizations": {
         "ru": {
@@ -1179,6 +1189,26 @@
         }
       }
     },
+    "Claude Code not found": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude Code не найден"
+          }
+        }
+      }
+    },
+    "Claude Code sends excerpts of your screen history to Anthropic through your signed-in Claude Code login. Your recordings and index stay local.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude Code отправляет фрагменты истории экрана в Anthropic через вашу учётную запись Claude Code. Записи и индекс остаются на устройстве."
+          }
+        }
+      }
+    },
     "Claude Desktop — claude_desktop_config.json": {
       "localizations": {}
     },
@@ -1438,6 +1468,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Не удалось завершить вход (%@)."
+          }
+        }
+      }
+    },
+    "Couldn't generate secure sign-in credentials. Try again.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось создать безопасные данные для входа. Попробуйте ещё раз."
           }
         }
       }
@@ -2432,6 +2472,16 @@
         }
       }
     },
+    "Install the Claude Code CLI and run `claude` once to sign in, then re-check.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установите CLI Claude Code и запустите `claude`, чтобы войти, затем проверьте снова."
+          }
+        }
+      }
+    },
     "Intensity": {
       "localizations": {
         "ru": {
@@ -2598,6 +2648,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Длинный день — в сводку попали только самые длинные сессии."
+          }
+        }
+      }
+    },
+    "Looking for Claude Code…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ищем Claude Code…"
           }
         }
       }
@@ -2948,12 +3008,32 @@
         }
       }
     },
+    "On this Mac — private by default": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На этом Mac — приватно по умолчанию"
+          }
+        }
+      }
+    },
     "One model processes excerpts of your history for Ask, Daily Insights and the day summary. Local providers keep everything on this Mac; cloud providers are an explicit opt-in. Recording, search index and storage stay local no matter what you pick here.": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Одна модель обрабатывает фрагменты вашей истории для «Спросить», «Инсайтов дня» и дневного дайджеста. Локальные провайдеры держат всё на этом Mac; облачные — только по явному согласию. Запись, поисковый индекс и хранилище остаются локальными при любом выборе."
+          }
+        }
+      }
+    },
+    "One-click cloud": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Облако в один клик"
           }
         }
       }
@@ -3064,6 +3144,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Перезаписано"
+          }
+        }
+      }
+    },
+    "Paste an API key for OpenAI or Anthropic, or point at your own OpenAI-compatible localhost server. Most people don't need this.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вставьте API-ключ OpenAI или Anthropic либо укажите свой локальный сервер, совместимый с OpenAI. Большинству это не нужно."
           }
         }
       }
@@ -3438,6 +3528,16 @@
         }
       }
     },
+    "Runs entirely on your Mac: free, offline, nothing leaves the device. Start LM Studio or Ollama, then Connect.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Работает целиком на вашем Mac: бесплатно, офлайн, ничего не покидает устройство. Запустите LM Studio или Ollama и нажмите «Подключить»."
+          }
+        }
+      }
+    },
     "Runs on this Mac (port 11434). Free and private — `ollama serve`, then Connect.": {
       "localizations": {
         "ru": {
@@ -3534,6 +3634,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Отправлять фрагменты в %@"
+          }
+        }
+      }
+    },
+    "Send excerpts via Claude Code": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправлять фрагменты через Claude Code"
           }
         }
       }
@@ -4418,12 +4528,32 @@
         }
       }
     },
+    "Use your Claude Code": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Используйте свой Claude Code"
+          }
+        }
+      }
+    },
     "Used": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Использовано"
+          }
+        }
+      }
+    },
+    "Uses the Claude Code you're already signed into — no API key to paste. Excerpts are sent to Anthropic through your Claude Code login, so it needs the same cloud opt-in.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использует Claude Code, в который вы уже вошли, — не нужно вставлять API-ключ. Фрагменты отправляются в Anthropic через вашу учётную запись Claude Code, поэтому требуется такое же согласие на облако."
           }
         }
       }
@@ -4494,6 +4624,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Что пошло не так? (например, звук не записывается во время звонков)"
+          }
+        }
+      }
+    },
+    "Which AI reads your memory": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Какой ИИ читает вашу память"
           }
         }
       }

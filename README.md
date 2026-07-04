@@ -28,8 +28,8 @@ ZBS Eye quietly keeps an "eternal memory" of your work at the computer:
   a scrubbable timeline, frames served as images.
 - **Access for AI agents** → a local REST + MCP surface so LLMs/agents can work with your memory.
 - **Bring your own AI** → you pick the model that processes history excerpts (Ask, Daily Insights,
-  day summary): local (LM Studio / Ollama) by default, cloud (OpenRouter / Anthropic / OpenAI) only
-  as an explicit opt-in.
+  day summary): local (LM Studio / Ollama) by default, **your already-installed Claude Code** (no API
+  key), **one-click OpenRouter** (OAuth), or an API key as a fallback — cloud only as an explicit opt-in.
 
 Capture, index and storage stay on the device — zero egress, no subscription, no account. AI is
 local-first: cloud providers exist only behind an explicit per-provider opt-in and receive prompt
@@ -58,9 +58,11 @@ native alternative that **never goes to the cloud** — your activity history is
 - 🔍 **Hybrid search** — FTS5 + multilingual-e5 (384-dim) via RRF; cross-lingual.
 - 🕰️ **Timeline** — scrub through time, frame + text + app/URL, a player.
 - 🔌 **REST + MCP** — a local API (127.0.0.1, Bearer token) for agents; MCP over stdio.
-- 🧠 **Bring your own AI** — the "AI Models" section: one-click connect for LM Studio / Ollama (or any
-  local OpenAI-compatible server) as the default; OpenRouter / Anthropic / OpenAI as an explicit
-  opt-in with a clear warning (excerpts of screen history leave the Mac — capture/index/storage never do).
+- 🧠 **Bring your own AI** — the "AI Models" section, ordered by least friction: local LM Studio / Ollama
+  (or any local OpenAI-compatible server) as the default; **your installed Claude Code**, run as a local
+  subprocess with no API key to paste; **one-click OpenRouter** (real OAuth). Pasting an API key
+  (OpenAI / Anthropic) is demoted to an "Advanced" fallback. Cloud providers are an explicit opt-in with
+  a clear warning (excerpts of screen history leave the Mac — capture/index/storage never do).
 - ♾️ **Storage** — forever by default; **move to an external SSD** in one click;
   **iCloud auto-backup** (a compressed snapshot, without uploading the live database); size tracking.
 - 📥 **Import previous history** — bring your accumulated history (text + metadata) over.
