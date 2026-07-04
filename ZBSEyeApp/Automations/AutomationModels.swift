@@ -17,7 +17,10 @@ struct LLMConfig: Sendable, Equatable {
     var cloudConsented: Bool = false
 
     var isConfigured: Bool {
-        !baseURL.trimmingCharacters(in: .whitespaces).isEmpty &&
+        // A subprocess provider (Claude Code) has no baseURL — it's configured once a model is chosen
+        // ("default" counts). Everything else needs both an endpoint and a model.
+        if provider.isSubprocess { return !model.trimmingCharacters(in: .whitespaces).isEmpty }
+        return !baseURL.trimmingCharacters(in: .whitespaces).isEmpty &&
         !model.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
@@ -37,7 +40,9 @@ struct LLMConfig: Sendable, Equatable {
     }
 
     /// Local provider → localhost only; cloud provider → exactly its pinned API host over https.
+    /// A subprocess provider (Claude Code) has no HTTP endpoint to pin — the CLI owns its transport.
     var isEndpointAllowed: Bool {
+        if provider.isSubprocess { return true }
         guard let url = URL(string: normalizedBaseURL), let host = url.host?.lowercased() else { return false }
         if let pinned = provider.apiHost { return host == pinned && url.scheme == "https" }
         return isLocalOnly
@@ -47,6 +52,15 @@ struct LLMConfig: Sendable, Equatable {
     /// requireModel=false for `/models` probes (no model chosen yet); requireConsent=false likewise —
     /// listing models sends no history, actual chat (history excerpts) always requires consent.
     func validate(requireModel: Bool = true, requireConsent: Bool = true) throws {
+        // Subprocess providers (Claude Code) have no endpoint to check — the CLI handles transport.
+        // The consent gate still applies (the CLI egresses to Anthropic via the user's login).
+        if provider.isSubprocess {
+            guard !requireModel || isConfigured else { throw AutomationError.noLLM }
+            if provider.isCloud, requireConsent, !cloudConsented {
+                throw AutomationError.cloudConsentRequired(provider.displayName)
+            }
+            return
+        }
         let base = baseURL.trimmingCharacters(in: .whitespaces)
         guard !base.isEmpty, !requireModel || isConfigured else { throw AutomationError.noLLM }
         guard isEndpointAllowed else {

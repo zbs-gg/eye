@@ -74,12 +74,74 @@ actor LLMClient {
     func chat(_ cfg: LLMConfig, system: String, user: String,
               maxTokens: Int, timeout: TimeInterval) async throws -> ChatOutput {
         try cfg.validate()
+        // Claude Code is a local subprocess, not an HTTP endpoint — dispatch before the wire switch.
+        if cfg.provider.isSubprocess {
+            return try await claudeCodeChat(cfg, system: system, user: user, timeout: timeout)
+        }
         switch cfg.provider.wire {
         case .openAICompatible:
             return try await openAIChat(cfg, system: system, user: user, maxTokens: maxTokens, timeout: timeout)
         case .anthropicMessages:
             return try await anthropicChat(cfg, system: system, user: user, maxTokens: maxTokens, timeout: timeout)
         }
+    }
+
+    // MARK: Claude Code (local CLI subprocess — no API key, no URLSession)
+
+    /// The shape of `claude -p --output-format json`: we only need `result` (the answer) plus the
+    /// error/stop flags. Everything else in the payload (usage, cost, ids) is ignored.
+    private struct ClaudeCodeResult: Decodable {
+        let result: String?
+        let is_error: Bool?
+        let subtype: String?
+        let stop_reason: String?
+    }
+
+    /// Path to the `claude` binary, resolved once per client via the shared locator and cached here.
+    private var cachedClaudePath: String?
+    private func claudePath() async throws -> String {
+        if let p = cachedClaudePath { return p }
+        guard let p = await ClaudeCodeLocator.shared.resolve() else {
+            throw AutomationError.llm("Claude Code not found — install it and run `claude` once to sign in.")
+        }
+        cachedClaudePath = p
+        return p
+    }
+
+    /// Run the user's authenticated Claude Code CLI as a subprocess and map its JSON to ChatOutput.
+    /// Prompt goes on stdin; the system prompt uses `--append-system-prompt` when the CLI supports it,
+    /// otherwise it's prepended to the user prompt. Neither the prompt nor the answer is ever logged.
+    private func claudeCodeChat(_ cfg: LLMConfig, system: String, user: String,
+                                timeout: TimeInterval) async throws -> ChatOutput {
+        let path = try await claudePath()
+        var args = ["-p", "--output-format", "json"]
+        let model = cfg.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !model.isEmpty, model != AIProvider.claudeCodeDefaultModel {
+            args += ["--model", model]
+        }
+        let prompt: String
+        let trimmedSystem = system.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedSystem.isEmpty, await ClaudeCodeLocator.shared.supportsAppendSystemPrompt() {
+            args += ["--append-system-prompt", system]
+            prompt = user
+        } else if !trimmedSystem.isEmpty {
+            prompt = system + "\n\n" + user
+        } else {
+            prompt = user
+        }
+
+        let data = try await ClaudeCodeRunner.run(path: path, args: args, stdin: prompt, timeout: timeout)
+        guard let decoded = try? JSONDecoder().decode(ClaudeCodeResult.self, from: data) else {
+            throw AutomationError.llm("unexpected response from Claude Code")
+        }
+        if decoded.is_error == true {
+            throw AutomationError.llm("Claude Code reported an error (\(decoded.subtype ?? "unknown")).")
+        }
+        guard let text = decoded.result,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AutomationError.llm("empty model response")
+        }
+        return ChatOutput(content: text, truncated: decoded.stop_reason == "max_tokens")
     }
 
     /// `POST {base}/chat/completions` (LM Studio / Ollama / custom / OpenRouter / OpenAI).
