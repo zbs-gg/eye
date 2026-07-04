@@ -29,9 +29,13 @@ enum SystemAppFilter {
         "com.apple.screensaver",
     ]
 
-    /// Name fallback for frames recorded without a bundle id (loginwindow sometimes surfaces
-    /// only as a process name).
-    private static let deniedNames: Set<String> = ["loginwindow", "login window"]
+    /// Name fallback for frames recorded without a bundle id (a system shell sometimes surfaces only as
+    /// a process name). Covers loginwindow and the screen saver (whose engine has appeared under several
+    /// process names across macOS versions) so an idle lock/screensaver stretch reads as a gap, not activity.
+    private static let deniedNames: Set<String> = [
+        "loginwindow", "login window",
+        "screensaverengine", "legacyscreensaver", "screen saver", "screensaver",
+    ]
 
     /// True → a system shell, not user activity.
     static func isSystem(bundleId: String?, appName: String? = nil) -> Bool {

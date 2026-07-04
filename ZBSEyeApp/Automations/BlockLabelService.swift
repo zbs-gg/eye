@@ -7,28 +7,39 @@ import Foundation
 /// (graceful fallback, no error surface). Read-only consumer of LocalLLMClient's current interface.
 actor BlockLabelService {
     private let client: LocalLLMClient
-    /// Cache per (day, block-range): a re-render / repeat visit of the day never re-asks the model.
+    /// Cache per block-content+model: a re-render / repeat visit never re-asks the model. The value is
+    /// optional — a stored `nil` is a NEGATIVE cache entry (the call errored or the output sanitized to
+    /// empty), so a bad block isn't re-sent to the local model on every Activities re-appearance.
     /// Session-lifetime is enough — labels are cosmetic and cheap to lose on relaunch.
-    private var cache: [String: String] = [:]
+    private var cache: [String: String?] = [:]
 
     init(client: LocalLLMClient) { self.client = client }
 
-    /// Key = day + exact block range: stable across re-renders, naturally invalidated when new
-    /// frames shift the block's boundaries (a changed block deserves a fresh label).
-    private static func cacheKey(day: Date, block: ActivityBlock) -> String {
-        "\(CartographerService.ymd(day))|\(msFromDate(block.startTs))-\(msFromDate(block.endTs))"
+    /// Key = block's epoch-ms range + model id + a fingerprint of its apps and topics. The ms range is
+    /// absolute (globally unique across days, so no day prefix is needed); the model id + content
+    /// fingerprint invalidate a stale one-liner when the user switches models or the block's interior
+    /// changes (a new app/topic mid-range) even if its start/end don't shift.
+    private static func cacheKey(block: ActivityBlock, llm: LLMConfig) -> String {
+        let apps = block.topApps.prefix(4)
+            .map { "\($0.name):\(Int($0.seconds))" }.joined(separator: ",")
+        let topics = block.scenes.compactMap { ActivityBlockBuilder.topic(of: $0) }.joined(separator: ",")
+        return "\(msFromDate(block.startTs))-\(msFromDate(block.endTs))|\(llm.model)|\(apps)|\(topics)"
     }
 
     /// One-liner for a block, or nil (LLM not configured / non-local / bad output) → keep heuristic.
+    /// `day` is accepted for the caller's clarity but does not enter the (globally unique) cache key.
     func label(day: Date, block: ActivityBlock, llm: LLMConfig,
                safety: AutomationSafety = .default) async -> String? {
         guard llm.isConfigured, llm.isLocalOnly else { return nil }
-        let key = Self.cacheKey(day: day, block: block)
-        if let hit = cache[key] { return hit }
+        let key = Self.cacheKey(block: block, llm: llm)
+        if let hit = cache[key] { return hit }   // hit = a label OR a cached miss (nil) — never re-ask this session
         let (system, user) = Self.buildPrompt(block)
         guard let out = try? await client.chat(llm, system: system, user: user,
                                                maxTokens: 60, timeout: safety.requestTimeout),
-              let line = Self.sanitize(out.content) else { return nil }
+              let line = Self.sanitize(out.content) else {
+            cache.updateValue(nil, forKey: key)   // negative cache (subscript = nil would REMOVE the key)
+            return nil
+        }
         cache[key] = line
         return line
     }

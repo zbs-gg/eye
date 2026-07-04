@@ -11,8 +11,8 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   window title), plus an optional local-LLM one-liner ("Working on ZBS Eye: Xcode, GitHub, docs")
   when a model is connected and consented — cached per block, heuristic-only otherwise. System shells
   (loginwindow, screen saver, Dock, Control Center, Notification Center…) no longer count as
-  "activity" anywhere: Activities, top apps, active minutes, context switches and the busiest-hour
-  histogram all treat them as idle gaps via one shared `SystemAppFilter`. Blocks expand into the
+  "activity" in Activities or usage stats: Activities, top apps, active minutes, context switches and
+  the busiest-hour histogram all treat them as idle gaps via one shared `SystemAppFilter`. Blocks expand into the
   underlying app sessions; a "Show system events" toggle (default off) reveals the filtered entries
   for debugging.
 - **Much lighter at runtime (RAM/CPU).** Measured live, Eye sat at ~740 MB (peaking ~1.35 GB) and spiked

@@ -50,7 +50,10 @@ actor SceneService {
         let caps = try await repo.captures(fromMs: msFromDate(time.addingTimeInterval(-window)),
                                            toMs: msFromDate(time.addingTimeInterval(window)))
         guard !caps.isEmpty else { return nil }
-        let sessions = DayActivityRepository.sessions(caps, grouping: .appOnly, gapMs: gapMs)
+        // excludeSystem: false — MUST match build()'s segmentation so the scene under the cursor is the
+        // same one the user tapped in a block's session list (Pro review: panel vs card consistency).
+        let sessions = DayActivityRepository.sessions(caps, grouping: .appOnly, gapMs: gapMs,
+                                                      excludeSystem: false)
         guard let seg = sessions.first(where: { $0.startMs <= timeMs && $0.endMs >= timeMs }) else { return nil }
         let text = try await repo.batchText(captureIds: [seg.rep.id])
         return Self.buildScene(seg, repText: text[seg.rep.id] ?? "")

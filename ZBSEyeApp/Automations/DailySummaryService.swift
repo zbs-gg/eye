@@ -25,7 +25,10 @@ actor DailySummaryService {
 
         // app+window sessions (5-min pause tolerance); top by duration (ties broken by frame count),
         // then back into chronological order for the prompt.
-        let sessions = DayActivityRepository.sessions(caps, grouping: .appAndWindow, gapMs: 5 * 60 * 1000)
+        // excludeSystem: false — the daily summary written to the vault is out of the Activities/usage-stats
+        // scope; keep prior behaviour so a long lock-screen session isn't silently dropped from the summary.
+        let sessions = DayActivityRepository.sessions(caps, grouping: .appAndWindow, gapMs: 5 * 60 * 1000,
+                                                      excludeSystem: false)
         let totalSlices = sessions.count
         let chosen = sessions
             .sorted { ($0.durationMs, $0.count) > ($1.durationMs, $1.count) }

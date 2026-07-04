@@ -245,9 +245,7 @@ private struct BlockCard: View {
     }
 
     private func timeRangeLabel(start: Date, end: Date) -> String {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "HH:mm"
-        return "\(fmt.string(from: start))–\(fmt.string(from: end))"
+        "\(cardTimeFormatter.string(from: start))–\(cardTimeFormatter.string(from: end))"
     }
 }
 
@@ -329,13 +327,21 @@ private struct SceneCard: View {
     }
 
     private func timeRangeLabel(_ scene: ActivityScene) -> String {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "HH:mm"
-        return "\(fmt.string(from: scene.startTs))–\(fmt.string(from: scene.endTs))"
+        "\(cardTimeFormatter.string(from: scene.startTs))–\(cardTimeFormatter.string(from: scene.endTs))"
     }
 }
 
 // MARK: - shared helpers
+
+/// One shared "HH:mm" formatter for the card time ranges. A DateFormatter is relatively expensive to
+/// build; allocating one per card per body evaluation shows up on the scroll hot path. Formatting is
+/// read-only and we never mutate it after init, so a single reused instance is safe
+/// (`nonisolated(unsafe)` — the cards read it from the MainActor render path).
+nonisolated(unsafe) private let cardTimeFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "HH:mm"
+    return f
+}()
 
 private func durationLabel(_ sec: Double) -> String {
     let s = Int(sec)

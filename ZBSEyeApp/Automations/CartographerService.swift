@@ -57,7 +57,10 @@ actor CartographerService {
         let switches = DayActivityRepository.contextSwitches(caps)
 
         // Text samples: top-5 sessions (app+window) by frame count → batch text over their frames.
-        let sessions = DayActivityRepository.sessions(caps, grouping: .appAndWindow, gapMs: 5 * 60 * 1000)
+        // excludeSystem: false — Daily Insights is out of the Activities/usage-stats scope; keep prior
+        // behaviour so a long lock-screen stretch isn't silently dropped from the model's input.
+        let sessions = DayActivityRepository.sessions(caps, grouping: .appAndWindow, gapMs: 5 * 60 * 1000,
+                                                      excludeSystem: false)
         let topSessions = sessions.sorted { $0.count > $1.count }.prefix(5)
         let candidateIds = topSessions.flatMap { $0.sampledCaptureIds(max: 80) }
         let textByCapture = try await repo.batchText(captureIds: candidateIds)

@@ -5,12 +5,11 @@ import Foundation
 /// scenes, so system shells (loginwindow etc.) never appear inside — they became gaps upstream.
 /// Sendable: crosses SceneStore → SwiftUI.
 struct ActivityBlock: Sendable, Identifiable {
-    /// Per-app aggregate inside a block: display name + share of the block's active time.
+    /// Per-app aggregate inside a block: display name + active seconds (desc by seconds).
     struct AppShare: Sendable, Identifiable {
         let name: String
         let bundleId: String?
         let seconds: Double
-        let share: Double            // 0…1 of the block's total active seconds
         var id: String { name }
     }
 
@@ -76,10 +75,8 @@ enum ActivityBlockBuilder {
             seconds[name, default: 0] += s.durationSec
             if let bid = s.bundleId, bundleIds[name] == nil { bundleIds[name] = bid }
         }
-        let total = max(1, seconds.values.reduce(0, +))
         return seconds.sorted { $0.value > $1.value }.map {
-            ActivityBlock.AppShare(name: $0.key, bundleId: bundleIds[$0.key],
-                                   seconds: $0.value, share: $0.value / total)
+            ActivityBlock.AppShare(name: $0.key, bundleId: bundleIds[$0.key], seconds: $0.value)
         }
     }
 
