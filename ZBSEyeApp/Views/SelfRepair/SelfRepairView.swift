@@ -12,6 +12,7 @@ struct SelfRepairView: View {
 
     @State private var problemText = ""
     @State private var repairCopied = false
+    @State private var workspaceCopied = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -21,23 +22,20 @@ struct SelfRepairView: View {
                 Spacer()
                 if let onClose { Button("Close") { onClose() } }
             }
-            Text("ZBS Eye is open to read and yours to fix. Describe what's wrong — Eye collects the "
-                 + "diagnostics and hands your own AI agent a ready-to-run repair prompt (it reads the "
-                 + "source and fixes it). If that doesn't do it, file a GitHub issue with one click. "
-                 + "Nothing leaves your machine.")
+            // Single literal (not concatenation) so it stays a LocalizedStringKey → xcstrings.
+            Text("ZBS Eye is open to read and yours to fix. Describe what's wrong — Eye collects the diagnostics and hands your own AI agent a ready-to-run repair prompt (it reads the source and fixes it). If that doesn't do it, file a GitHub issue with one click. Nothing leaves your machine.")
                 .font(.callout).foregroundStyle(.secondary)
 
             TextField("What went wrong? (e.g. audio doesn't record during calls)",
                       text: $problemText, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(3...6)
-                .onChange(of: problemText) { _, _ in repairCopied = false }
+                .onChange(of: problemText) { _, _ in repairCopied = false; workspaceCopied = false }
 
             HStack(spacing: 10) {
                 Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(buildRepairPrompt(), forType: .string)
-                    repairCopied = true
+                    copyToPasteboard(buildRepairPrompt())
+                    repairCopied = true; workspaceCopied = false
                 } label: {
                     Label(repairCopied ? "Copied — paste into your agent" : "Ask your agent to fix it",
                           systemImage: repairCopied ? "checkmark" : "wand.and.stars")
@@ -47,6 +45,23 @@ struct SelfRepairView: View {
                     Label("Open a GitHub issue", systemImage: "ladybug")
                 }
                 Spacer()
+            }
+
+            // Quick fix vs full workspace: the button above copies a one-shot repair prompt; this one
+            // bootstraps a persistent dev setup — clone + toolchain + the bundled .claude harness —
+            // so the user's agent can fix this bug properly AND keep maintaining Eye afterwards.
+            VStack(alignment: .leading, spacing: 4) {
+                Button {
+                    copyToPasteboard(buildWorkspacePrompt())
+                    workspaceCopied = true; repairCopied = false
+                } label: {
+                    Label(workspaceCopied ? "Copied — paste into your agent"
+                                          : "Set up a dev workspace (for your agent)",
+                          systemImage: workspaceCopied ? "checkmark" : "hammer")
+                }
+                // Single literal (not concatenation) so it stays a LocalizedStringKey → xcstrings.
+                Text("Bigger job? This longer prompt has your agent clone the public source with a ready-made harness (build, diagnose, and review skills) — fix this bug properly, then keep improving Eye for you.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             DisclosureGroup("What gets shared (nothing leaves the machine on its own)") {
@@ -62,6 +77,11 @@ struct SelfRepairView: View {
     }
 
     // MARK: — prompt / diagnostics (shared with the MCP get_diagnostics tool's intent)
+
+    private func copyToPasteboard(_ s: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(s, forType: .string)
+    }
 
     private func buildRepairPrompt() -> String {
         """
@@ -81,6 +101,63 @@ struct SelfRepairView: View {
         4. If you can't fix it, open a GitHub issue at github.com/zbs-gg/eye/issues/new with this whole message.
 
         (Tip: connect ZBS Eye's MCP server — `ZBS Eye --mcp` — and call `get_diagnostics` for live state.)
+        """
+    }
+
+    /// The "own your recorder" bootstrap: unlike the quick repair prompt above, this sets up a
+    /// persistent local workspace — clone, toolchain, green build — and points the agent at the
+    /// harness that ships IN the repo (.claude skills/agents/workflows), so fixing this one bug
+    /// turns into being able to maintain and extend Eye from now on.
+    private func buildWorkspacePrompt() -> String {
+        """
+        You are my coding agent. I use ZBS Eye — a local, open-source macOS screen/audio memory \
+        recorder — and I want to OWN it: set up a development workspace, reproduce and fix the \
+        problem below, and keep the workspace so you can maintain and improve Eye for me from now \
+        on. The full source is public: https://github.com/zbs-gg/eye
+
+        ## What's wrong (my words)
+        \(problemText.isEmpty ? "(describe the problem here)" : problemText)
+
+        ## Diagnostics (auto-collected, on-device)
+        \(diagnosticsBlock())
+
+        ## Step 1 — set up the workspace
+        1. Ask me which directory the project should live in (suggest one), and confirm before creating anything.
+        2. `git clone https://github.com/zbs-gg/eye`
+        3. Toolchain check: `xcode-select -p` must point at a full Xcode (not bare Command Line Tools); \
+        `xcodegen` must be installed — `brew install xcodegen` if missing.
+        4. `xcodegen generate` — ZBSEye.xcodeproj is generated from project.yml, it is NOT in git.
+        5. Verify the build is green before changing anything (the CODE_SIGN/DEVELOPMENT_TEAM overrides \
+        let it build with no Apple team; -derivedDataPath keeps the product path deterministic):
+           `xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Release -destination 'platform=macOS' -derivedDataPath build/DerivedData CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" build`
+           (the CoreSimulator version warning is noise; look for BUILD SUCCEEDED and no `error:` lines).
+
+        ## Step 2 — learn the harness (it ships in the repo)
+        Read CLAUDE.md and AGENTS.md first — build rules, architecture map, invariants, known gotchas. \
+        Then use the bundled agent harness instead of improvising:
+        - `.claude/skills/eye-build` — build + common-failure playbook
+        - `.claude/skills/eye-diagnose` — pull live state from my running Eye (MCP `get_diagnostics`, REST /health, logs, read-only DB)
+        - `.claude/skills/eye-db-validate` — scratch-DB harness for any SQL/migration/trigger change
+        - `.claude/skills/eye-review-loop` — branch → build green → self-review checklist → PR
+        - `.claude/skills/eye-release` — notarized release pipeline
+        - `.claude/agents/swift6-reviewer.md` — hostile Swift 6 / data-safety reviewer for your diffs
+        - `.claude/workflows/eye-adversarial-review.js` — find→verify review workflow over a diff
+
+        ## Step 3 — reproduce and fix
+        Work on the problem above. Keep it local-first (zero egress) and Swift 6 strict-concurrency \
+        clean — the review checklist covers both.
+
+        ## HARD RULE — do not break my recording permissions (TCC)
+        NEVER launch a Debug or differently-signed build over my installed app: macOS Screen \
+        Recording permission is cdhash-strict, and a foreign signature silently kills my live \
+        capture. Verify your fix headlessly instead (Release compile-check, scratch-DB SQL, MCP \
+        stdio — CLAUDE.md shows how). When the fix is ready, I reinstall via a properly signed \
+        build (`scripts/build-release.sh` or `scripts/build-notarized.sh`) myself.
+
+        ## Before you finish
+        Run the `eye-review-loop` skill (build gate + the full self-review checklist) before opening \
+        a PR — and if the fix is worth sharing, open the PR against https://github.com/zbs-gg/eye so \
+        everyone's Eye gets better.
         """
     }
 

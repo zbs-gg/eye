@@ -14,6 +14,49 @@
         }
       }
     },
+    "%1$@ — %2$@": {
+      "localizations": {}
+    },
+    "%1$lld  ·  live %2$lld, imported %3$lld": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld  ·  вживую %2$lld, импортировано %3$lld"
+          }
+        }
+      }
+    },
+    "%1$lld activities · %2$@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld событий · %2$@"
+          }
+        }
+      }
+    },
+    "%1$lld of %2$lld unlocked": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld из %2$lld открыто"
+          }
+        }
+      }
+    },
+    "%1$lld sessions · %2$lld frames · %3$@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld сессий · %2$lld кадров · %3$@"
+          }
+        }
+      }
+    },
     "%@ moments": {
       "localizations": {
         "ru": {
@@ -23,9 +66,6 @@
           }
         }
       }
-    },
-    "%1$@ — %2$@": {
-      "localizations": {}
     },
     "%@ — in “Appearance”": {
       "localizations": {
@@ -40,32 +80,12 @@
     "%lld": {
       "localizations": {}
     },
-    "%1$lld  ·  live %2$lld, imported %3$lld": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld  ·  вживую %2$lld, импортировано %3$lld"
-          }
-        }
-      }
-    },
     "%lld GB": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "%lld ГБ"
-          }
-        }
-      }
-    },
-    "%1$lld activities · %2$@": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld событий · %2$@"
           }
         }
       }
@@ -83,32 +103,12 @@
         }
       }
     },
-    "%1$lld of %2$lld unlocked": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld из %2$lld открыто"
-          }
-        }
-      }
-    },
     "%lld results": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "%lld результатов"
-          }
-        }
-      }
-    },
-    "%1$lld sessions · %2$lld frames · %3$@": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld сессий · %2$lld кадров · %3$@"
           }
         }
       }
@@ -129,6 +129,416 @@
         }
       }
     },
+    "10 days of memory collected. The first annual ring — thin, but it's there.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "10 дней памяти набрано. Первый годовой круг — тонкий, но он есть."
+          }
+        }
+      }
+    },
+    "120 days with the Cartographer. The Eye became a crystal oracle — your life as a complete map.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "120 дней с Картографом. Око стало кристальным оракулом — твоя жизнь как карта целиком."
+          }
+        }
+      }
+    },
+    "15 000 frames in a day — the whole mechanism is running.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "15 000 кадров за день — заработал весь механизм."
+          }
+        }
+      }
+    },
+    "15 days of insights. The pupil became a map of connections — the Eye reads the whole day.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "15 дней инсайтов. Зрачок стал картой связей — око читает день целиком."
+          }
+        }
+      }
+    },
+    "15 minutes straight in one app — you dove from the surface.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Непрерывно 15 минут в одном приложении — нырнул с поверхности."
+          }
+        }
+      }
+    },
+    "150 switches in a day — the squirrel's off and running.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "150 переключений за день — побежала белка."
+          }
+        }
+      }
+    },
+    "180 days. The rings pressed into a dense golden disc-dial — a whole season on the cross-section.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "180 дней. Кольца спрессовались в плотный золотой диск-циферблат — целый сезон на срезе."
+          }
+        }
+      }
+    },
+    "180 minutes without looking up — where the light ends.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "180 минут не отрываясь — там, где кончается свет."
+          }
+        }
+      }
+    },
+    "2 500 frames in a day — the engine started up.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2 500 кадров за день — двигатель завёлся."
+          }
+        }
+      }
+    },
+    "200 scenes. A whole gallery of the lived — a dense wall of frames, yours.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "200 сцен. Целая галерея прожитого — плотная стена кадров, твоя."
+          }
+        }
+      }
+    },
+    "25 000 frames in a day — the engine at full.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "25 000 кадров за день — двигатель на максимум."
+          }
+        }
+      }
+    },
+    "25 scenes. The frames linked up by routes — connections appeared between moments.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "25 сцен. Кадры соединились маршрутами — между моментами появились связи."
+          }
+        }
+      }
+    },
+    "3 days in a row. A small spark caught — not a flame yet, but no longer darkness.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "3 дня подряд. Маленькая искра поймана — ещё не пламя, но уже не темнота."
+          }
+        }
+      }
+    },
+    "30 days of the Cartographer. The Eye grew meridian-rays and sees right through.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "30 дней Картографа. Око обросло лучами-меридианами и видит насквозь."
+          }
+        }
+      }
+    },
+    "30 days. Several rings formed a dense pattern — like growth rings on a trunk's cross-section.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "30 дней. Несколько колец сложились в плотный узор — как годичные кольца на срезе ствола."
+          }
+        }
+      }
+    },
+    "300 minutes of deep focus — five hours on a single point.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "300 минут глубокого фокуса — пять часов в одной точке."
+          }
+        }
+      }
+    },
+    "300 switches in a day — the carousel's spinning.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "300 переключений за день — закружилась карусель."
+          }
+        }
+      }
+    },
+    "365 days with memory. The full annual circle has closed — a whole season of life recorded.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "365 дней с памятью. Полный годовой круг сомкнулся — целый сезон жизни записан."
+          }
+        }
+      }
+    },
+    "40 000 frames in a day — the reactor in the red zone, did you even sleep?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "40 000 кадров за день — реактор на красной зоне, ты вообще спал?"
+          }
+        }
+      }
+    },
+    "45 minutes without a break — you descended beneath the first rays.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "45 минут без отрыва — спустился под первые лучи."
+          }
+        }
+      }
+    },
+    "480 minutes — eight hours straight, you reached the floor of the glowing abyss.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "480 минут — восемь часов кряду, ты достиг дна сияющей бездны."
+          }
+        }
+      }
+    },
+    "5 days with the Cartographer. The lid lifted — the pupil catches the day's first patterns.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "5 дней с Картографом. Веко поднялось — зрачок ловит первые узоры дня."
+          }
+        }
+      }
+    },
+    "5 scenes opened. The day's first frames are caught.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "5 открытых сцен. Первые кадры дня пойманы."
+          }
+        }
+      }
+    },
+    "50 switches in a day — the wheel started spinning.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "50 переключений за день — колесо закрутилось."
+          }
+        }
+      }
+    },
+    "500 scenes opened. The frames became a crystal diorama-casket — a whole volumetric world of your moments.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "500 открытых сцен. Кадры стали кристальной диорамой-шкатулкой — целый объёмный мир твоих моментов."
+          }
+        }
+      }
+    },
+    "500 switches in a day — being pulled into the funnel.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "500 переключений за день — затягивает в воронку."
+          }
+        }
+      }
+    },
+    "60 days. The Eye became a living astrolabe — spinning the orbits of your days and reading the patterns.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "60 дней. Око стало живой астролябией — крутит орбиты твоих дней и читает закономерности."
+          }
+        }
+      }
+    },
+    "7 500 frames in a day — the gears engaged.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "7 500 кадров за день — шестерни сошлись."
+          }
+        }
+      }
+    },
+    "730 days. Two years of memory. The rings became orbits around a glowing core.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "730 дней. Два года памяти. Кольца стали орбитами вокруг сияющего ядра."
+          }
+        }
+      }
+    },
+    "75 scenes. The frames formed a dense collage — your days have taken shape.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "75 сцен. Кадры сложились в плотный коллаж — у твоих дней появилась форма."
+          }
+        }
+      }
+    },
+    "800 switches in a day — a full whirlwind of windows, take a breath.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "800 переключений за день — полный смерч из окон, выдохни."
+          }
+        }
+      }
+    },
+    "90 days of memory. The rings formed a radial rosette-dial — memory counts the days by its marks.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "90 дней памяти. Кольца сложились в радиальную розетку-циферблат — память считает дни по делениям."
+          }
+        }
+      }
+    },
+    "90 minutes in one window — you passed through the layer of currents.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "90 минут в одном окне — прошёл слой течений."
+          }
+        }
+      }
+    },
+    "A Faceted Question": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Гранёный вопрос"
+          }
+        }
+      }
+    },
+    "A Timid Question": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Робкий вопрос"
+          }
+        }
+      }
+    },
+    "A Whole World": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Целый мир"
+          }
+        }
+      }
+    },
+    "A day without fuss: lots of work, almost no switching": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "День без суеты: много работы, почти без переключений"
+          }
+        }
+      }
+    },
+    "A full rotating globe. A hundred different apps mastered — you hold the entire map in your hands.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Полный вращающийся глобус. Сто разных приложений освоено — ты держишь в руках всю карту."
+          }
+        }
+      }
+    },
+    "A hundred fifty domains — the network curved into a glowing sphere of nodes. The flat map is over.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сто пятьдесят доменов — сеть выгнулась в светящуюся сферу из узлов. Плоская карта кончилась."
+          }
+        }
+      }
+    },
+    "A hundred fifty questions. The crystal broke free of its setting and floats — shards of past answers orbit around it.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Полтораста вопросов. Кристалл оторвался от оправы и парит — вокруг него вращаются осколки прошлых ответов."
+          }
+        }
+      }
+    },
+    "A hundred searches. You've built up a real card index — the magnifying glass isn't alone anymore, a fan of cards beside it.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сотня поисков. У тебя завелась настоящая картотека — лупа уже не одна, рядом веер карточек."
+          }
+        }
+      }
+    },
     "A local LLM is required": {
       "localizations": {
         "ru": {
@@ -139,12 +549,132 @@
         }
       }
     },
+    "A million frames. The crystals are locked in an armored vault-reliquary — a memory store under lock and key.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Миллион кадров. Кристаллы заперты в бронированный vault-реликварий — хранилище памяти под замком."
+          }
+        }
+      }
+    },
+    "A month of memory. A thin trunk, first branches — the sapling has grown stronger.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Месяц памяти. Тонкий ствол, первые ветви — деревце окрепло."
+          }
+        }
+      }
+    },
     "A processing model is required": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Нужна модель обработки"
+          }
+        }
+      }
+    },
+    "A quarter million frames. One crystal grew a cluster — memory crystallizes faster than you can look around.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Четверть миллиона кадров. Один кристалл оброс гроздью — память кристаллизуется быстрее, чем ты успеваешь оглянуться."
+          }
+        }
+      }
+    },
+    "A thousand frames. Memory has just lit up — a lone spark in a cold setting.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Тысяча кадров. Память только зажглась — одинокая искорка в холодной оправе."
+          }
+        }
+      }
+    },
+    "A week of memory. A fragile sprout broke through the soil — your memory's roots are still fresh.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неделя памяти. Хрупкий росток пробил землю — корни у твоей памяти ещё свежие."
+          }
+        }
+      }
+    },
+    "A week without a miss. The spark grew into a steady tongue of fire.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неделя без пропусков. Искра окрепла в устойчивый язык огня."
+          }
+        }
+      }
+    },
+    "A year of memory. The tree turned into a glowing petrified artifact — a year written in stone.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Год памяти. Древо обратилось в светящийся окаменелый артефакт — год записан в камне."
+          }
+        }
+      }
+    },
+    "A year. Three hundred sixty-five days in a row. This isn't a streak anymore — it's your physics.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Год. Триста шестьдесят пять дней подряд. Это уже не серия — это твоя физика."
+          }
+        }
+      }
+    },
+    "AI Models": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модели ИИ"
+          }
+        }
+      }
+    },
+    "API key": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "API-ключ"
+          }
+        }
+      }
+    },
+    "API key in Keychain": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "API-ключ в Связке ключей"
+          }
+        }
+      }
+    },
+    "API key required — paste it above.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нужен API-ключ — вставьте его выше."
           }
         }
       }
@@ -179,6 +709,26 @@
         }
       }
     },
+    "Activity after midnight — the eye doesn't sleep, and neither do you": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Активность после полуночи — глаз не спит, и ты тоже"
+          }
+        }
+      }
+    },
+    "Activity before 7 a.m. — dawn caught you at work": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Активность до 7 утра — рассвет застал тебя за делом"
+          }
+        }
+      }
+    },
     "Address": {
       "localizations": {
         "ru": {
@@ -195,16 +745,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Агенты и скрипты на этом Mac могут читать вашу историю по HTTP. Сервер слушает только 127.0.0.1; всё, кроме /health, требует Bearer-токен (он хранится в Связке ключей)."
-          }
-        }
-      }
-    },
-    "AI Models": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Модели ИИ"
           }
         }
       }
@@ -249,6 +789,26 @@
         }
       }
     },
+    "All-Seeing": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Всевидящее"
+          }
+        }
+      }
+    },
+    "All-Seeing Bureau": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Всевидящее бюро"
+          }
+        }
+      }
+    },
     "An accidentally recorded password or a sensitive conversation can be wiped forever (files, text, indexes).": {
       "localizations": {
         "ru": {
@@ -289,42 +849,22 @@
         }
       }
     },
-    "API key": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "API-ключ"
-          }
-        }
-      }
-    },
-    "API key in Keychain": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "API-ключ в Связке ключей"
-          }
-        }
-      }
-    },
-    "API key required — paste it above.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Нужен API-ключ — вставьте его выше."
-          }
-        }
-      }
-    },
     "Appearance": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Оформление"
+          }
+        }
+      }
+    },
+    "Archipelago": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Архипелаг"
           }
         }
       }
@@ -349,12 +889,42 @@
         }
       }
     },
+    "Ask your agent to fix it": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Попросите вашего агента починить"
+          }
+        }
+      }
+    },
     "Ask your memory": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Спросите свою память"
+          }
+        }
+      }
+    },
+    "Astrolabe of the Day": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Астролябия дня"
+          }
+        }
+      }
+    },
+    "Atlas": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Атлас"
           }
         }
       }
@@ -375,6 +945,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Аудио и расшифровка"
+          }
+        }
+      }
+    },
+    "Aurora": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аврора"
           }
         }
       }
@@ -469,6 +1049,56 @@
         }
       }
     },
+    "Below the Light": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Уходя под свет"
+          }
+        }
+      }
+    },
+    "Beneath the Currents": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Глубже течений"
+          }
+        }
+      }
+    },
+    "Bigger job? This longer prompt has your agent clone the public source with a ready-made harness (build, diagnose, and review skills) — fix this bug properly, then keep improving Eye for you.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Задача побольше? Этот промпт длиннее: ваш агент клонирует открытый исходный код с готовой обвязкой (скиллы сборки, диагностики и ревью) — как следует чинит этот баг, а дальше продолжает улучшать Eye для вас."
+          }
+        }
+      }
+    },
+    "Bloodhound's Nose": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нюх ищейки"
+          }
+        }
+      }
+    },
+    "Blue Heat": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Синий жар"
+          }
+        }
+      }
+    },
     "Build preview": {
       "localizations": {
         "ru": {
@@ -499,12 +1129,42 @@
         }
       }
     },
+    "Carousel of Context": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Карусель контекста"
+          }
+        }
+      }
+    },
     "Cartographer": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Картограф"
+          }
+        }
+      }
+    },
+    "Changing the language restarts ZBS Eye.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Смена языка перезапустит ZBS Eye."
+          }
+        }
+      }
+    },
+    "Chief Detective": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Главный сыщик"
           }
         }
       }
@@ -522,6 +1182,16 @@
     "Claude Desktop — claude_desktop_config.json": {
       "localizations": {}
     },
+    "Cleaner": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чистильщик"
+          }
+        }
+      }
+    },
     "Clear conversation": {
       "localizations": {
         "ru": {
@@ -532,12 +1202,32 @@
         }
       }
     },
+    "Clockwork": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Часовой механизм"
+          }
+        }
+      }
+    },
     "Close": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Закрыть"
+          }
+        }
+      }
+    },
+    "Cloud Guardian": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Облачный страж"
           }
         }
       }
@@ -572,6 +1262,26 @@
         }
       }
     },
+    "Clutch Caught": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сцепление поймано"
+          }
+        }
+      }
+    },
+    "Collage of the Day": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Коллаж дня"
+          }
+        }
+      }
+    },
     "Collects the day's activity from your history, runs it through your processing model (AI Models — local by default), and writes a Markdown digest to a folder of your choice.": {
       "localizations": {
         "ru": {
@@ -602,12 +1312,12 @@
         }
       }
     },
-    "connecting…": {
+    "Connected Frames": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "подключение…"
+            "value": "Связанные кадры"
           }
         }
       }
@@ -632,12 +1342,62 @@
         }
       }
     },
+    "Consistency": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Постоянство"
+          }
+        }
+      }
+    },
+    "Constellation": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Созвездие"
+          }
+        }
+      }
+    },
+    "Continent": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Континент"
+          }
+        }
+      }
+    },
     "Continue": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Продолжить"
+          }
+        }
+      }
+    },
+    "Control": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Контроль"
+          }
+        }
+      }
+    },
+    "Copied — paste into your agent": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скопировано — вставьте вашему агенту"
           }
         }
       }
@@ -668,6 +1428,56 @@
           "stringUnit": {
             "state": "translated",
             "value": "Не удалось сохранить API-ключ в Связку ключей. Попробуйте ещё раз."
+          }
+        }
+      }
+    },
+    "Crossroads": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перекрёсток"
+          }
+        }
+      }
+    },
+    "Crown": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Корона"
+          }
+        }
+      }
+    },
+    "Crystal Cluster": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Кристальный кластер"
+          }
+        }
+      }
+    },
+    "Curiosity · Detective": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Любопытство · Сыск"
+          }
+        }
+      }
+    },
+    "Curiosity · Oracle": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Любопытство · Оракул"
           }
         }
       }
@@ -762,6 +1572,26 @@
         }
       }
     },
+    "Days of Memory": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дни памяти"
+          }
+        }
+      }
+    },
+    "Defocus": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Расфокус"
+          }
+        }
+      }
+    },
     "Delete from memory": {
       "localizations": {
         "ru": {
@@ -802,6 +1632,26 @@
         }
       }
     },
+    "Detective's Desk": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стол следователя"
+          }
+        }
+      }
+    },
+    "Diorama of Memory": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диорама памяти"
+          }
+        }
+      }
+    },
     "Don't record for 15 minutes": {
       "localizations": {
         "ru": {
@@ -822,12 +1672,32 @@
         }
       }
     },
+    "Early Bird": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ранняя пташка"
+          }
+        }
+      }
+    },
     "Enable cloud processing?": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Включить облачную обработку?"
+          }
+        }
+      }
+    },
+    "Enabled compressed iCloud backup": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включил сжатый iCloud-бэкап"
           }
         }
       }
@@ -858,6 +1728,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ошибка"
+          }
+        }
+      }
+    },
+    "Eternal Archive": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вечный архив"
+          }
+        }
+      }
+    },
+    "Eternal Flame": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вечный огонь"
           }
         }
       }
@@ -902,12 +1792,172 @@
         }
       }
     },
+    "Eye": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Глаз"
+          }
+        }
+      }
+    },
     "Fetch the model list from the server": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Получить список моделей с сервера"
+          }
+        }
+      }
+    },
+    "Fifteen million frames. The galaxy collapsed into a single glowing core of eternity. Beyond — only space.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пятнадцать миллионов кадров. Галактика свернулась в единое сияющее ядро вечности. Дальше — только космос."
+          }
+        }
+      }
+    },
+    "Fifteen questions. The crystal took on facets, the spark inside burns steady — memory has begun to answer.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пятнадцать вопросов. Кристалл огранился, искра внутри загорелась ровно — память начала отвечать."
+          }
+        }
+      }
+    },
+    "Fifty questions. The crystal has spoken — a glowing oracle formed inside, answering any query.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Полсотни вопросов. Кристалл заговорил — внутри сложился светящийся оракул, отвечающий на любой запрос."
+          }
+        }
+      }
+    },
+    "Fifty thousand frames. The spark froze into the first faceted crystal — memory has taken shape.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пятьдесят тысяч кадров. Искра застыла в первый гранёный кристалл — память обрела форму."
+          }
+        }
+      }
+    },
+    "First Breath": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Первый вдох"
+          }
+        }
+      }
+    },
+    "First Crystal": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Первый кристалл"
+          }
+        }
+      }
+    },
+    "First Glance": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Первый взгляд"
+          }
+        }
+      }
+    },
+    "First Lines": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Первые линии"
+          }
+        }
+      }
+    },
+    "First Ring": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Первое кольцо"
+          }
+        }
+      }
+    },
+    "First Rings": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Первые кольца"
+          }
+        }
+      }
+    },
+    "First Route": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Первый маршрут"
+          }
+        }
+      }
+    },
+    "First Scenes": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Первые сцены"
+          }
+        }
+      }
+    },
+    "First Shore": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Первый берег"
+          }
+        }
+      }
+    },
+    "First Spark": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Первая искра"
+          }
+        }
+      }
+    },
+    "First Squint": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Первый прищур"
           }
         }
       }
@@ -932,12 +1982,72 @@
         }
       }
     },
+    "Five hundred queries. The magnifying glass gained an investigator's kit: optics, threads of theories, a pinned case card.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пятьсот запросов. Лупа обросла снаряжением дознавателя: оптика, нити версий, пришпиленная карточка дела."
+          }
+        }
+      }
+    },
+    "Five hundred questions. The crystal grew into a floating obelisk of mind with an eye at its core — it sees the answer before the question.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пятьсот вопросов. Кристалл вырос в парящий обелиск разума с глазом-сердцевиной — он видит ответ раньше вопроса."
+          }
+        }
+      }
+    },
+    "Five searches. For the first time you aimed the magnifying glass at your own memory and realized — it's searchable.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пять поисков. Ты впервые навёл лупу на собственную память и понял — оно ищется."
+          }
+        }
+      }
+    },
+    "Floating Oracle": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Парящий оракул"
+          }
+        }
+      }
+    },
+    "Focus": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Фокус"
+          }
+        }
+      }
+    },
     "Forever": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Навсегда"
+          }
+        }
+      }
+    },
+    "Four million frames. The vault unfolded into a spiral galaxy — every frame became a star.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Четыре миллиона кадров. Хранилище раскрылось в спиральную галактику — каждый кадр стал звездой."
           }
         }
       }
@@ -982,6 +2092,66 @@
         }
       }
     },
+    "Frost": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мороз"
+          }
+        }
+      }
+    },
+    "Frosty": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Морозный"
+          }
+        }
+      }
+    },
+    "Full Throttle": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Полный газ"
+          }
+        }
+      }
+    },
+    "Galaxy of Memories": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Галактика воспоминаний"
+          }
+        }
+      }
+    },
+    "Galaxy of the Day": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Галактика дня"
+          }
+        }
+      }
+    },
+    "Gallery of the Day": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Галерея дня"
+          }
+        }
+      }
+    },
     "Get a key…": {
       "localizations": {
         "ru": {
@@ -1002,12 +2172,52 @@
         }
       }
     },
+    "Global Network": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Глобальная сеть"
+          }
+        }
+      }
+    },
+    "Glowing": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Светящийся"
+          }
+        }
+      }
+    },
     "Go to a date": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Перейти к дате"
+          }
+        }
+      }
+    },
+    "Gold": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Золото"
+          }
+        }
+      }
+    },
+    "Golden Eye": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Золотой глаз"
           }
         }
       }
@@ -1022,12 +2232,52 @@
         }
       }
     },
+    "Half a year without a single break. The fire gained wings and a gaze.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Полгода без единого разрыва. Огонь обрёл крылья и взгляд."
+          }
+        }
+      }
+    },
+    "Half a year. A wide crown, deep roots — memory has truly taken root.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Полгода. Крона широкая, корни глубокие — память пустила корни всерьёз."
+          }
+        }
+      }
+    },
+    "Half-Year Disc": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Полугодовой диск"
+          }
+        }
+      }
+    },
     "Health check (no auth)": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Проверка живости (без авторизации)"
+          }
+        }
+      }
+    },
+    "Hemisphere": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Полушарие"
           }
         }
       }
@@ -1062,6 +2312,26 @@
         }
       }
     },
+    "Idling": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Холостой ход"
+          }
+        }
+      }
+    },
+    "Immersion": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Погружение"
+          }
+        }
+      }
+    },
     "Import": {
       "localizations": {
         "ru": {
@@ -1092,6 +2362,16 @@
         }
       }
     },
+    "Inferno": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Инферно"
+          }
+        }
+      }
+    },
     "Initializing…": {
       "localizations": {
         "ru": {
@@ -1112,6 +2392,26 @@
         }
       }
     },
+    "Intensity": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Интенсивность"
+          }
+        }
+      }
+    },
+    "Interface language": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Язык интерфейса"
+          }
+        }
+      }
+    },
     "Keep copies": {
       "localizations": {
         "ru": {
@@ -1128,6 +2428,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Хранить историю"
+          }
+        }
+      }
+    },
+    "Language": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Язык"
           }
         }
       }
@@ -1188,6 +2498,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Запускать ZBS Eye при входе"
+          }
+        }
+      }
+    },
+    "Lightning": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Молния"
           }
         }
       }
@@ -1265,6 +2585,26 @@
         }
       }
     },
+    "Magic": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Магия"
+          }
+        }
+      }
+    },
+    "Map Within": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Картой внутри"
+          }
+        }
+      }
+    },
     "Media limit": {
       "localizations": {
         "ru": {
@@ -1295,12 +2635,52 @@
         }
       }
     },
+    "Memory · Age": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Память · Древность"
+          }
+        }
+      }
+    },
+    "Memory · Volume": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Память · Объём"
+          }
+        }
+      }
+    },
     "Microphone": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Микрофон"
+          }
+        }
+      }
+    },
+    "Midnight": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Полночь"
+          }
+        }
+      }
+    },
+    "Mind-Obelisk": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разум-обелиск"
           }
         }
       }
@@ -1315,12 +2695,92 @@
         }
       }
     },
+    "Month Cross-Section": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Срез месяца"
+          }
+        }
+      }
+    },
+    "Moved your memory to an external SSD": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перенёс память на внешний SSD"
+          }
+        }
+      }
+    },
     "Move…": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Переместить…"
+          }
+        }
+      }
+    },
+    "Neon": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неон"
+          }
+        }
+      }
+    },
+    "Neon Eye": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неоновый глаз"
+          }
+        }
+      }
+    },
+    "Network": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сеть"
+          }
+        }
+      }
+    },
+    "Network Sphere": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сетевая сфера"
+          }
+        }
+      }
+    },
+    "Night": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ночь"
+          }
+        }
+      }
+    },
+    "Night Owl": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ночная сова"
           }
         }
       }
@@ -1415,16 +2875,6 @@
         }
       }
     },
-    "not running": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "не запущен"
-          }
-        }
-      }
-    },
     "Nothing yet.": {
       "localizations": {
         "ru": {
@@ -1437,6 +2887,26 @@
     },
     "OK": {
       "localizations": {}
+    },
+    "Omnipresent": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вездесущий"
+          }
+        }
+      }
+    },
+    "Omniscient Oracle": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Всеведущий оракул"
+          }
+        }
+      }
     },
     "One model processes excerpts of your history for Ask, Daily Insights and the day summary. Local providers keep everything on this Mac; cloud providers are an explicit opt-in. Recording, search index and storage stay local no matter what you pick here.": {
       "localizations": {
@@ -1498,12 +2968,32 @@
         }
       }
     },
+    "Open a GitHub issue": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть issue на GitHub"
+          }
+        }
+      }
+    },
     "Open this moment in the timeline": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Открыть этот момент на таймлайне"
+          }
+        }
+      }
+    },
+    "Oracle": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оракул"
           }
         }
       }
@@ -1548,6 +3038,16 @@
         }
       }
     },
+    "Pearl of the Abyss": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Жемчужина бездны"
+          }
+        }
+      }
+    },
     "Period": {
       "localizations": {
         "ru": {
@@ -1584,6 +3084,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Разрешения и диагностика"
+          }
+        }
+      }
+    },
+    "Petrified Tree": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Окаменевшее древо"
+          }
+        }
+      }
+    },
+    "Phoenix": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Феникс"
           }
         }
       }
@@ -1738,6 +3258,16 @@
         }
       }
     },
+    "Reliquary": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Реликварий"
+          }
+        }
+      }
+    },
     "Remove key": {
       "localizations": {
         "ru": {
@@ -1764,6 +3294,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Перезапустить ZBS Eye"
+          }
+        }
+      }
+    },
+    "Restart ZBS Eye to change the language?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перезапустить ZBS Eye для смены языка?"
+          }
+        }
+      }
+    },
+    "Restart now": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перезапустить сейчас"
           }
         }
       }
@@ -1808,22 +3358,22 @@
         }
       }
     },
+    "Rosette of Days": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Розетка дней"
+          }
+        }
+      }
+    },
     "Run history (%lld)": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "История запусков (%lld)"
-          }
-        }
-      }
-    },
-    "running · port %lld": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "работает · порт %lld"
           }
         }
       }
@@ -1864,6 +3414,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сцена"
+          }
+        }
+      }
+    },
+    "Scenes": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сцены"
           }
         }
       }
@@ -1938,12 +3498,32 @@
         }
       }
     },
+    "Set up a dev workspace (for your agent)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Развернуть dev-окружение (для вашего агента)"
+          }
+        }
+      }
+    },
     "Settings": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Настройки"
+          }
+        }
+      }
+    },
+    "Seventy-five domains wove into a dense web of trails and nodes. You go everywhere.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Семьдесят пять доменов сплелись в густую сеть троп и узлов. Ты ходишь везде."
           }
         }
       }
@@ -1968,12 +3548,112 @@
         }
       }
     },
+    "Six apps — the first glowing lines stretched between the stars. A figure begins to read.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Шесть приложений — между звёздами протянулись первые светящиеся линии. Рисунок начинает читаться."
+          }
+        }
+      }
+    },
+    "Six hundred domains. The node-globe is surrounded by orbital data streams — your web has outgrown the planet.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Шестьсот доменов. Узловой глобус окружён орбитальными потоками данных — твоя паутина переросла планету."
+          }
+        }
+      }
+    },
+    "Something not working?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Что-то не работает?"
+          }
+        }
+      }
+    },
     "Sources": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Источники"
+          }
+        }
+      }
+    },
+    "Spark": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Искра"
+          }
+        }
+      }
+    },
+    "Sparkles": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Искры"
+          }
+        }
+      }
+    },
+    "Spreading Tree": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Раскидистое древо"
+          }
+        }
+      }
+    },
+    "Sprout": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проросток"
+          }
+        }
+      }
+    },
+    "Squirrel in a Wheel": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Белка в колесе"
+          }
+        }
+      }
+    },
+    "Standard": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стандарт"
+          }
+        }
+      }
+    },
+    "Star Cluster": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Звёздное скопление"
           }
         }
       }
@@ -2018,6 +3698,16 @@
         }
       }
     },
+    "Steady Flame": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ровное пламя"
+          }
+        }
+      }
+    },
     "Still locked": {
       "localizations": {
         "ru": {
@@ -2058,12 +3748,12 @@
         }
       }
     },
-    "System event": {
+    "System": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Системное событие"
+            "value": "Системный"
           }
         }
       }
@@ -2088,12 +3778,52 @@
         }
       }
     },
+    "System event": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системное событие"
+          }
+        }
+      }
+    },
     "Take your memory with you: markdown by day (activity + conversations), optionally frames and audio.": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Берите память с собой: markdown по дням (активность + разговоры), при желании — кадры и звук."
+          }
+        }
+      }
+    },
+    "Ten apps — a handful of neighbors surfaced around the first island. There's already something to link by routes.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Десять приложений — вокруг первого острова всплыла горстка соседей. Уже есть что соединять маршрутами."
+          }
+        }
+      }
+    },
+    "Ten domains — the first waypoint with a single trail appeared on the map.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Десять доменов — на карте появился первый путевой знак с одной тропой."
+          }
+        }
+      }
+    },
+    "Ten thousand. The bureau never sleeps. The magnifying glass gave way to a living eye-core with an orbit of lenses — memory is found in a single squint.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Десять тысяч. Бюро не спит. Лупа уступила место живому оку-ядру с орбитой линз — память находится за один прищур."
           }
         }
       }
@@ -2108,12 +3838,42 @@
         }
       }
     },
-    "The finished digest will arrive as a notification. Auto-write drops it into the folder without confirmation.": {
+    "The Abyss Answers": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Готовый дайджест придёт уведомлением. Автозапись кладёт его в папку без подтверждения."
+            "value": "Бездна отвечает"
+          }
+        }
+      }
+    },
+    "The Card Index Swells": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Картотека пухнет"
+          }
+        }
+      }
+    },
+    "The Cartographer worked a full day for the first time. The Eye cracked open its lid.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Картограф отработал день впервые. Око приоткрыло веко."
+          }
+        }
+      }
+    },
+    "The Eye Opens": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Око открывается"
           }
         }
       }
@@ -2124,6 +3884,56 @@
           "stringUnit": {
             "state": "translated",
             "value": "MCP-сервер напрямую читает ту же локальную базу (только чтение) и проксирует управление записью в запущенное приложение. Установите приложение в /Applications, чтобы команда выше совпадала."
+          }
+        }
+      }
+    },
+    "The Speaking Crystal": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Говорящий кристалл"
+          }
+        }
+      }
+    },
+    "The finished digest will arrive as a notification. Auto-write drops it into the folder without confirmation.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готовый дайджест придёт уведомлением. Автозапись кладёт его в папку без подтверждения."
+          }
+        }
+      }
+    },
+    "The interface language is applied after a restart.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Язык интерфейса применяется после перезапуска."
+          }
+        }
+      }
+    },
+    "The islands fused into a continent: mountains, rivers, a coastline. Twenty-five apps — that's a whole land already.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Острова срослись в материк: горы, реки, береговая линия. Двадцать пять приложений — это уже целая земля."
+          }
+        }
+      }
+    },
+    "The map curved into a sphere — a whole hemisphere of the planet is visible. Fifty apps, and the flat world is over.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Карта выгнулась в шар — видно целое полушарie планеты. Пятьдесят приложений, и плоский мир кончился."
           }
         }
       }
@@ -2198,12 +4008,112 @@
         }
       }
     },
+    "Thirty different apps in a day. This isn't a constellation anymore — it's a swirling galaxy. Phew.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Тридцать разных приложений за сутки. Это уже не созвездие — это закрученная галактика. Уф."
+          }
+        }
+      }
+    },
+    "Thirty domains — the trails met at a crossroads with several nodes. The network comes alive.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Тридцать доменов — тропы сошлись в перекрёсток с несколькими узлами. Сеть оживает."
+          }
+        }
+      }
+    },
+    "Three Fires": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Три огня"
+          }
+        }
+      }
+    },
+    "Three different apps in a day. Three lone stars lit up in the dark.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "За день — три разных приложения. Три одиноких звезды загорелись в темноте."
+          }
+        }
+      }
+    },
+    "Three hundred domains wrapped a whole node-globe in glowing lines of connection. The whole world at hand.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Триста доменов опутали целый узловой глобус сияющими линиями связи. Весь мир под рукой."
+          }
+        }
+      }
+    },
+    "Three months. The first growth rings showed on the trunk's cross-section — memory is counting its age.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Три месяца. На срезе ствола проступили первые годовые кольца — память считает свой возраст."
+          }
+        }
+      }
+    },
+    "Three questions to memory. The crystal has just sprouted — a spark barely smolders inside.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Три вопроса к памяти. Кристалл только проклюнулся — внутри едва тлеет искра."
+          }
+        }
+      }
+    },
+    "Three weeks. The flame grew hotter and turned blue — burning calmly and fiercely at once.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Три недели. Пламя стало горячее и посинело — горит спокойно и яростно одновременно."
+          }
+        }
+      }
+    },
     "Time": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Время"
+          }
+        }
+      }
+    },
+    "Time of Day": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Время суток"
+          }
+        }
+      }
+    },
+    "To Your Own Disk": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На свой диск"
           }
         }
       }
@@ -2278,6 +4188,126 @@
         }
       }
     },
+    "Tornado of Defocus": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Торнадо расфокуса"
+          }
+        }
+      }
+    },
+    "Turbine Overheat": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перегрев турбины"
+          }
+        }
+      }
+    },
+    "Twelve apps in a day — a full constellation with a clear figure and bright nodes.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Двенадцать приложений за день — полноценное созвездие с ясной фигурой и яркими узлами."
+          }
+        }
+      }
+    },
+    "Twenty apps — the sky is packed with a dense, glowing cluster of stars. It was a full day.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Двадцать приложений — небо забито плотным сияющим скоплением звёзд. День был насыщенным."
+          }
+        }
+      }
+    },
+    "Twenty-five queries. A skill has emerged — you know which word will pull up the right frame.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Двадцать пять запросов. Появился навык — ты знаешь, какое слово вытащит нужный кадр."
+          }
+        }
+      }
+    },
+    "Twilight Zone": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сумеречная зона"
+          }
+        }
+      }
+    },
+    "Two Seasons of Life": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Два сезона жизни"
+          }
+        }
+      }
+    },
+    "Two hundred apps. The globe is ringed by orbital rings and satellites — the map has outgrown the planet.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Двести приложений. Глобус окружён орбитальными кольцами и спутниками — карта переросла планету."
+          }
+        }
+      }
+    },
+    "Two months in a row. Not a flame — a furnace. Fire engulfs the whole medallion.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Два месяца подряд. Не пламя — печь. Огонь захлёстывает весь медальон."
+          }
+        }
+      }
+    },
+    "Two thousand questions. The obelisk collapsed into a self-luminous sphere-mind — you barely need to ask, it already knows.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Две тысячи вопросов. Обелиск свернулся в самосветящуюся сферу-разум — спрашивать почти не нужно, она уже знает."
+          }
+        }
+      }
+    },
+    "Two thousand searches. You don't search — you run the case. A grand magnifier-bureau at the center of a cross-crest.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Две тысячи поисков. Ты не ищешь — ты ведёшь дело. Большая лупа-бюро в центре крест-герба."
+          }
+        }
+      }
+    },
+    "Two years of unbroken memory. An eternal glowing tree whose rings reach into infinity. Keeper of everything you've seen.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Два года непрерывной памяти. Вечное светящееся древо, чьи кольца уходят в бесконечность. Хранитель всего, что ты видел."
+          }
+        }
+      }
+    },
     "Unlocked %@": {
       "localizations": {
         "ru": {
@@ -2308,6 +4338,116 @@
         }
       }
     },
+    "Warmed Up": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размялся"
+          }
+        }
+      }
+    },
+    "Wave": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Волна"
+          }
+        }
+      }
+    },
+    "Web of Trails": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Паутина троп"
+          }
+        }
+      }
+    },
+    "Weekend Ghost": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Призрак выходного"
+          }
+        }
+      }
+    },
+    "What gets shared (nothing leaves the machine on its own)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Что будет передано (само по себе ничего не покидает машину)"
+          }
+        }
+      }
+    },
+    "What went wrong? (e.g. audio doesn't record during calls)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Что пошло не так? (например, звук не записывается во время звонков)"
+          }
+        }
+      }
+    },
+    "Whirlpool of Windows": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Водоворот окон"
+          }
+        }
+      }
+    },
+    "Wiped a period of history — your right": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стёр период истории — твоё право"
+          }
+        }
+      }
+    },
+    "Worked on a day off — ever tried resting?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Работал в выходной — отдыхать не пробовал?"
+          }
+        }
+      }
+    },
+    "World Tree": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мировое древо"
+          }
+        }
+      }
+    },
+    "World in Orbit": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мир на орбите"
+          }
+        }
+      }
+    },
     "Write immediately without a preview": {
       "localizations": {
         "ru": {
@@ -2328,12 +4468,42 @@
         }
       }
     },
+    "Year of Rings": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Год колец"
+          }
+        }
+      }
+    },
     "Yesterday": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Вчера"
+          }
+        }
+      }
+    },
+    "You've touched three different apps. One modest island emerged from the fog — the start of the map.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ты потрогал три разных приложения. Из тумана показался один скромный островок — начало карты."
+          }
+        }
+      }
+    },
+    "Young Sapling": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Молодое деревце"
           }
         }
       }
@@ -2361,6 +4531,16 @@
         }
       }
     },
+    "ZBS Eye is open to read and yours to fix. Describe what's wrong — Eye collects the diagnostics and hands your own AI agent a ready-to-run repair prompt (it reads the source and fixes it). If that doesn't do it, file a GitHub issue with one click. Nothing leaves your machine.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZBS Eye открыт для чтения и ваш, чтобы его чинить. Опишите, что не так — Eye соберёт диагностику и передаст вашему AI-агенту готовый промпт для починки (он читает исходники и чинит их). Если это не помогло — заведите issue на GitHub в один клик. Ничего не покидает вашу машину."
+          }
+        }
+      }
+    },
     "ZBS Eye reads the screen via Accessibility (precise and easy on the battery), OCR — only where AX is unavailable.": {
       "localizations": {
         "ru": {
@@ -2371,12 +4551,42 @@
         }
       }
     },
+    "ZBS Eye recognizes speech on-device to make audio searchable.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZBS Eye распознаёт речь на устройстве, чтобы по звуку можно было искать."
+          }
+        }
+      }
+    },
+    "ZBS Eye records and transcribes audio locally, to make conversations searchable.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZBS Eye записывает и расшифровывает звук локально, чтобы по разговорам можно было искать."
+          }
+        }
+      }
+    },
     "ZBS Eye — your Mac's perfect memory": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "ZBS Eye — идеальная память вашего Mac"
+          }
+        }
+      }
+    },
+    "Zen Focus": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дзен-фокус"
           }
         }
       }
@@ -2424,6 +4634,16 @@
         }
       }
     },
+    "connecting…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "подключение…"
+          }
+        }
+      }
+    },
     "curl -H 'Authorization: Bearer <token>' '%@/v1/search?q=test'": {
       "localizations": {}
     },
@@ -2453,6 +4673,16 @@
     "llama3.2 / qwen2.5 / …": {
       "localizations": {}
     },
+    "not running": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "не запущен"
+          }
+        }
+      }
+    },
     "optional": {
       "localizations": {
         "ru": {
@@ -2479,6 +4709,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "достигнуто"
+          }
+        }
+      }
+    },
+    "running · port %lld": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "работает · порт %lld"
           }
         }
       }
@@ -2552,2156 +4792,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "· %lld с"
-          }
-        }
-      }
-    },
-    "ZBS Eye records and transcribes audio locally, to make conversations searchable.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ZBS Eye записывает и расшифровывает звук локально, чтобы по разговорам можно было искать."
-          }
-        }
-      }
-    },
-    "ZBS Eye recognizes speech on-device to make audio searchable.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ZBS Eye распознаёт речь на устройстве, чтобы по звуку можно было искать."
-          }
-        }
-      }
-    },
-    "Language": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Язык"
-          }
-        }
-      }
-    },
-    "Interface language": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Язык интерфейса"
-          }
-        }
-      }
-    },
-    "System": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Системный"
-          }
-        }
-      }
-    },
-    "Changing the language restarts ZBS Eye.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Смена языка перезапустит ZBS Eye."
-          }
-        }
-      }
-    },
-    "Restart ZBS Eye to change the language?": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перезапустить ZBS Eye для смены языка?"
-          }
-        }
-      }
-    },
-    "Restart now": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перезапустить сейчас"
-          }
-        }
-      }
-    },
-    "The interface language is applied after a restart.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Язык интерфейса применяется после перезапуска."
-          }
-        }
-      }
-    },
-    "First Spark": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Первая искра"
-          }
-        }
-      }
-    },
-    "A thousand frames. Memory has just lit up — a lone spark in a cold setting.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Тысяча кадров. Память только зажглась — одинокая искорка в холодной оправе."
-          }
-        }
-      }
-    },
-    "Memory · Volume": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Память · Объём"
-          }
-        }
-      }
-    },
-    "First Crystal": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Первый кристалл"
-          }
-        }
-      }
-    },
-    "Fifty thousand frames. The spark froze into the first faceted crystal — memory has taken shape.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Пятьдесят тысяч кадров. Искра застыла в первый гранёный кристалл — память обрела форму."
-          }
-        }
-      }
-    },
-    "Crystal Cluster": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Кристальный кластер"
-          }
-        }
-      }
-    },
-    "A quarter million frames. One crystal grew a cluster — memory crystallizes faster than you can look around.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Четверть миллиона кадров. Один кристалл оброс гроздью — память кристаллизуется быстрее, чем ты успеваешь оглянуться."
-          }
-        }
-      }
-    },
-    "Reliquary": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Реликварий"
-          }
-        }
-      }
-    },
-    "A million frames. The crystals are locked in an armored vault-reliquary — a memory store under lock and key.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Миллион кадров. Кристаллы заперты в бронированный vault-реликварий — хранилище памяти под замком."
-          }
-        }
-      }
-    },
-    "Galaxy of Memories": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Галактика воспоминаний"
-          }
-        }
-      }
-    },
-    "Four million frames. The vault unfolded into a spiral galaxy — every frame became a star.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Четыре миллиона кадров. Хранилище раскрылось в спиральную галактику — каждый кадр стал звездой."
-          }
-        }
-      }
-    },
-    "Eternal Archive": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Вечный архив"
-          }
-        }
-      }
-    },
-    "Fifteen million frames. The galaxy collapsed into a single glowing core of eternity. Beyond — only space.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Пятнадцать миллионов кадров. Галактика свернулась в единое сияющее ядро вечности. Дальше — только космос."
-          }
-        }
-      }
-    },
-    "Sprout": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Проросток"
-          }
-        }
-      }
-    },
-    "A week of memory. A fragile sprout broke through the soil — your memory's roots are still fresh.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Неделя памяти. Хрупкий росток пробил землю — корни у твоей памяти ещё свежие."
-          }
-        }
-      }
-    },
-    "Memory · Age": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Память · Древность"
-          }
-        }
-      }
-    },
-    "Young Sapling": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Молодое деревце"
-          }
-        }
-      }
-    },
-    "A month of memory. A thin trunk, first branches — the sapling has grown stronger.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Месяц памяти. Тонкий ствол, первые ветви — деревце окрепло."
-          }
-        }
-      }
-    },
-    "First Rings": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Первые кольца"
-          }
-        }
-      }
-    },
-    "Three months. The first growth rings showed on the trunk's cross-section — memory is counting its age.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Три месяца. На срезе ствола проступили первые годовые кольца — память считает свой возраст."
-          }
-        }
-      }
-    },
-    "Spreading Tree": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Раскидистое древо"
-          }
-        }
-      }
-    },
-    "Half a year. A wide crown, deep roots — memory has truly taken root.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Полгода. Крона широкая, корни глубокие — память пустила корни всерьёз."
-          }
-        }
-      }
-    },
-    "Petrified Tree": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Окаменевшее древо"
-          }
-        }
-      }
-    },
-    "A year of memory. The tree turned into a glowing petrified artifact — a year written in stone.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Год памяти. Древо обратилось в светящийся окаменелый артефакт — год записан в камне."
-          }
-        }
-      }
-    },
-    "World Tree": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Мировое древо"
-          }
-        }
-      }
-    },
-    "Two years of unbroken memory. An eternal glowing tree whose rings reach into infinity. Keeper of everything you've seen.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Два года непрерывной памяти. Вечное светящееся древо, чьи кольца уходят в бесконечность. Хранитель всего, что ты видел."
-          }
-        }
-      }
-    },
-    "Spark": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Искра"
-          }
-        }
-      }
-    },
-    "3 days in a row. A small spark caught — not a flame yet, but no longer darkness.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "3 дня подряд. Маленькая искра поймана — ещё не пламя, но уже не темнота."
-          }
-        }
-      }
-    },
-    "Consistency": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Постоянство"
-          }
-        }
-      }
-    },
-    "Steady Flame": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ровное пламя"
-          }
-        }
-      }
-    },
-    "A week without a miss. The spark grew into a steady tongue of fire.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Неделя без пропусков. Искра окрепла в устойчивый язык огня."
-          }
-        }
-      }
-    },
-    "Blue Heat": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Синий жар"
-          }
-        }
-      }
-    },
-    "Three weeks. The flame grew hotter and turned blue — burning calmly and fiercely at once.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Три недели. Пламя стало горячее и посинело — горит спокойно и яростно одновременно."
-          }
-        }
-      }
-    },
-    "Inferno": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Инферно"
-          }
-        }
-      }
-    },
-    "Two months in a row. Not a flame — a furnace. Fire engulfs the whole medallion.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Два месяца подряд. Не пламя — печь. Огонь захлёстывает весь медальон."
-          }
-        }
-      }
-    },
-    "Phoenix": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Феникс"
-          }
-        }
-      }
-    },
-    "Half a year without a single break. The fire gained wings and a gaze.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Полгода без единого разрыва. Огонь обрёл крылья и взгляд."
-          }
-        }
-      }
-    },
-    "Eternal Flame": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Вечный огонь"
-          }
-        }
-      }
-    },
-    "A year. Three hundred sixty-five days in a row. This isn't a streak anymore — it's your physics.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Год. Триста шестьдесят пять дней подряд. Это уже не серия — это твоя физика."
-          }
-        }
-      }
-    },
-    "First Ring": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Первое кольцо"
-          }
-        }
-      }
-    },
-    "10 days of memory collected. The first annual ring — thin, but it's there.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "10 дней памяти набрано. Первый годовой круг — тонкий, но он есть."
-          }
-        }
-      }
-    },
-    "Days of Memory": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Дни памяти"
-          }
-        }
-      }
-    },
-    "Month Cross-Section": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Срез месяца"
-          }
-        }
-      }
-    },
-    "30 days. Several rings formed a dense pattern — like growth rings on a trunk's cross-section.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "30 дней. Несколько колец сложились в плотный узор — как годичные кольца на срезе ствола."
-          }
-        }
-      }
-    },
-    "Rosette of Days": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Розетка дней"
-          }
-        }
-      }
-    },
-    "90 days of memory. The rings formed a radial rosette-dial — memory counts the days by its marks.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "90 дней памяти. Кольца сложились в радиальную розетку-циферблат — память считает дни по делениям."
-          }
-        }
-      }
-    },
-    "Half-Year Disc": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Полугодовой диск"
-          }
-        }
-      }
-    },
-    "180 days. The rings pressed into a dense golden disc-dial — a whole season on the cross-section.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "180 дней. Кольца спрессовались в плотный золотой диск-циферблат — целый сезон на срезе."
-          }
-        }
-      }
-    },
-    "Year of Rings": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Год колец"
-          }
-        }
-      }
-    },
-    "365 days with memory. The full annual circle has closed — a whole season of life recorded.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "365 дней с памятью. Полный годовой круг сомкнулся — целый сезон жизни записан."
-          }
-        }
-      }
-    },
-    "Two Seasons of Life": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Два сезона жизни"
-          }
-        }
-      }
-    },
-    "730 days. Two years of memory. The rings became orbits around a glowing core.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "730 дней. Два года памяти. Кольца стали орбитами вокруг сияющего ядра."
-          }
-        }
-      }
-    },
-    "First Glance": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Первый взгляд"
-          }
-        }
-      }
-    },
-    "The Cartographer worked a full day for the first time. The Eye cracked open its lid.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Картограф отработал день впервые. Око приоткрыло веко."
-          }
-        }
-      }
-    },
-    "The Eye Opens": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Око открывается"
-          }
-        }
-      }
-    },
-    "5 days with the Cartographer. The lid lifted — the pupil catches the day's first patterns.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "5 дней с Картографом. Веко поднялось — зрачок ловит первые узоры дня."
-          }
-        }
-      }
-    },
-    "Map Within": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Картой внутри"
-          }
-        }
-      }
-    },
-    "15 days of insights. The pupil became a map of connections — the Eye reads the whole day.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "15 дней инсайтов. Зрачок стал картой связей — око читает день целиком."
-          }
-        }
-      }
-    },
-    "All-Seeing": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Всевидящее"
-          }
-        }
-      }
-    },
-    "30 days of the Cartographer. The Eye grew meridian-rays and sees right through.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "30 дней Картографа. Око обросло лучами-меридианами и видит насквозь."
-          }
-        }
-      }
-    },
-    "Astrolabe of the Day": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Астролябия дня"
-          }
-        }
-      }
-    },
-    "60 days. The Eye became a living astrolabe — spinning the orbits of your days and reading the patterns.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "60 дней. Око стало живой астролябией — крутит орбиты твоих дней и читает закономерности."
-          }
-        }
-      }
-    },
-    "Oracle": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Оракул"
-          }
-        }
-      }
-    },
-    "120 days with the Cartographer. The Eye became a crystal oracle — your life as a complete map.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "120 дней с Картографом. Око стало кристальным оракулом — твоя жизнь как карта целиком."
-          }
-        }
-      }
-    },
-    "First Scenes": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Первые сцены"
-          }
-        }
-      }
-    },
-    "5 scenes opened. The day's first frames are caught.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "5 открытых сцен. Первые кадры дня пойманы."
-          }
-        }
-      }
-    },
-    "Scenes": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сцены"
-          }
-        }
-      }
-    },
-    "Connected Frames": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Связанные кадры"
-          }
-        }
-      }
-    },
-    "25 scenes. The frames linked up by routes — connections appeared between moments.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "25 сцен. Кадры соединились маршрутами — между моментами появились связи."
-          }
-        }
-      }
-    },
-    "Collage of the Day": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Коллаж дня"
-          }
-        }
-      }
-    },
-    "75 scenes. The frames formed a dense collage — your days have taken shape.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "75 сцен. Кадры сложились в плотный коллаж — у твоих дней появилась форма."
-          }
-        }
-      }
-    },
-    "Gallery of the Day": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Галерея дня"
-          }
-        }
-      }
-    },
-    "200 scenes. A whole gallery of the lived — a dense wall of frames, yours.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "200 сцен. Целая галерея прожитого — плотная стена кадров, твоя."
-          }
-        }
-      }
-    },
-    "Diorama of Memory": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Диорама памяти"
-          }
-        }
-      }
-    },
-    "500 scenes opened. The frames became a crystal diorama-casket — a whole volumetric world of your moments.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "500 открытых сцен. Кадры стали кристальной диорамой-шкатулкой — целый объёмный мир твоих моментов."
-          }
-        }
-      }
-    },
-    "First Shore": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Первый берег"
-          }
-        }
-      }
-    },
-    "You've touched three different apps. One modest island emerged from the fog — the start of the map.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ты потрогал три разных приложения. Из тумана показался один скромный островок — начало карты."
-          }
-        }
-      }
-    },
-    "Atlas": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Атлас"
-          }
-        }
-      }
-    },
-    "Archipelago": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Архипелаг"
-          }
-        }
-      }
-    },
-    "Ten apps — a handful of neighbors surfaced around the first island. There's already something to link by routes.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Десять приложений — вокруг первого острова всплыла горстка соседей. Уже есть что соединять маршрутами."
-          }
-        }
-      }
-    },
-    "Continent": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Континент"
-          }
-        }
-      }
-    },
-    "The islands fused into a continent: mountains, rivers, a coastline. Twenty-five apps — that's a whole land already.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Острова срослись в материк: горы, реки, береговая линия. Двадцать пять приложений — это уже целая земля."
-          }
-        }
-      }
-    },
-    "Hemisphere": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Полушарие"
-          }
-        }
-      }
-    },
-    "The map curved into a sphere — a whole hemisphere of the planet is visible. Fifty apps, and the flat world is over.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Карта выгнулась в шар — видно целое полушарie планеты. Пятьдесят приложений, и плоский мир кончился."
-          }
-        }
-      }
-    },
-    "A Whole World": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Целый мир"
-          }
-        }
-      }
-    },
-    "A full rotating globe. A hundred different apps mastered — you hold the entire map in your hands.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Полный вращающийся глобус. Сто разных приложений освоено — ты держишь в руках всю карту."
-          }
-        }
-      }
-    },
-    "World in Orbit": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Мир на орбите"
-          }
-        }
-      }
-    },
-    "Two hundred apps. The globe is ringed by orbital rings and satellites — the map has outgrown the planet.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Двести приложений. Глобус окружён орбитальными кольцами и спутниками — карта переросла планету."
-          }
-        }
-      }
-    },
-    "Three Fires": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Три огня"
-          }
-        }
-      }
-    },
-    "Three different apps in a day. Three lone stars lit up in the dark.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "За день — три разных приложения. Три одиноких звезды загорелись в темноте."
-          }
-        }
-      }
-    },
-    "Constellation": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Созвездие"
-          }
-        }
-      }
-    },
-    "First Lines": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Первые линии"
-          }
-        }
-      }
-    },
-    "Six apps — the first glowing lines stretched between the stars. A figure begins to read.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Шесть приложений — между звёздами протянулись первые светящиеся линии. Рисунок начинает читаться."
-          }
-        }
-      }
-    },
-    "Twelve apps in a day — a full constellation with a clear figure and bright nodes.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Двенадцать приложений за день — полноценное созвездие с ясной фигурой и яркими узлами."
-          }
-        }
-      }
-    },
-    "Star Cluster": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Звёздное скопление"
-          }
-        }
-      }
-    },
-    "Twenty apps — the sky is packed with a dense, glowing cluster of stars. It was a full day.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Двадцать приложений — небо забито плотным сияющим скоплением звёзд. День был насыщенным."
-          }
-        }
-      }
-    },
-    "Galaxy of the Day": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Галактика дня"
-          }
-        }
-      }
-    },
-    "Thirty different apps in a day. This isn't a constellation anymore — it's a swirling galaxy. Phew.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Тридцать разных приложений за сутки. Это уже не созвездие — это закрученная галактика. Уф."
-          }
-        }
-      }
-    },
-    "First Route": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Первый маршрут"
-          }
-        }
-      }
-    },
-    "Ten domains — the first waypoint with a single trail appeared on the map.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Десять доменов — на карте появился первый путевой знак с одной тропой."
-          }
-        }
-      }
-    },
-    "Network": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сеть"
-          }
-        }
-      }
-    },
-    "Crossroads": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перекрёсток"
-          }
-        }
-      }
-    },
-    "Thirty domains — the trails met at a crossroads with several nodes. The network comes alive.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Тридцать доменов — тропы сошлись в перекрёсток с несколькими узлами. Сеть оживает."
-          }
-        }
-      }
-    },
-    "Web of Trails": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Паутина троп"
-          }
-        }
-      }
-    },
-    "Seventy-five domains wove into a dense web of trails and nodes. You go everywhere.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Семьдесят пять доменов сплелись в густую сеть троп и узлов. Ты ходишь везде."
-          }
-        }
-      }
-    },
-    "Network Sphere": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сетевая сфера"
-          }
-        }
-      }
-    },
-    "A hundred fifty domains — the network curved into a glowing sphere of nodes. The flat map is over.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сто пятьдесят доменов — сеть выгнулась в светящуюся сферу из узлов. Плоская карта кончилась."
-          }
-        }
-      }
-    },
-    "Global Network": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Глобальная сеть"
-          }
-        }
-      }
-    },
-    "Three hundred domains wrapped a whole node-globe in glowing lines of connection. The whole world at hand.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Триста доменов опутали целый узловой глобус сияющими линиями связи. Весь мир под рукой."
-          }
-        }
-      }
-    },
-    "Omnipresent": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Вездесущий"
-          }
-        }
-      }
-    },
-    "Six hundred domains. The node-globe is surrounded by orbital data streams — your web has outgrown the planet.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Шестьсот доменов. Узловой глобус окружён орбитальными потоками данных — твоя паутина переросла планету."
-          }
-        }
-      }
-    },
-    "First Breath": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Первый вдох"
-          }
-        }
-      }
-    },
-    "15 minutes straight in one app — you dove from the surface.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Непрерывно 15 минут в одном приложении — нырнул с поверхности."
-          }
-        }
-      }
-    },
-    "Immersion": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Погружение"
-          }
-        }
-      }
-    },
-    "Below the Light": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Уходя под свет"
-          }
-        }
-      }
-    },
-    "45 minutes without a break — you descended beneath the first rays.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "45 минут без отрыва — спустился под первые лучи."
-          }
-        }
-      }
-    },
-    "Beneath the Currents": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Глубже течений"
-          }
-        }
-      }
-    },
-    "90 minutes in one window — you passed through the layer of currents.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "90 минут в одном окне — прошёл слой течений."
-          }
-        }
-      }
-    },
-    "Twilight Zone": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сумеречная зона"
-          }
-        }
-      }
-    },
-    "180 minutes without looking up — where the light ends.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "180 минут не отрываясь — там, где кончается свет."
-          }
-        }
-      }
-    },
-    "The Abyss Answers": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Бездна отвечает"
-          }
-        }
-      }
-    },
-    "300 minutes of deep focus — five hours on a single point.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "300 минут глубокого фокуса — пять часов в одной точке."
-          }
-        }
-      }
-    },
-    "Pearl of the Abyss": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Жемчужина бездны"
-          }
-        }
-      }
-    },
-    "480 minutes — eight hours straight, you reached the floor of the glowing abyss.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "480 минут — восемь часов кряду, ты достиг дна сияющей бездны."
-          }
-        }
-      }
-    },
-    "Idling": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Холостой ход"
-          }
-        }
-      }
-    },
-    "2 500 frames in a day — the engine started up.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "2 500 кадров за день — двигатель завёлся."
-          }
-        }
-      }
-    },
-    "Intensity": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Интенсивность"
-          }
-        }
-      }
-    },
-    "Clutch Caught": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сцепление поймано"
-          }
-        }
-      }
-    },
-    "7 500 frames in a day — the gears engaged.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "7 500 кадров за день — шестерни сошлись."
-          }
-        }
-      }
-    },
-    "Clockwork": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Часовой механизм"
-          }
-        }
-      }
-    },
-    "15 000 frames in a day — the whole mechanism is running.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "15 000 кадров за день — заработал весь механизм."
-          }
-        }
-      }
-    },
-    "Full Throttle": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Полный газ"
-          }
-        }
-      }
-    },
-    "25 000 frames in a day — the engine at full.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "25 000 кадров за день — двигатель на максимум."
-          }
-        }
-      }
-    },
-    "Turbine Overheat": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перегрев турбины"
-          }
-        }
-      }
-    },
-    "40 000 frames in a day — the reactor in the red zone, did you even sleep?": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "40 000 кадров за день — реактор на красной зоне, ты вообще спал?"
-          }
-        }
-      }
-    },
-    "Warmed Up": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Размялся"
-          }
-        }
-      }
-    },
-    "50 switches in a day — the wheel started spinning.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "50 переключений за день — колесо закрутилось."
-          }
-        }
-      }
-    },
-    "Defocus": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Расфокус"
-          }
-        }
-      }
-    },
-    "Squirrel in a Wheel": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Белка в колесе"
-          }
-        }
-      }
-    },
-    "150 switches in a day — the squirrel's off and running.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "150 переключений за день — побежала белка."
-          }
-        }
-      }
-    },
-    "Carousel of Context": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Карусель контекста"
-          }
-        }
-      }
-    },
-    "300 switches in a day — the carousel's spinning.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "300 переключений за день — закружилась карусель."
-          }
-        }
-      }
-    },
-    "Whirlpool of Windows": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Водоворот окон"
-          }
-        }
-      }
-    },
-    "500 switches in a day — being pulled into the funnel.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "500 переключений за день — затягивает в воронку."
-          }
-        }
-      }
-    },
-    "Tornado of Defocus": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Торнадо расфокуса"
-          }
-        }
-      }
-    },
-    "800 switches in a day — a full whirlwind of windows, take a breath.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "800 переключений за день — полный смерч из окон, выдохни."
-          }
-        }
-      }
-    },
-    "First Squint": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Первый прищур"
-          }
-        }
-      }
-    },
-    "Five searches. For the first time you aimed the magnifying glass at your own memory and realized — it's searchable.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Пять поисков. Ты впервые навёл лупу на собственную память и понял — оно ищется."
-          }
-        }
-      }
-    },
-    "Curiosity · Detective": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Любопытство · Сыск"
-          }
-        }
-      }
-    },
-    "Bloodhound's Nose": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Нюх ищейки"
-          }
-        }
-      }
-    },
-    "Twenty-five queries. A skill has emerged — you know which word will pull up the right frame.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Двадцать пять запросов. Появился навык — ты знаешь, какое слово вытащит нужный кадр."
-          }
-        }
-      }
-    },
-    "The Card Index Swells": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Картотека пухнет"
-          }
-        }
-      }
-    },
-    "A hundred searches. You've built up a real card index — the magnifying glass isn't alone anymore, a fan of cards beside it.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сотня поисков. У тебя завелась настоящая картотека — лупа уже не одна, рядом веер карточек."
-          }
-        }
-      }
-    },
-    "Detective's Desk": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Стол следователя"
-          }
-        }
-      }
-    },
-    "Five hundred queries. The magnifying glass gained an investigator's kit: optics, threads of theories, a pinned case card.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Пятьсот запросов. Лупа обросла снаряжением дознавателя: оптика, нити версий, пришпиленная карточка дела."
-          }
-        }
-      }
-    },
-    "Chief Detective": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Главный сыщик"
-          }
-        }
-      }
-    },
-    "Two thousand searches. You don't search — you run the case. A grand magnifier-bureau at the center of a cross-crest.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Две тысячи поисков. Ты не ищешь — ты ведёшь дело. Большая лупа-бюро в центре крест-герба."
-          }
-        }
-      }
-    },
-    "All-Seeing Bureau": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Всевидящее бюро"
-          }
-        }
-      }
-    },
-    "Ten thousand. The bureau never sleeps. The magnifying glass gave way to a living eye-core with an orbit of lenses — memory is found in a single squint.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Десять тысяч. Бюро не спит. Лупа уступила место живому оку-ядру с орбитой линз — память находится за один прищур."
-          }
-        }
-      }
-    },
-    "A Timid Question": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Робкий вопрос"
-          }
-        }
-      }
-    },
-    "Three questions to memory. The crystal has just sprouted — a spark barely smolders inside.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Три вопроса к памяти. Кристалл только проклюнулся — внутри едва тлеет искра."
-          }
-        }
-      }
-    },
-    "Curiosity · Oracle": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Любопытство · Оракул"
-          }
-        }
-      }
-    },
-    "A Faceted Question": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Гранёный вопрос"
-          }
-        }
-      }
-    },
-    "Fifteen questions. The crystal took on facets, the spark inside burns steady — memory has begun to answer.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Пятнадцать вопросов. Кристалл огранился, искра внутри загорелась ровно — память начала отвечать."
-          }
-        }
-      }
-    },
-    "The Speaking Crystal": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Говорящий кристалл"
-          }
-        }
-      }
-    },
-    "Fifty questions. The crystal has spoken — a glowing oracle formed inside, answering any query.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Полсотни вопросов. Кристалл заговорил — внутри сложился светящийся оракул, отвечающий на любой запрос."
-          }
-        }
-      }
-    },
-    "Floating Oracle": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Парящий оракул"
-          }
-        }
-      }
-    },
-    "A hundred fifty questions. The crystal broke free of its setting and floats — shards of past answers orbit around it.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Полтораста вопросов. Кристалл оторвался от оправы и парит — вокруг него вращаются осколки прошлых ответов."
-          }
-        }
-      }
-    },
-    "Mind-Obelisk": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Разум-обелиск"
-          }
-        }
-      }
-    },
-    "Five hundred questions. The crystal grew into a floating obelisk of mind with an eye at its core — it sees the answer before the question.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Пятьсот вопросов. Кристалл вырос в парящий обелиск разума с глазом-сердцевиной — он видит ответ раньше вопроса."
-          }
-        }
-      }
-    },
-    "Omniscient Oracle": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Всеведущий оракул"
-          }
-        }
-      }
-    },
-    "Two thousand questions. The obelisk collapsed into a self-luminous sphere-mind — you barely need to ask, it already knows.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Две тысячи вопросов. Обелиск свернулся в самосветящуюся сферу-разум — спрашивать почти не нужно, она уже знает."
-          }
-        }
-      }
-    },
-    "Night Owl": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ночная сова"
-          }
-        }
-      }
-    },
-    "Activity after midnight — the eye doesn't sleep, and neither do you": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Активность после полуночи — глаз не спит, и ты тоже"
-          }
-        }
-      }
-    },
-    "Time of Day": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Время суток"
-          }
-        }
-      }
-    },
-    "Early Bird": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ранняя пташка"
-          }
-        }
-      }
-    },
-    "Activity before 7 a.m. — dawn caught you at work": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Активность до 7 утра — рассвет застал тебя за делом"
-          }
-        }
-      }
-    },
-    "Weekend Ghost": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Призрак выходного"
-          }
-        }
-      }
-    },
-    "Worked on a day off — ever tried resting?": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Работал в выходной — отдыхать не пробовал?"
-          }
-        }
-      }
-    },
-    "Zen Focus": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Дзен-фокус"
-          }
-        }
-      }
-    },
-    "A day without fuss: lots of work, almost no switching": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "День без суеты: много работы, почти без переключений"
-          }
-        }
-      }
-    },
-    "Focus": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Фокус"
-          }
-        }
-      }
-    },
-    "Cleaner": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Чистильщик"
-          }
-        }
-      }
-    },
-    "Wiped a period of history — your right": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Стёр период истории — твоё право"
-          }
-        }
-      }
-    },
-    "Control": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Контроль"
-          }
-        }
-      }
-    },
-    "To Your Own Disk": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "На свой диск"
-          }
-        }
-      }
-    },
-    "Moved your memory to an external SSD": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перенёс память на внешний SSD"
-          }
-        }
-      }
-    },
-    "Cloud Guardian": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Облачный страж"
-          }
-        }
-      }
-    },
-    "Enabled compressed iCloud backup": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Включил сжатый iCloud-бэкап"
-          }
-        }
-      }
-    },
-    "Standard": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Стандарт"
-          }
-        }
-      }
-    },
-    "Magic": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Магия"
-          }
-        }
-      }
-    },
-    "Midnight": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Полночь"
-          }
-        }
-      }
-    },
-    "Gold": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Золото"
-          }
-        }
-      }
-    },
-    "Neon": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Неон"
-          }
-        }
-      }
-    },
-    "Frost": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Мороз"
-          }
-        }
-      }
-    },
-    "Glowing": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Светящийся"
-          }
-        }
-      }
-    },
-    "Golden Eye": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Золотой глаз"
-          }
-        }
-      }
-    },
-    "Neon Eye": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Неоновый глаз"
-          }
-        }
-      }
-    },
-    "Aurora": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Аврора"
-          }
-        }
-      }
-    },
-    "Frosty": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Морозный"
-          }
-        }
-      }
-    },
-    "Wave": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Волна"
-          }
-        }
-      }
-    },
-    "Eye": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Глаз"
-          }
-        }
-      }
-    },
-    "Sparkles": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Искры"
-          }
-        }
-      }
-    },
-    "Night": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ночь"
-          }
-        }
-      }
-    },
-    "Lightning": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Молния"
-          }
-        }
-      }
-    },
-    "Crown": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Корона"
           }
         }
       }

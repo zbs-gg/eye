@@ -5,6 +5,17 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 ## [Unreleased] — 2026-07-03
 
 ### Added
+- **Self-repair bootstrap: a dev workspace for your agent + a harness that ships in the repo.**
+  "Something wrong?" now has a second action — **"Set up a dev workspace (for your agent)"** — which
+  copies a long bootstrap prompt (with your problem description + on-device diagnostics): the agent
+  confirms a directory, clones the public repo, checks the toolchain (Xcode, xcodegen), verifies a
+  green Release build, and works with the harness bundled in the repo. New in-repo harness: a root
+  `CLAUDE.md` (build/verify rules any coding agent needs: xcodegen-first, the TCC hard rule — never
+  debug-launch over the installed app, scratch-DB SQL validation, read-only live-DB access via lsof),
+  five `.claude/skills/` (`eye-build`, `eye-diagnose`, `eye-db-validate`, `eye-review-loop`,
+  `eye-release`), a hostile `swift6-reviewer` subagent, and a find→verify
+  `eye-adversarial-review` workflow. README gets an "Own it" section; both prompts and the new UI
+  strings are localized (EN + RU).
 - **AI Models + Connections overhaul (local-first, bring-your-own-AI).** A new sidebar section
   **"AI Models"** picks WHICH model processes history excerpts (Ask / Daily Insights / day summary):
   one-click Connect for **LM Studio / Ollama** (+ any custom localhost OpenAI-compatible server), and
