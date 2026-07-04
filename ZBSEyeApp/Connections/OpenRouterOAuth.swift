@@ -69,7 +69,9 @@ actor OpenRouterOAuth {
     func authorize(timeout: TimeInterval = 180) async throws -> String {
         let verifier = try Self.makeCodeVerifier()
         let challenge = Self.codeChallenge(for: verifier)
-        // CSRF/anti-injection nonce: the callback MUST echo this exact `state`, or we ignore it.
+        // CSRF/anti-injection nonce: always SENT on the auth URL, but validated on the callback ONLY when
+        // it's echoed back (best-effort — OpenRouter's PKCE flow may omit `state`; PKCE + the loopback bind
+        // the exchange regardless). A present-but-wrong nonce is rejected; an absent one is accepted.
         let state = try Self.makeStateNonce()
 
         let listener = LoopbackListener()
@@ -255,7 +257,7 @@ private actor LoopbackListener {
     private var pending: Result<String, Error>?   // callback arrived before waitForCode() was awaited
     private var delivered = false
     private var stopped = false
-    private var expectedState: String?            // the `state` nonce the callback must echo (CSRF guard)
+    private var expectedState: String?            // the `state` nonce; validated only if the callback echoes one
 
     private static let queue = DispatchQueue(label: "gg.zbs.eye.openrouter.oauth.loopback")
     /// Binding a loopback socket is near-instant; if it hasn't reached `.ready` within this window the
@@ -263,7 +265,7 @@ private actor LoopbackListener {
     private static let bindTimeout: TimeInterval = 10
 
     /// Bind 127.0.0.1 on an ephemeral port; resolves with the assigned port once listening.
-    /// `expectedState` is the nonce the OAuth callback must echo. Bounded by `bindTimeout` and
+    /// `expectedState` is the nonce validated only if the OAuth callback echoes one. Bounded by `bindTimeout` and
     /// cancellation-safe: a wedged bind, a cancelled task, or a terminal `.failed`/`.cancelled` state
     /// all resume the waiter (and tear the socket down) rather than leaking it.
     func start(expectedState: String) async throws -> UInt16 {
@@ -421,9 +423,11 @@ private actor LoopbackListener {
         let providerErr = items.first { $0.name == "error" }?.value
         let gotState = items.first { $0.name == "state" }?.value
 
-        // CSRF/anti-injection: the callback MUST echo our `state`. A missing/mismatched nonce is IGNORED
-        // (400, single-use guard untouched) so the legitimate callback can still land — never delivered.
-        if let expectedState, gotState != expectedState {
+        // CSRF/anti-injection: `state` is defense-in-depth ON TOP of PKCE (code↔verifier) + the loopback
+        // bind. Validate it ONLY when the callback actually echoes one: OpenRouter's /auth PKCE flow is not
+        // documented to return `state`, so rejecting on ABSENCE would break every real sign-in. Reject only
+        // on an explicit MISMATCH (a present-but-wrong nonce ⇒ likely forged); a missing nonce still lands.
+        if let expectedState, let gotState, gotState != expectedState {
             respondAndClose(conn, status: "400 Bad Request", html: "Bad request")
             return
         }

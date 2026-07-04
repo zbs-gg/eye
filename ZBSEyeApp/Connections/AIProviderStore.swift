@@ -70,6 +70,13 @@ final class AIProviderStore {
         for p in AIProvider.allCases where p.isCloud {
             keyPresent[p.rawValue] = Self.storedKeyExists(p)
         }
+        // If Claude Code was the persisted processing model, confirm the CLI in the BACKGROUND so the card
+        // status is accurate on relaunch WITHOUT the user opening AI Models (the probe used to run only
+        // from that screen). activeConfig already treats "not yet probed" optimistically, so Ask/Insights
+        // keep working immediately; this just refreshes the card dot and catches a genuine "not installed".
+        if settings.activeProvider == .claudeCode {
+            Task { await probeClaudeCode() }
+        }
     }
 
     // MARK: derived state
@@ -139,7 +146,12 @@ final class AIProviderStore {
         if p.isCloud {
             guard hasConsent(p) else { return nil }
             if p.usesAPIKey { guard hasKey(p) else { return nil } }
-            if p == .claudeCode { guard case .found = claudeCode else { return nil } }
+            // A persisted Claude Code selection must survive a relaunch without visiting AI Models. Treat
+            // "not yet probed" (.unknown/.checking) OPTIMISTICALLY — the binary is resolved, and a real
+            // "not installed" error surfaced, at use-time in claudeCodeChat. Only a CONFIRMED .notFound
+            // gates it off here; and since a transient miss never un-selects (see probeClaudeCode), it
+            // self-heals once discovery succeeds again.
+            if p == .claudeCode, case .notFound = claudeCode { return nil }
         }
         return cfg
     }
@@ -212,9 +224,11 @@ final class AIProviderStore {
                 setModel(AIProvider.claudeCodeDefaultModel, for: .claudeCode)
             }
         } else {
+            // A discovery miss can be TRANSIENT (a flaky login-shell/PATH lookup). Reflect unavailability
+            // in the card status ONLY — never wipe the user's persisted active selection here. activeConfig
+            // gates a confirmed .notFound off honestly, and a later successful probe (or a relaunch's
+            // background probe) self-heals it; if the CLI is truly gone, the use-time call surfaces an error.
             claudeCode = .notFound
-            // A previously-active Claude Code provider is no longer usable without the CLI.
-            if isActive(.claudeCode) { settings.active = nil }
         }
     }
 
