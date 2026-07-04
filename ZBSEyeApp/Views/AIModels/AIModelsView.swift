@@ -1,35 +1,92 @@
 import SwiftUI
 
 /// "AI Models": choose WHICH model processes history excerpts (Ask / Daily Insights / day summary).
-/// Local-first, bring-your-own-AI: LM Studio / Ollama / any localhost server are the default and the
-/// privacy story; OpenRouter / Anthropic / OpenAI are an explicit opt-in behind a consent alert —
-/// excerpts of screen history leave the Mac only for the one provider the user confirmed.
-/// Capture/index/storage never leave regardless.
+/// Local-first, bring-your-own-AI, ordered by least friction:
+///   1. Local (LM Studio / Ollama) — everything stays on this Mac; the default and the privacy story.
+///   2. Claude Code — reuse the CLI you're already signed into; no API key. (Egresses to Anthropic ⇒ consent.)
+///   3. OpenRouter — one-click Connect (real OAuth + PKCE); a pasted key is only a fallback.
+///   4. Advanced — API keys (OpenAI / Anthropic) + a custom localhost server, collapsed by default.
+/// Cloud providers are an explicit opt-in behind a consent alert; recording, index and storage always
+/// stay on-device regardless of the choice made here.
 struct AIModelsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var consentTarget: AIProvider?
     @State private var showConsent = false
+    @State private var advancedExpanded = false
 
     var body: some View {
         Form {
             activeSection
-            ForEach(AIProvider.allCases) { provider in
-                ProviderSection(provider: provider,
-                                requestCloudConsent: { p in consentTarget = p; showConsent = true })
+
+            Section {
+                ProviderCard(provider: .lmstudio, requestCloudConsent: requestConsent)
+                Divider()
+                ProviderCard(provider: .ollama, requestCloudConsent: requestConsent)
+            } header: {
+                Text("On this Mac — private by default")
+            } footer: {
+                Text("Runs entirely on your Mac: free, offline, nothing leaves the device. Start LM Studio or Ollama, then Connect.")
+            }
+
+            Section {
+                ClaudeCodeCard(requestCloudConsent: requestConsent)
+            } header: {
+                Text("Use your Claude Code")
+            }
+
+            Section {
+                ProviderCard(provider: .openrouter, requestCloudConsent: requestConsent)
+            } header: {
+                Text("One-click cloud")
+            }
+
+            Section {
+                DisclosureGroup(isExpanded: $advancedExpanded) {
+                    ProviderCard(provider: .custom, requestCloudConsent: requestConsent)
+                    Divider()
+                    ProviderCard(provider: .openai, requestCloudConsent: requestConsent)
+                    Divider()
+                    ProviderCard(provider: .anthropic, requestCloudConsent: requestConsent)
+                } label: {
+                    Label("Advanced — API keys & custom server", systemImage: "slider.horizontal.3")
+                }
+            } footer: {
+                Text("Paste an API key for OpenAI or Anthropic, or point at your own OpenAI-compatible localhost server. Most people don't need this.")
             }
         }
         .formStyle(.grouped)
         .navigationTitle("AI Models")
-        .task { await env.ai.autoProbeLocal() }   // fill pickers if LM Studio/Ollama are already running
+        .task {
+            await env.ai.autoProbeLocal()   // fill pickers if LM Studio/Ollama are already running
+            await env.ai.probeClaudeCode()  // detect the `claude` CLI (a GUI app doesn't inherit $PATH)
+        }
+        .onAppear { env.ai.resetOpenRouterOAuthPhaseIfStale() }   // don't resurface a past OAuth error
         .alert("Enable cloud processing?", isPresented: $showConsent, presenting: consentTarget) { p in
             Button("Cancel", role: .cancel) {}
-            Button("Send excerpts to \(p.displayName)") {
+            Button(Self.consentConfirmTitle(p)) {
                 env.ai.grantConsent(p)
                 env.ai.activate(p)
             }
         } message: { p in
-            Text("Cloud processing sends excerpts of your screen history to \(p.displayName). Your recordings and index stay local.")
+            Text(Self.consentMessage(p))
         }
+    }
+
+    private func requestConsent(_ p: AIProvider) {
+        consentTarget = p
+        showConsent = true
+    }
+
+    // MARK: consent copy (Claude Code is worded honestly — excerpts reach Anthropic via the CLI login)
+
+    private static func consentConfirmTitle(_ p: AIProvider) -> LocalizedStringKey {
+        p == .claudeCode ? "Send excerpts via Claude Code" : "Send excerpts to \(p.displayName)"
+    }
+
+    private static func consentMessage(_ p: AIProvider) -> LocalizedStringKey {
+        p == .claudeCode
+        ? "Claude Code sends excerpts of your screen history to Anthropic through your signed-in Claude Code login. Your recordings and index stay local."
+        : "Cloud processing sends excerpts of your screen history to \(p.displayName). Your recordings and index stay local."
     }
 
     // MARK: active model header
@@ -49,15 +106,110 @@ struct AIModelsView: View {
                     Image(systemName: "circle.dashed").foregroundStyle(.secondary)
                 }
             }
+        } header: {
+            Text("Which AI reads your memory")
         } footer: {
             Text("One model processes excerpts of your history for Ask, Daily Insights and the day summary. Local providers keep everything on this Mac; cloud providers are an explicit opt-in. Recording, search index and storage stay local no matter what you pick here.")
         }
     }
 }
 
-// MARK: — one provider card
+// MARK: — Claude Code card (local CLI subprocess, no API key)
 
-private struct ProviderSection: View {
+private struct ClaudeCodeCard: View {
+    let requestCloudConsent: (AIProvider) -> Void
+    @Environment(AppEnvironment.self) private var env
+    private var ai: AIProviderStore { env.ai }
+    private let provider = AIProvider.claudeCode
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            header
+            Text("Uses the Claude Code you're already signed into — no API key to paste. Excerpts are sent to Anthropic through your Claude Code login, so it needs the same cloud opt-in.")
+                .font(.footnote).foregroundStyle(.secondary)
+
+            switch ai.claudeCode {
+            case .unknown, .checking:
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Looking for Claude Code…").foregroundStyle(.secondary)
+                }
+            case .notFound:
+                notFoundRows
+            case .found:
+                foundRows
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            statusDot
+            Text(verbatim: provider.displayName)
+            Text(verbatim: "CLOUD")
+                .font(.caption2.bold())
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(.orange.opacity(0.2), in: Capsule())
+                .foregroundStyle(.orange)
+            if ai.isActive(provider) && ai.activeConfig != nil {
+                Label("Active", systemImage: "checkmark.seal.fill")
+                    .font(.caption).foregroundStyle(.green)
+            }
+        }
+    }
+
+    private var statusDot: some View {
+        let color: Color = switch ai.claudeCode {
+        case .found:              .green
+        case .checking, .unknown: .yellow
+        case .notFound:           .red
+        }
+        return Circle().fill(color).frame(width: 8, height: 8)
+    }
+
+    private var notFoundRows: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Claude Code not found", systemImage: "xmark.octagon.fill")
+                .font(.caption).foregroundStyle(.red)
+            Text("Install the Claude Code CLI and run `claude` once to sign in, then re-check.")
+                .font(.footnote).foregroundStyle(.secondary)
+            Button("Re-check") { Task { await ai.probeClaudeCode(force: true) } }
+                .buttonStyle(.borderless)
+        }
+    }
+
+    private var foundRows: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("Model", selection: Binding(
+                get: { ai.model(for: provider) },
+                set: { ai.setModel($0, for: provider) })) {
+                ForEach(ai.modelOptions(provider), id: \.self) { m in
+                    Text(verbatim: m == AIProvider.claudeCodeDefaultModel ? "Default" : m).tag(m)
+                }
+            }
+            HStack {
+                Button("Use this model") {
+                    // Cloud cannot become active silently: the consent alert is the only path in.
+                    if !ai.hasConsent(provider) {
+                        requestCloudConsent(provider)
+                    } else {
+                        ai.activate(provider)
+                    }
+                }
+                .disabled(ai.model(for: provider).isEmpty || (ai.isActive(provider) && ai.activeConfig != nil))
+                Spacer()
+                if ai.hasConsent(provider) {
+                    Text("Cloud opt-in confirmed").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+// MARK: — generic provider card (LM Studio / Ollama / custom / OpenRouter / OpenAI / Anthropic)
+
+private struct ProviderCard: View {
     let provider: AIProvider
     let requestCloudConsent: (AIProvider) -> Void
     @Environment(AppEnvironment.self) private var env
@@ -66,22 +218,21 @@ private struct ProviderSection: View {
     private var ai: AIProviderStore { env.ai }
 
     var body: some View {
-        Section {
+        VStack(alignment: .leading, spacing: 10) {
+            header
             if provider == .custom { endpointField }
             // OpenRouter: one-click "Sign in" (real OAuth + PKCE) ABOVE the manual key field.
             if provider == .openrouter && !ai.hasKey(provider) { openRouterOAuthRow }
-            if provider.isCloud { keyRow }
+            if provider.usesAPIKey { keyRow }
             connectRow
             if !ai.fetchedModels(provider).isEmpty { modelPicker }
             // No server-provided list yet (empty /v1/models, JIT loading, or not probed) → let any LOCAL
             // provider's model be typed in by hand, so a valid model id is always selectable/activatable.
             if ai.fetchedModels(provider).isEmpty && !provider.isCloud { manualModelField }
             useRow
-        } header: {
-            header
-        } footer: {
             footer
         }
+        .padding(.vertical, 2)
     }
 
     // MARK: header (status dot + name + CLOUD badge)
@@ -106,9 +257,9 @@ private struct ProviderSection: View {
 
     private var statusDot: some View {
         let color: Color = switch ai.status(provider) {
-        case .connected: .green
-        case .probing: .yellow
-        case .error: .red
+        case .connected:    .green
+        case .probing:      .yellow
+        case .error:        .red
         case .notConfigured: .secondary.opacity(0.5)
         }
         return Circle().fill(color).frame(width: 8, height: 8)
@@ -188,7 +339,7 @@ private struct ProviderSection: View {
             } label: {
                 Label(provider.isCloud ? "Load models" : "Connect", systemImage: "bolt.horizontal")
             }
-            .disabled(isProbing || (provider.isCloud && !ai.hasKey(provider))
+            .disabled(isProbing || (provider.usesAPIKey && !ai.hasKey(provider))
                       || (provider == .custom && ai.endpoint(for: provider).isEmpty))
 
             if isProbing { ProgressView().controlSize(.small) }
@@ -243,7 +394,7 @@ private struct ProviderSection: View {
                     ai.activate(provider)
                 }
             }
-            .disabled(ai.model(for: provider).isEmpty || (provider.isCloud && !ai.hasKey(provider))
+            .disabled(ai.model(for: provider).isEmpty || (provider.usesAPIKey && !ai.hasKey(provider))
                       || (ai.isActive(provider) && ai.activeConfig != nil))
             Spacer()
             if provider.isCloud && ai.hasConsent(provider) {
@@ -252,19 +403,25 @@ private struct ProviderSection: View {
         }
     }
 
-    // MARK: footer
+    // MARK: footer (one-line "what this is")
 
     @ViewBuilder
     private var footer: some View {
         switch provider {
         case .lmstudio:
-            Text("Runs on this Mac (port 1234). Free and private — start the LM Studio server, then Connect.")
+            caption("Runs on this Mac (port 1234). Free and private — start the LM Studio server, then Connect.")
         case .ollama:
-            Text("Runs on this Mac (port 11434). Free and private — `ollama serve`, then Connect.")
+            caption("Runs on this Mac (port 11434). Free and private — `ollama serve`, then Connect.")
         case .custom:
-            Text("Any OpenAI-compatible server on localhost: mlx_lm.server, llama.cpp server, …")
+            caption("Any OpenAI-compatible server on localhost: mlx_lm.server, llama.cpp server, …")
+        case .claudeCode:
+            EmptyView()   // handled by ClaudeCodeCard
         case .openrouter, .anthropic, .openai:
-            Text("Cloud: excerpts of your screen history are sent to this provider — only after your explicit opt-in. The API key is stored in the Keychain.")
+            caption("Cloud: excerpts of your screen history are sent to this provider — only after your explicit opt-in. The API key is stored in the Keychain.")
         }
+    }
+
+    private func caption(_ key: LocalizedStringKey) -> some View {
+        Text(key).font(.footnote).foregroundStyle(.secondary)
     }
 }
