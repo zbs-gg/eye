@@ -10,16 +10,19 @@ Four independent probes, cheapest first. None of them writes anything, none of t
 ## 1. MCP `get_diagnostics` (stdio)
 
 The installed binary doubles as an MCP server (`--mcp`). macOS has **no `timeout` command**, so run it
-in the background and `pkill` it:
+in the background, capture the PID of the probe you launched, and kill **only that PID** when done.
+Never `pkill -f -- '--mcp'`: it would also kill the user's own persistent `ZBS Eye --mcp` server (the
+one your MCP client is connected to) and any third-party `--mcp` tool.
 
 ```bash
 BIN="/Applications/ZBS Eye.app/Contents/MacOS/ZBS Eye"
-printf '%s\n' \
+req=$(printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}' \
   '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_diagnostics","arguments":{}}}' \
-  | "$BIN" --mcp > /tmp/eye-diagnostics.out 2>/dev/null &
-sleep 5; pkill -f -- '--mcp' 2>/dev/null
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_diagnostics","arguments":{}}}')
+"$BIN" --mcp <<<"$req" > /tmp/eye-diagnostics.out 2>/dev/null &
+PROBE=$!                          # the exact process we started — kill only this one
+sleep 5; kill "$PROBE" 2>/dev/null
 cat /tmp/eye-diagnostics.out
 ```
 
@@ -55,12 +58,17 @@ engine restarts all log here.
 ## 4. The live database — locate via lsof, read-only always
 
 The user may have relocated storage (external SSD), so **never assume**
-`~/Library/Application Support/ZBS Eye`. Ask the running process what it has open:
+`~/Library/Application Support/ZBS Eye`. Ask the running process what it has open — match by command
+name (`-c`), not by PID:
 
 ```bash
-DB="$(lsof -p "$(pgrep -x 'ZBS Eye')" 2>/dev/null | grep -o '/.*zbseye\.sqlite$' | head -1)"
-# Fallback when the app is not running (legacy default location):
-[ -n "$DB" ] || DB="$HOME/Library/Application Support/ZBS Eye/zbseye.sqlite"
+# `lsof -c` catches every "ZBS Eye" process. Don't use `lsof -p "$(pgrep -x 'ZBS Eye')"`:
+# when the GUI and an --mcp helper are both live, pgrep returns a newline-joined PID list that
+# `lsof -p` rejects → empty result → a silent fall back to a stale copy on relocated installs.
+DB="$(lsof -c "ZBS Eye" 2>/dev/null | grep -o '/.*zbseye\.sqlite$' | head -1)"
+# Empty (app not running, or a relocated install)? ASK the user where storage lives — do NOT
+# assume ~/Library/Application Support/ZBS Eye, it is stale after a relocation.
+[ -n "$DB" ] || { echo "live DB not found via lsof — ask the user for the path"; return 2>/dev/null || exit 1; }
 ```
 
 Open **read-only, immutable** — never take a lock on, never write to, the live DB (the GUI is the

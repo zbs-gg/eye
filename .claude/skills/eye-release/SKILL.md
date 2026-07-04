@@ -51,14 +51,18 @@ entitlement from a Debug build (the script builds Release, so normally it passes
 ## Publish
 
 ```bash
-VERSION=vX.Y.Z   # match CFBundleShortVersionString
+VERSION=vX.Y.Z   # match CFBundleShortVersionString AND the "## [$VERSION]" heading in CHANGELOG.md
+# You already renamed "## [Unreleased]" to "## [$VERSION]" (see the note below), so extract THAT
+# block — everything under the "## [$VERSION]" heading up to the next "## " — not [Unreleased],
+# which no longer exists after the rename (extracting it would yield an empty --notes).
 gh release create "$VERSION" dist/ZBSEye-notarized-*.zip \
   --title "ZBS Eye $VERSION" \
-  --notes "$(sed -n '/## \[Unreleased\]/,/^## /p' CHANGELOG.md | head -60)"
+  --notes "$(awk -v v="## [$VERSION]" 'index($0,v)==1{f=1;next} f&&/^## /{exit} f' CHANGELOG.md)"
 ```
 
-Release notes come from `CHANGELOG.md` — move the `[Unreleased]` items under a version heading in the
-same PR that tags the release.
+Release notes come from `CHANGELOG.md`: in the **same PR that tags the release**, rename the top
+`## [Unreleased]` heading to `## [$VERSION]` first — then the command above pulls exactly that
+version's items, so the published notes match what you shipped.
 
 ## Post-release sanity
 

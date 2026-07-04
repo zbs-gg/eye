@@ -25,8 +25,12 @@ Consult `AGENTS.md` invariants before touching `Data/`, `Capture/`, or `Server/`
 
 ```bash
 xcodegen generate    # re-run after adding/removing .swift files
+# CODE_SIGN_*/DEVELOPMENT_TEAM="" → ad-hoc signing (SPM deps build with no Apple team);
+# -derivedDataPath → deterministic product path under build/.
 xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Release \
-  -destination 'platform=macOS' build 2>&1 | grep -E "error:|BUILD"
+  -destination 'platform=macOS' -derivedDataPath build/DerivedData \
+  CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \
+  build 2>&1 | grep -E "error:|BUILD"
 ```
 
 `BUILD SUCCEEDED` required. SQL changes additionally get a scratch-DB run (`eye-db-validate`).

@@ -16,8 +16,12 @@ command -v xcodegen || brew install xcodegen
 xcodegen generate
 
 # 2. Build (Release compile-check; judged by grep, the log is noisy)
+#    CODE_SIGN_*/DEVELOPMENT_TEAM="" — ad-hoc signing so SPM deps (GRDB etc.) build with no Apple team.
+#    -derivedDataPath build/DerivedData — deterministic product path (the artifact check below relies on it).
 xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Release \
-  -destination 'platform=macOS' build 2>&1 | grep -E "error:|BUILD"
+  -destination 'platform=macOS' -derivedDataPath build/DerivedData \
+  CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \
+  build 2>&1 | grep -E "error:|BUILD"
 ```
 
 Green = the output ends with `BUILD SUCCEEDED` and there is no `error:` line.

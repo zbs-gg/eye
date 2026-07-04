@@ -22,10 +22,8 @@ struct SelfRepairView: View {
                 Spacer()
                 if let onClose { Button("Close") { onClose() } }
             }
-            Text("ZBS Eye is open to read and yours to fix. Describe what's wrong — Eye collects the "
-                 + "diagnostics and hands your own AI agent a ready-to-run repair prompt (it reads the "
-                 + "source and fixes it). If that doesn't do it, file a GitHub issue with one click. "
-                 + "Nothing leaves your machine.")
+            // Single literal (not concatenation) so it stays a LocalizedStringKey → xcstrings.
+            Text("ZBS Eye is open to read and yours to fix. Describe what's wrong — Eye collects the diagnostics and hands your own AI agent a ready-to-run repair prompt (it reads the source and fixes it). If that doesn't do it, file a GitHub issue with one click. Nothing leaves your machine.")
                 .font(.callout).foregroundStyle(.secondary)
 
             TextField("What went wrong? (e.g. audio doesn't record during calls)",
@@ -129,8 +127,9 @@ struct SelfRepairView: View {
         3. Toolchain check: `xcode-select -p` must point at a full Xcode (not bare Command Line Tools); \
         `xcodegen` must be installed — `brew install xcodegen` if missing.
         4. `xcodegen generate` — ZBSEye.xcodeproj is generated from project.yml, it is NOT in git.
-        5. Verify the build is green before changing anything:
-           `xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Release -destination 'platform=macOS' build`
+        5. Verify the build is green before changing anything (the CODE_SIGN/DEVELOPMENT_TEAM overrides \
+        let it build with no Apple team; -derivedDataPath keeps the product path deterministic):
+           `xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Release -destination 'platform=macOS' -derivedDataPath build/DerivedData CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" build`
            (the CoreSimulator version warning is noise; look for BUILD SUCCEEDED and no `error:` lines).
 
         ## Step 2 — learn the harness (it ships in the repo)

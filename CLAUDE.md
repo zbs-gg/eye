@@ -21,10 +21,15 @@ keep re-learning the hard way, plus a map of the bundled harness.
 - `ZBSEye.xcodeproj` is **not tracked in git** — it is generated. Run `xcodegen generate` first, and
   re-run it after adding or removing any `.swift` file (`project.yml` globs sources from `ZBSEyeApp/`).
   Never commit `ZBSEye.xcodeproj`.
-- Build command:
+- Enable the `swift-lsp` plugin in this repo (it is off globally) so you get LSP diagnostics and
+  jump-to-def while editing Swift here.
+- Build command (the `CODE_SIGN_*` / `DEVELOPMENT_TEAM=""` overrides let it build on a machine with no
+  Apple team — SPM deps like GRDB otherwise demand one; `-derivedDataPath` keeps the product path
+  deterministic under `build/`):
   ```bash
   xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Release \
-    -destination 'platform=macOS' build
+    -destination 'platform=macOS' -derivedDataPath build/DerivedData \
+    CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" build
   ```
 - The CoreSimulator version-mismatch warning is noise. Judge the build by grepping the output for
   `error:` and `BUILD SUCCEEDED`.
@@ -64,10 +69,14 @@ Full pattern with a worked example: `.claude/skills/eye-db-validate/SKILL.md`.
 ## Reading the user's live DB (diagnosis only)
 
 - Locate it via `lsof` — the user may have relocated storage to an external SSD, so never assume
-  `~/Library/Application Support/ZBS Eye`:
+  `~/Library/Application Support/ZBS Eye`. Match by command name (`-c`), not by PID: more than one
+  `ZBS Eye` process can be live at once (the GUI plus an `--mcp` helper), and `lsof -p` rejects the
+  newline-joined multi-PID list a `pgrep` returns:
   ```bash
-  lsof -p "$(pgrep -x 'ZBS Eye')" 2>/dev/null | grep -o '/.*zbseye\.sqlite$'
+  lsof -c "ZBS Eye" 2>/dev/null | grep -o '/.*zbseye\.sqlite$' | head -1
   ```
+  Empty result (app not running, or a relocated install)? **Ask the user for the DB path** — do not
+  fall back to `~/Library`, it is stale after a storage relocation.
 - Open strictly read-only: `sqlite3 "file:<path>?mode=ro&immutable=1" "<query>"`.
 - **Never write to the live DB.** The GUI process is the single writer (GRDB `DatabasePool`,
   `IngestService`).
@@ -75,7 +84,9 @@ Full pattern with a worked example: `.claude/skills/eye-db-validate/SKILL.md`.
 ## Misc that bites
 
 - macOS has **no `timeout` command**. To test the MCP server, launch the built binary with `--mcp` in
-  the background, drive it over stdio, then `pkill` it.
+  the background, capture its PID (`PROBE=$!`), drive it over stdio, then `kill "$PROBE"` — never
+  `pkill -f -- '--mcp'`, which would also kill the user's own `ZBS Eye --mcp` server and any other
+  `--mcp` tool.
 - Swift 6 strict concurrency is `complete`: actors own non-Sendable state (`CVPixelBuffer`,
   `AXUIElement`, … live and die inside one actor); UI state lives in `@MainActor @Observable` stores;
   the DB has a single logical writer via GRDB `DatabasePool`. Do not add a second writer, do not

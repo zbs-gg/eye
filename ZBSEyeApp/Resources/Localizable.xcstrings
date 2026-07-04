@@ -499,6 +499,66 @@
         }
       }
     },
+    "Something not working?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Что-то не работает?"
+          }
+        }
+      }
+    },
+    "ZBS Eye is open to read and yours to fix. Describe what's wrong — Eye collects the diagnostics and hands your own AI agent a ready-to-run repair prompt (it reads the source and fixes it). If that doesn't do it, file a GitHub issue with one click. Nothing leaves your machine.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZBS Eye открыт для чтения и ваш, чтобы его чинить. Опишите, что не так — Eye соберёт диагностику и передаст вашему AI-агенту готовый промпт для починки (он читает исходники и чинит их). Если это не помогло — заведите issue на GitHub в один клик. Ничего не покидает вашу машину."
+          }
+        }
+      }
+    },
+    "What went wrong? (e.g. audio doesn't record during calls)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Что пошло не так? (например, звук не записывается во время звонков)"
+          }
+        }
+      }
+    },
+    "Ask your agent to fix it": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Попросите вашего агента починить"
+          }
+        }
+      }
+    },
+    "Open a GitHub issue": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть issue на GitHub"
+          }
+        }
+      }
+    },
+    "What gets shared (nothing leaves the machine on its own)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Что будет передано (само по себе ничего не покидает машину)"
+          }
+        }
+      }
+    },
     "DB error": {
       "localizations": {
         "ru": {
