@@ -2,7 +2,9 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
-## [Unreleased] — 2026-07-03
+## [Unreleased]
+
+## [0.2.0] — 2026-07-05
 
 ### Added
 - **Use your own Claude Code (no API key) + one-click OpenRouter; API keys demoted to Advanced.** The
