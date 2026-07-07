@@ -103,6 +103,16 @@
         }
       }
     },
+    "%lld models available": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступно моделей: %lld"
+          }
+        }
+      }
+    },
     "%lld results": {
       "localizations": {
         "ru": {
@@ -559,6 +569,16 @@
         }
       }
     },
+    "A model is ready — pick it above to turn on Ask & Insights.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель готова — выберите её выше, чтобы включить «Спросить» и «Инсайты»."
+          }
+        }
+      }
+    },
     "A month of memory. A thin trunk, first branches — the sapling has grown stronger.": {
       "localizations": {
         "ru": {
@@ -709,6 +729,16 @@
         }
       }
     },
+    "Active model": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Активная модель"
+          }
+        }
+      }
+    },
     "Activity after midnight — the eye doesn't sleep, and neither do you": {
       "localizations": {
         "ru": {
@@ -725,6 +755,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Активность до 7 утра — рассвет застал тебя за делом"
+          }
+        }
+      }
+    },
+    "Add a provider…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавить провайдера…"
           }
         }
       }
@@ -895,6 +935,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Спросите о своей истории…"
+          }
+        }
+      }
+    },
+    "Ask and Daily Insights need a model to read your history. Pick one below — a free local model runs entirely on your Mac.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "«Спросить» и «Инсайтам дня» нужна модель, чтобы читать вашу историю. Выберите её ниже — бесплатная локальная модель работает целиком на вашем Mac."
           }
         }
       }
@@ -1248,6 +1298,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Закрыть"
+          }
+        }
+      }
+    },
+    "Cloud": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Облако"
           }
         }
       }
@@ -1658,6 +1718,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Дни памяти"
+          }
+        }
+      }
+    },
+    "Default": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "По умолчанию"
           }
         }
       }
@@ -2695,6 +2765,16 @@
         }
       }
     },
+    "Manage providers": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Управление провайдерами"
+          }
+        }
+      }
+    },
     "Map Within": {
       "localizations": {
         "ru": {
@@ -2965,6 +3045,26 @@
         }
       }
     },
+    "None (turn Ask & Insights off)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не выбрана (выключить «Спросить» и «Инсайты»)"
+          }
+        }
+      }
+    },
+    "None — Ask & Insights off": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не выбрана — «Спросить» и «Инсайты» выключены"
+          }
+        }
+      }
+    },
     "None — Ask and Daily Insights are off": {
       "localizations": {
         "ru": {
@@ -3004,6 +3104,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Всеведущий оракул"
+          }
+        }
+      }
+    },
+    "On this Mac": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На этом Mac"
           }
         }
       }
@@ -3364,6 +3474,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Проверить снова"
+          }
+        }
+      }
+    },
+    "Ready — choose it in the switcher above": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готово — выберите её в переключателе выше"
           }
         }
       }
@@ -4214,6 +4334,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Тридцать доменов — тропы сошлись в перекрёсток с несколькими узлами. Сеть оживает."
+          }
+        }
+      }
+    },
+    "This model reads history excerpts for Ask and Daily Insights. Local models never leave your Mac.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта модель читает фрагменты истории для «Спросить» и «Инсайтов дня». Локальные модели никогда не покидают ваш Mac."
           }
         }
       }
