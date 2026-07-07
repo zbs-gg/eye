@@ -37,6 +37,8 @@ private struct CartographerBody: View {
                 UsageStatsCard()
                 if !store.llmReady {
                     noLLMCard
+                    // No model → fall back to the on-device heuristic summary so the screen is never blank.
+                    if let a = store.heuristicActivity { heuristicCard(a) }
                 } else if !store.hasConsent {
                     consentCard
                 } else {
@@ -48,6 +50,23 @@ private struct CartographerBody: View {
             .padding(20)
             .frame(maxWidth: 720, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // Auto-generate insights on appear (with consent + a model); otherwise load the heuristic summary.
+        // Re-runs when the selected day changes.
+        .task(id: store.selectedDay) { store.autoRefresh() }
+    }
+
+    private func heuristicCard(_ a: CartographerService.DayActivity) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Your day at a glance", systemImage: "chart.bar.doc.horizontal")
+                    .font(.headline)
+                Text("Computed on-device from your activity. Add a processing model above for written insights.")
+                    .font(.callout).foregroundStyle(.secondary)
+                ActivitySummaryView(activity: a)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(6)
         }
     }
 
@@ -212,7 +231,8 @@ private struct ActivitySummaryView: View {
                 .padding(.bottom, 2)
 
             HStack(spacing: 20) {
-                statBadge(value: "\(activity.totalCaptures)", label: "frames")
+                statBadge(value: "\(activity.totalCaptures)", label: "moments")
+                statBadge(value: activeTimeLabel, label: "active")
                 statBadge(value: "\(activity.contextSwitches)", label: "switches")
             }
 
@@ -227,7 +247,14 @@ private struct ActivitySummaryView: View {
         }
     }
 
-    private func statBadge(value: String, label: String) -> some View {
+    /// Total active time across the day's top apps (rough, from per-app active-ms buckets).
+    private var activeTimeLabel: String {
+        let m = activity.topApps.reduce(0) { $0 + $1.minutes }
+        if m < 60 { return "\(m)m" }
+        return "\(m / 60)h \(m % 60)m"
+    }
+
+    private func statBadge(value: String, label: LocalizedStringKey) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(value).font(.title3).bold().monospacedDigit()
             Text(label).font(.caption2).foregroundStyle(.secondary)

@@ -29,7 +29,7 @@ struct MemoryProgressView: View {
                     let s = p.snapshot
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())],
                               alignment: .leading, spacing: 12) {
-                        statCell(label: "Frames",
+                        statCell(label: "Moments",
                                  value: NumberFormatter.localizedString(
                                     from: NSNumber(value: s.totalFrames), number: .decimal))
                         statCell(label: "Streak",
@@ -105,7 +105,7 @@ struct MemoryProgressView: View {
 
     // MARK: — Helpers
 
-    private func statCell(label: String, value: String) -> some View {
+    private func statCell(label: LocalizedStringKey, value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.title3.bold())

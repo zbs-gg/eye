@@ -61,12 +61,17 @@ private struct ActivitiesBody: View {
     }
 
     private var toolbar: some View {
-        HStack(spacing: 12) {
-            Text("Day in activities")
-                .font(.headline)
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Day in activities")
+                    .font(.headline)
+                Text("Your day grouped into what you were working on — tap a session to replay it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
             // Debug: reveal the filtered system shells (loginwindow, screen saver…) as dimmed cards.
-            Toggle("Show system events", isOn: $store.showSystemEvents)
+            Toggle("Show idle / system time", isOn: $store.showSystemEvents)
                 .toggleStyle(.checkbox)
                 .controlSize(.small)
             Button("Today") {
@@ -94,7 +99,7 @@ private struct ActivitiesBody: View {
     @ViewBuilder
     private var content: some View {
         if store.isLoading {
-            ProgressView("Segmenting…")
+            ProgressView("Grouping your activity…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let err = store.error {
             // Error BEFORE "empty": on error scenes is also empty, otherwise the error would be masked
@@ -105,7 +110,7 @@ private struct ActivitiesBody: View {
             ContentUnavailableView {
                 Label("No activity", systemImage: "calendar.badge.clock")
             } description: {
-                Text("No frames recorded for this day. Pick a different day.")
+                Text("No moments recorded for this day. Pick a different day.")
             }
         } else {
             ScrollView {
@@ -256,6 +261,7 @@ private struct SceneCard: View {
     let onTap: () -> Void
 
     @State private var appIcon: NSImage?
+    @State private var hovered = false
 
     var body: some View {
         Button(action: onTap) {
@@ -310,7 +316,17 @@ private struct SceneCard: View {
 
                     HStack(spacing: 8) {
                         Label(durationLabel(scene.durationSec), systemImage: "clock")
-                        Label("\(scene.frameCount) frames", systemImage: "photo")
+                        Label("\(scene.frameCount) moments", systemImage: "photo")
+                        Spacer()
+                        // Visible affordance: tapping a session jumps to that spot on the timeline.
+                        HStack(spacing: 3) {
+                            if hovered {
+                                Text("Open in Timeline")
+                                    .transition(.opacity)
+                            }
+                            Image(systemName: "clock.arrow.circlepath")
+                        }
+                        .foregroundStyle(.tint)
                     }
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -321,6 +337,9 @@ private struct SceneCard: View {
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.06)))
         }
         .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(.easeInOut(duration: 0.12), value: hovered)
+        .help("Open in Timeline")
         .task(id: scene.bundleId) {
             appIcon = await loadAppIcon(bundleId: scene.bundleId)
         }
@@ -398,7 +417,7 @@ struct SceneSummaryCard: View {
 
             HStack(spacing: 10) {
                 Label(durationLabel(scene.durationSec), systemImage: "clock")
-                Label("\(scene.frameCount) frames", systemImage: "photo")
+                Label("\(scene.frameCount) moments", systemImage: "photo")
             }
             .font(.caption)
             .foregroundStyle(.secondary)

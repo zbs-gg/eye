@@ -1,11 +1,13 @@
 import SwiftUI
 
 struct StatusPill: View {
-    let text: String
+    // LocalizedStringKey (not a plain String) so the pill's text is actually looked up in the catalog —
+    // a String is rendered verbatim, which silently dropped the RU translations (Pro l10n #7).
+    let text: LocalizedStringKey
     let color: Color
     var system: String?
 
-    init(text: String, color: Color, system: String? = nil) {
+    init(text: LocalizedStringKey, color: Color, system: String? = nil) {
         self.text = text
         self.color = color
         self.system = system

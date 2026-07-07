@@ -121,12 +121,17 @@ private struct TimelineBody: View {
             .tint(env.recording.isCapturing ? .red : .accentColor)
             .animation(reduceMotion ? .none : .snappy(duration: 0.2), value: env.recording.isCapturing)
 
-            Text("\(env.recording.screenFrameCount)")
-                .font(.system(.body, design: .rounded).weight(.semibold))
-                .monospacedDigit()
-                .contentTransition(.numericText())
-                .animation(reduceMotion ? .none : .snappy(duration: 0.25), value: env.recording.screenFrameCount)
-                .help("Frames this session")
+            HStack(spacing: 4) {
+                Text("\(env.recording.screenFrameCount)")
+                    .font(.system(.body, design: .rounded).weight(.semibold))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                    .animation(reduceMotion ? .none : .snappy(duration: 0.25), value: env.recording.screenFrameCount)
+                Text("moments")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .help("Moments captured this session")
         }
         .padding(16)
     }
@@ -223,10 +228,11 @@ private struct TimelineBody: View {
                         if let u = c.browserURL { Text(u).font(.caption).foregroundStyle(.blue).lineLimit(2) }
                         HStack {
                             Text(c.ts.formatted(date: .abbreviated, time: .standard)).font(.caption).foregroundStyle(.secondary)
-                            if let q = c.axQuality { StatusPill(text: Self.qualityLabel(q), color: Self.qualityColor(q)) }
-                            if let s = Self.sourcePill(c) {
-                                // Source ≠ ax_quality: we show where the text actually came from (AX/OCR/mixed).
-                                StatusPill(text: s.text, color: s.color, system: s.icon)
+                            // Plain-language capture quality + a colored dot; the raw AX/OCR detail
+                            // (dev jargon) lives only in the tooltip now, not in the label.
+                            if let q = c.axQuality {
+                                let plain = Self.plainQuality(q)
+                                QualityDot(label: plain.label, color: plain.color, detail: Self.rawQualityDetail(c))
                             }
                         }
                         Divider()
@@ -245,7 +251,7 @@ private struct TimelineBody: View {
                     }
                     .transition(.opacity)
                 } else {
-                    Text("No frame at this moment").foregroundStyle(.secondary)
+                    Text("No moment captured here").foregroundStyle(.secondary)
                         .transition(.opacity)
                 }
             }
@@ -330,6 +336,16 @@ private struct TimelineBody: View {
                          onSeek: { scheduleSeek(toEpoch: $0.timeIntervalSince1970) })
                 .frame(height: 46)
 
+            // Legend for the two-track density strip (accent = screen activity, orange = audio).
+            HStack(spacing: 14) {
+                LegendSwatch(color: .accentColor, label: "screen")
+                if !store.audioDensity.isEmpty {
+                    LegendSwatch(color: .orange, label: "audio")
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 2)
+
             if let lo = store.bounds.oldest?.timeIntervalSince1970,
                let hi = store.bounds.newest?.timeIntervalSince1970, hi > lo {
                 Slider(value: Binding(
@@ -374,7 +390,7 @@ private struct TimelineBody: View {
     private var transport: some View {
         HStack(spacing: 8) {
             TransportButton(systemImage: "backward.frame.fill",
-                            help: "Previous frame",
+                            help: "Previous moment",
                             reduceMotion: reduceMotion) {
                 Task { await store.stepBackward() }
             }
@@ -385,7 +401,7 @@ private struct TimelineBody: View {
             }
 
             TransportButton(systemImage: "forward.frame.fill",
-                            help: "Next frame",
+                            help: "Next moment",
                             reduceMotion: reduceMotion) {
                 Task { await store.stepForward() }
             }
@@ -398,15 +414,25 @@ private struct TimelineBody: View {
         }
     }
 
-    static func qualityColor(_ q: String) -> Color {
+    /// Plain-language capture quality for the detail panel — four calm states with a colored dot.
+    /// The precise AX/OCR breakdown is preserved in the tooltip via `rawQualityDetail`.
+    static func plainQuality(_ q: String) -> (label: LocalizedStringKey, color: Color) {
         switch q {
-        case "fullUseful": return .green
-        case "partialUseful", "titleOnly": return .yellow
-        case "ocr", "timedOut": return .orange
-        case "sickPID": return .purple   // diagnostics: the process hung/is unavailable — this is NOT an empty frame
-        default: return .red             // none
+        case "fullUseful":                 return ("Text captured", .green)
+        case "partialUseful", "titleOnly": return ("Partial text", .yellow)
+        case "ocr":                        return ("Read via OCR", .orange)
+        default:                           return ("No text", .red)   // timedOut, sickPID, none
         }
     }
+
+    /// The raw AX/OCR jargon, kept for the tooltip only (quality + where the text came from).
+    static func rawQualityDetail(_ c: FrameDetail) -> String {
+        var parts: [String] = []
+        if let q = c.axQuality { parts.append(qualityLabel(q)) }
+        if let s = Self.sourcePill(c) { parts.append(s.text) }
+        return parts.joined(separator: " · ")
+    }
+
     static func qualityLabel(_ q: String) -> String {
         switch q {
         case "fullUseful": return "AX full"
@@ -476,6 +502,37 @@ private struct PlayPauseButton: View {
     }
 }
 
+// MARK: - small labels
+
+/// Plain-language capture-quality indicator: a colored dot + a calm label. The raw AX/OCR
+/// jargon is only in the `.help` tooltip (item: no dev jargon in the user-facing label).
+private struct QualityDot: View {
+    let label: LocalizedStringKey
+    let color: Color
+    let detail: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle().fill(color).frame(width: 7, height: 7)
+            Text(label).font(.caption).foregroundStyle(.secondary)
+        }
+        .help(detail)
+    }
+}
+
+/// One entry of the density-strip legend: a colored swatch + a label in the strip's own color.
+private struct LegendSwatch: View {
+    let color: Color
+    let label: LocalizedStringKey
+
+    var body: some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 10, height: 10)
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+}
+
 // MARK: - frame (crossfade on change)
 
 private struct FramePreview: View {
@@ -497,11 +554,12 @@ private struct FramePreview: View {
                     .transition(.opacity)
             }
             if frameID != nil, url == nil {
-                // A frame without a snapshot (context-only/dedup) — a badge OVER the previous frame, we don't break the fade.
-                ContentUnavailableView("Frame without a snapshot", systemImage: "photo.badge.exclamationmark")
+                // A deduped moment (context-only) — calm/neutral note OVER the previous frame, not an error.
+                ContentUnavailableView("Screen unchanged here — nothing new was captured",
+                                       systemImage: "rectangle.on.rectangle")
                     .background(.ultraThinMaterial)
             } else if loaded == nil {
-                ContentUnavailableView("No frame", systemImage: "photo")
+                ContentUnavailableView("No moment", systemImage: "photo")
             }
         }
         // With reduceMotion — an instant change (nil duration = no animation); when normal — a smooth crossfade.

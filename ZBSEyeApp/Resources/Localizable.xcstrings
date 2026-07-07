@@ -57,12 +57,32 @@
         }
       }
     },
+    "%1$lld sessions · %2$lld moments · %3$@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld сессий · %2$lld моментов · %3$@"
+          }
+        }
+      }
+    },
     "%@ moments": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "%@ моментов"
+          }
+        }
+      }
+    },
+    "%@ moments · %lld-day streak": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ моментов · серия %lld дн."
           }
         }
       }
@@ -109,6 +129,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Доступно моделей: %lld"
+          }
+        }
+      }
+    },
+    "%lld moments": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld моментов"
           }
         }
       }
@@ -165,6 +195,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "15 000 кадров за день — заработал весь механизм."
+          }
+        }
+      }
+    },
+    "15 000 moments in a day — the whole mechanism is running.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "15 000 моментов за день — заработал весь механизм."
           }
         }
       }
@@ -229,12 +269,32 @@
         }
       }
     },
+    "2 500 moments in a day — the engine started up.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2 500 моментов за день — двигатель завёлся."
+          }
+        }
+      }
+    },
     "200 scenes. A whole gallery of the lived — a dense wall of frames, yours.": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "200 сцен. Целая галерея прожитого — плотная стена кадров, твоя."
+          }
+        }
+      }
+    },
+    "200 scenes. A whole gallery of the lived — a dense wall of moments, yours.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "200 сцен. Целая галерея прожитого — плотная стена моментов, твоя."
           }
         }
       }
@@ -249,12 +309,32 @@
         }
       }
     },
+    "25 000 moments in a day — the engine at full.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "25 000 моментов за день — двигатель на максимум."
+          }
+        }
+      }
+    },
     "25 scenes. The frames linked up by routes — connections appeared between moments.": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "25 сцен. Кадры соединились маршрутами — между моментами появились связи."
+          }
+        }
+      }
+    },
+    "25 scenes. The moments linked up by routes — connections appeared between moments.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "25 сцен. Моменты соединились маршрутами — между моментами появились связи."
           }
         }
       }
@@ -329,6 +409,16 @@
         }
       }
     },
+    "40 000 moments in a day — the reactor in the red zone, did you even sleep?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "40 000 моментов за день — реактор на красной зоне, ты вообще спал?"
+          }
+        }
+      }
+    },
     "45 minutes without a break — you descended beneath the first rays.": {
       "localizations": {
         "ru": {
@@ -369,6 +459,16 @@
         }
       }
     },
+    "5 scenes opened. The day's first moments are caught.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "5 открытых сцен. Первые моменты дня пойманы."
+          }
+        }
+      }
+    },
     "50 switches in a day — the wheel started spinning.": {
       "localizations": {
         "ru": {
@@ -385,6 +485,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "500 открытых сцен. Кадры стали кристальной диорамой-шкатулкой — целый объёмный мир твоих моментов."
+          }
+        }
+      }
+    },
+    "500 scenes opened. The moments became a crystal diorama-casket — a whole volumetric world of your moments.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "500 открытых сцен. Моменты стали кристальной диорамой-шкатулкой — целый объёмный мир твоих моментов."
           }
         }
       }
@@ -419,6 +529,16 @@
         }
       }
     },
+    "7 500 moments in a day — the gears engaged.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "7 500 моментов за день — шестерни сошлись."
+          }
+        }
+      }
+    },
     "730 days. Two years of memory. The rings became orbits around a glowing core.": {
       "localizations": {
         "ru": {
@@ -435,6 +555,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "75 сцен. Кадры сложились в плотный коллаж — у твоих дней появилась форма."
+          }
+        }
+      }
+    },
+    "75 scenes. The moments formed a dense collage — your days have taken shape.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "75 сцен. Моменты сложились в плотный коллаж — у твоих дней появилась форма."
           }
         }
       }
@@ -569,6 +699,16 @@
         }
       }
     },
+    "A million moments. The crystals are locked in an armored vault-reliquary — a memory store under lock and key.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Миллион моментов. Кристаллы заперты в бронированный vault-реликварий — хранилище памяти под замком."
+          }
+        }
+      }
+    },
     "A model is ready — pick it above to turn on Ask & Insights.": {
       "localizations": {
         "ru": {
@@ -609,12 +749,32 @@
         }
       }
     },
+    "A quarter million moments. One crystal grew a cluster — memory crystallizes faster than you can look around.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Четверть миллиона моментов. Один кристалл оброс гроздью — память кристаллизуется быстрее, чем ты успеваешь оглянуться."
+          }
+        }
+      }
+    },
     "A thousand frames. Memory has just lit up — a lone spark in a cold setting.": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Тысяча кадров. Память только зажглась — одинокая искорка в холодной оправе."
+          }
+        }
+      }
+    },
+    "A thousand moments. Memory has just lit up — a lone spark in a cold setting.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Тысяча моментов. Память только зажглась — одинокая искорка в холодной оправе."
           }
         }
       }
@@ -1392,6 +1552,16 @@
         }
       }
     },
+    "Computed on-device from your activity. Add a processing model above for written insights.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Посчитано на устройстве по вашей активности. Добавьте модель обработки выше — и получите текстовые выводы."
+          }
+        }
+      }
+    },
     "Connect": {
       "localizations": {
         "ru": {
@@ -1418,6 +1588,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Связанные кадры"
+          }
+        }
+      }
+    },
+    "Connected Moments": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Связанные моменты"
           }
         }
       }
@@ -1722,6 +1902,16 @@
         }
       }
     },
+    "Days used": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дней использования"
+          }
+        }
+      }
+    },
     "Default": {
       "localizations": {
         "ru": {
@@ -1972,6 +2162,16 @@
         }
       }
     },
+    "Fifteen million moments. The galaxy collapsed into a single glowing core of eternity. Beyond — only space.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пятнадцать миллионов моментов. Галактика свернулась в единое сияющее ядро вечности. Дальше — только космос."
+          }
+        }
+      }
+    },
     "Fifteen questions. The crystal took on facets, the spark inside burns steady — memory has begun to answer.": {
       "localizations": {
         "ru": {
@@ -1998,6 +2198,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пятьдесят тысяч кадров. Искра застыла в первый гранёный кристалл — память обрела форму."
+          }
+        }
+      }
+    },
+    "Fifty thousand moments. The spark froze into the first faceted crystal — memory has taken shape.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пятьдесят тысяч моментов. Искра застыла в первый гранёный кристалл — память обрела форму."
           }
         }
       }
@@ -2202,6 +2412,16 @@
         }
       }
     },
+    "Four million moments. The vault unfolded into a spiral galaxy — every moment became a star.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Четыре миллиона моментов. Хранилище раскрылось в спиральную галактику — каждый момент стал звездой."
+          }
+        }
+      }
+    },
     "Frame without a snapshot": {
       "localizations": {
         "ru": {
@@ -2378,6 +2598,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Понял — анализирую день"
+          }
+        }
+      }
+    },
+    "Grouping your activity…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Группирую вашу активность…"
           }
         }
       }
@@ -2742,6 +2972,16 @@
         }
       }
     },
+    "Low disk — manage storage": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мало места — управление хранилищем"
+          }
+        }
+      }
+    },
     "MCP": {
       "localizations": {}
     },
@@ -2791,6 +3031,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Лимит медиа"
+          }
+        }
+      }
+    },
+    "Memory age": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Возраст памяти"
           }
         }
       }
@@ -2875,6 +3125,26 @@
         }
       }
     },
+    "Moments": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Моменты"
+          }
+        }
+      }
+    },
+    "Moments captured this session": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Моментов за эту сессию"
+          }
+        }
+      }
+    },
     "Month Cross-Section": {
       "localizations": {
         "ru": {
@@ -2941,6 +3211,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сетевая сфера"
+          }
+        }
+      }
+    },
+    "Next moment": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Следующий момент"
           }
         }
       }
@@ -3035,12 +3315,52 @@
         }
       }
     },
+    "No moment": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет момента"
+          }
+        }
+      }
+    },
+    "No moment captured here": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Здесь момент не снят"
+          }
+        }
+      }
+    },
+    "No moments recorded for this day. Pick a different day.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "За этот день нет записанных моментов. Выберите другой день."
+          }
+        }
+      }
+    },
     "No speech recognition — audio is recorded, but without text for search (you'll find it by time and play it back).": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Без распознавания речи — звук записывается, но без текста для поиска (найдёте по времени и прослушаете)."
+          }
+        }
+      }
+    },
+    "No text": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текста нет"
           }
         }
       }
@@ -3208,6 +3528,16 @@
         }
       }
     },
+    "Open in Timeline": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть на таймлайне"
+          }
+        }
+      }
+    },
     "Open this moment in the timeline": {
       "localizations": {
         "ru": {
@@ -3254,6 +3584,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Перезаписано"
+          }
+        }
+      }
+    },
+    "Partial text": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст частично"
           }
         }
       }
@@ -3428,6 +3768,16 @@
         }
       }
     },
+    "Previous moment": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Предыдущий момент"
+          }
+        }
+      }
+    },
     "Privacy": {
       "localizations": {
         "ru": {
@@ -3474,6 +3824,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Проверить снова"
+          }
+        }
+      }
+    },
+    "Read via OCR": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознано через OCR"
           }
         }
       }
@@ -3708,6 +4068,16 @@
         }
       }
     },
+    "Screen unchanged here — nothing new was captured": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экран здесь не менялся — ничего нового не записано"
+          }
+        }
+      }
+    },
     "Search (Bearer auth)": {
       "localizations": {
         "ru": {
@@ -3814,6 +4184,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Семьдесят пять доменов сплелись в густую сеть троп и узлов. Ты ходишь везде."
+          }
+        }
+      }
+    },
+    "Show idle / system time": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Показывать простой / системное время"
           }
         }
       }
@@ -4048,12 +4428,32 @@
         }
       }
     },
+    "Streak": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Серия"
+          }
+        }
+      }
+    },
     "Subfolder": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Подпапка"
+          }
+        }
+      }
+    },
+    "Summarize the last hour": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Кратко о последнем часе"
           }
         }
       }
@@ -4144,6 +4544,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Проверить соединение"
+          }
+        }
+      }
+    },
+    "Text captured": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст распознан"
           }
         }
       }
@@ -4558,6 +4968,16 @@
         }
       }
     },
+    "Twenty-five queries. A skill has emerged — you know which word will pull up the right moment.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Двадцать пять запросов. Появился навык — ты знаешь, какое слово вытащит нужный момент."
+          }
+        }
+      }
+    },
     "Twilight Zone": {
       "localizations": {
         "ru": {
@@ -4738,12 +5158,62 @@
         }
       }
     },
+    "What address did someone send me yesterday?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Какой адрес мне вчера прислали?"
+          }
+        }
+      }
+    },
+    "What did I read about Swift concurrency this week?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Что я читал про конкурентность в Swift на этой неделе?"
+          }
+        }
+      }
+    },
+    "What did I read today?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Что я читал сегодня?"
+          }
+        }
+      }
+    },
     "What gets shared (nothing leaves the machine on its own)": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Что будет передано (само по себе ничего не покидает машину)"
+          }
+        }
+      }
+    },
+    "What was I just doing?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чем я только что занимался?"
+          }
+        }
+      }
+    },
+    "What was the last call about?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "О чём был последний созвон?"
           }
         }
       }
@@ -4878,6 +5348,26 @@
         }
       }
     },
+    "Your day at a glance": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ваш день вкратце"
+          }
+        }
+      }
+    },
+    "Your day grouped into what you were working on — tap a session to replay it.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ваш день, сгруппированный по тому, чем вы занимались — нажмите на сессию, чтобы пересмотреть её."
+          }
+        }
+      }
+    },
     "Your memory": {
       "localizations": {
         "ru": {
@@ -4964,12 +5454,32 @@
     "[%lld]": {
       "localizations": {}
     },
+    "active": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "активно"
+          }
+        }
+      }
+    },
     "analyzing the day…": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "анализ дня…"
+          }
+        }
+      }
+    },
+    "audio": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "аудио"
           }
         }
       }
@@ -5043,6 +5553,16 @@
     "llama3.2 / qwen2.5 / …": {
       "localizations": {}
     },
+    "moments": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "моментов"
+          }
+        }
+      }
+    },
     "network error": {
       "localizations": {
         "ru": {
@@ -5113,12 +5633,32 @@
         }
       }
     },
+    "screen": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "экран"
+          }
+        }
+      }
+    },
     "semantics downloading": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "загрузка семантики"
+          }
+        }
+      }
+    },
+    "switches": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "переключений"
           }
         }
       }

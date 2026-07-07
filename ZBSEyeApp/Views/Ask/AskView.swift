@@ -80,7 +80,7 @@ private struct AskBody: View {
                         Text("Ask a question in plain language — ZBS Eye will find the relevant moments in your screen and "
                              + "conversation history and answer from them, with links to the sources. All on-device.")
                             .font(.callout).foregroundStyle(.secondary)
-                        ForEach(Self.examples, id: \.self) { ex in
+                        ForEach(examples, id: \.self) { ex in
                             Button { store.input = ex; store.send() } label: {
                                 Label(ex, systemImage: "text.magnifyingglass").font(.callout)
                             }
@@ -94,6 +94,16 @@ private struct AskBody: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // Reuse the cached progress snapshot to size the examples; throttled so opening Ask doesn't run a
+        // full history scan on every appear (Pro perf #5).
+        .task { await env.progress?.refreshThrottled() }
+    }
+
+    /// Example prompts adapt to available history: little/no history (a fresh install, < ~1 day of
+    /// memory) gets the "day one" prompts; ample history (a day or more) gets the week-scale ones.
+    private var examples: [String] {
+        let ageDays = env.progress?.snapshot.memoryAgeDays ?? 0
+        return ageDays < 1 ? Self.dayOneExamples : Self.weekExamples
     }
 
     private var inputBar: some View {
@@ -117,10 +127,18 @@ private struct AskBody: View {
         .padding(12)
     }
 
-    static let examples = [
+    /// Week-scale prompts once there's more than a day of history.
+    static let weekExamples = [
         "What did I read about Swift concurrency this week?",
         "What was the last call about?",
         "What address did someone send me yesterday?",
+    ]
+
+    /// Day-one prompts for a fresh install with only a few hours of memory.
+    static let dayOneExamples = [
+        "What was I just doing?",
+        "Summarize the last hour",
+        "What did I read today?",
     ]
 }
 

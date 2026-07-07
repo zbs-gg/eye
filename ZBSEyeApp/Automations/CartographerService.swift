@@ -75,6 +75,27 @@ actor CartographerService {
                            totalCaptures: caps.count, textSamples: textSamples)
     }
 
+    /// Lighter collection for the on-device heuristic card: top apps + context switches + counts, WITHOUT
+    /// the textSamples work (session grouping + per-frame text batch fetch + sanitize) that only the LLM
+    /// prompt consumes. The heuristic card never displays textSamples, so skip that whole extra scan.
+    func collectSummary(day: Date) async throws -> DayActivity {
+        let start = Calendar.current.startOfDay(for: day)
+        let caps = try await repo.captures(forDay: day)
+        guard !caps.isEmpty else { throw AutomationError.noData(day: start) }
+
+        let hostOverrides = (try? await repo.browserHostOverrides(caps)) ?? [:]
+        let usage = DayActivityRepository.appSiteActiveMs(caps, activeGapCapMs: 120 * 1000, hosts: hostOverrides)
+        let rankedApps = usage.ms.sorted { $0.value > $1.value }.prefix(8)
+        let topApps: [DayActivity.AppUsage] = rankedApps.map { entry in
+            DayActivity.AppUsage(app: usage.label[entry.key] ?? "—",
+                                 minutes: max(1, Int(entry.value / 60000)),
+                                 captures: usage.count[entry.key] ?? 0)
+        }
+        let switches = DayActivityRepository.contextSwitches(caps)
+        return DayActivity(day: start, topApps: topApps, contextSwitches: switches,
+                           totalCaptures: caps.count, textSamples: [])
+    }
+
     // MARK: — insight generation
 
     struct Insights: Sendable {
