@@ -78,7 +78,9 @@ struct MenuBarContent: View {
         }
         .padding(12)
         .frame(width: 260)
-        .task { await env.progress?.refresh() }
+        // Throttled so opening the menu never triggers a full screen_captures scan every time — the
+        // glance line reuses the cached snapshot (Pro perf #3). The menu opens instantly.
+        .task { await env.progress?.refreshThrottled() }
     }
 
     private var audioOverrideTitle: String {

@@ -251,7 +251,7 @@ private struct TimelineBody: View {
                     }
                     .transition(.opacity)
                 } else {
-                    Text("No frame at this moment").foregroundStyle(.secondary)
+                    Text("No moment captured here").foregroundStyle(.secondary)
                         .transition(.opacity)
                 }
             }
@@ -390,7 +390,7 @@ private struct TimelineBody: View {
     private var transport: some View {
         HStack(spacing: 8) {
             TransportButton(systemImage: "backward.frame.fill",
-                            help: "Previous frame",
+                            help: "Previous moment",
                             reduceMotion: reduceMotion) {
                 Task { await store.stepBackward() }
             }
@@ -401,7 +401,7 @@ private struct TimelineBody: View {
             }
 
             TransportButton(systemImage: "forward.frame.fill",
-                            help: "Next frame",
+                            help: "Next moment",
                             reduceMotion: reduceMotion) {
                 Task { await store.stepForward() }
             }
@@ -559,7 +559,7 @@ private struct FramePreview: View {
                                        systemImage: "rectangle.on.rectangle")
                     .background(.ultraThinMaterial)
             } else if loaded == nil {
-                ContentUnavailableView("No frame", systemImage: "photo")
+                ContentUnavailableView("No moment", systemImage: "photo")
             }
         }
         // With reduceMotion — an instant change (nil duration = no animation); when normal — a smooth crossfade.

@@ -164,7 +164,7 @@ private struct AutomationBody: View {
                 HStack(spacing: 12) {
                     Text("Preview").font(.headline)
                     Spacer()
-                    Text("\(p.sessions) sessions · \(p.totalCaptures) frames · \(p.model)")
+                    Text("\(p.sessions) sessions · \(p.totalCaptures) moments · \(p.model)")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if p.truncated {

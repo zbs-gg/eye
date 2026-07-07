@@ -42,16 +42,27 @@ final class ProgressStore {
     private(set) var pendingCelebration: Int? = nil
 
     @ObservationIgnored private weak var db: ZBSEyeDatabase?
+    /// Last time the full-table scan ran — drives `refreshThrottled`.
+    @ObservationIgnored private var lastRefresh = Date.distantPast
 
     init(db: ZBSEyeDatabase?) {
         self.db = db
     }
 
-    /// Public refresh: called after ingest cycle / on appear.
+    /// Public refresh: called after ingest cycle / on demand. Runs the full-table scan unconditionally.
     func refresh() async {
         guard let db else { return }
+        lastRefresh = Date()
         let result = await Self.compute(db: db)
         snapshot = result
+    }
+
+    /// Cheap on-appear refresh for glance surfaces (menu bar, Ask examples): runs the full history scan
+    /// at most once per `minInterval`, otherwise reuses the cached snapshot. Keeps the menu bar opening
+    /// instantly and avoids a full `screen_captures` scan on every view appear (Pro perf #3 / #5).
+    func refreshThrottled(minInterval: TimeInterval = 60) async {
+        if Date().timeIntervalSince(lastRefresh) < minInterval { return }
+        await refresh()
     }
 
     /// Called from AppEnvironment when milestone is crossed to trigger the overlay.

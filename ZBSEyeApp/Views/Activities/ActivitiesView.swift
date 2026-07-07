@@ -110,7 +110,7 @@ private struct ActivitiesBody: View {
             ContentUnavailableView {
                 Label("No activity", systemImage: "calendar.badge.clock")
             } description: {
-                Text("No frames recorded for this day. Pick a different day.")
+                Text("No moments recorded for this day. Pick a different day.")
             }
         } else {
             ScrollView {

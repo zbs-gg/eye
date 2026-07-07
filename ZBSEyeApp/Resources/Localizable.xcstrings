@@ -47,12 +47,12 @@
         }
       }
     },
-    "%1$lld sessions · %2$lld frames · %3$@": {
+    "%1$lld sessions · %2$lld moments · %3$@": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$lld сессий · %2$lld кадров · %3$@"
+            "value": "%1$lld сессий · %2$lld моментов · %3$@"
           }
         }
       }
@@ -2925,16 +2925,6 @@
         }
       }
     },
-    "Manage storage": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Управление хранилищем"
-          }
-        }
-      }
-    },
     "Map Within": {
       "localizations": {
         "ru": {
@@ -3175,32 +3165,52 @@
         }
       }
     },
-    "No frame": {
+    "Next moment": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Нет кадра"
+            "value": "Следующий момент"
           }
         }
       }
     },
-    "No frame at this moment": {
+    "Previous moment": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Нет кадра на этот момент"
+            "value": "Предыдущий момент"
           }
         }
       }
     },
-    "No frames recorded for this day. Pick a different day.": {
+    "No moment": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "За этот день нет записанных кадров. Выберите другой день."
+            "value": "Нет момента"
+          }
+        }
+      }
+    },
+    "No moment captured here": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Здесь момент не снят"
+          }
+        }
+      }
+    },
+    "No moments recorded for this day. Pick a different day.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "За этот день нет записанных моментов. Выберите другой день."
           }
         }
       }

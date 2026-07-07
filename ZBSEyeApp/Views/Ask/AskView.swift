@@ -94,19 +94,16 @@ private struct AskBody: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        // Cheap oldest-capture read so the example prompts fit how much history actually exists.
-        .task { await env.progress?.refresh() }
+        // Reuse the cached progress snapshot to size the examples; throttled so opening Ask doesn't run a
+        // full history scan on every appear (Pro perf #5).
+        .task { await env.progress?.refreshThrottled() }
     }
 
-    /// Example prompts adapt to available history: a fresh install (< ~1 day) gets "day one"
-    /// prompts; once there's more than a day of memory, the week-scale ones.
+    /// Example prompts adapt to available history: little/no history (a fresh install, < ~1 day of
+    /// memory) gets the "day one" prompts; ample history (a day or more) gets the week-scale ones.
     private var examples: [String] {
-        let snap = env.progress?.snapshot
-        let hasHistory = (snap?.totalFrames ?? 0) > 0
-        if hasHistory, (snap?.memoryAgeDays ?? 0) < 1 {
-            return Self.dayOneExamples
-        }
-        return Self.weekExamples
+        let ageDays = env.progress?.snapshot.memoryAgeDays ?? 0
+        return ageDays < 1 ? Self.dayOneExamples : Self.weekExamples
     }
 
     private var inputBar: some View {
