@@ -137,6 +137,10 @@ final class AIProviderStore {
         settings.active = p.rawValue
     }
 
+    /// Turn Ask & Insights off — no model processes history until one is picked again. The per-provider
+    /// selections, keys and consent are untouched, so re-activating later is a single tap.
+    func deactivate() { settings.active = nil }
+
     /// The request config consumers use. nil = nothing usable is active → Ask/Insights degrade honestly.
     var activeConfig: LLMConfig? {
         guard let p = activeProvider else { return nil }
