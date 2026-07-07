@@ -47,6 +47,16 @@
         }
       }
     },
+    "%1$lld sessions · %2$lld frames · %3$@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld сессий · %2$lld кадров · %3$@"
+          }
+        }
+      }
+    },
     "%1$lld sessions · %2$lld moments · %3$@": {
       "localizations": {
         "ru": {
@@ -109,6 +119,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%lld кадров"
+          }
+        }
+      }
+    },
+    "%lld models available": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступно моделей: %lld"
           }
         }
       }
@@ -689,6 +709,16 @@
         }
       }
     },
+    "A model is ready — pick it above to turn on Ask & Insights.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель готова — выберите её выше, чтобы включить «Спросить» и «Инсайты»."
+          }
+        }
+      }
+    },
     "A month of memory. A thin trunk, first branches — the sapling has grown stronger.": {
       "localizations": {
         "ru": {
@@ -859,6 +889,16 @@
         }
       }
     },
+    "Active model": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Активная модель"
+          }
+        }
+      }
+    },
     "Activity after midnight — the eye doesn't sleep, and neither do you": {
       "localizations": {
         "ru": {
@@ -875,6 +915,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Активность до 7 утра — рассвет застал тебя за делом"
+          }
+        }
+      }
+    },
+    "Add a provider…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавить провайдера…"
           }
         }
       }
@@ -1045,6 +1095,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Спросите о своей истории…"
+          }
+        }
+      }
+    },
+    "Ask and Daily Insights need a model to read your history. Pick one below — a free local model runs entirely on your Mac.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "«Спросить» и «Инсайтам дня» нужна модель, чтобы читать вашу историю. Выберите её ниже — бесплатная локальная модель работает целиком на вашем Mac."
           }
         }
       }
@@ -1398,6 +1458,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Закрыть"
+          }
+        }
+      }
+    },
+    "Cloud": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Облако"
           }
         }
       }
@@ -1838,6 +1908,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Дней использования"
+          }
+        }
+      }
+    },
+    "Default": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "По умолчанию"
           }
         }
       }
@@ -2925,6 +3005,16 @@
         }
       }
     },
+    "Manage providers": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Управление провайдерами"
+          }
+        }
+      }
+    },
     "Map Within": {
       "localizations": {
         "ru": {
@@ -3125,6 +3215,16 @@
         }
       }
     },
+    "Next moment": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Следующий момент"
+          }
+        }
+      }
+    },
     "Night": {
       "localizations": {
         "ru": {
@@ -3165,22 +3265,52 @@
         }
       }
     },
-    "Next moment": {
+    "No frame": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Следующий момент"
+            "value": "Нет кадра"
           }
         }
       }
     },
-    "Previous moment": {
+    "No frame at this moment": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Предыдущий момент"
+            "value": "Нет кадра на этот момент"
+          }
+        }
+      }
+    },
+    "No frames recorded for this day. Pick a different day.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "За этот день нет записанных кадров. Выберите другой день."
+          }
+        }
+      }
+    },
+    "No limit": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Без ограничений"
+          }
+        }
+      }
+    },
+    "No microphone access — only system audio is recorded.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет доступа к микрофону — записывается только системный звук."
           }
         }
       }
@@ -3215,26 +3345,6 @@
         }
       }
     },
-    "No limit": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Без ограничений"
-          }
-        }
-      }
-    },
-    "No microphone access — only system audio is recorded.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Нет доступа к микрофону — записывается только системный звук."
-          }
-        }
-      }
-    },
     "No speech recognition — audio is recorded, but without text for search (you'll find it by time and play it back).": {
       "localizations": {
         "ru": {
@@ -3251,6 +3361,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Текста нет"
+          }
+        }
+      }
+    },
+    "None (turn Ask & Insights off)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не выбрана (выключить «Спросить» и «Инсайты»)"
+          }
+        }
+      }
+    },
+    "None — Ask & Insights off": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не выбрана — «Спросить» и «Инсайты» выключены"
           }
         }
       }
@@ -3294,6 +3424,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Всеведущий оракул"
+          }
+        }
+      }
+    },
+    "On this Mac": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На этом Mac"
           }
         }
       }
@@ -3628,6 +3768,16 @@
         }
       }
     },
+    "Previous moment": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Предыдущий момент"
+          }
+        }
+      }
+    },
     "Privacy": {
       "localizations": {
         "ru": {
@@ -3684,6 +3834,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Распознано через OCR"
+          }
+        }
+      }
+    },
+    "Ready — choose it in the switcher above": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готово — выберите её в переключателе выше"
           }
         }
       }
@@ -4584,6 +4744,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Тридцать доменов — тропы сошлись в перекрёсток с несколькими узлами. Сеть оживает."
+          }
+        }
+      }
+    },
+    "This model reads history excerpts for Ask and Daily Insights. Local models never leave your Mac.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта модель читает фрагменты истории для «Спросить» и «Инсайтов дня». Локальные модели никогда не покидают ваш Mac."
           }
         }
       }
