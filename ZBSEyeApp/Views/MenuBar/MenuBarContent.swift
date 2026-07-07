@@ -9,7 +9,28 @@ struct MenuBarContent: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("ZBS Eye").font(.headline)
 
+            // Glanceable one-liner: how much memory + the current streak.
+            if let s = env.progress?.snapshot, s.totalFrames > 0 {
+                let moments = NumberFormatter.localizedString(from: NSNumber(value: s.totalFrames), number: .decimal)
+                Text("\(moments) moments · \(s.streakDays)-day streak")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             RecordingStatusView()
+
+            if env.recording.lowDiskPaused {
+                // Low disk isn't a dead end: give a way straight to storage settings.
+                Button {
+                    env.selectedSection = .settings
+                    openWindow(id: "main")
+                    NSApp.activate(ignoringOtherApps: true)
+                } label: {
+                    StatusPill(text: "Low disk — manage storage", color: .orange,
+                               system: "externaldrive.badge.exclamationmark")
+                }
+                .buttonStyle(.plain)
+            }
 
             if !env.permissions.allCriticalGranted {
                 // Clickable pill: from the menubar straight to permission setup, not a dead end.
@@ -57,6 +78,7 @@ struct MenuBarContent: View {
         }
         .padding(12)
         .frame(width: 260)
+        .task { await env.progress?.refresh() }
     }
 
     private var audioOverrideTitle: String {

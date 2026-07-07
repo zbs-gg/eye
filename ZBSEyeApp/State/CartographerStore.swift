@@ -17,13 +17,17 @@ final class CartographerStore {
     private(set) var insights: CartographerService.Insights?
     private(set) var errorText: String?
 
+    /// Heuristic day summary (top apps / active time / context switches), computed on-device with NO LLM.
+    /// Shown when no processing model is configured, so the screen is never blank.
+    private(set) var heuristicActivity: CartographerService.DayActivity?
+
     /// Which day is selected for analysis (today by default).
     var selectedDay: Date = Calendar.current.startOfDay(for: Date()) {
         didSet {
             guard Calendar.current.startOfDay(for: selectedDay)
                     != Calendar.current.startOfDay(for: oldValue) else { return }
             // Day changed → reset the previous result (it was for a different day).
-            insights = nil; errorText = nil
+            insights = nil; errorText = nil; heuristicActivity = nil
             if phase != .loading { phase = .idle }
         }
     }
@@ -55,6 +59,28 @@ final class CartographerStore {
 
     // MARK: — actions
 
+    /// Called when the view appears (and when the day changes). With a model + prior consent, insights
+    /// generate automatically (no manual "Get insights" click). Without a model, compute the heuristic
+    /// summary so the screen is never empty.
+    func autoRefresh() {
+        if llmReady {
+            heuristicActivity = nil
+            if hasConsent, insights == nil, phase == .idle { generate() }
+        } else {
+            Task { await refreshHeuristic() }
+        }
+    }
+
+    /// On-device day summary via CartographerService.collect (no LLM, no egress).
+    func refreshHeuristic() async {
+        let day = selectedDay
+        let activity = try? await service.collect(day: day)
+        // Guard against a day change while we were collecting.
+        guard Calendar.current.startOfDay(for: selectedDay)
+                == Calendar.current.startOfDay(for: day) else { return }
+        heuristicActivity = activity
+    }
+
     func generate() {
         guard hasConsent, !isBusy else { return }   // without explicit consent, fragments don't go to the LLM
         generateTask?.cancel()
@@ -74,6 +100,7 @@ final class CartographerStore {
         generateTask = nil
         insights = nil
         errorText = nil
+        heuristicActivity = nil
         phase = .idle
     }
 
