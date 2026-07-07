@@ -16,18 +16,24 @@ import SwiftUI
 struct AIModelsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var consentTarget: AIProvider?
+    /// The model chosen in the switcher that is waiting behind the cloud consent alert. It is persisted +
+    /// activated ONLY on grant — cancelling consent must leave the previously-active model untouched.
+    @State private var consentPendingModel: String?
     @State private var showConsent = false
     @State private var advancedExpanded = false
-    /// nil = follow the connectivity-derived default (expanded when nothing is connected); non-nil once the
-    /// user toggles the group by hand, so their choice sticks for the rest of the session.
-    @State private var manageExpandedOverride: Bool?
+    /// Set ONCE at first appear (expanded iff the user hasn't configured any provider yet) and thereafter
+    /// only by hand — the manual toggle or the "Add a provider…" affordance. It must NOT track a live
+    /// computed value, or the group would snap open/shut under the user as probes land.
+    @State private var manageExpanded = false
+    @State private var didInitManageExpansion = false
 
     private var ai: AIProviderStore { env.ai }
 
     var body: some View {
-        Form {
-            activeSection
-            manageSection
+        let connected = connectedProviders   // one scan of the 7 providers per render (finding 6)
+        return Form {
+            activeSection(connected)
+            manageSection(connected)
         }
         .formStyle(.grouped)
         .navigationTitle("AI Models")
@@ -35,12 +41,23 @@ struct AIModelsView: View {
             await env.ai.autoProbeLocal()   // fill the switcher if LM Studio/Ollama are already running
             await env.ai.probeClaudeCode()  // detect the `claude` CLI (a GUI app doesn't inherit $PATH)
         }
-        .onAppear { env.ai.resetOpenRouterOAuthPhaseIfStale() }   // don't resurface a past OAuth error
+        .onAppear {
+            env.ai.resetOpenRouterOAuthPhaseIfStale()   // don't resurface a past OAuth error
+            if !didInitManageExpansion {
+                // Onboarding auto-expand keys on USER-configured providers only — never on a merely
+                // auto-detected Claude Code CLI or a stale probed local model.
+                manageExpanded = !env.ai.userHasConfiguredProvider
+                didInitManageExpansion = true
+            }
+        }
         .alert("Enable cloud processing?", isPresented: $showConsent, presenting: consentTarget) { p in
             Button("Cancel", role: .cancel) {}
             Button(Self.consentConfirmTitle(p)) {
+                // Consent is the gate: only NOW do we persist + activate the chosen cloud model, so
+                // cancelling above left the previously-active model unchanged.
                 env.ai.grantConsent(p)
-                env.ai.activate(p)   // uses the model already set by select(_:_:) before the alert
+                if let m = consentPendingModel { env.ai.setModel(m, for: p) }
+                env.ai.activate(p)
             }
         } message: { p in
             Text(Self.consentMessage(p))
@@ -49,20 +66,20 @@ struct AIModelsView: View {
 
     // MARK: — (1) active-model switcher: the one authoritative line
 
-    private var activeSection: some View {
+    private func activeSection(_ connected: Set<AIProvider>) -> some View {
         Section {
             LabeledContent {
-                activeModelMenu
+                activeModelMenu(connected)
             } label: {
                 Text("Active model")
             }
         } footer: {
-            activeCaption
+            activeCaption(connected)
         }
     }
 
     /// The single green statement on the screen: the friendly "Provider · Model" that is running, or "None".
-    private var activeModelMenu: some View {
+    private func activeModelMenu(_ connected: Set<AIProvider>) -> some View {
         Menu {
             ForEach(Self.switcherGroups) { menuSection($0) }
             Divider()
@@ -72,9 +89,9 @@ struct AIModelsView: View {
                 menuLabel(String(localized: "None (turn Ask & Insights off)"),
                           selected: ai.activeConfig == nil)
             }
-            if hasUnconfiguredProviders {
+            if connected.count < AIProvider.allCases.count {
                 Divider()
-                Button { manageExpandedOverride = true } label: {
+                Button { manageExpanded = true } label: {
                     Label("Add a provider…", systemImage: "plus")
                 }
             }
@@ -99,7 +116,7 @@ struct AIModelsView: View {
     @ViewBuilder
     private func menuSection(_ group: ProviderGroup) -> some View {
         let entries = group.providers.flatMap { p in
-            availableModels(for: p).map { ModelEntry(provider: p, model: $0) }
+            ai.availableModels(for: p).map { ModelEntry(provider: p, model: $0) }
         }
         if !entries.isEmpty {
             Section(group.title) {
@@ -125,8 +142,8 @@ struct AIModelsView: View {
     }
 
     @ViewBuilder
-    private var activeCaption: some View {
-        if ai.activeConfig == nil, anyConnected {
+    private func activeCaption(_ connected: Set<AIProvider>) -> some View {
+        if ai.activeConfig == nil, !connected.isEmpty {
             // A model is set up but nothing runs — nudge the user to flip it on.
             Text("A model is ready — pick it above to turn on Ask & Insights.")
         } else {
@@ -136,10 +153,10 @@ struct AIModelsView: View {
 
     // MARK: — (2) manage providers: setup only, no activation here
 
-    private var manageSection: some View {
+    private func manageSection(_ connected: Set<AIProvider>) -> some View {
         Section {
-            DisclosureGroup(isExpanded: manageExpandedBinding) {
-                if !anyConnected {
+            DisclosureGroup(isExpanded: $manageExpanded) {
+                if connected.isEmpty {
                     Text("Ask and Daily Insights need a model to read your history. Pick one below — a free local model runs entirely on your Mac.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
@@ -178,12 +195,6 @@ struct AIModelsView: View {
         }
     }
 
-    private var manageExpandedBinding: Binding<Bool> {
-        Binding(
-            get: { manageExpandedOverride ?? !anyConnected },
-            set: { manageExpandedOverride = $0 })
-    }
-
     // MARK: — switcher model catalog
 
     /// The groups the switcher presents (custom localhost lives under "On this Mac"; the key-based cloud
@@ -194,29 +205,12 @@ struct AIModelsView: View {
         ProviderGroup(id: "cloud",  title: "Cloud",                providers: [.openrouter, .anthropic, .openai]),
     ]
 
-    /// Models this provider can hand the switcher RIGHT NOW. Empty ⇒ the provider isn't connected and does
-    /// not appear as a source. Local providers also surface a manually-typed id (the card's fallback field).
-    private func availableModels(for p: AIProvider) -> [String] {
-        switch p {
-        case .claudeCode:
-            if case .found = ai.claudeCode { return AIProvider.claudeCodeModels }
-            return []
-        case .lmstudio, .ollama, .custom:
-            var opts = ai.fetchedModels(p)
-            let sel = ai.model(for: p)
-            if !sel.isEmpty, !opts.contains(sel) { opts.insert(sel, at: 0) }
-            return opts
-        case .openrouter, .anthropic, .openai:
-            guard ai.hasKey(p) else { return [] }
-            return ai.fetchedModels(p)
-        }
+    /// The providers that currently expose at least one selectable model. Computed ONCE per render in
+    /// `body` and threaded down — the manage-group's first-run expansion, the caption and the "add a
+    /// provider" affordance all derive from this single scan instead of each rescanning the 7 providers.
+    private var connectedProviders: Set<AIProvider> {
+        Set(AIProvider.allCases.filter { !ai.availableModels(for: $0).isEmpty })
     }
-
-    private var connectedProviders: [AIProvider] {
-        AIProvider.allCases.filter { !availableModels(for: $0).isEmpty }
-    }
-    private var anyConnected: Bool { !connectedProviders.isEmpty }
-    private var hasUnconfiguredProviders: Bool { connectedProviders.count < AIProvider.allCases.count }
 
     /// Short, human name: last path component (or the Claude Code "Default" sentinel). Full id in the tooltip.
     private func friendlyModelName(_ id: String, provider: AIProvider) -> String {
@@ -231,19 +225,31 @@ struct AIModelsView: View {
         ai.activeConfig != nil && ai.activeProvider == p && ai.model(for: p) == m
     }
 
-    /// The one place activation happens: local flips on immediately; cloud routes through the unchanged
-    /// consent alert (requestConsent → grantConsent → activate) with the chosen model already set.
+    /// The one place activation happens. Local flips on immediately. A cloud model is NOT persisted or
+    /// activated until consent is granted: an already-consented provider activates now; otherwise the
+    /// chosen model is parked in `consentPendingModel` behind the alert, so cancelling leaves the
+    /// previously-active model unchanged.
     private func select(_ p: AIProvider, _ m: String) {
-        ai.setModel(m, for: p)
         if p.isCloud {
-            if ai.hasConsent(p) { ai.activate(p) } else { requestConsent(p) }
+            if ai.hasConsent(p) {
+                ai.setModel(m, for: p)
+                ai.activate(p)
+            } else {
+                consentTarget = p
+                consentPendingModel = m
+                showConsent = true
+            }
         } else {
+            ai.setModel(m, for: p)
             ai.activate(p)
         }
     }
 
+    /// Consent path used by the setup cards (no specific switcher model to park — activate whatever the
+    /// provider already has selected once consent is granted).
     private func requestConsent(_ p: AIProvider) {
         consentTarget = p
+        consentPendingModel = nil
         showConsent = true
     }
 

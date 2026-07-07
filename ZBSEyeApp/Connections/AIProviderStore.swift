@@ -104,18 +104,47 @@ final class AIProviderStore {
 
     func status(_ p: AIProvider) -> CardStatus { statuses[p.rawValue] ?? .notConfigured }
 
-    /// Models actually fetched from the server this session (empty if none/failed). Distinct from
-    /// `modelOptions`, which also folds in the currently-selected model — the view uses this to decide
-    /// whether to offer manual model entry (no server list ⇒ let the user type an id).
+    /// Models actually fetched from the server this session (empty if none/failed). The view uses this to
+    /// decide whether to offer manual model entry (no server list ⇒ let the user type an id).
     func fetchedModels(_ p: AIProvider) -> [String] { models[p.rawValue] ?? [] }
 
-    /// Picker options: models from the server + the currently selected one (don't lose the choice).
-    /// Claude Code has no live `/models` — it offers a fixed preset list for the `--model` flag.
-    func modelOptions(_ p: AIProvider) -> [String] {
-        var opts = p == .claudeCode ? AIProvider.claudeCodeModels : (models[p.rawValue] ?? [])
+    /// The ONE source of truth for "which models may the switcher offer for this provider RIGHT NOW".
+    /// Empty ⇒ the provider isn't connected and doesn't appear as a source. It always folds in the
+    /// currently-selected/persisted model, so a running model keeps its checkmark even before a fresh
+    /// probe repopulates the server list after relaunch (notably a cloud model, which isn't auto-probed).
+    func availableModels(for p: AIProvider) -> [String] {
+        switch p {
+        case .claudeCode:
+            if case .found = claudeCode { return AIProvider.claudeCodeModels }
+            return []
+        case .lmstudio, .ollama, .custom:
+            // A localhost model with no endpoint can't activate — don't list a dead-end (custom has no
+            // default endpoint; LM Studio / Ollama always have one, so this only ever excludes custom).
+            guard !endpoint(for: p).trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
+            return foldingInSelected(fetchedModels(p), for: p)
+        case .openrouter, .anthropic, .openai:
+            guard hasKey(p) else { return [] }
+            return foldingInSelected(fetchedModels(p), for: p)
+        }
+    }
+
+    /// Prepend the currently-selected model when the fetched list doesn't already contain it, so an
+    /// active choice never drops out of the switcher (and keeps its checkmark) between probes.
+    private func foldingInSelected(_ list: [String], for p: AIProvider) -> [String] {
+        var opts = list
         let sel = model(for: p)
         if !sel.isEmpty, !opts.contains(sel) { opts.insert(sel, at: 0) }
         return opts
+    }
+
+    /// True once the USER has configured or activated any provider by hand — a saved API key, a saved
+    /// local endpoint override, or an active selection. Merely auto-detected presence (e.g. the Claude
+    /// Code CLI, or a probed local server) does NOT count, so first-run onboarding still auto-expands for
+    /// someone who just happens to have `claude` installed.
+    var userHasConfiguredProvider: Bool {
+        if settings.active != nil { return true }
+        if keyPresent.values.contains(true) { return true }
+        return settings.endpoints.values.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
     }
 
     func hasKey(_ p: AIProvider) -> Bool { keyPresent[p.rawValue] ?? false }
