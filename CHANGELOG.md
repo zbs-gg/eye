@@ -4,6 +4,31 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-07-09
+
+### Changed
+- **AI Models: one active-model line + one switcher.** The screen no longer shows the active model in
+  three competing places with a picker and a "Use this model" button on every provider. Now there's a
+  single "Active model · Provider · Model" line with one menu that lists every available model grouped
+  by connected provider; provider setup (connect / keys / OAuth) moved into a collapsed "Manage
+  providers" group. "connected · N models" → the calmer "N models available".
+- **Less jargon, more signal.**
+  - Timeline: the capture-quality pills are now plain **Text captured / Partial / Read via OCR / No
+    text** dots instead of "AX full / partial / sickPID"; the activity strip has a legend (screen vs
+    audio); a deduped frame reads "Screen unchanged here" instead of an error badge.
+  - Activities: "Segmenting…" → "Grouping your activity…", a visible **Open in Timeline** affordance, a
+    one-line subtitle.
+  - "Frames" → **"moments"** across Progress, milestones and the timeline.
+- **Ask & Daily Insights work sooner.** Ask's example questions adapt to how much history you have;
+  Daily Insights auto-generates on open for a local model (with a heuristic fallback when no model is
+  set) — a cloud model still needs an explicit tap, so nothing leaves your Mac by surprise.
+- **Menu bar:** an actionable low-disk row + a glanceable "moments · streak" line.
+
+### Fixed
+- Cancelling a cloud provider's consent no longer persists the model change; an active cloud model no
+  longer disappears from the switcher after relaunch; menu bar and Ask no longer scan the full history
+  on every open.
+
 ## [0.2.0] — 2026-07-05
 
 ### Added

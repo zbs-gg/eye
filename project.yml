@@ -53,8 +53,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: "ZBS Eye"
         INFOPLIST_KEY_CFBundleName: "ZBS Eye"
         GENERATE_INFOPLIST_FILE: YES
-        MARKETING_VERSION: "0.2.0"          # CFBundleShortVersionString
-        CURRENT_PROJECT_VERSION: "2"        # CFBundleVersion
+        MARKETING_VERSION: "0.2.1"          # CFBundleShortVersionString
+        CURRENT_PROJECT_VERSION: "3"        # CFBundleVersion
         CODE_SIGN_ENTITLEMENTS: ZBSEyeApp/ZBSEye.entitlements
         # Default — ad-hoc. A stable self-signed identity "ZBS Eye Dev" (internal cert name; without
         # a $99 account): scripts/make-signing-cert.sh once, then build with CODE_SIGN_IDENTITY="ZBS Eye Dev"
