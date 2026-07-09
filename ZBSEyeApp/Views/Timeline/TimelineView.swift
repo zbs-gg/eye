@@ -555,8 +555,10 @@ private struct FramePreview: View {
             }
             if frameID != nil, url == nil {
                 // A deduped moment (context-only) — calm/neutral note OVER the previous frame, not an error.
-                ContentUnavailableView("Screen unchanged here — nothing new was captured",
-                                       systemImage: "rectangle.on.rectangle")
+                ContentUnavailableView(
+                    "Screen unchanged here",
+                    systemImage: "rectangle.on.rectangle",
+                    description: Text("Nothing new was captured — the previous frame still stands."))
                     .background(.ultraThinMaterial)
             } else if loaded == nil {
                 ContentUnavailableView("No moment", systemImage: "photo")

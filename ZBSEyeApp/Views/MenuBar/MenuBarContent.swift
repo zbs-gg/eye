@@ -12,9 +12,16 @@ struct MenuBarContent: View {
             // Glanceable one-liner: how much memory + the current streak.
             if let s = env.progress?.snapshot, s.totalFrames > 0 {
                 let moments = NumberFormatter.localizedString(from: NSNumber(value: s.totalFrames), number: .decimal)
-                Text("\(moments) moments · \(s.streakDays)-day streak")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                // Drop the streak clause on a gap day — "0-day streak" reads as a bug, not a status.
+                if s.streakDays > 0 {
+                    Text("\(moments) moments · \(s.streakDays)-day streak")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("\(moments) moments")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             RecordingStatusView()
