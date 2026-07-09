@@ -65,7 +65,7 @@ private struct ActivitiesBody: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Day in activities")
                     .font(.headline)
-                Text("Your day grouped into what you were working on — tap a session to replay it.")
+                Text("Your day grouped into what you were working on — expand an activity, then tap a session to replay it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

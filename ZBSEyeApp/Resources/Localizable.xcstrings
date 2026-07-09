@@ -2002,6 +2002,16 @@
         }
       }
     },
+    "Done: +%1$@ moments, +%2$@ audio. Semantics are indexing in the background.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готово: +%1$@ моментов, +%2$@ звук. Семантика индексируется в фоне."
+          }
+        }
+      }
+    },
     "Each milestone is a piece of life saved locally, forever.": {
       "localizations": {
         "ru": {
@@ -3395,6 +3405,16 @@
         }
       }
     },
+    "Nothing new was captured — the previous frame still stands.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ничего нового не записано — остаётся предыдущий кадр."
+          }
+        }
+      }
+    },
     "Nothing yet.": {
       "localizations": {
         "ru": {
@@ -3407,6 +3427,16 @@
     },
     "OK": {
       "localizations": {}
+    },
+    "Old data is deleted automatically when the limit is exceeded (every 30 minutes). The limit covers moments and audio; the search index grows separately and is cleaned along with history. \"Forever\" — at your own risk: the disk is finite.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Старые данные удаляются автоматически при превышении лимита (каждые 30 минут). Лимит покрывает моменты и звук; поисковый индекс растёт отдельно и чистится вместе с историей. «Навсегда» — на свой риск: диск не бесконечен."
+          }
+        }
+      }
     },
     "Omnipresent": {
       "localizations": {
@@ -3778,6 +3808,16 @@
         }
       }
     },
+    "Prior history found (~/.screenpipe). It will move text and metadata (moments, windows, URLs, transcripts with speakers) into ZBS Eye's memory — search will work across all your old history. Media files stay where they are. You can interrupt and continue later.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Найдена прежняя история (~/.screenpipe). Она перенесёт текст и метаданные (моменты, окна, URL, транскрипты со спикерами) в память ZBS Eye — поиск заработает по всей вашей старой истории. Медиафайлы остаются на месте. Можно прервать и продолжить позже."
+          }
+        }
+      }
+    },
     "Privacy": {
       "localizations": {
         "ru": {
@@ -4068,12 +4108,12 @@
         }
       }
     },
-    "Screen unchanged here — nothing new was captured": {
+    "Screen unchanged here": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Экран здесь не менялся — ничего нового не записано"
+            "value": "Экран здесь не менялся"
           }
         }
       }
@@ -4508,6 +4548,16 @@
         }
       }
     },
+    "Take your memory with you: markdown by day (activity + conversations), optionally moments and audio.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Берите память с собой: markdown по дням (активность + разговоры), при желании — моменты и звук."
+          }
+        }
+      }
+    },
     "Ten apps — a handful of neighbors surfaced around the first island. There's already something to link by routes.": {
       "localizations": {
         "ru": {
@@ -4744,6 +4794,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Тридцать доменов — тропы сошлись в перекрёсток с несколькими узлами. Сеть оживает."
+          }
+        }
+      }
+    },
+    "This model reads history excerpts for Ask and Daily Insights. Excerpts are sent to %@.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта модель читает фрагменты истории для «Спросить» и «Инсайтов дня». Фрагменты отправляются в %@."
           }
         }
       }
@@ -5358,6 +5418,16 @@
         }
       }
     },
+    "Your day grouped into what you were working on — expand an activity, then tap a session to replay it.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ваш день, сгруппированный по тому, чем вы занимались — раскройте активность и нажмите на сессию, чтобы пересмотреть её."
+          }
+        }
+      }
+    },
     "Your day grouped into what you were working on — tap a session to replay it.": {
       "localizations": {
         "ru": {
@@ -5563,6 +5633,16 @@
         }
       }
     },
+    "moments %1$@, audio %2$@…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "моментов %1$@, звук %2$@…"
+          }
+        }
+      }
+    },
     "network error": {
       "localizations": {
         "ru": {
@@ -5732,6 +5812,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "…или вставьте ключ"
+          }
+        }
+      }
+    },
+    "Deleted: moments %lld, audio segments %lld.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалено: моментов %lld, аудиосегментов %lld."
+          }
+        }
+      }
+    },
+    "Couldn't delete — history is untouched or only partially touched. Try again.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось удалить — история не тронута или затронута лишь частично. Попробуйте ещё раз."
+          }
+        }
+      }
+    },
+    "Imported %lld new visits from %lld browser(s)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортировано новых посещений: %lld из браузеров: %lld"
+          }
+        }
+      }
+    },
+    "Import failed": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка импорта"
           }
         }
       }

@@ -39,6 +39,20 @@ enum AIProvider: String, Codable, Sendable, CaseIterable, Identifiable {
         }
     }
 
+    /// Where excerpts actually EGRESS to for a cloud provider — the real recipient, which is not always
+    /// the provider's display name. Claude Code runs a local CLI but that CLI ships excerpts to Anthropic,
+    /// and OpenRouter/OpenAI/Anthropic send to their own hosts. Local providers never egress (nil here).
+    /// Proper nouns — not localized on purpose.
+    var egressDestination: String? {
+        switch self {
+        case .lmstudio, .ollama, .custom: return nil
+        case .claudeCode:                 return "Anthropic, via your Claude Code login"
+        case .openrouter:                 return "OpenRouter"
+        case .anthropic:                  return "Anthropic"
+        case .openai:                     return "OpenAI"
+        }
+    }
+
     /// Providers invoked as a local CLI subprocess instead of an HTTP request. They have no API host to
     /// pin, no endpoint to validate and no API key — but (see isCloud) may still egress via the CLI.
     var isSubprocess: Bool { self == .claudeCode }
@@ -123,6 +137,11 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
     var endpoints: [String: String] = [:]
     /// Per-provider cloud consent: "excerpts of screen history may leave this Mac to <provider>".
     var cloudConsent: [String: Bool] = [:]
+    /// Set once the user DELIBERATELY turned processing off (picked "None"). Distinguishes a genuine
+    /// "never configured" (false) from a chosen-off state (true) so re-opening AI Models never silently
+    /// re-activates a running local server the user just turned off. Cleared when any model is activated.
+    /// Missing in older persisted JSON ⇒ decodes to false (fresh-user semantics), which is correct.
+    var processingDisabledByUser: Bool = false
 
     var activeProvider: AIProvider? { active.flatMap(AIProvider.init(rawValue:)) }
 }

@@ -170,7 +170,7 @@ struct SettingsView: View {
                     Divider()
                     Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
                         GridRow {
-                            Text("Frames").foregroundStyle(.secondary)
+                            Text("Moments").foregroundStyle(.secondary)
                             Text("\(bd.framesTotal)  ·  live \(bd.framesLive), imported \(bd.framesImport)")
                         }
                         GridRow {
@@ -204,7 +204,7 @@ struct SettingsView: View {
                         Text(g == 0 ? "No limit" : "\(g) GB").tag(g)
                     }
                 }
-                Text("Old data is deleted automatically when the limit is exceeded (every 30 minutes). The limit covers frames and audio; "
+                Text("Old data is deleted automatically when the limit is exceeded (every 30 minutes). The limit covers moments and audio; "
                      + "the search index grows separately and is cleaned along with history. \"Forever\" — at your own risk: the disk is finite.")
                     .font(.caption).foregroundStyle(.secondary)
                 Divider()
@@ -237,7 +237,7 @@ struct SettingsView: View {
                     .fixedSize()
                     .disabled(exporting)
                 }
-                Text("Take your memory with you: markdown by day (activity + conversations), optionally frames and audio.")
+                Text("Take your memory with you: markdown by day (activity + conversations), optionally moments and audio.")
                     .font(.caption).foregroundStyle(.secondary)
                 if let r = exportResult {
                     Label(r, systemImage: "checkmark.circle").font(.caption).foregroundStyle(.green)
@@ -252,9 +252,11 @@ struct SettingsView: View {
                     deleting = true
                     let r = await env.deleteHistory(lastSeconds: (seconds ?? 0) > 0 ? seconds : nil)
                     deleting = false
-                    // a failed "wipe forever" must not be indistinguishable from success
-                    deleteOutcome = r.map { "Deleted: frames \($0.framesDeleted), audio segments \($0.audioDeleted)." }
-                        ?? "Couldn't delete — history is untouched or only partially touched. Try again."
+                    // a failed "wipe forever" must not be indistinguishable from success. Build LOCALIZED
+                    // outcome strings (String(localized:)) so the catalog's RU translations render — the
+                    // plain Text(String?) overload below does no lookup on its own.
+                    deleteOutcome = r.map { String(localized: "Deleted: moments \($0.framesDeleted), audio segments \($0.audioDeleted).") }
+                        ?? String(localized: "Couldn't delete — history is untouched or only partially touched. Try again.")
                 }
             }
             Button("Cancel", role: .cancel) { confirmDelete = nil }
@@ -375,7 +377,7 @@ struct SettingsView: View {
         GlassCard {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Import prior history").font(.headline)
-                Text("Prior history found (~/.screenpipe). It will move text and metadata (frames, "
+                Text("Prior history found (~/.screenpipe). It will move text and metadata (moments, "
                      + "windows, URLs, transcripts with speakers) into ZBS Eye's memory — search will work across all "
                      + "your old history. Media files stay where they are. You can interrupt and continue later.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -402,10 +404,10 @@ struct SettingsView: View {
             do {
                 let report = try await importer.run { f, a in
                     Task { @MainActor in
-                        importStatus = "frames \(f), audio \(a)…"
+                        importStatus = "moments \(f), audio \(a)…"
                     }
                 }
-                importStatus = "Done: +\(report.frames) frames, +\(report.audio) audio. Semantics are indexing in the background."
+                importStatus = "Done: +\(report.frames) moments, +\(report.audio) audio. Semantics are indexing in the background."
                 await env.storageSettings.refresh(storage: env.storage, db: env.db)
                 await env.timelineStore?.load()
             } catch {
@@ -460,12 +462,13 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 HStack(spacing: 10) {
                     Button("Import now") {
-                        browserImportStatus = "Importing…"
+                        browserImportStatus = String(localized: "Importing…")
                         Task {
                             guard let r = try? await env.browserHistoryImporter?.run() else {
-                                browserImportStatus = "Import failed"; return
+                                browserImportStatus = String(localized: "Import failed"); return
                             }
-                            var msg = "Imported \(r.imported) new visits from \(r.sources) browser(s)"
+                            // LOCALIZED so the catalog RU renders (Text(String?) does no lookup).
+                            var msg = String(localized: "Imported \(r.imported) new visits from \(r.sources) browser(s)")
                             if let first = r.errors.first { msg += " · " + first }
                             browserImportStatus = msg
                         }

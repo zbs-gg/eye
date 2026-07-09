@@ -79,17 +79,23 @@ struct AIModelsView: View {
     }
 
     /// The single green statement on the screen: the friendly "Provider · Model" that is running, or "None".
+    /// Rendered as a bordered pull-down (visible chevron) so it plainly reads as tappable — the "where do I
+    /// switch?" question must never re-appear, least of all in the "None" state.
     private func activeModelMenu(_ connected: Set<AIProvider>) -> some View {
         Menu {
             ForEach(Self.switcherGroups) { menuSection($0) }
-            Divider()
+            // Leading divider only when at least one provider group actually rendered entries above —
+            // otherwise "None" would sit under an orphan divider on a fresh install.
+            if !connected.isEmpty { Divider() }
             Button {
                 ai.deactivate()
             } label: {
                 menuLabel(String(localized: "None (turn Ask & Insights off)"),
                           selected: ai.activeConfig == nil)
             }
-            if connected.count < AIProvider.allCases.count {
+            // "Add a provider…" only when Manage-providers is collapsed — otherwise its sole action
+            // (expand) is a no-op against an already-open group.
+            if !manageExpanded, connected.count < AIProvider.allCases.count {
                 Divider()
                 Button { manageExpanded = true } label: {
                     Label("Add a provider…", systemImage: "plus")
@@ -98,6 +104,9 @@ struct AIModelsView: View {
         } label: {
             activeValueLabel
         }
+        .menuStyle(.button)
+        .buttonStyle(.bordered)
+        .fixedSize()
     }
 
     @ViewBuilder
@@ -146,6 +155,11 @@ struct AIModelsView: View {
         if ai.activeConfig == nil, !connected.isEmpty {
             // A model is set up but nothing runs — nudge the user to flip it on.
             Text("A model is ready — pick it above to turn on Ask & Insights.")
+        } else if let p = ai.activeProvider, ai.activeConfig != nil, p.isCloud {
+            // A CLOUD model is active — excerpts DO leave the Mac. Say so honestly instead of the
+            // stays-local line, naming the REAL egress recipient (for Claude Code that's Anthropic, not
+            // "Claude Code"). Falls back to the display name if a destination is somehow unset.
+            Text("This model reads history excerpts for Ask and Daily Insights. Excerpts are sent to \(p.egressDestination ?? p.displayName).")
         } else {
             Text("This model reads history excerpts for Ask and Daily Insights. Local models never leave your Mac.")
         }
