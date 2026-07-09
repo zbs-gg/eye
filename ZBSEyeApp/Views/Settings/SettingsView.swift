@@ -252,9 +252,11 @@ struct SettingsView: View {
                     deleting = true
                     let r = await env.deleteHistory(lastSeconds: (seconds ?? 0) > 0 ? seconds : nil)
                     deleting = false
-                    // a failed "wipe forever" must not be indistinguishable from success
-                    deleteOutcome = r.map { "Deleted: moments \($0.framesDeleted), audio segments \($0.audioDeleted)." }
-                        ?? "Couldn't delete — history is untouched or only partially touched. Try again."
+                    // a failed "wipe forever" must not be indistinguishable from success. Build LOCALIZED
+                    // outcome strings (String(localized:)) so the catalog's RU translations render — the
+                    // plain Text(String?) overload below does no lookup on its own.
+                    deleteOutcome = r.map { String(localized: "Deleted: moments \($0.framesDeleted), audio segments \($0.audioDeleted).") }
+                        ?? String(localized: "Couldn't delete — history is untouched or only partially touched. Try again.")
                 }
             }
             Button("Cancel", role: .cancel) { confirmDelete = nil }
@@ -460,12 +462,13 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 HStack(spacing: 10) {
                     Button("Import now") {
-                        browserImportStatus = "Importing…"
+                        browserImportStatus = String(localized: "Importing…")
                         Task {
                             guard let r = try? await env.browserHistoryImporter?.run() else {
-                                browserImportStatus = "Import failed"; return
+                                browserImportStatus = String(localized: "Import failed"); return
                             }
-                            var msg = "Imported \(r.imported) new visits from \(r.sources) browser(s)"
+                            // LOCALIZED so the catalog RU renders (Text(String?) does no lookup).
+                            var msg = String(localized: "Imported \(r.imported) new visits from \(r.sources) browser(s)")
                             if let first = r.errors.first { msg += " · " + first }
                             browserImportStatus = msg
                         }

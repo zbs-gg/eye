@@ -157,8 +157,9 @@ struct AIModelsView: View {
             Text("A model is ready — pick it above to turn on Ask & Insights.")
         } else if let p = ai.activeProvider, ai.activeConfig != nil, p.isCloud {
             // A CLOUD model is active — excerpts DO leave the Mac. Say so honestly instead of the
-            // stays-local line, naming the destination provider.
-            Text("This model reads history excerpts for Ask and Daily Insights. Excerpts are sent to \(p.displayName).")
+            // stays-local line, naming the REAL egress recipient (for Claude Code that's Anthropic, not
+            // "Claude Code"). Falls back to the display name if a destination is somehow unset.
+            Text("This model reads history excerpts for Ask and Daily Insights. Excerpts are sent to \(p.egressDestination ?? p.displayName).")
         } else {
             Text("This model reads history excerpts for Ask and Daily Insights. Local models never leave your Mac.")
         }

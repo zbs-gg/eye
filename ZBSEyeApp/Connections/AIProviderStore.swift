@@ -164,11 +164,16 @@ final class AIProviderStore {
             if p == .claudeCode { guard case .found = claudeCode else { return } }
         }
         settings.active = p.rawValue
+        settings.processingDisabledByUser = false   // an explicit choice clears the user's "off" state
     }
 
     /// Turn Ask & Insights off — no model processes history until one is picked again. The per-provider
-    /// selections, keys and consent are untouched, so re-activating later is a single tap.
-    func deactivate() { settings.active = nil }
+    /// selections, keys and consent are untouched, so re-activating later is a single tap. Records the
+    /// deliberate "off" so a connected local server can't silently re-activate on the next AI Models visit.
+    func deactivate() {
+        settings.active = nil
+        settings.processingDisabledByUser = true
+    }
 
     /// The request config consumers use. nil = nothing usable is active → Ask/Insights degrade honestly.
     var activeConfig: LLMConfig? {
@@ -247,12 +252,18 @@ final class AIProviderStore {
 
     /// When a LOCAL provider connects/probes successfully and NOTHING is active yet, flip it on
     /// automatically — a local model needs no consent, so "N models available" turning into a live
-    /// switcher without any activation affordance is a dead end. It never overrides an already-active
-    /// model (guarded by `activeConfig == nil`), only fills the empty "None" state.
+    /// switcher without any activation affordance is a dead end. It only ever fills a genuinely empty
+    /// state, and never:
+    ///   • overrides a user who deliberately picked "None" (processingDisabledByUser) — re-activating a
+    ///     model they just turned off would be a consent regression (excerpts start processing again);
+    ///   • overrides an active provider whose config is only TRANSIENTLY invalid — we key off the
+    ///     PERSISTED `settings.active`, not the computed `activeConfig`, so a cloud provider momentarily
+    ///     reporting .notFound (activeConfig == nil) is still "something active" and isn't overwritten.
     private func autoActivateLocalIfNothingActive(_ p: AIProvider) {
         guard !p.isCloud else { return }
-        guard activeConfig == nil else { return }   // never override an already-active model
-        activate(p)                                 // activate() itself guards a non-empty model
+        guard settings.active == nil else { return }          // something is persisted-active — leave it
+        guard !settings.processingDisabledByUser else { return }  // user chose "None" — respect it
+        activate(p)                                           // activate() itself guards a non-empty model
     }
 
     /// Detect the user's Claude Code CLI when "AI Models" opens (or on an explicit re-check). Found →

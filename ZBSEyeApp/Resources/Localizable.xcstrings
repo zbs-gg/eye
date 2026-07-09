@@ -1952,16 +1952,6 @@
         }
       }
     },
-    "Deleted: moments %1$@, audio segments %2$@.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Удалено: моментов %1$@, аудиосегментов %2$@."
-          }
-        }
-      }
-    },
     "Delete…": {
       "localizations": {
         "ru": {
@@ -4128,16 +4118,6 @@
         }
       }
     },
-    "Screen unchanged here — nothing new was captured": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Экран здесь не менялся — ничего нового не записано"
-          }
-        }
-      }
-    },
     "Search (Bearer auth)": {
       "localizations": {
         "ru": {
@@ -5832,6 +5812,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "…или вставьте ключ"
+          }
+        }
+      }
+    },
+    "Deleted: moments %lld, audio segments %lld.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалено: моментов %lld, аудиосегментов %lld."
+          }
+        }
+      }
+    },
+    "Couldn't delete — history is untouched or only partially touched. Try again.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось удалить — история не тронута или затронута лишь частично. Попробуйте ещё раз."
+          }
+        }
+      }
+    },
+    "Imported %lld new visits from %lld browser(s)": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортировано новых посещений: %lld из браузеров: %lld"
+          }
+        }
+      }
+    },
+    "Import failed": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка импорта"
           }
         }
       }
