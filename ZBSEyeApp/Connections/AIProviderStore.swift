@@ -208,6 +208,7 @@ final class AIProviderStore {
             models[p.rawValue] = list
             statuses[p.rawValue] = .connected(list.count)
             autoSelect(p, from: list, fetched: true)
+            autoActivateLocalIfNothingActive(p)
         case .ok:
             // 2xx but no enumerable models. Anthropic's /v1/models can be unavailable while the key is
             // valid for /v1/messages → fall back to a static list (auth proven good, enumeration isn't).
@@ -239,8 +240,19 @@ final class AIProviderStore {
                 models[p.rawValue] = list
                 statuses[p.rawValue] = .connected(list.count)
                 autoSelect(p, from: list, fetched: true)
+                autoActivateLocalIfNothingActive(p)
             }
         }
+    }
+
+    /// When a LOCAL provider connects/probes successfully and NOTHING is active yet, flip it on
+    /// automatically — a local model needs no consent, so "N models available" turning into a live
+    /// switcher without any activation affordance is a dead end. It never overrides an already-active
+    /// model (guarded by `activeConfig == nil`), only fills the empty "None" state.
+    private func autoActivateLocalIfNothingActive(_ p: AIProvider) {
+        guard !p.isCloud else { return }
+        guard activeConfig == nil else { return }   // never override an already-active model
+        activate(p)                                 // activate() itself guards a non-empty model
     }
 
     /// Detect the user's Claude Code CLI when "AI Models" opens (or on an explicit re-check). Found →
