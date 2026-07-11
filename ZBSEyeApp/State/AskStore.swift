@@ -1,87 +1,181 @@
 import Foundation
 import Observation
 
-/// UI state for the "Ask" section (@MainActor @Observable): the conversation feed + input. The RAG answer itself is
-/// computed by AskService (actor); the store only orchestrates (the gate "is a processing model active", busy, errors)
-/// and holds the messages for the feed. Egress is gated inside LLMConfig.validate()/LLMClient: local by default,
-/// a cloud provider only after the explicit opt-in in "AI Models".
+/// Main-actor state for Ask. Generation belongs to the process-wide router;
+/// the store owns only user-visible request identity and refuses to paint a
+/// completion after clear, a newer request, or a selection/authorization change.
 @MainActor
 @Observable
 final class AskStore {
     struct Message: Identifiable, Sendable {
-        enum Role: Sendable { case user, assistant }
+        enum Role: Sendable, Equatable { case user, assistant }
+
         let id = UUID()
         let role: Role
         var text: String
         var sources: [SearchResult] = []
         var truncated = false
+        var contextTruncated = false
+        var provenance: AIExecutionProvenance?
     }
 
     private(set) var messages: [Message] = []
     var input: String = ""
     private(set) var busy = false
 
-    @ObservationIgnored private let service: AskService
-    @ObservationIgnored private let ai: AIProviderStore
+    @ObservationIgnored private let service: any AskAnswering
+    @ObservationIgnored private let readiness: any AskReadinessProviding
+    @ObservationIgnored private let onQuestionSent: @MainActor @Sendable () -> Void
+    @ObservationIgnored private var activeRequestID: UUID?
+    @ObservationIgnored private var activeTask: Task<Void, Never>?
 
-    init(service: AskService, ai: AIProviderStore) {
+    init(
+        service: any AskAnswering,
+        readiness: any AskReadinessProviding,
+        onQuestionSent: @escaping @MainActor @Sendable () -> Void = {}
+    ) {
         self.service = service
-        self.ai = ai
+        self.readiness = readiness
+        self.onQuestionSent = onQuestionSent
     }
 
-    /// Whether a processing model is active (otherwise the section shows a hint instead of the input).
-    var llmReady: Bool { ai.activeConfig != nil }
-    var canSend: Bool { !busy && !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    /// Consumer-scoped readiness. Reading this property never loads a model or
+    /// dispatches generation.
+    var llmReady: Bool { readiness.currentAskExecutionContext() != nil }
+
+    var canSend: Bool {
+        !busy && !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Truthful copy for the currently authorized Ask selection. Cloud is
+    /// described as cloud even if another provider happened to be local before.
+    var executionDisclosure: String {
+        guard let execution = readiness.currentAskExecutionContext() else {
+            return String(localized: "Pick a processing model in AI Models before asking your history.")
+        }
+        if execution.executedLocally {
+            return String(localized: "Answers with \(execution.selection.modelID) stay on this Mac.")
+        }
+        let recipient = execution.recipientDisclosure ?? execution.selection.providerID
+        return String(localized: "History excerpts are sent to \(recipient) for answers from \(execution.selection.modelID).")
+    }
 
     func send() {
-        let q = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !busy, !q.isEmpty else { return }
+        let question = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !busy, !question.isEmpty else { return }
         input = ""
-        messages.append(Message(role: .user, text: q))
-        AchievementCounters.bump(.questions)                // achievements "First question"/"Interrogator"
-        if let egg = Self.easterEgg(q) {                    // 🥚 easter egg: the Eye's personality, works even without an LLM
+        messages.append(Message(role: .user, text: question))
+        onQuestionSent()
+
+        if let egg = Self.easterEgg(question) {
             messages.append(Message(role: .assistant, text: egg))
             return
         }
-        guard let llm = ai.activeConfig else {              // a real question without a model → friendly hint
-            messages.append(Message(role: .assistant, text: "To answer from your history I need a processing "
-                + "model — pick one in AI Models. Local (LM Studio / Ollama) by default; excerpts go to a cloud "
-                + "provider only if you explicitly opt in. 👁"))
+        guard let execution = readiness.currentAskExecutionContext() else {
+            messages.append(Message(
+                role: .assistant,
+                text: String(localized: "To answer from your history I need a processing model — pick one in AI Models. Local models keep excerpts on this Mac; cloud providers receive excerpts only with your explicit consent. 👁")
+            ))
             return
         }
+
+        let requestID = UUID()
+        activeRequestID = requestID
         busy = true
-        Task {
-            defer { busy = false }
+        let service = self.service
+        activeTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.activeRequestID == requestID {
+                    self.activeRequestID = nil
+                    self.activeTask = nil
+                    self.busy = false
+                }
+            }
+
             do {
-                let a = try await service.answer(question: q, llm: llm)
-                messages.append(Message(role: .assistant, text: a.text,
-                                        sources: a.sources, truncated: a.truncated))
+                let answer = try await service.answer(
+                    question: question,
+                    execution: execution,
+                    requestID: requestID,
+                    limits: .default
+                )
+                guard self.mayPaint(requestID: requestID, execution: execution) else {
+                    return
+                }
+                if let provenance = answer.provenance,
+                   !Self.provenance(provenance, matches: execution) {
+                    return
+                }
+                self.messages.append(Message(
+                    role: .assistant,
+                    text: answer.text,
+                    sources: answer.sources,
+                    truncated: answer.truncated,
+                    contextTruncated: answer.contextTruncated,
+                    provenance: answer.provenance
+                ))
+            } catch is CancellationError {
+                return
             } catch {
-                let msg = (error as? AutomationError)?.errorDescription ?? error.localizedDescription
-                messages.append(Message(role: .assistant, text: "⚠️ \(msg)"))
+                guard self.mayPaint(requestID: requestID, execution: execution) else {
+                    return
+                }
+                let message = (error as? LocalizedError)?.errorDescription
+                    ?? String(localized: "The selected model could not answer.")
+                self.messages.append(Message(
+                    role: .assistant,
+                    text: String(localized: "⚠️ \(message)")
+                ))
             }
         }
     }
 
-    func clear() { messages.removeAll() }
+    func clear() {
+        activeRequestID = nil
+        activeTask?.cancel()
+        activeTask = nil
+        busy = false
+        messages.removeAll()
+    }
 
-    /// 🥚 Easter eggs — NARROW triggers, so they don't intercept real questions. An Eye with character, and
-    /// every reply quietly restates the product's point: "I see only for you, I send nothing anywhere".
-    private static func easterEgg(_ q: String) -> String? {
-        let s = q.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: " ?!.,…"))
-        switch s {
+    private func mayPaint(
+        requestID: UUID,
+        execution: AskExecutionContext
+    ) -> Bool {
+        guard activeRequestID == requestID,
+              let current = readiness.currentAskExecutionContext() else {
+            return false
+        }
+        return current == execution
+    }
+
+    private static func provenance(
+        _ provenance: AIExecutionProvenance,
+        matches execution: AskExecutionContext
+    ) -> Bool {
+        provenance.providerID == execution.selection.providerID
+            && provenance.modelID == execution.selection.modelID
+            && provenance.executedLocally == execution.executedLocally
+    }
+
+    private static func easterEgg(_ question: String) -> String? {
+        let normalized = question.lowercased().trimmingCharacters(
+            in: CharacterSet(charactersIn: " ?!.,…")
+        )
+        switch normalized {
         case "cock-a-doodle-doo", "cluck-cluck":
-            return "Cluck-cluck 🥚 You found the easter egg. I see everything — but only for you. 👁"
+            return String(localized: "Cluck-cluck 🥚 You found the easter egg. I see everything — but only for you. 👁")
         case "who are you", "who're you":
-            return "I'm the Eye. Your memory on this Mac. I have no hands, no cloud, and nowhere to send anything — so everything I see stays only with you. 👁"
+            return String(localized: "I'm the Eye. Capture and memory stay on this Mac. For generated answers I use the model you chose; a cloud provider receives excerpts only after your explicit consent. 👁")
         case "are you watching me", "you're watching me", "you're a spy", "are you spying on me":
-            return "Surveillance is when someone watches FOR someone else. I watch ONLY for you and report to no one: zero outbound, check it in Little Snitch. 👁"
+            return String(localized: "Capture and stored memory stay on this Mac for you. Ask shows exactly which selected model generated an answer and whether consented excerpts went to cloud. 👁")
         case "42", "the meaning of life", "what is the meaning of life":
-            return "The answer is somewhere in your history. Ask more specifically 👁"
+            return String(localized: "The answer is somewhere in your history. Ask more specifically 👁")
         case "👁", "eye", "blink":
-            return "👁 … 👁 (blinked)"
+            return String(localized: "👁 … 👁 (blinked)")
         case "i love you", "love you":
-            return "And I remember you. Every moment. 👁"
+            return String(localized: "And I remember you. Every moment. 👁")
         default:
             return nil
         }

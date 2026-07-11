@@ -4,6 +4,26 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 
 ## [Unreleased]
 
+### Added
+- **One-click built-in local AI.** On qualified Apple Silicon Macs, **ZBS Eye Local** downloads a pinned,
+  verified MLX model after an explicit click and then powers Ask, Daily Insights, summaries, and generated
+  activity labels offline — no LM Studio, Ollama, account, API key, or separate server required. Setup is
+  resumable and honest about hardware, disk space, progress, verification, failures, and installed bytes;
+  a failed replacement cannot destroy the last verified model.
+- **Provider freedom without mixing providers and models.** The provider-first AI Models screen keeps Codex,
+  OpenRouter, Anthropic, direct Kimi/GLM/MiMo/OpenAI/Claude Code connections, plus separate Ollama and
+  LM Studio choices. Each provider owns its models and optional recommendation; one global active
+  `Provider · Model` pair powers the product, and discovery never silently changes it.
+
+### Changed
+- Every generative consumer now goes through one cancellable router with selection revision, authorization,
+  deterministic context budgets, and provider/model/locality provenance. Interactive Ask takes priority over
+  background work; stale or revoked output is discarded.
+- Cloud, broker, and signed-in CLI generation uses recipient- and scope-specific consent. Capture, recordings,
+  search index, and storage stay local regardless of the selected processing provider.
+- Local model assets follow the resolved storage root, are excluded from iCloud snapshots, preserve capture
+  disk reserve, and coordinate inference/embedding work so recording never waits on generation.
+
 ## [0.2.1] — 2026-07-09
 
 ### Changed

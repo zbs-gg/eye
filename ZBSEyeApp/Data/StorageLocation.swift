@@ -1,5 +1,16 @@
 import Foundation
 
+enum StorageLocationError: LocalizedError, Equatable {
+    case configuredRootUnavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .configuredRootUnavailable(let path):
+            "Data folder unavailable: \(path). Connect the disk or volume and try again."
+        }
+    }
+}
+
 /// Single source of the ZBS Eye data path for ALL processes (GUI, --mcp, --import-history,
 /// --backup-now) and all modules. Previously the path was derived INDEPENDENTLY in 6 places — relocate
 /// would have been impossible (helper processes would read the old location). Now relocate changes ONLY
@@ -19,6 +30,20 @@ enum StorageLocation {
         return url
     }
 
+    /// Headless modes do not have AppEnvironment's startup guard. They must
+    /// call this before resolving any DB/media path so an unplugged configured
+    /// volume can never redirect work into a newly created legacy root.
+    static func requireAvailableDataRoot() throws -> URL {
+        try validateConfiguredRootAvailability(unavailableConfiguredPath())
+        return dataRoot()
+    }
+
+    static func validateConfiguredRootAvailability(_ unavailablePath: String?) throws {
+        if let unavailablePath {
+            throw StorageLocationError.configuredRootUnavailable(unavailablePath)
+        }
+    }
+
     static func databaseURL() -> URL { dataRoot().appendingPathComponent("zbseye.sqlite") }
 
     static func mediaDirectory() -> URL {
@@ -29,6 +54,17 @@ enum StorageLocation {
 
     static func portURL() -> URL { dataRoot().appendingPathComponent("port") }
     static func serverLogURL() -> URL { dataRoot().appendingPathComponent("server.log") }
+
+    /// Generative assets remain below the same relocatable root as the DB and
+    /// media, but outside both the SQLite-only backup and the bundled e5 model.
+    /// Model services should receive a root pinned after the anti-split-brain
+    /// startup guard and use the `under:` overloads for their entire lifetime.
+    static func builtInModelRoot(under resolvedDataRoot: URL) -> URL {
+        resolvedDataRoot
+            .appendingPathComponent("ai", isDirectory: true)
+            .appendingPathComponent("generative", isDirectory: true)
+            .appendingPathComponent("v1", isDirectory: true)
+    }
 
     /// Default (legacy) location — the same one that was hardcoded before relocate.
     static func legacyRoot() -> URL {

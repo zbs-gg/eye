@@ -1,12 +1,12 @@
 import SwiftUI
 import AppKit
 
-/// AppDelegate exists for ONE hook: applicationShouldTerminate → terminateLater, so we can take the
-/// iCloud snapshot BEFORE the process dies (willTerminate no longer has time — the process dies
-/// synchronously there). onTerminate is set by AppEnvironment.bootstrap (if backup is enabled).
+/// AppDelegate exists for ONE hook: applicationShouldTerminate → terminateLater, so AppEnvironment can
+/// bound process-provider teardown and, when enabled, take the iCloud snapshot before the process dies
+/// (willTerminate no longer has time — the process dies synchronously there).
 /// Without it — an immediate exit.
 final class ZBSEyeAppDelegate: NSObject, NSApplicationDelegate {
-    @MainActor static var onTerminate: (@MainActor () async -> Void)?
+    @MainActor static var onTerminate: (@MainActor () async -> Bool)?
     private var isTerminating = false   // a repeated Cmd+Q / Force Quit while the backup is running → do NOT spawn another reply
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -14,8 +14,24 @@ final class ZBSEyeAppDelegate: NSObject, NSApplicationDelegate {
         guard let handler = ZBSEyeAppDelegate.onTerminate else { return .terminateNow }
         isTerminating = true
         Task { @MainActor in
-            await handler()
-            NSApp.reply(toApplicationShouldTerminate: true)
+            let shouldTerminate = await handler()
+            for action in AppTerminationReplyPlan.actions(
+                shouldTerminate: shouldTerminate
+            ) {
+                switch action {
+                case .reply(let value):
+                    NSApp.reply(toApplicationShouldTerminate: value)
+                case .resetTerminationGuard:
+                    isTerminating = false
+                case .showRetryAlert:
+                    let alert = NSAlert()
+                    alert.alertStyle = .warning
+                    alert.messageText = String(localized: "ZBS Eye is still stopping")
+                    alert.informativeText = String(localized: "ZBS Eye is staying open until macOS confirms that local capture and AI resources have stopped. Please try Quit again in a moment.")
+                    alert.addButton(withTitle: String(localized: "OK"))
+                    alert.runModal()
+                }
+            }
         }
         return .terminateLater
     }

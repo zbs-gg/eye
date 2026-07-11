@@ -14,6 +14,7 @@ import GRDB
 /// reported clearly if missing).
 actor BrowserHistoryImporter {
     private let db: ZBSEyeDatabase
+    private let maintenanceGate = DatabaseWriterMaintenanceGate()
     private var running = false
     init(db: ZBSEyeDatabase) { self.db = db }
 
@@ -38,6 +39,10 @@ actor BrowserHistoryImporter {
     }
 
     func run() async throws -> Report {
+        guard maintenanceGate.beginOperation() else {
+            throw DatabaseWriterMaintenanceError.suspendedForRelocation
+        }
+        defer { maintenanceGate.finishOperation() }
         guard !running else { return Report() }
         running = true
         defer { running = false }
@@ -45,7 +50,7 @@ actor BrowserHistoryImporter {
         var report = Report()
         for src in Self.sources() {
             for dbPath in Self.historyDBs(for: src) {
-                if Task.isCancelled { return report }
+                if Task.isCancelled || maintenanceGate.snapshot().suspended { return report }
                 do {
                     report.imported += try await importOne(src: src, dbPath: dbPath)
                     report.sources += 1
@@ -62,6 +67,14 @@ actor BrowserHistoryImporter {
         }
         if report.imported > 0 { Log.app.info("browser-history import: +\(report.imported) visits from \(report.sources) source(s)") }
         return report
+    }
+
+    func suspendAndDrainForRelocation() async -> DatabaseWriterDrainAcknowledgement {
+        await maintenanceGate.suspendAndDrain()
+    }
+
+    func resumeAfterRelocation() {
+        maintenanceGate.resume()
     }
 
     private static func historyDBs(for src: Source) -> [String] {

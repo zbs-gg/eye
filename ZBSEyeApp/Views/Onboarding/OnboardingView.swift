@@ -76,7 +76,7 @@ struct OnboardingView: View {
             if env.permissions.snapshot.screenRecording == .needsRestart {
                 Label("Permission granted — ZBS Eye needs a restart (that's how macOS works).",
                       systemImage: "arrow.clockwise").font(.caption).foregroundStyle(.orange)
-                Button("Restart ZBS Eye") { AppRelauncher.relaunch() }
+                Button("Restart ZBS Eye") { try? AppRelauncher.relaunch() }
                     .buttonStyle(.borderedProminent).controlSize(.small)
             }
             permissionStep(

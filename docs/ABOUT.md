@@ -62,9 +62,10 @@ a temporary marketing position, it's an architectural principle (see §4).
   as images. Smooth: frame crossfade, a soft scrubber, micro-animations (respecting Reduce Motion).
 - **"Ask"** — ask your memory a question → hybrid search finds fragments → your **processing model**
   answers with citation links (click → jump on the timeline). A local equivalent of "Ask Rewind".
-  The model is picked in **"AI Models"**: local (**LM Studio / Ollama**, the list comes from
-  `/v1/models`) by default, **your installed Claude Code** (run as a local subprocess, no API key), or
-  **one-click OpenRouter** (OAuth); a cloud provider only with an explicit opt-in, keys optional.
+  The model is picked in **"AI Models"**. The headline path downloads and enables ZBS Eye's verified
+  built-in MLX model in one action; provider cards also expose Codex, OpenRouter, Anthropic, Kimi, GLM,
+  MiMo, OpenAI, Claude Code, and separate Ollama / LM Studio connections. Models stay inside providers,
+  and one global active provider/model pair powers every generative feature.
 
 ### Rewards and progress
 - **Gamification** — day streaks, milestones (1k/5k/10k/… frames), "memory age", progress to the next
@@ -88,14 +89,12 @@ a temporary marketing position, it's an architectural principle (see §4).
 
 - **Zero egress for capture, index and storage.** The server listens only on `127.0.0.1`; everything except `/health` is behind a Bearer token (in the Keychain). Recordings never leave the Mac.
 - **Zero accounts, zero subscription, zero telemetry.** That IS the product.
-- **AI is local-first, bring-your-own — keys optional.** Local providers (LM Studio / Ollama / any
-  OpenAI-compatible localhost server) are the default and need no key. You can also **use the Claude
-  Code you're already signed into** (run as a local subprocess — no API key) or connect **OpenRouter in
-  one click** (OAuth); pasting an OpenAI / Anthropic key is an Advanced fallback. Cloud providers —
-  including Claude Code, whose CLI egresses to Anthropic via your login — exist only behind an explicit
-  per-provider opt-in with a clear warning: they receive prompt **excerpts** of history for
-  Ask/Insights/summaries — never recordings, never the index. Keys live in the Keychain; a consented
-  key-based cloud provider may reach exactly one host (its official API).
+- **Built-in local AI first; provider freedom stays real.** On qualified Macs the shortest path is a
+  one-click, verified local model that works offline after download and needs no account, key, or server.
+  External providers remain first-class choices. A recommendation is shown inside its provider and never
+  activates itself. Cloud, broker, and signed-in CLI providers are behind explicit recipient- and
+  scope-specific consent: they receive only the prompt excerpts needed for the chosen feature, never
+  recordings or the index. Credentials live in the data-protection Keychain.
 - **The default is to record everything**, but the human is in charge: pause, app exclusions, delete a range.
 - **Native and lightweight.** Swift/SwiftUI, Apple Silicon hardware acceleration, minimal dependencies —
   as opposed to heavy web wrappers (Electron/Tauri).
@@ -104,7 +103,7 @@ a temporary marketing position, it's an architectural principle (see §4).
 
 ## 4. How it works (architecture and stack)
 
-- **Platform:** Swift 6 (strict concurrency = `complete`), SwiftUI, target macOS 15+, Apple Silicon. ~10k lines of Swift.
+- **Platform:** Swift 6 (strict concurrency = `complete`), SwiftUI, target macOS 15+, Apple Silicon.
 - **Concurrency:** `@MainActor @Observable` stores for the UI; actors for data/capture; one logical writer
   (`IngestService`); non-Sendable (`CVPixelBuffer`/`AXUIElement`/…) live and die inside a single actor.
 - **Storage:** GRDB (`DatabasePool` + WAL) + **FTS5** (external-content) + **sqlite-vec** (statically linked —
@@ -145,12 +144,12 @@ staying faithful to the "everything on-device" principle.
 ## 7. Status
 
 **Working and verified live:** capture (screen + audio), hybrid search (cross-lingual), timeline (smooth),
-scenes/"Day in activities", "Ask" (RAG over the model picked in "AI Models" — LM Studio/Ollama by default,
-cloud as an explicit opt-in), Cartographer (daily insights), progress/milestones, REST + MCP, history
+scenes/"Day in activities", "Ask" (RAG over the global provider/model pair), Daily Insights,
+progress/milestones, REST + MCP, history
 import, retention (forever), relocatable storage, iCloud backup, daily summary, export. A notarized
 Developer ID release exists.
 
-**Deferred:** a test target (XCTest), Sparkle auto-updates, deep integration of Cartographer with Pulse/Atlas,
+**Deferred:** Sparkle auto-updates, deep integration of Cartographer with Pulse/Atlas,
 the v1.5 "live prompter" (a real-time overlay).
 
 Strategy and priorities — in [`ROADMAP.md`](../ROADMAP.md). Architecture and the contributor guide — in [`AGENTS.md`](../AGENTS.md).

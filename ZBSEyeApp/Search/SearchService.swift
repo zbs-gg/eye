@@ -1,18 +1,35 @@
 import Foundation
 import GRDB
 
+enum SearchSemanticMode: Sendable, Equatable {
+    case hybrid
+    case embeddingUnavailable
+    case ftsOnly(SemanticQueryFallbackReason)
+}
+
+struct SearchExecution: Sendable {
+    let results: [SearchResult]
+    let semanticMode: SearchSemanticMode
+}
+
 /// Hybrid search: FTS5 (exact words, bm25) + semantic (vec0, by meaning, screen AND transcripts) →
 /// Reciprocal Rank Fusion merge (RRF, k=60, no scale calibration). Frame dedup via ROW_NUMBER.
 /// Filters (time/app/kind) are applied in SQL where cheap and as a post-filter for the semantic legs;
 /// pagination sits on top of the final ranking (offset/limit).
 actor SearchService {
     private let db: ZBSEyeDatabase
-    private let embedder: EmbeddingService
+    private let semanticQuery: SearchSemanticQueryRunner
     private let rrfK = 60.0
 
-    init(db: ZBSEyeDatabase, embedder: EmbeddingService) {
+    init(
+        db: ZBSEyeDatabase,
+        embedder: EmbeddingService,
+        semanticPolicy: SearchSemanticPolicy = .uncoordinated
+    ) {
         self.db = db
-        self.embedder = embedder
+        self.semanticQuery = SearchSemanticQueryRunner(policy: semanticPolicy) { query in
+            await embedder.embed(query: query)
+        }
     }
 
     /// Compatibility with old call sites (UI/MCP without filters).
@@ -21,6 +38,15 @@ actor SearchService {
     }
 
     func search(query: String, filters: SearchFilters) async throws -> [SearchResult] {
+        try await searchWithMetadata(query: query, filters: filters).results
+    }
+
+    /// Metadata-bearing path used by helper processes that must disclose an
+    /// explicit FTS-only policy rather than silently pretending hybrid search.
+    func searchWithMetadata(
+        query: String,
+        filters: SearchFilters
+    ) async throws -> SearchExecution {
         // candidate window: with headroom over offset+limit; the app filter is cut by a POST-filter (Unicode),
         // so the window is wider when it's set — otherwise a rare app would drown among other candidates
         let baseWindow = min(filters.offset + filters.limit + 40, 400)
@@ -28,7 +54,7 @@ actor SearchService {
 
         // FTS and the query embedding — in parallel (they don't depend on each other). query prefix for e5.
         async let ftsTask = ftsSearch(query, filters: filters, limit: window)
-        async let qvecTask = embedder.embed(query: query)
+        async let semanticTask = semanticQuery.run(query: query)
         let fts = try await ftsTask
 
         var byKey: [String: SearchResult] = [:]
@@ -48,7 +74,8 @@ actor SearchService {
             byKey[k] = r
         }
 
-        if let qvec = await qvecTask {
+        let semanticOutcome = await semanticTask
+        if case .vector(let qvec) = semanticOutcome {
             // Two semantic legs IN PARALLEL (async let → DB reads overlap via the pool): screen and
             // transcripts (cross-lingual, for calls). The kind filter AND app filter mute the unneeded leg
             // entirely (audio has no appId — under an app filter it's dropped in matches() anyway, no KNN burned).
@@ -89,7 +116,19 @@ actor SearchService {
             if a.kind != b.kind { return a.kind == .screen }
             return a.id > b.id
         }
-        return Array(ranked.dropFirst(filters.offset).prefix(filters.limit))
+        let mode: SearchSemanticMode
+        switch semanticOutcome {
+        case .vector:
+            mode = .hybrid
+        case .embeddingUnavailable:
+            mode = .embeddingUnavailable
+        case .ftsOnly(let reason):
+            mode = .ftsOnly(reason)
+        }
+        return SearchExecution(
+            results: Array(ranked.dropFirst(filters.offset).prefix(filters.limit)),
+            semanticMode: mode
+        )
     }
 
     /// Exact check of a result against the filters (the semantic legs are only filtered coarsely in SQL).

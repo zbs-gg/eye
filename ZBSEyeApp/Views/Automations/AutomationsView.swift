@@ -94,7 +94,7 @@ private struct AutomationBody: View {
             VStack(alignment: .leading, spacing: 12) {
                 Label("A processing model is required", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange).font(.headline)
-                Text("Pick a model in AI Models — local (LM Studio / Ollama) by default; the automation won't run without one.")
+                Text("Choose a model in AI Models. ZBS Eye Local works without another app or account; the automation won't run until a model is active.")
                     .foregroundStyle(.secondary)
                 Button("Open AI Models") { env.selectedSection = .aiModels }
                     .buttonStyle(.borderedProminent)
@@ -164,11 +164,18 @@ private struct AutomationBody: View {
                 HStack(spacing: 12) {
                     Text("Preview").font(.headline)
                     Spacer()
-                    Text("\(p.sessions) sessions · \(p.totalCaptures) moments · \(p.model)")
+                    let executionScope = p.provenance.executedLocally
+                        ? String(localized: "On this Mac")
+                        : String(localized: "Cloud")
+                    Text("\(p.sessions) sessions · \(p.totalCaptures) moments · \(executionScope) · \(p.provenance.providerID) · \(p.model)")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if p.truncated {
+                if p.truncated && !p.contextTruncated {
                     Label("Long day — only the longest sessions made it into the summary.",
+                          systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
+                }
+                if p.contextTruncated {
+                    Label("The selected model's context limit reduced the sessions used in this preview.",
                           systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
                 }
                 if p.outputTruncated {
@@ -206,10 +213,10 @@ private struct AutomationBody: View {
 
     private var writeButtonTitle: String {
         let sub = store.connections.destination.subfolder
-        let folder = sub.isEmpty ? "folder" : sub
+        let folder = sub.isEmpty ? String(localized: "selected folder") : sub
         // Name from preview.day, not selectedDay — the button must promise exactly what gets written.
         let day = store.preview?.day ?? store.selectedDay
-        return "Write to \(folder)/\(DailySummaryService.ymd(day)).md"
+        return String(localized: "Write to \(folder)/\(DailySummaryService.ymd(day)).md")
     }
 
     private func writeSuccess(_ w: WriteResult) -> some View {
@@ -217,7 +224,10 @@ private struct AutomationBody: View {
             HStack(spacing: 12) {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(w.overwritten ? "Overwritten" : "Written").font(.headline)
+                    Text(w.overwritten
+                         ? String(localized: "Overwritten")
+                         : String(localized: "Written"))
+                        .font(.headline)
                     Text(w.path).font(.caption).foregroundStyle(.secondary)
                         .textSelection(.enabled).lineLimit(2)
                 }

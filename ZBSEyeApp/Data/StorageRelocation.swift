@@ -6,25 +6,11 @@ struct RelocationReport: Sendable {
     let newDataRoot: URL
     let dbBytes: Int64
     let mediaFilesCopied: Int
+    let modelFilesCopied: Int
+    let modelBytesCopied: Int64
 }
 
-enum RelocationError: LocalizedError {
-    case sameLocation
-    case destinationOccupied(String)
-    case insufficientSpace(needed: Int64, free: Int64)
-    case verifyFailed(String)
-    var errorDescription: String? {
-        switch self {
-        case .sameLocation: return "This is already the current data folder"
-        case let .destinationOccupied(p): return "The selected folder already contains ZBS Eye data (\(p)) — pick another one"
-        case let .insufficientSpace(n, f):
-            return "Not enough space: need ~\(n / 1_000_000) MB, \(f / 1_000_000) MB free"
-        case let .verifyFailed(m): return "Move not confirmed: \(m). The data at the old location is intact."
-        }
-    }
-}
-
-/// Moves "forever memory" (DB + media) to another folder. DB — GRDB online backup (a consistent
+/// Moves "forever memory" (DB + media + managed generative assets) to another folder. DB — GRDB online backup (a consistent
 /// snapshot of the live pool under WAL; vec0/FTS5 as pages). media — COPY (NOT move: the old location stays intact until
 /// confirmation). Verify (integrity + COUNT-parity + media count) BEFORE switching over. The caller THEN
 /// does StorageLocation.setRoot + relaunch (repointing via restart is the only way to re-attach the
@@ -34,37 +20,57 @@ actor StorageRelocator {
     /// paused (recording.pauseForMaintenance) before the call, otherwise a couple of boundary frames settle into the old root.
     func migrate(sourcePool: DatabasePool, sourceDBURL: URL, sourceMedia: URL, chosen: URL,
                  progress: @Sendable @escaping (Double, String) -> Void) async throws -> RelocationReport {
-        let newRoot = chosen.appendingPathComponent("ZBS Eye", isDirectory: true)
-        let currentRoot = StorageLocation.dataRoot().standardizedFileURL
-        guard newRoot.standardizedFileURL.path != currentRoot.path else { throw RelocationError.sameLocation }
+        let currentRoot = StorageLocation.dataRoot().resolvingSymlinksInPath().standardizedFileURL
+        let newRoot = try StorageRelocationPolicy.destinationRoot(
+            currentRoot: currentRoot,
+            chosenParent: chosen
+        )
 
         return try await Task.detached(priority: .userInitiated) {
             let fm = FileManager.default
             let destDB = newRoot.appendingPathComponent("zbseye.sqlite")
             let destMedia = newRoot.appendingPathComponent("media", isDirectory: true)
-            // An occupied dest (e.g. moving back to legacy, where a stale copy remained) — we do NOT clobber and do NOT
-            // block: we move it aside to ZBS Eye.replaced-<ts> (no data loss, the user deletes it themselves).
-            if fm.fileExists(atPath: destDB.path) {
-                let aside = newRoot.deletingLastPathComponent()
-                    .appendingPathComponent("ZBS Eye.replaced-\(BackupManager.timestamp())", isDirectory: true)
-                try fm.moveItem(at: newRoot, to: aside)
-            }
-
+            let sourceModels = StorageLocation.builtInModelRoot(under: currentRoot)
+            let destModels = StorageLocation.builtInModelRoot(under: newRoot)
             // pre-flight: space on the TARGET volume
             let srcDBBytes = BackupManager.fileBytes(sourceDBURL)
-            let mediaFiles = (try? fm.contentsOfDirectory(at: sourceMedia,
-                                                          includingPropertiesForKeys: [.fileSizeKey])) ?? []
-            let mediaBytes = mediaFiles.reduce(Int64(0)) { $0 + BackupManager.fileBytes($1) }
-            let needed = srcDBBytes + mediaBytes + (256 << 20)
-            let freeOpt = try? chosen.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-                .volumeAvailableCapacityForImportantUsage
-            let free = freeOpt.map { Int64($0) } ?? Int64.max
-            guard free > needed else { throw RelocationError.insufficientSpace(needed: needed, free: free) }
+            guard let mediaInventory = try RelocatableAssetTree
+                .inventoryIfPresent(at: sourceMedia) else {
+                throw RelocationError.verifyFailed("the source media directory is missing")
+            }
+            let mediaBytes = mediaInventory.totalBytes
+            let modelInventory = try RelocatableAssetTree.inventoryIfPresent(at: sourceModels)
+            let modelBytes = modelInventory?.totalBytes ?? 0
+            let needed = try StorageRelocationPolicy.requiredFreeBytes(
+                databaseBytes: srcDBBytes,
+                mediaBytes: mediaBytes,
+                modelBytes: modelBytes
+            )
+            let destinationParent = newRoot.deletingLastPathComponent()
+            let capacity = try? destinationParent.resourceValues(forKeys: [
+                .volumeAvailableCapacityForImportantUsageKey,
+                .volumeAvailableCapacityKey,
+            ])
+            let available = capacity?.volumeAvailableCapacityForImportantUsage.map { Int64($0) }
+                ?? capacity?.volumeAvailableCapacity.map { Int64($0) }
+            try StorageRelocationPolicy.requireCapacity(
+                requiredBytes: needed,
+                availableBytes: available
+            )
 
-            try fm.createDirectory(at: newRoot, withIntermediateDirectories: true)
-            try fm.createDirectory(at: destMedia, withIntermediateDirectories: true)
-
-            do {
+            // Every destination mutation lives in one rollback boundary. An
+            // occupied root is kept aside on success and restored verbatim if
+            // any create/copy/verification step fails.
+            let replacementRoot = newRoot.deletingLastPathComponent()
+                .appendingPathComponent(
+                    "ZBS Eye.replaced-\(BackupManager.timestamp())-\(UUID().uuidString.lowercased())",
+                    isDirectory: true
+                )
+            return try StorageRelocationDestinationTransaction.run(
+                destinationRoot: newRoot,
+                replacementRoot: replacementRoot,
+                fileManager: fm
+            ) {
                 // 1. DB: online backup of the live pool → dest .sqlite
                 progress(0.05, "Copying the database…")
                 var dest: DatabaseQueue? = try DatabaseQueue(path: destDB.path)
@@ -84,33 +90,48 @@ actor StorageRelocator {
                 }
 
                 // 3. media — COPY (the old location stays intact)
-                progress(0.55, "Copying media (\(mediaFiles.count))…")
-                for (i, f) in mediaFiles.enumerated() {
-                    let to = destMedia.appendingPathComponent(f.lastPathComponent)
-                    try? fm.removeItem(at: to)
-                    try fm.copyItem(at: f, to: to)
-                    if i % 300 == 0 {
-                        progress(0.55 + 0.4 * Double(i) / Double(max(1, mediaFiles.count)), "Copying media…")
-                    }
-                }
-                // 4. media parity
-                let destCount = ((try? fm.contentsOfDirectory(at: destMedia, includingPropertiesForKeys: nil)) ?? []).count
-                guard destCount >= mediaFiles.count else {
-                    throw RelocationError.verifyFailed("media: copied \(destCount) of \(mediaFiles.count)")
+                progress(0.55, "Copying media (\(mediaInventory.files.count))…")
+                let copiedMedia = try RelocatableAssetTree.copyIfPresent(
+                    from: sourceMedia,
+                    to: destMedia
+                )
+                // 4. media parity. Compare against the pre-flight inventory as
+                // well as copy-time parity so a source mutation cannot be
+                // silently accepted between sizing and the DB snapshot.
+                guard copiedMedia == mediaInventory else {
+                    throw RelocationError.verifyFailed(
+                        "media inventory changed during relocation"
+                    )
                 }
 
+                // 5. managed model assets — the download/runtime managers are
+                // drained by the caller, so staging + journal + installed LKG
+                // form one immutable tree for this copy. Exact relative-path,
+                // byte-count, and SHA-256 parity is checked before the flip.
+                progress(0.88, "Copying local AI model…")
+                let copiedModels = try RelocatableAssetTree.copyIfPresent(
+                    from: sourceModels,
+                    to: destModels
+                )
+
                 progress(1.0, "Done")
-                return RelocationReport(newDataRoot: newRoot, dbBytes: srcDBBytes, mediaFilesCopied: mediaFiles.count)
-            } catch {
-                try? fm.removeItem(at: newRoot)   // rollback: source untouched
-                throw error
+                return RelocationReport(
+                    newDataRoot: newRoot,
+                    dbBytes: srcDBBytes,
+                    mediaFilesCopied: mediaInventory.files.count,
+                    modelFilesCopied: copiedModels?.files.count ?? 0,
+                    modelBytesCopied: copiedModels?.totalBytes ?? 0
+                )
             }
         }.value
     }
 
     private static func counts(_ db: Database) throws -> [String: Int] {
         var c: [String: Int] = [:]
-        for t in ["screen_captures", "text_blocks", "audio_captures", "transcriptions", "apps"] {
+        for t in [
+            "screen_captures", "text_blocks", "audio_captures", "transcriptions",
+            "apps", "browser_visits", "embed_queue",
+        ] {
             c[t] = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(t)") ?? -1
         }
         return c

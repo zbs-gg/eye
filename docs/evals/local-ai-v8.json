@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_id": "gg.zbs.eye.eval-protocol/v8",
+  "protocol": {
+    "id": "local-ai-v8",
+    "revision": 8,
+    "status": "release-candidate",
+    "created_at": "2026-07-11",
+    "purpose": "Release-quality multilingual qualification of the corrected channel-separated production Ask, Daily Insights, Day Summary, and Activity Label requests through deterministic context budgets, the built-in native no-side-effect tool channel, parser, and renderer.",
+    "supersedes": "local-ai-v7",
+    "change_reason": "The non-qualifying V7 bounded preflight passed 5 of 8 stable cases with 75% parser acceptance. All six Label attempts began the required Qwen3.5 XML function call but were truncated by the 60-token production cap before the call closed. One English Summary attempt converted non-citable coverage metadata into a work claim; V7 correctly rejected it. Revision 8 raises Label to 160 tokens, requires the most specific supplied project or topic while omitting optional fields, and makes the shared English/Russian Summary prompt explicit that coverage metadata is not output evidence. The strict parser, no-repair rule, scorer, cases, and thresholds are unchanged.",
+    "provenance": {
+      "source": "Synthetic ZBS Eye-like cases authored for this protocol; no case is copied from user history.",
+      "contains_user_history": false,
+      "contains_secrets": false,
+      "license": "CC0-1.0",
+      "stability": "Protocol text, fixture bytes and hashes, case IDs and inputs, production prompt versions, channel selection, context policy, tool schema, parser, renderer, generation parameters, bounded-preflight selection, seed derivation, scoring, and thresholds are immutable within revision 8. Any correction requires revision 9."
+    }
+  },
+  "fixture_files": [
+    {
+      "path": "fixtures/local-ai-v8-en.json",
+      "language": "en",
+      "case_count": 32,
+      "sha256": "2cd084dfb825fc60bf65add6a703550cf56e5ca00cef5278c62a6ef32e6426d7"
+    },
+    {
+      "path": "fixtures/local-ai-v8-ru.json",
+      "language": "ru",
+      "case_count": 32,
+      "sha256": "268863b6e40bb077ef3fe3e7682cc0c0443ea24619750d49fd2495c1e1cbb262"
+    }
+  ],
+  "negative_predecessor": {
+    "protocol_id": "local-ai-v7",
+    "run_kind": "bounded-preflight-probe",
+    "release_qualification": false,
+    "summary_path": "local-ai-v7-negative-probe.md",
+    "raw_report_filename": "local-ai-v7-probe-2026-07-11T00-22-21Z.json",
+    "raw_report_sha256": "8ff6f3f2ea960c8e43491c5978690efc6fbc2141433ab7cc09db362c4c00e930",
+    "raw_report_checked_in": false
+  },
+  "bounded_preflight": {
+    "release_qualification": false,
+    "case_count": 8,
+    "attempt_count": 24,
+    "case_ids": [
+      "v6-en-ask-01",
+      "v6-en-insights-01",
+      "v6-en-summary-01",
+      "v6-en-label-01",
+      "v6-ru-ask-01",
+      "v6-ru-insights-01",
+      "v6-ru-summary-01",
+      "v6-ru-label-01"
+    ],
+    "parser_acceptance_required": 1.0,
+    "stable_case_pass_required": 1.0,
+    "report_prefix": "local-ai-v8-probe-",
+    "relationship_to_release_gate": "Diagnostic preflight only. It never substitutes for, reruns, or relabels the 64-case release gate."
+  },
+  "case_distribution": {
+    "total": 64,
+    "per_language": {
+      "en": 32,
+      "ru": 32
+    },
+    "per_language_and_consumer": {
+      "en": {
+        "ask": 8,
+        "insights": 8,
+        "summary": 8,
+        "label": 8
+      },
+      "ru": {
+        "ask": 8,
+        "insights": 8,
+        "summary": 8,
+        "label": 8
+      }
+    },
+    "must_refuse_per_language": {
+      "en": 4,
+      "ru": 4
+    },
+    "uniqueness": "All 64 case IDs and sorted-key canonical input JSON payloads must be globally unique."
+  },
+  "production_request_construction": {
+    "ask": {
+      "source": "ZBSEyeApp/Search/AskService.swift",
+      "execution": "Fixture retrieval is injected into AskService; a capture router records the exact production LLMRequest after production status hints, citation numbering, and LocalAIContextPolicy budget."
+    },
+    "insights": {
+      "source": "ZBSEyeApp/Connections/AIConsumerGeneration.swift AIConsumerPromptFactory.dailyInsights",
+      "execution": "Fixture activity is reduced by LocalAIContextPolicy.insightsHints, then RoutedAIConsumerGenerator captures the exact production LLMRequest and structured source vocabulary."
+    },
+    "summary": {
+      "source": "ZBSEyeApp/Connections/AIConsumerGeneration.swift AIConsumerPromptFactory.dailySummary",
+      "execution": "Locked ordered slices cross the production deterministic context budget; the captured source set is the exact included subset. Date, session count, and frame count are coverage metadata, not citable history facts, and the shared English/Russian production prompt forbids restating them."
+    },
+    "label": {
+      "source": "ZBSEyeApp/Connections/AIConsumerGeneration.swift AIConsumerPromptFactory.generatedLabel",
+      "execution": "The locked serialized activity block and language signals produce the production one-line label request. The 160-token cap covers Qwen3.5 XML tool-call framing; the prompt requires the most specific supplied project or topic and omits optional fields."
+    },
+    "context_budget_source": "ZBSEyeApp/Connections/LocalAIContextPolicy.swift",
+    "context_token_ceiling": 8192,
+    "no_bypass": "Every physical generation uses the captured production LLMRequest; test-only prompt copies or overlays are forbidden."
+  },
+  "prompt_contracts": {
+    "ask-production-v8": {
+      "consumer": "ask",
+      "prompt_version": "AskService built-in native-tool production request",
+      "output_purpose": "ask"
+    },
+    "insights-production-v8": {
+      "consumer": "insights",
+      "prompt_version": "daily-insights-v4",
+      "output_purpose": "insights"
+    },
+    "summary-production-v8": {
+      "consumer": "summary",
+      "prompt_version": "daily-summary-v4",
+      "output_purpose": "summary"
+    },
+    "label-production-v8": {
+      "consumer": "label",
+      "prompt_version": "block-label-v4",
+      "output_purpose": "label"
+    }
+  },
+  "separated_channels": {
+    "built_in_local": "The captured ZBS Eye Local production request contains an unconditional instruction to call emit_zbs_eye_answer exactly once, with no normal text or bare JSON before or after it.",
+    "external": "The external-provider production request contains no function-call branch and requires only final visible lines, Markdown, or label text.",
+    "selection": "Channel selection is derived from the exact provider identity; executedLocally alone must not opt Ollama, LM Studio, or Custom into the built-in MLX tool channel.",
+    "quality_gate": "The v8 physical gate qualifies the captured built-in local production request. Synthetic external behavior remains covered by pure consumer tests."
+  },
+  "structured_channel": {
+    "kind": "native model function call",
+    "function_name": "emit_zbs_eye_answer",
+    "side_effects": "none; parsed but never dispatched",
+    "production_source": "ZBSEyeApp/Connections/LocalAIAnswerToolContract.swift",
+    "function_call_count": 1,
+    "normal_text_before_or_after_call": "reject",
+    "repair": "none",
+    "status_by_consumer": {
+      "ask": [
+        "supported",
+        "uncertain",
+        "not_found"
+      ],
+      "insights": [
+        "supported",
+        "conflict",
+        "insufficient"
+      ],
+      "summary": [
+        "supported"
+      ],
+      "label": [
+        "supported"
+      ]
+    },
+    "renderer_source": "ZBSEyeApp/Connections/LocalAIOutputContract.swift"
+  },
+  "generation": {
+    "thinking": false,
+    "temperature": 0.2,
+    "top_p": 0.95,
+    "top_k": 0,
+    "presence_penalty": null,
+    "prefill_step_size": 256,
+    "max_output_tokens": {
+      "ask": 800,
+      "insights": 400,
+      "summary": 800,
+      "label": 160
+    },
+    "retries": 0,
+    "attempted_seed_variants_per_case": 3,
+    "seed_derivation": {
+      "canonical_request": "NFC(protocol.id + '\\n' + protocol.revision + '\\n' + prompt_contract_id + '\\n' + case.id + '\\n' + sorted-key JSON(case.input))",
+      "production": "First 8 SHA-256 bytes of canonical_request, interpreted unsigned big-endian.",
+      "perturbation_1": "First 8 SHA-256 bytes of canonical_request + '\\nperturbation:1'.",
+      "perturbation_2": "First 8 SHA-256 bytes of canonical_request + '\\nperturbation:2'.",
+      "stability": "A case passes only when all three attempts pass. No retry, repair, or best-result selection."
+    }
+  },
+  "scoring": {
+    "mode": "binary stable-case pass",
+    "parser_acceptance": "Exactly one production tool call, zero normal model text, accepted by LocalAIAnswerToolContract without repair.",
+    "semantic_checks": [
+      "expected typed status for consumer and answerability",
+      "all required concepts and exact quotes",
+      "required and allowlisted structured sources",
+      "no forbidden substring or invented number",
+      "language, word, and line limits"
+    ],
+    "summary_numeric_grounding": "A number is output-grounded only when it appears verbatim inside an included source fragment. Date/session/frame coverage metadata remains outside allowed_numbers.",
+    "unsupported_denominator": "Every attempted seed of each must_refuse Ask or Insights case.",
+    "stable_rates": "Overall, language, and consumer rates use cases, not seed attempts; all three attempts must pass."
+  },
+  "thresholds": {
+    "stable_case_pass_rate_min": 0.9,
+    "stable_per_language_case_pass_rate_min": 0.85,
+    "stable_per_consumer_case_pass_rate_min": 0.85,
+    "parser_acceptance_rate_min": 0.95,
+    "unsupported_refusal_rate": 1,
+    "attempted_seed_variants_per_case": 3,
+    "minimum_cases_per_language": 30
+  }
+}

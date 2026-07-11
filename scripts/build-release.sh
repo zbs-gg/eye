@@ -25,6 +25,7 @@ set +e
 # With Manual they get signed by our self-signed "ZBS Eye Dev" without a team.
 xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Release \
   -derivedDataPath "$DERIVED" \
+  -onlyUsePackageVersionsFromResolvedFile \
   CODE_SIGN_IDENTITY="$IDENTITY" CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \
   build 2>&1 | grep -E "error:|warning:|BUILD"
 XC_STATUS=${PIPESTATUS[0]}

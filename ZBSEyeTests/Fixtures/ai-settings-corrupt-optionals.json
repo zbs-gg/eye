@@ -1,0 +1,9 @@
+{
+  "active": "anthropic",
+  "models": { "anthropic": "claude-haiku-4-5-20251001" },
+  "endpoints": ["not", "a", "dictionary"],
+  "cloudConsent": { "anthropic": true },
+  "processingDisabledByUser": "not-a-boolean",
+  "selectionRevision": "not-an-integer",
+  "authorizationEpoch": 4
+}

@@ -10,13 +10,18 @@ final class SceneStore {
     @ObservationIgnored private let service: SceneService
     @ObservationIgnored private let timeline: TimelineService
     @ObservationIgnored private let labeler: BlockLabelService
-    @ObservationIgnored private let ai: AIProviderStore
+    @ObservationIgnored private let readiness: any AIConsumerReadinessProviding
 
     var scenes: [ActivityScene] = []          // all scenes of the day (system ones flagged)
     var blocks: [ActivityBlock] = []          // merged user activity — the top-level UI unit
     var systemScenes: [ActivityScene] = []    // filtered entries, shown only by the debug toggle
     /// block.id → LLM one-liner; arrives asynchronously, UI falls back to the heuristic label.
     var llmLabels: [String: String] = [:]
+    /// Identity stays next to every generated label even though labels are
+    /// session-only UI data. This prevents local/cloud/model attribution from
+    /// being lost when the active pair later changes.
+    var llmLabelProvenance: [String: AIExecutionProvenance] = [:]
+    var llmLabelPromptVersions: [String: String] = [:]
     /// "Show system events" debug toggle (default OFF), persisted like other view prefs.
     var showSystemEvents = UserDefaults.standard.bool(forKey: "zbseye.activities.showSystem") {
         didSet { UserDefaults.standard.set(showSystemEvents, forKey: "zbseye.activities.showSystem") }
@@ -34,11 +39,12 @@ final class SceneStore {
     @ObservationIgnored private var labelTask: Task<Void, Never>?
 
     init(service: SceneService, timeline: TimelineService,
-         labeler: BlockLabelService, ai: AIProviderStore) {
+         labeler: BlockLabelService,
+         readiness: any AIConsumerReadinessProviding) {
         self.service = service
         self.timeline = timeline
         self.labeler = labeler
-        self.ai = ai
+        self.readiness = readiness
     }
 
     /// Loads scenes for `selectedDay`. Called on day change and on view appear.
@@ -55,11 +61,14 @@ final class SceneStore {
             systemScenes = result.filter(\.isSystem)
             blocks = ActivityBlockBuilder.blocks(from: result)
             llmLabels = [:]
+            llmLabelProvenance = [:]
+            llmLabelPromptVersions = [:]
             requestLLMLabels(day: day, blocks: blocks, gen: gen)
         } catch {
             guard gen == loadGeneration else { return }
             self.error = String(describing: error)
             scenes = []; blocks = []; systemScenes = []; llmLabels = [:]
+            llmLabelProvenance = [:]; llmLabelPromptVersions = [:]
         }
         if gen == loadGeneration { isLoading = false }
     }
@@ -71,24 +80,31 @@ final class SceneStore {
 
     // MARK: - LLM block labels (optional, heuristic fallback always shown)
 
-    /// Kick off one-liner generation for the day's blocks. Only when a LOCAL model is configured
-    /// AND the user already consented to screen fragments going to the local LLM (the Cartographer
-    /// consent, Pro #13 — Activities must not start sending titles/phrases before that explicit yes).
+    /// Kick off one-liner generation only when the generated-label consumer is
+    /// explicitly authorized. A migrated legacy cloud grant excludes this
+    /// automatic scope, so it produces zero background dispatch.
     /// Sequential on purpose: don't hammer a local model with N parallel requests. Results are
     /// cached per (day, block-range) inside BlockLabelService — a re-render never re-asks.
     private func requestLLMLabels(day: Date, blocks: [ActivityBlock], gen: Int) {
         labelTask?.cancel()
-        // Local-only for Activities labels: don't send activity titles/phrases to a cloud provider even if
-        // one is the active processing model — cosmetic labels aren't worth cloud egress. Gated by the same
-        // Cartographer consent (screen fragments → local LLM).
-        guard let llm = ai.activeConfig, llm.isLocalOnly,
-              UserDefaults.standard.bool(forKey: "zbseye.cartographer.consent") else { return }
+        guard UserDefaults.standard.bool(forKey: "zbseye.cartographer.consent"),
+              let execution = readiness.currentExecutionContext(for: .generatedLabels) else { return }
         labelTask = Task { [weak self] in
             for block in blocks {
-                guard let self, !Task.isCancelled, gen == self.loadGeneration else { return }
-                guard let line = await self.labeler.label(day: day, block: block, llm: llm) else { continue }
-                guard !Task.isCancelled, gen == self.loadGeneration else { return }
-                self.llmLabels[block.id] = line
+                guard let self, !Task.isCancelled, gen == self.loadGeneration,
+                      self.readiness.currentExecutionContext(for: .generatedLabels) == execution else { return }
+                let requestID = UUID()
+                guard let generated = await self.labeler.label(
+                    day: day,
+                    block: block,
+                    execution: execution,
+                    requestID: requestID
+                ) else { continue }
+                guard !Task.isCancelled, gen == self.loadGeneration,
+                      self.readiness.currentExecutionContext(for: .generatedLabels) == execution else { return }
+                self.llmLabels[block.id] = generated.text
+                self.llmLabelProvenance[block.id] = generated.provenance
+                self.llmLabelPromptVersions[block.id] = generated.promptVersion
             }
         }
     }

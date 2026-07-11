@@ -21,6 +21,7 @@ struct PruneReport: Sendable {
 actor RetentionManager {
     private let db: ZBSEyeDatabase
     private let storage: StorageManager
+    private let maintenanceGate = DatabaseWriterMaintenanceGate()
 
     /// Files younger than this window are treated as possibly in-flight and aren't touched by the orphan sweep.
     private let orphanGraceSeconds: TimeInterval = 60
@@ -31,23 +32,47 @@ actor RetentionManager {
     }
 
     func prune(retentionDays: Int?, maxBytes: Int64?) async throws -> PruneReport {
+        guard maintenanceGate.beginOperation() else {
+            throw DatabaseWriterMaintenanceError.suspendedForRelocation
+        }
+        defer { maintenanceGate.finishOperation() }
         var report = PruneReport()
         // FOOTGUN GUARD: days/maxBytes ≤ 0 = "forever" (NOT "delete everything older than 0 days" / "shrink to 0 bytes").
         // Without this, the default-forever accidentally arriving as 0 would wipe the entire history.
         if let days = retentionDays, days > 0 {
             let cutoff = Int64(Date().addingTimeInterval(-Double(days) * 86400).timeIntervalSince1970 * 1000)
             report.framesDeleted += try await deleteFramesOlderThan(cutoff)
+            try checkOperationContinuation()
             report.audioDeleted += try await deleteAudioOlderThan(cutoff)
+            try checkOperationContinuation()
         }
         if let maxBytes, maxBytes > 0 {
             let (f, a) = try await enforceSizeLimit(maxBytes)
             report.framesDeleted += f
             report.audioDeleted += a
+            try checkOperationContinuation()
         }
         report.orphansDeleted = try await sweepOrphans()
+        try checkOperationContinuation()
         try? await sweepVectorOrphans()   // vec0 has no FK: insurance against orphans (races, old bugs)
+        try checkOperationContinuation()
         try await checkpoint()
         return report
+    }
+
+    func suspendAndDrainForRelocation() async -> DatabaseWriterDrainAcknowledgement {
+        await maintenanceGate.suspendAndDrain()
+    }
+
+    func resumeAfterRelocation() {
+        maintenanceGate.resume()
+    }
+
+    private func checkOperationContinuation() throws {
+        try Task.checkCancellation()
+        guard !maintenanceGate.snapshot().suspended else {
+            throw DatabaseWriterMaintenanceError.suspendedForRelocation
+        }
     }
 
     /// vec-table orphans (the base row was deleted, the vector remained). Cheap with a PK subquery; once per prune.
@@ -72,7 +97,7 @@ actor RetentionManager {
     // ── deletion by time (exit on number of rows deleted, not on paths — dedup-nil-paths fix) ──
     private func deleteFramesOlderThan(_ cutoffMs: Int64) async throws -> Int {
         var deleted = 0
-        while true {
+        while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
             let (count, paths): (Int, [String]) = try await db.pool.write { db in
                 let rows = try ScreenCaptureRow
                     .filter(Column("ts") < cutoffMs).order(Column("ts")).limit(500).fetchAll(db)
@@ -109,7 +134,7 @@ actor RetentionManager {
 
     private func deleteAudioOlderThan(_ cutoffMs: Int64) async throws -> Int {
         var deleted = 0
-        while true {
+        while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
             let (count, paths): (Int, [String]) = try await db.pool.write { db in
                 let rows = try AudioCaptureRow
                     .filter(Column("ts") < cutoffMs).order(Column("ts")).limit(500).fetchAll(db)
@@ -129,7 +154,8 @@ actor RetentionManager {
     // ── size: delete the oldest frames, then audio, while SUM(bytes) > the limit ──
     private func enforceSizeLimit(_ maxBytes: Int64) async throws -> (frames: Int, audio: Int) {
         var frames = 0, audio = 0
-        while try await dbBytes() > maxBytes {
+        while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
+            guard try await dbBytes() > maxBytes else { break }
             if try await deleteOldestFrameBatch(into: &frames) { continue }
             if try await deleteOldestAudioBatch(into: &audio) { continue }
             break   // nothing to delete — don't loop forever
@@ -142,12 +168,18 @@ actor RetentionManager {
     /// would then delete nothing, and the recording pause would never self-heal. If there's no ZBS Eye data
     /// left and space is still low — the disk is occupied by others (returns how much was deleted; the caller shows status).
     func pruneUntilFree(targetFreeBytes: Int64) async throws -> PruneReport {
+        guard maintenanceGate.beginOperation() else {
+            throw DatabaseWriterMaintenanceError.suspendedForRelocation
+        }
+        defer { maintenanceGate.finishOperation() }
         var report = PruneReport()
-        while storage.freeBytes() < targetFreeBytes {
+        while !Task.isCancelled && !maintenanceGate.snapshot().suspended
+                && storage.freeBytes() < targetFreeBytes {
             if try await deleteOldestFrameBatch(into: &report.framesDeleted) { continue }
             if try await deleteOldestAudioBatch(into: &report.audioDeleted) { continue }
             break   // no ZBS Eye data left — beyond here isn't our zone
         }
+        try checkOperationContinuation()
         try await checkpoint()   // return space to the OS: FTS optimize + WAL truncate
         return report
     }
@@ -156,8 +188,12 @@ actor RetentionManager {
     /// The cascade cleans text_blocks/transcriptions → FTS triggers; vec tables — explicitly (vec0 has no FK).
     /// toMs = Int64.max + fromMs = 0 → "delete everything".
     func deleteRange(fromMs: Int64, toMs: Int64) async throws -> PruneReport {
+        guard maintenanceGate.beginOperation() else {
+            throw DatabaseWriterMaintenanceError.suspendedForRelocation
+        }
+        defer { maintenanceGate.finishOperation() }
         var report = PruneReport()
-        while true {
+        while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
             let (c, paths): (Int, [String]) = try await db.pool.write { db in
                 let rows = try ScreenCaptureRow
                     .filter(Column("ts") >= fromMs && Column("ts") <= toMs)
@@ -172,7 +208,8 @@ actor RetentionManager {
             for p in paths { storage.deleteFile(relativePath: p) }
             report.framesDeleted += c
         }
-        while true {
+        try checkOperationContinuation()
+        while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
             let (c, paths): (Int, [String]) = try await db.pool.write { db in
                 let rows = try AudioCaptureRow
                     .filter(Column("ts") >= fromMs && Column("ts") <= toMs)
@@ -187,7 +224,9 @@ actor RetentionManager {
             for p in paths { storage.deleteFile(relativePath: p) }
             report.audioDeleted += c
         }
+        try checkOperationContinuation()
         try? await checkpoint()   // best-effort: a checkpoint error must not mask a successful deletion
+        try checkOperationContinuation()
         // Full deletion → VACUUM: otherwise sqlite reuses pages, the file doesn't shrink, and the user
         // sees "I deleted everything but it's still almost as full" — undermining trust in the privacy feature.
         if fromMs == 0 && toMs == Int64.max {
@@ -243,6 +282,7 @@ actor RetentionManager {
         let graceCutoff = Date().addingTimeInterval(-orphanGraceSeconds)
         var deleted = 0
         for url in files {
+            guard !Task.isCancelled && !maintenanceGate.snapshot().suspended else { break }
             let name = url.lastPathComponent
             guard name.hasSuffix(".heic") || name.hasSuffix(".m4a") else { continue }
             if known.contains(name) { continue }

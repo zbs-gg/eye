@@ -23,7 +23,16 @@ enum ZBSEyeMCPServer {
         let db: ZBSEyeDatabase?
         do {
             let d = try ZBSEyeDatabase(path: ZBSEyeDatabase.defaultURL().path, runMigrations: false)
-            db = d; search = SearchService(db: d, embedder: EmbeddingService()); timeline = TimelineService(db: d)
+            db = d
+            // This is a second process and cannot share the GUI's compute
+            // actor. Loading another e5 here could overlap GUI MLX, so helper
+            // search is explicitly FTS-only and discloses that in its result.
+            search = SearchService(
+                db: d,
+                embedder: EmbeddingService(),
+                semanticPolicy: .ftsOnly(.secondaryProcess)
+            )
+            timeline = TimelineService(db: d)
         } catch {
             FileHandle.standardError.write("[mcp] db open failed: \(error)\n".data(using: .utf8)!)
             db = nil; search = nil; timeline = nil
@@ -31,7 +40,7 @@ enum ZBSEyeMCPServer {
 
         let server = Server(
             name: "zbseye",
-            version: "0.2.1",
+            version: "0.3.0",
             capabilities: .init(tools: .init(listChanged: false)))
 
         await server.withMethodHandler(ListTools.self) { _ in
@@ -76,8 +85,13 @@ enum ZBSEyeMCPServer {
                     kind: kind,
                     limit: limit ?? 25)
                 do {
-                    let results = try await search.search(query: q, filters: filters)
-                    return .init(content: [.text(Self.formatResults(q, results))])
+                    let execution = try await search.searchWithMetadata(
+                        query: q,
+                        filters: filters
+                    )
+                    return .init(content: [
+                        .text(Self.formatResults(q, execution.results, semanticMode: execution.semanticMode))
+                    ])
                 } catch {
                     // honest error: the agent must distinguish "nothing found" from "DB broken"
                     return .init(content: [.text("Search failed: \(error)")], isError: true)
@@ -177,7 +191,7 @@ enum ZBSEyeMCPServer {
         }
         return [
             Tool(name: "search_history",
-                 description: "Hybrid search (exact words + by meaning, ru/en) over the user's screen and audio history.",
+                 description: "Exact-word search over the user's screen and audio history. The GUI adds semantic search; this read-only helper process stays FTS-only to avoid a second model runtime.",
                  inputSchema: .object(["type": .string("object"),
                                        "properties": .object([
                                            "query": strProp("search query"),
@@ -229,9 +243,23 @@ enum ZBSEyeMCPServer {
 
     // MARK: formatting
 
-    private static func formatResults(_ q: String, _ results: [SearchResult]) -> String {
-        guard !results.isEmpty else { return "Nothing found for \"\(q)\"." }
-        var out = "Found \(results.count) for \"\(q)\":\n"
+    private static func formatResults(
+        _ q: String,
+        _ results: [SearchResult],
+        semanticMode: SearchSemanticMode
+    ) -> String {
+        let disclosure = switch semanticMode {
+        case .ftsOnly(.secondaryProcess):
+            "FTS-only helper search (semantic search stays in the GUI process).\n"
+        case .ftsOnly, .embeddingUnavailable:
+            "FTS-only search.\n"
+        case .hybrid:
+            ""
+        }
+        guard !results.isEmpty else {
+            return disclosure + "Nothing found for \"\(q)\"."
+        }
+        var out = disclosure + "Found \(results.count) for \"\(q)\":\n"
         for r in results {
             let app = r.appName ?? r.bundleId ?? "—"
             let when = r.ts.formatted(date: .abbreviated, time: .shortened)

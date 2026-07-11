@@ -40,6 +40,7 @@ set +e
 # require an Apple Team → BUILD FAILED. With Manual they get ad-hoc signed without a team.
 xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Debug \
   -derivedDataPath "$DERIVED" \
+  -onlyUsePackageVersionsFromResolvedFile \
   CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \
   build 2>&1 | grep -E "error:|warning:|BUILD"
 XC_STATUS=${PIPESTATUS[0]}

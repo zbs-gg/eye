@@ -370,7 +370,7 @@ actor ZBSEyeHTTPServer {
     }
     /// Compact OpenAPI spec (a machine contract for the LAM; the contract used to live only in code).
     static let openAPISpec = #"""
-    {"openapi":"3.0.3","info":{"title":"ZBS Eye Local API","version":"0.2.0",
+    {"openapi":"3.0.3","info":{"title":"ZBS Eye Local API","version":"0.3.0",
      "description":"Local screen/audio memory. Auth: Bearer token on everything except /health. Time: epoch-ms or ISO8601."},
      "paths":{
       "/health":{"get":{"summary":"Status without auth","responses":{"200":{"description":"ok"}}}},

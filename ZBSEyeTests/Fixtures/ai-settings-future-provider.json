@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 99,
+  "active": "future.provider",
+  "models": {
+    "future.provider": "future-model-v7",
+    "ollama": "qwen2.5:7b"
+  },
+  "endpoints": { "future.provider": "https://future.invalid/v1" },
+  "cloudConsent": { "future.provider": true },
+  "processingDisabledByUser": false,
+  "selectionRevision": 8,
+  "authorizationEpoch": 13
+}

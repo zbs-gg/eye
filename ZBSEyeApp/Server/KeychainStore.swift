@@ -4,6 +4,12 @@ import Security
 /// Minimal Keychain access (secrets — NOT UserDefaults, by plan). Used for the API token and
 /// later for connector secrets.
 enum KeychainStore {
+    enum SetAction: Equatable {
+        case complete
+        case add
+        case fail
+    }
+
     static let service = "gg.zbs.eye"
 
     /// CRITICAL: we use the MODERN data-protection keychain (like on iOS), NOT the legacy file keychain.
@@ -37,22 +43,47 @@ enum KeychainStore {
             kSecAttrAccount as String: account,
             useDataProtection: true,
         ]
-        SecItemDelete(base as CFDictionary)
-        var add = base
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+        let update: [String: Any] = [kSecValueData as String: data]
+        switch setAction(for: SecItemUpdate(
+            base as CFDictionary,
+            update as CFDictionary
+        )) {
+        case .complete:
+            return true
+        case .add:
+            var add = base
+            add[kSecValueData as String] = data
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+        case .fail:
+            return false
+        }
+    }
+
+    static func setAction(for updateStatus: OSStatus) -> SetAction {
+        switch updateStatus {
+        case errSecSuccess: .complete
+        case errSecItemNotFound: .add
+        default: .fail
+        }
     }
 
     /// Removes a stored secret (e.g. a cloud provider's API key the user revokes).
-    static func delete(_ account: String) {
+    /// An already-missing item is a completed deletion; every other Keychain
+    /// error leaves absence unproven and must be surfaced by the caller.
+    @discardableResult
+    static func delete(_ account: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             useDataProtection: true,
         ]
-        SecItemDelete(query as CFDictionary)
+        return isSuccessfulDeletion(SecItemDelete(query as CFDictionary))
+    }
+
+    static func isSuccessfulDeletion(_ status: OSStatus) -> Bool {
+        status == errSecSuccess || status == errSecItemNotFound
     }
 
     /// Local API token: takes the existing one or generates and stores it.

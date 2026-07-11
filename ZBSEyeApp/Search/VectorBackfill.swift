@@ -15,6 +15,11 @@ actor VectorBackfill {
     private let db: ZBSEyeDatabase
     private let embedder: EmbeddingService
     private var running = false
+    private weak var computeCoordinator: AIComputeCoordinator?
+    private var suspended = false
+    private var activeWorkSections = 0
+    private var drainWaiters: [CheckedContinuation<Void, Never>] = []
+    private var resumeWaiters: [CheckedContinuation<Void, Never>] = []
     private let idleRescanSec: Double = 20
     /// On an outage (model unavailable / DB read or write failing) back off harder than the idle poll.
     private let blockedBackoffSec: Double = 120
@@ -30,12 +35,39 @@ actor VectorBackfill {
     private let readErrorBlockThreshold = 20
 
     private enum Kind: Int64 { case screen = 0, transcript = 1 }
-    private enum DrainStatus { case embedded, idle, blocked }
+    private enum DrainStatus { case embedded, idle, blocked, suspended }
+    private enum EmbedOutcome { case value([Float]?), deferred }
     private struct QueueItem: Sendable { let rowId: Int64; let kind: Int64; let ts: Int64 }
 
     init(db: ZBSEyeDatabase, embedder: EmbeddingService) {
         self.db = db
         self.embedder = embedder
+    }
+
+    /// Attached once by AppEnvironment after the coordinator has retained this
+    /// actor through its suspend/resume hooks. The backlink is weak to avoid a
+    /// process-lifetime retain cycle.
+    func attachComputeCoordinator(_ coordinator: AIComputeCoordinator) {
+        guard computeCoordinator == nil else { return }
+        computeCoordinator = coordinator
+    }
+
+    /// Stops admitting durable-queue work and acknowledges only after the
+    /// current DB/embed section has reached a safe boundary.
+    func suspendAndDrain() async {
+        suspended = true
+        if activeWorkSections > 0 {
+            await withCheckedContinuation { drainWaiters.append($0) }
+        }
+        await embedder.unload()
+    }
+
+    func resume() {
+        guard suspended else { return }
+        suspended = false
+        let waiters = resumeWaiters
+        resumeWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
     }
 
     /// Runs for the app's lifetime (a repeat call while already running is a no-op).
@@ -44,11 +76,20 @@ actor VectorBackfill {
         running = true
         defer { running = false }
 
+        beginWorkSection()
         await resetAttempts()   // give every queued row a fresh set of tries (a fixed model / past blip recovers)
-        await reconcile()       // re-enqueue any gap (pre-v6 rows / anything missing) — self-healing, every launch
+        if !suspended {
+            await reconcile()   // re-enqueue any gap (pre-v6 rows / anything missing) — self-healing, every launch
+        }
+        endWorkSection()
 
         var idleRounds = 0
         while !Task.isCancelled {
+            if suspended {
+                await embedder.unload()
+                await waitUntilResumed()
+                continue
+            }
             switch await drainQueue() {
             case .embedded:
                 idleRounds = 0
@@ -61,6 +102,10 @@ actor VectorBackfill {
                 idleRounds = 0
                 try? await Task.sleep(for: .seconds(blockedBackoffSec))
                 continue
+            case .suspended:
+                await embedder.unload()
+                await waitUntilResumed()
+                continue
             }
             try? await Task.sleep(for: .seconds(idleRescanSec))
         }
@@ -71,20 +116,24 @@ actor VectorBackfill {
     /// A genuine block always returns `.blocked` even after partial progress (the committed work stays; the fault is
     /// real, so we must release the model and back off rather than spin every 20s).
     private func drainQueue() async -> DrainStatus {
+        guard !suspended else { return .suspended }
+        beginWorkSection()
+        defer { endWorkSection() }
         var didWork = false
         var writeFailStreak = 0
         var readErrStreak = 0
-        while !Task.isCancelled {
+        while !Task.isCancelled, !suspended {
             let batch: [QueueItem]
             do { batch = try await nextBatch(limit: batchSize) }
             catch {
                 Log.app.error("embed-queue batch read failed: \(String(describing: error), privacy: .public)")
                 return .blocked   // whole-DB read outage (not one bad row) — back off, leave everything queued
             }
+            if suspended { return .suspended }
             if batch.isEmpty { return didWork ? .embedded : .idle }
 
             var progressed = false   // did the batch move at all (embed / dequeue / a successful bump)?
-            for item in batch where !Task.isCancelled {
+            for item in batch where !Task.isCancelled && !suspended {
                 let text: String?
                 do { text = try await textFor(item); readErrStreak = 0 }
                 catch {
@@ -99,7 +148,11 @@ actor VectorBackfill {
                     if await dequeue(item) { progressed = true }   // source row genuinely gone/empty — safe to drop
                     continue
                 }
-                guard let vec = await embedder.embed(passage: text), vec.count == ZBSEyeDatabase.embeddingDim else {
+                let outcome = await coordinatedEmbed(passage: text)
+                guard case .value(let maybeVector) = outcome else {
+                    return .suspended
+                }
+                guard let vec = maybeVector, vec.count == ZBSEyeDatabase.embeddingDim else {
                     if await embedder.isReady {
                         // Loaded model can't embed THIS text (too short / untokenizable). Keep it queued — bump so it
                         // sinks after maxAttempts. Never delete: a systematic fault must stay recoverable.
@@ -125,7 +178,41 @@ actor VectorBackfill {
             if !progressed { return .blocked }
             try? await Task.sleep(for: .seconds(2))   // pause between batches — background, not a load spike
         }
-        return didWork ? .embedded : .idle
+        return suspended ? .suspended : (didWork ? .embedded : .idle)
+    }
+
+    private func coordinatedEmbed(passage text: String) async -> EmbedOutcome {
+        guard !suspended else { return .deferred }
+        guard let computeCoordinator else {
+            return .value(await embedder.embed(passage: text))
+        }
+        guard let lease = await computeCoordinator.acquireBackgroundEmbedding() else {
+            return .deferred
+        }
+        if suspended {
+            await lease.release()
+            return .deferred
+        }
+        let vector = await embedder.embed(passage: text)
+        await lease.release()
+        return .value(vector)
+    }
+
+    private func beginWorkSection() {
+        activeWorkSections += 1
+    }
+
+    private func endWorkSection() {
+        activeWorkSections = max(0, activeWorkSections - 1)
+        guard activeWorkSections == 0 else { return }
+        let waiters = drainWaiters
+        drainWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
+
+    private func waitUntilResumed() async {
+        guard suspended, !Task.isCancelled else { return }
+        await withCheckedContinuation { resumeWaiters.append($0) }
     }
 
     /// Newest-first among rows still worth retrying this session (attempts under the cap). Rows at the cap are
@@ -169,7 +256,7 @@ actor VectorBackfill {
         }) ?? []
         guard !ids.isEmpty else { return }
         var i = 0
-        while i < ids.count, !Task.isCancelled {
+        while i < ids.count, !Task.isCancelled, !suspended {
             let chunk = ids[i..<min(i + batchSize, ids.count)]
             try? await db.pool.write { dbc in
                 for (rowId, kind) in chunk {
@@ -224,12 +311,14 @@ actor VectorBackfill {
     /// batches (short write locks) so a large store-forever history can't stall capture. Idempotent; a no-op once the
     /// queue is complete (the usual steady state, since all live write sites enqueue at write time).
     private func reconcile() async {
+        guard !suspended else { return }
         await reconcileGaps(kind: Kind.screen.rawValue, sql: """
             SELECT c.id AS id, c.ts AS ts FROM screen_captures c
             WHERE EXISTS (SELECT 1 FROM text_blocks tb WHERE tb.captureId = c.id)
               AND c.id NOT IN (SELECT capture_id FROM vec_screen)
               AND c.id NOT IN (SELECT row_id FROM embed_queue WHERE kind = 0)
             """)
+        guard !suspended else { return }
         await reconcileGaps(kind: Kind.transcript.rawValue, sql: """
             SELECT t.id AS id, a.ts AS ts FROM transcriptions t JOIN audio_captures a ON a.id = t.audioId
             WHERE t.id NOT IN (SELECT transcription_id FROM vec_transcripts)
@@ -243,7 +332,7 @@ actor VectorBackfill {
         }) ?? []
         guard !gaps.isEmpty else { return }
         var i = 0
-        while i < gaps.count, !Task.isCancelled {
+        while i < gaps.count, !Task.isCancelled, !suspended {
             let chunk = gaps[i..<min(i + batchSize, gaps.count)]
             try? await db.pool.write { dbc in
                 for (id, ts) in chunk {

@@ -1,9 +1,33 @@
 import Foundation
 import Observation
 
+protocol AIProviderCatalogLoading: Sendable {
+    func load(
+        provider: AIProvider,
+        baseURL: URL,
+        timeout: Duration
+    ) async throws -> ProviderCatalogState
+}
+
+extension ProviderHTTPCatalogClient: AIProviderCatalogLoading {}
+
+protocol AIProviderCredentialStoring {
+    func get(_ account: String) -> String?
+    @discardableResult func set(_ value: String, account: String) -> Bool
+    @discardableResult func delete(_ account: String) -> Bool
+}
+
+struct KeychainAIProviderCredentialStore: AIProviderCredentialStoring {
+    func get(_ account: String) -> String? { KeychainStore.get(account) }
+    func set(_ value: String, account: String) -> Bool {
+        KeychainStore.set(value, account: account)
+    }
+    func delete(_ account: String) -> Bool { KeychainStore.delete(account) }
+}
+
 /// State of the "AI Models" section: one card per provider, exactly ONE active processing model across
 /// all of them. @MainActor @Observable — the UI binds straight to it; the network probes go through the
-/// LLMClient actor. Persistence: UserDefaults "zbseye.ai.provider" (JSON, no secrets) with a one-time
+/// process-wide LLMRouter. Persistence: UserDefaults "zbseye.ai.provider" (JSON, no secrets) with a one-time
 /// migration from the legacy "zbseye.connections.llm" {baseURL, model} — an existing local setup keeps
 /// working without the user touching anything. API keys are ONLY in the Keychain (never in defaults,
 /// never in this observable state, never logged).
@@ -34,57 +58,204 @@ final class AIProviderStore {
         case checking
         case found(String)
         case notFound
+        case unavailable(String)
+    }
+
+    private struct CodexProbeBaseline {
+        let connection: CodexConnectionState
+        let catalog: ProviderCatalogState?
+        let status: CardStatus?
+    }
+
+    private struct CodexProbeOperation {
+        let attempt: Int
+        let task: Task<Void, Never>
+    }
+
+    private struct ClaudeCodeProbeBaseline {
+        let connection: ClaudeCodeState
+        let catalog: ProviderCatalogState?
+        let status: CardStatus?
+    }
+
+    private struct AutomaticLocalProbe: Sendable {
+        let provider: AIProvider
+        let baseURL: URL
+        let connectionAttempt: Int
+    }
+
+    private struct AutomaticLocalProbeResult: Sendable {
+        enum Outcome: Sendable {
+            case catalog(ProviderCatalogState)
+            case unavailable
+            case cancelled
+        }
+
+        let probe: AutomaticLocalProbe
+        let outcome: Outcome
     }
 
     var settings: AIProviderSettings {
-        didSet { if settings != oldValue { persist() } }
+        didSet {
+            guard settings != oldValue else { return }
+            if !settingsAlreadyPersisted {
+                persist()
+            }
+            if settings.selectionRevision != oldValue.selectionRevision
+                || settings.authorizationEpoch != oldValue.authorizationEpoch {
+                notifyRouterOfRoutingChange()
+            }
+        }
     }
-    /// Per-provider probe status + models fetched this session (not persisted — servers/keys change).
+    /// Per-provider reachability/auth state. This is deliberately independent from both the user's
+    /// persisted model preference and the global committed active pair.
     private(set) var statuses: [String: CardStatus] = [:]
-    private(set) var models: [String: [String]] = [:]
+    /// Authority of the latest model catalog observed this session. A catalog may become unavailable or
+    /// omit the preferred/active model without mutating either persisted identity.
+    private(set) var catalogs: [String: ProviderCatalogState] = [:]
     /// Whether a Keychain key exists per cloud provider (the key itself never enters observable state).
     private(set) var keyPresent: [String: Bool] = [:]
     /// OpenRouter one-click sign-in progress (nothing else here observes the key material).
     private(set) var openRouterOAuthPhase: OAuthPhase = .idle
     /// Whether the user's Claude Code CLI is installed (drives the Claude Code card's dot + activation).
     private(set) var claudeCode: ClaudeCodeState = .unknown
+    /// Prompt-free Codex App Server setup/auth/catalog state. Only `.authenticated`
+    /// is eligible for activation and overlay registration.
+    private(set) var codexConnection: CodexConnectionState = .unknown
+    /// A totally unreadable current payload is preserved in UserDefaults rather
+    /// than overwritten with empty state during launch. Field-level corruption
+    /// is recovered by AIProviderSettings' lossy decoder before reaching here.
+    private(set) var persistenceWarning: String?
 
     @ObservationIgnored private var oauthTask: Task<Void, Never>?
     /// Monotonically-increasing token that identifies the current OAuth attempt. A completion (or a late
     /// cancel) only mutates state if it still matches — so a superseded flow can't clobber a newer one.
     @ObservationIgnored private var oauthAttempt = 0
-    @ObservationIgnored private let client = LLMClient()
-    @ObservationIgnored private let defaults = UserDefaults.standard
+    @ObservationIgnored private var connectionAttempts: [String: Int] = [:]
+    @ObservationIgnored private var codexAttempt = 0
+    @ObservationIgnored private var claudeCodeAttempt = 0
+    @ObservationIgnored private var codexProbeOperation: CodexProbeOperation?
+    @ObservationIgnored private var codexProbeBaseline: CodexProbeBaseline?
+    @ObservationIgnored private var claudeCodeProbeBaseline: ClaudeCodeProbeBaseline?
+    @ObservationIgnored private var codexProvider: (any CodexProviderConnecting)?
+    @ObservationIgnored private var claudeCodeProvider: (any ClaudeCodeProviderConnecting)?
+    @ObservationIgnored private var processOverlay: LLMAdapterRegistry?
+    @ObservationIgnored private var routerChangeNotification: (@Sendable () async -> Void)?
+    @ObservationIgnored private let catalogClient: any AIProviderCatalogLoading
+    @ObservationIgnored private let credentialStore: any AIProviderCredentialStoring
+    @ObservationIgnored private let defaults: UserDefaults
+    /// Best-effort acknowledgement/fault-injection seam. UserDefaults does not
+    /// provide a transactional fsync boundary; the built-in model journal's
+    /// next-process recovery receipt owns crash safety instead.
+    @ObservationIgnored private let persistenceSynchronizer: () -> Bool
+    @ObservationIgnored private var settingsAlreadyPersisted = false
     private static let key = "zbseye.ai.provider"
+    private static let lastKnownGoodKey = "zbseye.ai.provider.lastKnownGood"
+    private static let unreadableRecoveryKey = "zbseye.ai.provider.unreadableRecovery"
     private static let legacyKey = "zbseye.connections.llm"
 
-    init() {
-        if let data = UserDefaults.standard.data(forKey: Self.key),
-           let s = try? JSONDecoder().decode(AIProviderSettings.self, from: data) {
-            settings = s
+    init(
+        defaults persistedDefaults: UserDefaults = .standard,
+        storedKeyExists: ((AIProvider) -> Bool)? = nil,
+        catalogClient injectedCatalogClient: (any AIProviderCatalogLoading)? = nil,
+        credentialStore injectedCredentialStore: (any AIProviderCredentialStoring)? = nil,
+        persistenceSynchronizer injectedPersistenceSynchronizer: (() -> Bool)? = nil
+    ) {
+        defaults = persistedDefaults
+        persistenceSynchronizer = injectedPersistenceSynchronizer
+            ?? { persistedDefaults.synchronize() }
+        catalogClient = injectedCatalogClient ?? ProviderHTTPCatalogClient(
+            credentials: KeychainProviderHTTPCredentials()
+        )
+        let resolvedCredentialStore = injectedCredentialStore
+            ?? KeychainAIProviderCredentialStore()
+        credentialStore = resolvedCredentialStore
+        if let data = persistedDefaults.data(forKey: Self.key) {
+            let resolution = AIProviderSettingsArchive.resolve(
+                currentData: data,
+                lastKnownGoodData: persistedDefaults.data(forKey: Self.lastKnownGoodKey)
+            )
+            settings = resolution.settings
+
+            switch resolution.source {
+            case .current:
+                // Any decodable current payload becomes the recovery point for
+                // a later launch whose primary value is totally unreadable.
+                persistedDefaults.set(data, forKey: Self.lastKnownGoodKey)
+            case .lastKnownGood:
+                persistenceWarning = String(localized: "AI model settings were recovered from the last known good copy. The unreadable payload was preserved.")
+            case .defaults:
+                persistenceWarning = String(localized: "AI model settings could not be read. The unreadable payload was preserved for recovery.")
+            }
+
+            if let unreadable = resolution.unreadableCurrentData {
+                persistedDefaults.set(unreadable, forKey: Self.unreadableRecoveryKey)
+            }
         } else {
             // One-time migration: the legacy config was always a LOCAL OpenAI-compatible endpoint.
-            settings = Self.migrateLegacy() ?? AIProviderSettings()
+            settings = Self.migrateLegacy(from: persistedDefaults) ?? AIProviderSettings()
             persist()
         }
+        let keyLookup = storedKeyExists ?? { provider in
+            guard let account = provider.keychainAccount else { return false }
+            return !(resolvedCredentialStore.get(account) ?? "").isEmpty
+        }
         for p in AIProvider.allCases where p.isCloud {
-            keyPresent[p.rawValue] = Self.storedKeyExists(p)
+            keyPresent[p.rawValue] = keyLookup(p)
         }
-        // If Claude Code was the persisted processing model, confirm the CLI in the BACKGROUND so the card
-        // status is accurate on relaunch WITHOUT the user opening AI Models (the probe used to run only
-        // from that screen). activeConfig already treats "not yet probed" optimistically, so Ask/Insights
-        // keep working immediately; this just refreshes the card dot and catches a genuine "not installed".
-        if settings.activeProvider == .claudeCode {
-            Task { await probeClaudeCode() }
-        }
+    }
+
+    /// Installs the process-provider control plane after AppEnvironment has
+    /// resolved the real generative data root. A persisted process provider is
+    /// reconnected only when it is still the active choice and owns at least
+    /// one valid scoped consent grant. Inactive or unconsented providers stay
+    /// completely quiet until the user presses their explicit Check button.
+    func configureProcessProviders(
+        codex: any CodexProviderConnecting,
+        claudeCode: any ClaudeCodeProviderConnecting,
+        overlay: LLMAdapterRegistry
+    ) {
+        codexProvider = codex
+        claudeCodeProvider = claudeCode
+        processOverlay = overlay
+        guard let active = settings.activeProvider,
+              active.isSubprocess,
+              AIConsumer.allCases.contains(where: {
+                  settings.isAuthorized(providerID: active.rawValue, consumer: $0)
+              }) else { return }
+        Task { [weak self] in await self?.connect(active) }
+    }
+
+    /// Wires the app-lifetime router after bootstrap constructs it. Routing
+    /// revisions are observed centrally in `settings.didSet`, so every commit
+    /// path gets prompt queued/active cancellation without bespoke callbacks.
+    func configureRouterChangeNotification(
+        _ notification: @escaping @Sendable () async -> Void
+    ) {
+        routerChangeNotification = notification
+    }
+
+    private func notifyRouterOfRoutingChange() {
+        guard let routerChangeNotification else { return }
+        Task { await routerChangeNotification() }
     }
 
     // MARK: derived state
 
     var activeProvider: AIProvider? { settings.activeProvider }
+    var activeModelID: String? { settings.activeModelID }
+    var selectionSnapshot: ProviderSelectionSnapshot? { settings.selectionSnapshot }
+    /// The revision exists independently of an active pair. In particular, an
+    /// explicit "None" selection still owns its advanced revision and must not
+    /// be mistaken for a fresh revision zero by delayed provisioning work.
+    var currentSelectionRevision: SelectionRevision { settings.selectionRevision }
 
     func model(for p: AIProvider) -> String { settings.models[p.rawValue] ?? "" }
-    func setModel(_ m: String, for p: AIProvider) { settings.models[p.rawValue] = m }
+    /// A card edit is only an inactive preference. The global active pair changes exclusively through
+    /// `activate`, so editing the active provider's card cannot redirect work that is already configured.
+    func setModel(_ m: String, for p: AIProvider) {
+        settings.setPreferredModel(m, providerID: p.rawValue)
+    }
 
     /// Cloud endpoints are pinned; local ones take the user override (custom has no default at all).
     func endpoint(for p: AIProvider) -> String {
@@ -93,48 +264,63 @@ final class AIProviderStore {
         return p.defaultBaseURL
     }
     func setEndpoint(_ s: String, for p: AIProvider) {
-        guard !p.isCloud else { return }
+        guard p.allowsEndpointOverride else { return }
         guard settings.endpoints[p.rawValue] != s else { return }
+        connectionAttempts[p.rawValue, default: 0] &+= 1
         settings.endpoints[p.rawValue] = s
-        // The cached status/models belong to the OLD server. Invalidate them so a stale
-        // "connected · N models" can't be activated against a now-different endpoint.
+        // Reachability/catalog belonged to the old server. Preserve the preference and committed pair,
+        // but invalidate authorization for work that may have snapshotted the old endpoint.
         statuses[p.rawValue] = .notConfigured
-        models[p.rawValue] = []
+        catalogs[p.rawValue] = .notLoaded
+        if isActive(p) { settings.authorizationEpoch.advance() }
     }
 
     func status(_ p: AIProvider) -> CardStatus { statuses[p.rawValue] ?? .notConfigured }
 
-    /// Models actually fetched from the server this session (empty if none/failed). The view uses this to
-    /// decide whether to offer manual model entry (no server list ⇒ let the user type an id).
-    func fetchedModels(_ p: AIProvider) -> [String] { models[p.rawValue] ?? [] }
-
-    /// The ONE source of truth for "which models may the switcher offer for this provider RIGHT NOW".
-    /// Empty ⇒ the provider isn't connected and doesn't appear as a source. It always folds in the
-    /// currently-selected/persisted model, so a running model keeps its checkmark even before a fresh
-    /// probe repopulates the server list after relaunch (notably a cloud model, which isn't auto-probed).
-    func availableModels(for p: AIProvider) -> [String] {
-        switch p {
-        case .claudeCode:
-            if case .found = claudeCode { return AIProvider.claudeCodeModels }
-            return []
-        case .lmstudio, .ollama, .custom:
-            // A localhost model with no endpoint can't activate — don't list a dead-end (custom has no
-            // default endpoint; LM Studio / Ollama always have one, so this only ever excludes custom).
-            guard !endpoint(for: p).trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
-            return foldingInSelected(fetchedModels(p), for: p)
-        case .openrouter, .anthropic, .openai:
-            guard hasKey(p) else { return [] }
-            return foldingInSelected(fetchedModels(p), for: p)
+    func catalogState(_ p: AIProvider) -> ProviderCatalogState {
+        if let catalog = catalogs[p.rawValue] { return catalog }
+        // Built-in provisioning and Codex App Server own separate authoritative
+        // lifecycles; neither may fall through to an HTTP model-list probe.
+        switch p.catalogDialect {
+        case .bundledManifest, .codexAppServer:
+            return .unsupported
+        case .openAIModels, .anthropicModels, .documentedSuggestions, .curatedClaudeCode:
+            return .notLoaded
         }
     }
 
-    /// Prepend the currently-selected model when the fetched list doesn't already contain it, so an
-    /// active choice never drops out of the switcher (and keeps its checkmark) between probes.
-    private func foldingInSelected(_ list: [String], for p: AIProvider) -> [String] {
-        var opts = list
-        let sel = model(for: p)
-        if !sel.isEmpty, !opts.contains(sel) { opts.insert(sel, at: 0) }
-        return opts
+    func selectionAvailability(_ p: AIProvider) -> ModelSelectionAvailability {
+        catalogState(p).selectionAvailability(for: model(for: p))
+    }
+
+    /// Models from a live authoritative catalog only. Curated CLI/static suggestions intentionally do not
+    /// appear here, so the UI cannot accidentally label them as server-verified.
+    func fetchedModels(_ p: AIProvider) -> [String] { catalogState(p).models }
+
+    /// Choices the provider card may show right now: an authoritative live catalog, or explicitly curated
+    /// CLI/static choices after authentication was proven. The persisted preference is NEVER folded into
+    /// this list; a missing choice remains visibly missing instead of becoming fake catalog authority.
+    func availableModels(for p: AIProvider) -> [String] {
+        switch p.catalogDialect {
+        case .bundledManifest, .codexAppServer:
+            return catalogState(p).models
+        case .curatedClaudeCode:
+            if case .found = claudeCode { return AIProvider.claudeCodeModels }
+            return []
+        case .documentedSuggestions:
+            guard hasKey(p) else { return [] }
+            return p.documentedSuggestedModels
+        case .anthropicModels:
+            guard hasKey(p) else { return [] }
+            return catalogState(p).models
+        case .openAIModels:
+            if p.usesAPIKey {
+                guard hasKey(p) else { return [] }
+            } else {
+                guard !endpoint(for: p).trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
+            }
+            return catalogState(p).models
+        }
     }
 
     /// True once the USER has configured or activated any provider by hand — a saved API key, a saved
@@ -148,191 +334,780 @@ final class AIProviderStore {
     }
 
     func hasKey(_ p: AIProvider) -> Bool { keyPresent[p.rawValue] ?? false }
-    func hasConsent(_ p: AIProvider) -> Bool { settings.cloudConsent[p.rawValue] ?? false }
-    func grantConsent(_ p: AIProvider) { settings.cloudConsent[p.rawValue] = true }
+
+    func consentGrant(_ p: AIProvider) -> ScopedAIConsentGrant? {
+        settings.consentGrant(forProviderID: p.rawValue)
+    }
+
+    /// The default keeps the existing UI and previously shipped manual Ask path compatible with a
+    /// `legacy-manual-v1` grant. New consumers must always name their own scope explicitly.
+    func hasConsent(_ p: AIProvider, for consumer: AIConsumer = .ask) -> Bool {
+        settings.isAuthorized(providerID: p.rawValue, consumer: consumer)
+    }
+
+    func hasConsent(_ p: AIProvider, for consumers: Set<AIConsumer>) -> Bool {
+        consumers.allSatisfy { settings.isAuthorized(providerID: p.rawValue, consumer: $0) }
+    }
+
+    func revokeConsent(_ p: AIProvider) {
+        settings.revokeConsent(providerID: p.rawValue)
+    }
 
     func isActive(_ p: AIProvider) -> Bool { activeProvider == p }
 
-    /// Make this provider THE processing model. Cloud requires prior consent (the view shows the
-    /// warning alert and calls grantConsent first) — refuse silently otherwise, never flip by accident.
-    /// A key-based cloud provider also needs its key; Claude Code (no key) only needs the CLI present.
-    func activate(_ p: AIProvider) {
-        guard !model(for: p).isEmpty else { return }
-        if p.isCloud {
-            guard hasConsent(p) else { return }
-            if p.usesAPIKey { guard hasKey(p) else { return } }
-            if p == .claudeCode { guard case .found = claudeCode else { return } }
+    /// Captures an immutable user choice against the current selection revision.
+    /// Discovery may change around it, but confirmation can only commit while
+    /// both the choice and its provider are still valid.
+    func activationIntent(for p: AIProvider, modelID: String) -> ActivationIntent? {
+        let cleanModel = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanModel.isEmpty, canActivate(p, modelID: cleanModel) else { return nil }
+        return ActivationIntent(
+            providerID: p.rawValue,
+            modelID: cleanModel,
+            expectedSelectionRevision: settings.selectionRevision
+        )
+    }
+
+    /// Captures the user's one-click built-in provisioning choice before the
+    /// multi-gigabyte artifact is available. This does not make the model
+    /// selectable or active; the manager still has to verify and load the exact
+    /// product manifest before the normal commitActivation boundary can pass.
+    func builtInProvisioningIntent(modelID: String) -> ActivationIntent? {
+        let cleanModel = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard BuiltInModelManifest.all.contains(where: { $0.id == cleanModel }) else {
+            return nil
         }
-        settings.active = p.rawValue
-        settings.processingDisabledByUser = false   // an explicit choice clears the user's "off" state
+        return ActivationIntent(
+            providerID: AIProvider.zbsEyeLocal.rawValue,
+            modelID: cleanModel,
+            expectedSelectionRevision: settings.selectionRevision
+        )
+    }
+
+    /// Publishes process-local runtime truth into the provider catalog. Only a
+    /// verified, loadable installation is authoritative. Removal or runtime
+    /// failure immediately makes the provider unavailable without fabricating
+    /// a model from a persisted preference.
+    @discardableResult
+    func publishBuiltInRuntimeAvailability(modelID: String?) -> Bool {
+        let provider = AIProvider.zbsEyeLocal
+        let nextCatalog: ProviderCatalogState
+        let nextStatus: CardStatus
+        if let modelID,
+           BuiltInModelManifest.all.contains(where: { $0.id == modelID }) {
+            nextCatalog = .authoritative([modelID])
+            nextStatus = .connected(1)
+        } else {
+            nextCatalog = .unavailable
+            nextStatus = .notConfigured
+        }
+
+        let previousCatalog = catalogState(provider)
+        let previousStatus = status(provider)
+        guard previousCatalog != nextCatalog || previousStatus != nextStatus else {
+            return false
+        }
+        catalogs[provider.rawValue] = nextCatalog
+        statuses[provider.rawValue] = nextStatus
+        if isActive(provider), previousCatalog != nextCatalog {
+            // The router's immutable snapshot must change when an active local
+            // runtime disappears or becomes usable after bootstrap.
+            settings.authorizationEpoch.advance()
+        }
+        return true
+    }
+
+    /// The only store-level activation commit boundary. When cloud consent is
+    /// confirmed, its fully-scoped grant and the provider/model pair are written
+    /// in the same settings mutation. A stale intent or newly-unavailable
+    /// provider returns false and leaves all persisted state untouched.
+    @discardableResult
+    func commitActivation(
+        _ intent: ActivationIntent,
+        grantCloudConsent: Bool = false
+    ) -> Bool {
+        guard let p = AIProvider(rawValue: intent.providerID),
+              canActivate(p, modelID: intent.modelID) else { return false }
+
+        let consentDraft: ScopedAIConsentGrant?
+        if grantCloudConsent {
+            guard p.isCloud, let recipient = p.egressDestination else { return false }
+            consentDraft = ScopedAIConsentGrant(
+                providerID: p.rawValue,
+                recipientDisclosure: recipient,
+                consumers: Set(AIConsumer.allCases),
+                policyRevision: ScopedAIConsentGrant.currentPolicyRevision
+            )
+        } else {
+            consentDraft = nil
+        }
+
+        return settings.commitActivation(intent, consentDraft: consentDraft)
+    }
+
+    /// Captures ownership for an asynchronous remove/disconnect flow. The
+    /// returned intent is safe to commit after draining because its revision
+    /// and exact pair are rechecked atomically.
+    func deactivationIntent(for provider: AIProvider) -> DeactivationIntent? {
+        guard let snapshot = settings.selectionSnapshot,
+              snapshot.providerID == provider.rawValue else { return nil }
+        return DeactivationIntent(
+            providerID: snapshot.providerID,
+            modelID: snapshot.modelID,
+            expectedSelectionRevision: snapshot.selectionRevision
+        )
+    }
+
+    @discardableResult
+    func commitDeactivation(_ intent: DeactivationIntent) -> Bool {
+        settings.commitDeactivation(intent)
+    }
+
+    /// Best-effort provider persistence step used by the built-in model
+    /// outbox. The proposed selection is queued before it is published into
+    /// this in-memory store. The model journal retains either the pending
+    /// effect or a next-process recovery receipt because UserDefaults cannot
+    /// itself supply the crash-safe commit boundary.
+    func commitBuiltInActivation(
+        _ intent: ActivationIntent
+    ) -> BuiltInModelProviderEffectResult {
+        guard intent.providerID == AIProvider.zbsEyeLocal.rawValue,
+              canActivate(.zbsEyeLocal, modelID: intent.modelID) else {
+            return .stale
+        }
+        var candidate = settings
+        guard candidate.commitActivation(intent) else { return .stale }
+        return commitProviderSettingsWithAcknowledgement(candidate)
+            ? .applied
+            : .retryablePersistenceFailure
+    }
+
+    func commitBuiltInDeactivation(
+        _ intent: DeactivationIntent
+    ) -> BuiltInModelProviderEffectResult {
+        guard intent.providerID == AIProvider.zbsEyeLocal.rawValue else {
+            return .stale
+        }
+        var candidate = settings
+        guard candidate.commitDeactivation(intent) else { return .stale }
+        return commitProviderSettingsWithAcknowledgement(candidate)
+            ? .applied
+            : .retryablePersistenceFailure
+    }
+
+    private func canActivate(_ p: AIProvider, modelID: String) -> Bool {
+        switch catalogState(p).selectionAvailability(for: modelID) {
+        case .missingFromAuthoritativeCatalog, .providerUnavailable, .unsupported:
+            return false
+        case .notSelected, .unknownUntilAuthoritative, .available:
+            break
+        }
+        if p.isCloud {
+            if p.usesAPIKey, !hasKey(p) { return false }
+            if p == .codex {
+                guard case .authenticated = codexConnection else { return false }
+            }
+            if p == .claudeCode {
+                guard case .found = claudeCode else { return false }
+            }
+        }
+        return true
     }
 
     /// Turn Ask & Insights off — no model processes history until one is picked again. The per-provider
     /// selections, keys and consent are untouched, so re-activating later is a single tap. Records the
     /// deliberate "off" so a connected local server can't silently re-activate on the next AI Models visit.
     func deactivate() {
-        settings.active = nil
-        settings.processingDisabledByUser = true
+        settings.deactivate()
     }
 
     /// The request config consumers use. nil = nothing usable is active → Ask/Insights degrade honestly.
     var activeConfig: LLMConfig? {
-        guard let p = activeProvider else { return nil }
-        let cfg = LLMConfig(provider: p, baseURL: endpoint(for: p), model: model(for: p),
-                            cloudConsented: hasConsent(p))
+        activeConfig(for: .ask)
+    }
+
+    /// Scoped configuration snapshot for a concrete consumer. The committed active model is used here,
+    /// never the mutable provider-card preference.
+    func activeConfig(for consumer: AIConsumer) -> LLMConfig? {
+        guard let snapshot = settings.selectionSnapshot,
+              let p = AIProvider(rawValue: snapshot.providerID) else { return nil }
+        switch catalogState(p).selectionAvailability(for: snapshot.modelID) {
+        case .missingFromAuthoritativeCatalog, .providerUnavailable, .unsupported:
+            return nil
+        case .notSelected, .unknownUntilAuthoritative, .available:
+            break
+        }
+        let consented = settings.isAuthorized(providerID: p.rawValue, consumer: consumer)
+        let cfg = LLMConfig(provider: p, baseURL: endpoint(for: p), model: snapshot.modelID,
+                            cloudConsented: consented)
         guard cfg.isConfigured, cfg.isEndpointAllowed else { return nil }
         if p.isCloud {
-            guard hasConsent(p) else { return nil }
+            guard consented else { return nil }
             if p.usesAPIKey { guard hasKey(p) else { return nil } }
-            // A persisted Claude Code selection must survive a relaunch without visiting AI Models. Treat
-            // "not yet probed" (.unknown/.checking) OPTIMISTICALLY — the binary is resolved, and a real
-            // "not installed" error surfaced, at use-time in claudeCodeChat. Only a CONFIRMED .notFound
-            // gates it off here; and since a transient miss never un-selects (see probeClaudeCode), it
-            // self-heals once discovery succeeds again.
-            if p == .claudeCode, case .notFound = claudeCode { return nil }
+            if p == .codex {
+                guard case .authenticated = codexConnection else { return nil }
+            }
+            // CLI identity is fail-closed. A persisted pair stays visible while
+            // checking, but it cannot dispatch until the exact signed/hash-pinned
+            // native executable has passed the current release policy.
+            if p == .claudeCode {
+                guard case .found = claudeCode else { return nil }
+            }
         }
         return cfg
     }
 
     // MARK: probing
 
-    /// Probe the provider: GET /models, fill the card's Picker. A cold-starting local server can take a
-    /// few seconds to answer, so the probe gets a network-realistic timeout. Anthropic keeps a static
-    /// fallback list ONLY when the probe SUCCEEDS (2xx = key proven good) but enumeration is unavailable —
-    /// a real failure (401 / offline / DNS) is surfaced honestly, never masked as connected.
+    /// Probe model authority without ever writing a preference or active pair. Built-in and subprocess
+    /// providers have dedicated lifecycles and must not fall through to an empty HTTP endpoint.
     func connect(_ p: AIProvider) async {
-        if p.isCloud, !hasKey(p) {
+        switch p.catalogDialect {
+        case .bundledManifest:
+            catalogs[p.rawValue] = .unsupported
+            statuses[p.rawValue] = .error(
+                String(localized: "Use the ZBS Eye Local controls above to manage the built-in model.")
+            )
+            return
+        case .codexAppServer:
+            await probeCodex(force: true)
+            return
+        case .curatedClaudeCode:
+            await probeClaudeCode(force: true)
+            return
+        case .documentedSuggestions:
+            guard hasKey(p) else {
+                catalogs[p.rawValue] = .unavailable
+                statuses[p.rawValue] = .error(
+                    String(localized: "API key required — paste it above.")
+                )
+                return
+            }
+            catalogs[p.rawValue] = .notLoaded
+            statuses[p.rawValue] = .connected(p.documentedSuggestedModels.count)
+            return
+        case .openAIModels, .anthropicModels:
+            break
+        }
+
+        connectionAttempts[p.rawValue, default: 0] &+= 1
+        let connectionAttempt = connectionAttempts[p.rawValue, default: 0]
+
+        if p.usesAPIKey, !hasKey(p) {
             statuses[p.rawValue] = .error(String(localized: "API key required — paste it above."))
+            catalogs[p.rawValue] = .unavailable
             return
         }
+        let previousStatus = status(p)
         statuses[p.rawValue] = .probing
-        let cfg = LLMConfig(provider: p, baseURL: endpoint(for: p), model: model(for: p))
-        let result = await client.listModels(cfg, timeout: 10)
-        switch result {
-        case .ok(let list) where !list.isEmpty:
-            models[p.rawValue] = list
-            statuses[p.rawValue] = .connected(list.count)
-            autoSelect(p, from: list, fetched: true)
-            autoActivateLocalIfNothingActive(p)
-        case .ok:
-            // 2xx but no enumerable models. Anthropic's /v1/models can be unavailable while the key is
-            // valid for /v1/messages → fall back to a static list (auth proven good, enumeration isn't).
-            if p == .anthropic {
-                let fallback = AIProvider.anthropicFallbackModels
-                models[p.rawValue] = fallback
-                statuses[p.rawValue] = .connected(fallback.count)
-                autoSelect(p, from: fallback, fetched: false)   // static list — never clobber a persisted choice
-            } else {
-                models[p.rawValue] = []
-                statuses[p.rawValue] = .connected(0)
+        guard let baseURL = URL(string: LLMConfig(
+            provider: p,
+            baseURL: endpoint(for: p),
+            model: model(for: p)
+        ).normalizedBaseURL) else {
+            catalogs[p.rawValue] = .unavailable
+            statuses[p.rawValue] = .error(String(localized: "The provider endpoint is invalid."))
+            return
+        }
+        do {
+            let catalog = try await catalogClient.load(
+                provider: p,
+                baseURL: baseURL,
+                timeout: .seconds(10)
+            )
+            guard connectionAttempt == connectionAttempts[p.rawValue] else {
+                return
             }
-        case .failed(let msg):
-            // Non-2xx (e.g. 401 bad key) or transport error. Report honestly; do NOT show a green
-            // connected state and do NOT touch the user's persisted model selection.
-            models[p.rawValue] = []
-            statuses[p.rawValue] = .error(msg)
+            guard !Task.isCancelled else {
+                statuses[p.rawValue] = previousStatus
+                return
+            }
+            guard case .authoritative(let list) = catalog else {
+                catalogs[p.rawValue] = .unavailable
+                statuses[p.rawValue] = .error(String(localized: "The provider returned an invalid model catalog."))
+                return
+            }
+            catalogs[p.rawValue] = catalog
+            statuses[p.rawValue] = .connected(list.count)
+        } catch {
+            guard connectionAttempt == connectionAttempts[p.rawValue] else {
+                return
+            }
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled {
+                statuses[p.rawValue] = previousStatus
+                return
+            }
+            catalogs[p.rawValue] = .unavailable
+            statuses[p.rawValue] = .error(
+                (error as? LocalizedError)?.errorDescription
+                    ?? String(localized: "The provider catalog is unavailable.")
+            )
         }
     }
 
-    /// Quiet local probe when "AI Models" opens: fill pickers if LM Studio/Ollama are already running,
-    /// stay silent (no error status) if not — the cards just show their Connect buttons.
+    /// Quiet local discovery fills only reachability/catalog state. It never chooses the first model and
+    /// never activates a running server, including on a user's explicit `none` state.
     func autoProbeLocal() async {
+        var probes: [AutomaticLocalProbe] = []
         for p in [AIProvider.lmstudio, .ollama, .custom] {
             guard !endpoint(for: p).isEmpty else { continue }
-            if case .ok(let list) = await client.listModels(
-                LLMConfig(provider: p, baseURL: endpoint(for: p), model: model(for: p)), timeout: 2),
-               !list.isEmpty {
-                models[p.rawValue] = list
-                statuses[p.rawValue] = .connected(list.count)
-                autoSelect(p, from: list, fetched: true)
-                autoActivateLocalIfNothingActive(p)
+            connectionAttempts[p.rawValue, default: 0] &+= 1
+            let connectionAttempt = connectionAttempts[p.rawValue, default: 0]
+            let config = LLMConfig(provider: p, baseURL: endpoint(for: p), model: model(for: p))
+            guard let baseURL = URL(string: config.normalizedBaseURL) else { continue }
+            probes.append(AutomaticLocalProbe(
+                provider: p,
+                baseURL: baseURL,
+                connectionAttempt: connectionAttempt
+            ))
+        }
+
+        let catalogClient = catalogClient
+        await withTaskGroup(of: AutomaticLocalProbeResult.self) { group in
+            for probe in probes {
+                group.addTask {
+                    do {
+                        let catalog = try await catalogClient.load(
+                            provider: probe.provider,
+                            baseURL: probe.baseURL,
+                            timeout: .seconds(2)
+                        )
+                        return AutomaticLocalProbeResult(
+                            probe: probe,
+                            outcome: .catalog(catalog)
+                        )
+                    } catch {
+                        let cancelled = Task.isCancelled
+                            || error is CancellationError
+                            || (error as? URLError)?.code == .cancelled
+                        return AutomaticLocalProbeResult(
+                            probe: probe,
+                            outcome: cancelled ? .cancelled : .unavailable
+                        )
+                    }
+                }
+            }
+
+            for await result in group {
+                guard !Task.isCancelled else {
+                    group.cancelAll()
+                    return
+                }
+                let p = result.probe.provider
+                guard result.probe.connectionAttempt == connectionAttempts[p.rawValue] else {
+                    continue
+                }
+
+                switch result.outcome {
+                case .catalog(let catalog):
+                    guard case .authoritative(let list) = catalog else {
+                        catalogs[p.rawValue] = .unavailable
+                        statuses[p.rawValue] = .error(String(localized: "The provider returned an invalid model catalog."))
+                        continue
+                    }
+                    catalogs[p.rawValue] = catalog
+                    statuses[p.rawValue] = .connected(list.count)
+                case .unavailable:
+                    catalogs[p.rawValue] = .unavailable
+                    statuses[p.rawValue] = .notConfigured
+                case .cancelled:
+                    continue
+                }
             }
         }
     }
 
-    /// When a LOCAL provider connects/probes successfully and NOTHING is active yet, flip it on
-    /// automatically — a local model needs no consent, so "N models available" turning into a live
-    /// switcher without any activation affordance is a dead end. It only ever fills a genuinely empty
-    /// state, and never:
-    ///   • overrides a user who deliberately picked "None" (processingDisabledByUser) — re-activating a
-    ///     model they just turned off would be a consent regression (excerpts start processing again);
-    ///   • overrides an active provider whose config is only TRANSIENTLY invalid — we key off the
-    ///     PERSISTED `settings.active`, not the computed `activeConfig`, so a cloud provider momentarily
-    ///     reporting .notFound (activeConfig == nil) is still "something active" and isn't overwritten.
-    private func autoActivateLocalIfNothingActive(_ p: AIProvider) {
-        guard !p.isCloud else { return }
-        guard settings.active == nil else { return }          // something is persisted-active — leave it
-        guard !settings.processingDisabledByUser else { return }  // user chose "None" — respect it
-        activate(p)                                           // activate() itself guards a non-empty model
+    /// Prompt-free Codex discovery. It can initialize App Server, read account
+    /// state, and read the current model catalog; it never starts a thread/turn
+    /// and never writes a preferred or active model.
+    func probeCodex(force: Bool = false) async {
+        // CodexProviderConnection intentionally rejects overlapping control
+        // operations. Share a normal discovery; a forced refresh cancels and
+        // fully drains the current probe before starting its replacement.
+        while let current = codexProbeOperation {
+            if !force {
+                await current.task.value
+                return
+            }
+            current.task.cancel()
+            await current.task.value
+            if codexProbeOperation?.attempt == current.attempt {
+                codexProbeOperation = nil
+            }
+            guard !Task.isCancelled else { return }
+        }
+
+        if !force, case .authenticated = codexConnection { return }
+        guard let codexProvider, let processOverlay else {
+            codexConnection = .error(String(localized: "Codex runtime is not ready."))
+            catalogs[AIProvider.codex.rawValue] = .unavailable
+            statuses[AIProvider.codex.rawValue] = .notConfigured
+            return
+        }
+        let providerID = AIProvider.codex.rawValue
+        let baseline = codexProbeBaseline ?? CodexProbeBaseline(
+            connection: codexConnection,
+            catalog: catalogs[providerID],
+            status: statuses[providerID]
+        )
+        codexProbeBaseline = baseline
+        codexAttempt &+= 1
+        let attempt = codexAttempt
+        if case .authenticated = baseline.connection {
+            // A refresh keeps the exact last-known-good runtime usable until a
+            // newer authoritative result commits.
+        } else {
+            codexConnection = .checking
+            catalogs[providerID] = .unavailable
+        }
+        statuses[providerID] = .probing
+
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performCodexProbe(
+                attempt: attempt,
+                baseline: baseline,
+                provider: codexProvider,
+                overlay: processOverlay
+            )
+        }
+        codexProbeOperation = CodexProbeOperation(attempt: attempt, task: task)
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        if codexProbeOperation?.attempt == attempt {
+            codexProbeOperation = nil
+        }
     }
 
-    /// Detect the user's Claude Code CLI when "AI Models" opens (or on an explicit re-check). Found →
-    /// seed a default `--model` preset so "Use this model" works immediately; not found → the card shows
-    /// an install hint. `force` re-runs discovery even if it was already checked (user just installed it).
+    private func performCodexProbe(
+        attempt: Int,
+        baseline: CodexProbeBaseline,
+        provider: any CodexProviderConnecting,
+        overlay: LLMAdapterRegistry
+    ) async {
+        guard !Task.isCancelled else {
+            restoreCodexProbe(
+                connection: baseline.connection,
+                catalog: baseline.catalog,
+                status: baseline.status
+            )
+            codexProbeBaseline = nil
+            return
+        }
+        let update = await provider.probe()
+        guard attempt == codexAttempt else { return }
+        guard !Task.isCancelled || update.runtimeDisposition == .committed else {
+            restoreCodexProbe(
+                connection: baseline.connection,
+                catalog: baseline.catalog,
+                status: baseline.status
+            )
+            codexProbeBaseline = nil
+            return
+        }
+        codexProbeBaseline = nil
+        await applyCodex(update, overlay: overlay)
+    }
+
+    private func restoreCodexProbe(
+        connection: CodexConnectionState,
+        catalog: ProviderCatalogState?,
+        status: CardStatus?
+    ) {
+        let providerID = AIProvider.codex.rawValue
+        codexConnection = connection
+        if let catalog {
+            catalogs[providerID] = catalog
+        } else {
+            catalogs.removeValue(forKey: providerID)
+        }
+        if let status {
+            statuses[providerID] = status
+        } else {
+            statuses.removeValue(forKey: providerID)
+        }
+    }
+
+    @discardableResult
+    func startCodexLogin() async -> CodexLoginChallenge? {
+        guard let codexProvider, let processOverlay else { return nil }
+        codexProbeBaseline = nil
+        codexAttempt &+= 1
+        let attempt = codexAttempt
+        statuses[AIProvider.codex.rawValue] = .probing
+        await processOverlay.unregister(providerID: AIProvider.codex.rawValue)
+        let update = await codexProvider.startLogin()
+        guard attempt == codexAttempt else { return nil }
+        await applyCodex(update, overlay: processOverlay)
+        guard case .loginPending(let loginID, let authorizationURL) = update.state else {
+            return nil
+        }
+        return CodexLoginChallenge(loginID: loginID, authorizationURL: authorizationURL)
+    }
+
+    func cancelCodexLogin() async {
+        guard case .loginPending(let loginID, _) = codexConnection,
+              let codexProvider, let processOverlay else { return }
+        codexProbeBaseline = nil
+        codexAttempt &+= 1
+        let attempt = codexAttempt
+        let update = await codexProvider.cancelLogin(loginID: loginID)
+        guard attempt == codexAttempt else { return }
+        await applyCodex(update, overlay: processOverlay)
+    }
+
+    func completeCodexLogin() async {
+        guard case .loginPending(let loginID, _) = codexConnection,
+              let codexProvider, let processOverlay else { return }
+        codexProbeBaseline = nil
+        codexAttempt &+= 1
+        let attempt = codexAttempt
+        let update = await codexProvider.completeLogin(loginID: loginID)
+        guard attempt == codexAttempt else { return }
+        await applyCodex(update, overlay: processOverlay)
+    }
+
+    private func applyCodex(
+        _ update: CodexConnectionUpdate,
+        overlay: LLMAdapterRegistry
+    ) async {
+        codexConnection = update.state
+        switch update.state {
+        case .authenticated(_, let models):
+            catalogs[AIProvider.codex.rawValue] = .authoritative(models)
+            statuses[AIProvider.codex.rawValue] = .connected(models.count)
+        case .loginPending:
+            catalogs[AIProvider.codex.rawValue] = .unavailable
+            statuses[AIProvider.codex.rawValue] = .probing
+        case .ready:
+            catalogs[AIProvider.codex.rawValue] = .unavailable
+            statuses[AIProvider.codex.rawValue] = .notConfigured
+        case .missing:
+            catalogs[AIProvider.codex.rawValue] = .unavailable
+            statuses[AIProvider.codex.rawValue] = .notConfigured
+        case .untrusted:
+            catalogs[AIProvider.codex.rawValue] = .unavailable
+            statuses[AIProvider.codex.rawValue] = .error(
+                String(localized: "Upgrade Codex to the version supported by this ZBS Eye release.")
+            )
+        case .error(let message):
+            catalogs[AIProvider.codex.rawValue] = .unavailable
+            statuses[AIProvider.codex.rawValue] = .error(message)
+        case .unknown, .checking:
+            catalogs[AIProvider.codex.rawValue] = .unavailable
+            statuses[AIProvider.codex.rawValue] = .probing
+        }
+        await overlay.unregister(providerID: AIProvider.codex.rawValue)
+        if let registration = update.registration,
+           case .authenticated = update.state {
+            await overlay.register(registration)
+        }
+        // Process-provider authorization lives outside persisted settings.
+        // Notify only after the overlay commit so new routing sees the same
+        // registration state that the UI just published.
+        notifyRouterOfRoutingChange()
+    }
+
+    /// Claude Code choices remain an exact curated release list. The adapter
+    /// overlay appears only after signed identity and first-party auth pass.
     func probeClaudeCode(force: Bool = false) async {
         if case .checking = claudeCode { return }
         if !force, case .found = claudeCode { return }
-        claudeCode = .checking
-        if force { await ClaudeCodeLocator.shared.refresh() }
-        if let path = await ClaudeCodeLocator.shared.resolve() {
-            claudeCode = .found(path)
-            if model(for: .claudeCode).isEmpty {
-                setModel(AIProvider.claudeCodeDefaultModel, for: .claudeCode)
-            }
-        } else {
-            // A discovery miss can be TRANSIENT (a flaky login-shell/PATH lookup). Reflect unavailability
-            // in the card status ONLY — never wipe the user's persisted active selection here. activeConfig
-            // gates a confirmed .notFound off honestly, and a later successful probe (or a relaunch's
-            // background probe) self-heals it; if the CLI is truly gone, the use-time call surfaces an error.
-            claudeCode = .notFound
+        guard let claudeCodeProvider, let processOverlay else {
+            claudeCode = .unavailable(String(localized: "Claude Code runtime is not ready."))
+            catalogs[AIProvider.claudeCode.rawValue] = .unavailable
+            statuses[AIProvider.claudeCode.rawValue] = .notConfigured
+            return
         }
+        let providerID = AIProvider.claudeCode.rawValue
+        let baseline = claudeCodeProbeBaseline ?? ClaudeCodeProbeBaseline(
+            connection: claudeCode,
+            catalog: catalogs[providerID],
+            status: statuses[providerID]
+        )
+        claudeCodeProbeBaseline = baseline
+        claudeCodeAttempt &+= 1
+        let attempt = claudeCodeAttempt
+        if case .found = baseline.connection {
+            // Keep the signed last-known-good adapter and identity available
+            // while a user-initiated refresh is in flight.
+        } else {
+            claudeCode = .checking
+        }
+        statuses[providerID] = .probing
+        guard !Task.isCancelled else {
+            restoreClaudeCodeProbe(
+                connection: baseline.connection,
+                catalog: baseline.catalog,
+                status: baseline.status
+            )
+            claudeCodeProbeBaseline = nil
+            return
+        }
+        let update = await claudeCodeProvider.probe()
+        guard attempt == claudeCodeAttempt else { return }
+        guard !Task.isCancelled else {
+            restoreClaudeCodeProbe(
+                connection: baseline.connection,
+                catalog: baseline.catalog,
+                status: baseline.status
+            )
+            claudeCodeProbeBaseline = nil
+            return
+        }
+        claudeCodeProbeBaseline = nil
+
+        switch update.state {
+        case .authenticated(_, let executablePath):
+            claudeCode = .found(executablePath)
+            catalogs[AIProvider.claudeCode.rawValue] = .notLoaded
+            statuses[AIProvider.claudeCode.rawValue] = .connected(AIProvider.claudeCodeModels.count)
+        case .missing:
+            claudeCode = .notFound
+            catalogs[AIProvider.claudeCode.rawValue] = .unavailable
+            statuses[AIProvider.claudeCode.rawValue] = .notConfigured
+        case .untrusted:
+            claudeCode = .unavailable(String(localized: "Installed Claude Code is not an approved signed version."))
+            catalogs[AIProvider.claudeCode.rawValue] = .unavailable
+            statuses[AIProvider.claudeCode.rawValue] = .error(
+                String(localized: "Upgrade Claude Code to the version supported by this ZBS Eye release.")
+            )
+        case .notAuthenticated:
+            claudeCode = .unavailable(String(localized: "Sign in to Claude Code first."))
+            catalogs[AIProvider.claudeCode.rawValue] = .unavailable
+            statuses[AIProvider.claudeCode.rawValue] = .notConfigured
+        case .unsupportedAccount:
+            claudeCode = .unavailable(String(localized: "Claude Code must use a first-party Anthropic account."))
+            catalogs[AIProvider.claudeCode.rawValue] = .unavailable
+            statuses[AIProvider.claudeCode.rawValue] = .error(
+                String(localized: "This routed Claude Code account is not supported.")
+            )
+        case .error(let message):
+            claudeCode = .unavailable(message)
+            catalogs[AIProvider.claudeCode.rawValue] = .unavailable
+            statuses[AIProvider.claudeCode.rawValue] = .error(message)
+        }
+        await processOverlay.unregister(providerID: AIProvider.claudeCode.rawValue)
+        if let registration = update.registration,
+           case .authenticated = update.state {
+            await processOverlay.register(registration)
+        }
+        notifyRouterOfRoutingChange()
     }
 
-    /// Fill the model selection so "Use this model" works right away — WITHOUT clobbering the user's
-    /// persisted choice. When there is no stored model, take the first available. When `fetched` is true
-    /// (a real, freshly-fetched server list) also replace a stored model that's genuinely gone from it;
-    /// on a static fallback list (`fetched == false`) a non-empty stored choice is left untouched.
-    private func autoSelect(_ p: AIProvider, from list: [String], fetched: Bool) {
-        guard !list.isEmpty else { return }
-        let current = model(for: p)
-        if current.isEmpty {
-            setModel(list[0], for: p)
-        } else if fetched, !list.contains(current) {
-            setModel(list[0], for: p)
+    private func restoreClaudeCodeProbe(
+        connection: ClaudeCodeState,
+        catalog: ProviderCatalogState?,
+        status: CardStatus?
+    ) {
+        let providerID = AIProvider.claudeCode.rawValue
+        claudeCode = connection
+        if let catalog {
+            catalogs[providerID] = catalog
+        } else {
+            catalogs.removeValue(forKey: providerID)
+        }
+        if let status {
+            statuses[providerID] = status
+        } else {
+            statuses.removeValue(forKey: providerID)
         }
     }
 
     // MARK: API keys (Keychain only)
 
-    func saveKey(_ raw: String, for p: AIProvider) {
+    func saveKey(
+        _ raw: String,
+        for p: AIProvider,
+        connectAfterSave: Bool = true
+    ) {
         guard let account = p.keychainAccount else { return }
         let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
+        let previousKey = credentialStore.get(account)
+        // Any manual credential write invalidates work that already crossed
+        // the old Keychain boundary. Advance synchronously, before another
+        // MainActor task can publish a response authenticated with that key.
+        connectionAttempts[p.rawValue, default: 0] &+= 1
         // A MANUAL key save must win over any in-flight OpenRouter OAuth: cancel it first so a late
         // OAuth success can't overwrite the pasted key and the "Cancel" row can't linger. (When this is
         // called by finishOpenRouterOAuth() on OAuth success, oauthTask is already nil → no-op.)
         if p == .openrouter, oauthTask != nil { cancelOpenRouterOAuth() }
-        // A failed Keychain write must NOT look saved: keep keyPresent=false so the SecureField stays
-        // visible for re-entry, surface the error, and do not auto-connect with a key that isn't stored.
-        guard KeychainStore.set(key, account: account) else {
-            keyPresent[p.rawValue] = false
-            statuses[p.rawValue] = .error(String(localized: "Couldn't save the API key to the Keychain. Try again."))
+        let retainedCredential = previousKey.map { !$0.isEmpty } ?? false
+        let failedReplacementWouldRetainOldKey = retainedCredential && previousKey != key
+        guard credentialStore.set(key, account: account) else {
+            catalogs[p.rawValue] = .unavailable
+            keyPresent[p.rawValue] = retainedCredential
+            guard failedReplacementWouldRetainOldKey else {
+                statuses[p.rawValue] = .error(String(localized: "Couldn't save the API key to the Keychain. Try again."))
+                return
+            }
+
+            // Update-first Keychain writes leave the old credential intact on
+            // failure. Revoke its authorization durably so a restart cannot
+            // resurrect the previous key as an active cloud route.
+            var revokedSettings = settings
+            let previousEpoch = revokedSettings.authorizationEpoch
+            revokedSettings.revokeConsent(providerID: p.rawValue)
+            if revokedSettings.authorizationEpoch == previousEpoch {
+                revokedSettings.authorizationEpoch.advance()
+            }
+            guard commitProviderSettingsWithAcknowledgement(revokedSettings) else {
+                publishSettingsWithoutPersistence(revokedSettings)
+                statuses[p.rawValue] = .error(String(localized: "Couldn't save the access revocation. The previous API key was kept; processing is paused. Try again."))
+                return
+            }
+            statuses[p.rawValue] = .error(String(localized: "Couldn't replace the API key in the Keychain. The previous key was kept, and access was revoked. Try again."))
             return
         }
         keyPresent[p.rawValue] = true
-        Task { await connect(p) }
+        catalogs[p.rawValue] = .notLoaded
+        statuses[p.rawValue] = .notConfigured
+        if previousKey != key { settings.authorizationEpoch.advance() }
+        if connectAfterSave {
+            Task { await connect(p) }
+        }
     }
 
     func removeKey(for p: AIProvider) {
         guard let account = p.keychainAccount else { return }
-        KeychainStore.delete(account)
-        keyPresent[p.rawValue] = false
-        models[p.rawValue] = []
-        statuses[p.rawValue] = .notConfigured
-        if isActive(p) { settings.active = nil }   // no key → the provider can't process anything
-        // Removing the OpenRouter key also tears down any in-flight OAuth and clears a stale .failed
-        // banner, so it can't resurface the next time the card is shown.
+        connectionAttempts[p.rawValue, default: 0] &+= 1
+        // Prevent an in-flight OAuth completion from restoring the credential
+        // after this explicit revocation.
         if p == .openrouter { cancelOpenRouterOAuth() }
+
+        // Revoke and persist authorization before touching the Keychain. If
+        // deletion fails or the process dies at that boundary, a retained
+        // credential still cannot authorize prompt egress after restart.
+        var revokedSettings = settings
+        let previousEpoch = revokedSettings.authorizationEpoch
+        revokedSettings.revokeConsent(providerID: p.rawValue)
+        if revokedSettings.authorizationEpoch == previousEpoch {
+            revokedSettings.authorizationEpoch.advance()
+        }
+        catalogs[p.rawValue] = .unavailable
+        guard commitProviderSettingsWithAcknowledgement(revokedSettings) else {
+            // The durable write failed, so do not risk deleting the only copy
+            // of the credential. Still publish the revoked snapshot in this
+            // process: no prompt may cross the old authorization boundary
+            // while the user retries the operation.
+            publishSettingsWithoutPersistence(revokedSettings)
+            keyPresent[p.rawValue] = true
+            statuses[p.rawValue] = .error(String(localized: "Couldn't save the access revocation. The API key was not deleted; processing is paused. Try again."))
+            return
+        }
+        guard credentialStore.delete(account) else {
+            // A Keychain error does not prove absence. Keep the removal action
+            // available, but never restore consent or routing authorization.
+            keyPresent[p.rawValue] = true
+            statuses[p.rawValue] = .error(String(localized: "Couldn't remove the API key from the Keychain. Access was revoked; try again."))
+            return
+        }
+        keyPresent[p.rawValue] = false
+        statuses[p.rawValue] = .notConfigured
     }
 
     // MARK: OpenRouter one-click sign-in (OAuth + PKCE)
@@ -390,23 +1165,51 @@ final class AIProviderStore {
         }
     }
 
-    private static func storedKeyExists(_ p: AIProvider) -> Bool {
-        guard let account = p.keychainAccount else { return false }
-        return !(KeychainStore.get(account) ?? "").isEmpty
-    }
-
     // MARK: persistence + migration
 
-    private func persist() {
-        if let data = try? JSONEncoder().encode(settings) { defaults.set(data, forKey: Self.key) }
+    @discardableResult
+    private func persist(
+        _ snapshot: AIProviderSettings? = nil,
+        requireAcknowledgement: Bool = false
+    ) -> Bool {
+        guard let data = try? JSONEncoder().encode(snapshot ?? settings) else {
+            return false
+        }
+        defaults.set(data, forKey: Self.key)
+        defaults.set(data, forKey: Self.lastKnownGoodKey)
+        return !requireAcknowledgement || persistenceSynchronizer()
+    }
+
+    private func commitProviderSettingsWithAcknowledgement(
+        _ candidate: AIProviderSettings
+    ) -> Bool {
+        guard persist(candidate, requireAcknowledgement: true) else {
+            return false
+        }
+        settingsAlreadyPersisted = true
+        settings = candidate
+        settingsAlreadyPersisted = false
+        return true
+    }
+
+    /// Publishes a fail-closed runtime snapshot after its durable
+    /// acknowledgement failed. `persist(candidate, requireAcknowledgement:)`
+    /// has already queued the same bytes; suppressing the observer here avoids
+    /// pretending that a second, unacknowledged write fixed the failure.
+    private func publishSettingsWithoutPersistence(
+        _ candidate: AIProviderSettings
+    ) {
+        settingsAlreadyPersisted = true
+        settings = candidate
+        settingsAlreadyPersisted = false
     }
 
     /// Legacy {baseURL, model} (pre-"AI Models") — always local. Default ports map to their named cards
     /// (1234 → LM Studio, 11434 → Ollama); anything else becomes the "custom localhost" card as-is.
     /// The legacy defaults value stays untouched (harmless, and downgrade-safe).
-    private static func migrateLegacy() -> AIProviderSettings? {
+    private static func migrateLegacy(from defaults: UserDefaults) -> AIProviderSettings? {
         struct Legacy: Decodable { let baseURL: String; let model: String }
-        guard let data = UserDefaults.standard.data(forKey: legacyKey),
+        guard let data = defaults.data(forKey: legacyKey),
               let legacy = try? JSONDecoder().decode(Legacy.self, from: data) else { return nil }
         let base = legacy.baseURL.trimmingCharacters(in: .whitespaces)
         guard !base.isEmpty else { return nil }
@@ -422,10 +1225,18 @@ final class AIProviderStore {
         case normalized(AIProvider.ollama.defaultBaseURL):   provider = .ollama
         default:                                             provider = .custom
         }
-        var s = AIProviderSettings()
-        s.models[provider.rawValue] = legacy.model
-        if provider == .custom { s.endpoints[provider.rawValue] = base }
-        if !legacy.model.trimmingCharacters(in: .whitespaces).isEmpty { s.active = provider.rawValue }
-        return s
+        let cleanModel = legacy.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let models = cleanModel.isEmpty ? [:] : [provider.rawValue: cleanModel]
+        let endpoints = provider == .custom ? [provider.rawValue: base] : [:]
+        // Migration reconstructs the already-committed legacy pair without pretending the user just made
+        // a new selection (so its revision/authorization epoch correctly begin at zero).
+        return AIProviderSettings(
+            active: cleanModel.isEmpty ? nil : provider.rawValue,
+            activeModelID: cleanModel.isEmpty ? nil : cleanModel,
+            models: models,
+            endpoints: endpoints
+        )
     }
 }
+
+extension AIProviderStore: BuiltInModelProviderControlling {}

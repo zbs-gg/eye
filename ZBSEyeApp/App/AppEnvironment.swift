@@ -16,6 +16,7 @@ final class AppEnvironment {
     let audioSettings = AudioSettingsStore()
     let storageSettings = StorageSettingsStore()
     let backupSettings = BackupSettingsStore()
+    let builtInModels = BuiltInModelStore()
     let privacy = PrivacyStore()
     let rewards = RewardsStore()   // cosmetic rewards (theme/icon/menu-bar) — independent of the DB
 
@@ -56,6 +57,21 @@ final class AppEnvironment {
     private(set) var dataError: String?
     private(set) var progress: ProgressStore?
     @ObservationIgnored private(set) var usageStats: UsageStatsService?
+    @ObservationIgnored private(set) var llmRouter: LLMRouter?
+    @ObservationIgnored private(set) var aiComputeCoordinator: AIComputeCoordinator?
+    @ObservationIgnored private(set) var builtInModelManager: BuiltInModelManager?
+    @ObservationIgnored private var builtInModelProviderBridge: BuiltInModelProviderBridge?
+    @ObservationIgnored private var builtInModelReconciliationTask: Task<Void, Never>?
+    @ObservationIgnored private var builtInModelRecoveryTask: Task<Void, Never>?
+    @ObservationIgnored private var builtInModelReconciliationGeneration: UInt64 = 0
+    @ObservationIgnored private var builtInModelRecoveryGeneration: UInt64 = 0
+    @ObservationIgnored private var localAIMemoryPressureSource: DispatchSourceMemoryPressure?
+    @ObservationIgnored private var processProviderRuntimeOwner: ProcessProviderRuntimeOwner?
+    /// Prevents a headless `--relocate` process from snapshotting this root
+    /// while the GUI has live writers. Kernel ownership survives stale files
+    /// and is released automatically if the app crashes.
+    @ObservationIgnored private var dataRootProcessLock: StorageRelocationProcessLock?
+    private let bootstrapGate = AppBootstrapGate()
     private(set) var achievements: AchievementStore?
 
     @ObservationIgnored private var retentionTask: Task<Void, Never>?
@@ -73,11 +89,123 @@ final class AppEnvironment {
 
     /// Race an operation against a timeout — so a backup on exit doesn't hang quit forever.
     nonisolated static func withTimeout(seconds: Double, _ op: @escaping @Sendable () async -> Void) async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { await op() }
-            group.addTask { try? await Task.sleep(for: .seconds(seconds)) }
-            _ = await group.next()
-            group.cancelAll()
+        let operation = Task { await op() }
+        let outcome = await LocalRuntimeTaskDeadline.wait(
+            for: operation,
+            timeout: .seconds(seconds)
+        )
+        if outcome != .completed {
+            // Structured task groups wait for a non-cooperative loser when
+            // leaving scope. Keep Quit caller-bounded; the process owns the
+            // cancelled backup task only until termination completes.
+            operation.cancel()
+        }
+    }
+
+    private func installLocalAIMemoryPressureHandler(
+        for localInference: LocalInferenceService
+    ) {
+        localAIMemoryPressureSource?.cancel()
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical],
+            queue: .global(qos: .utility)
+        )
+        source.setEventHandler {
+            Task { await localInference.handleMemoryPressure() }
+        }
+        source.activate()
+        localAIMemoryPressureSource = source
+    }
+
+    private func cancelBuiltInModelReconciliation() -> Task<Void, Never>? {
+        builtInModelReconciliationGeneration &+= 1
+        let task = builtInModelReconciliationTask
+        builtInModelReconciliationTask = nil
+        task?.cancel()
+        return task
+    }
+
+    private func restartBuiltInModelReconciliation(
+        manager: BuiltInModelManager,
+        providerBridge: BuiltInModelProviderBridge
+    ) {
+        _ = cancelBuiltInModelReconciliation()
+        builtInModelReconciliationGeneration &+= 1
+        let generation = builtInModelReconciliationGeneration
+        let selectionRevision = ai.currentSelectionRevision
+        builtInModelReconciliationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.builtInModelReconciliationGeneration == generation {
+                    self.builtInModelReconciliationTask = nil
+                }
+            }
+            do {
+                let reconciled = try await manager.reconcileAfterRestart(
+                    currentSelectionRevision: selectionRevision
+                )
+                guard !Task.isCancelled,
+                      self.builtInModelReconciliationGeneration == generation else { return }
+                _ = providerBridge.reconcile(reconciled.snapshot)
+                await self.builtInModels.refresh()
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled,
+                      self.builtInModelReconciliationGeneration == generation else { return }
+                await self.builtInModels.refresh()
+                self.builtInModels.setHardwareSupport(
+                    .unavailable(
+                        reason: String(localized: "ZBS Eye Local could not open its model storage safely.")
+                    )
+                )
+                let message = BuiltInModelFailureMessage.userFacing(
+                    error,
+                    context: .operation
+                )
+                Log.app.error(
+                    "built-in model reconciliation failed closed: \(message, privacy: .public)"
+                )
+            }
+        }
+    }
+
+    private func cancelBuiltInModelRecovery() {
+        builtInModelRecoveryGeneration &+= 1
+        builtInModelRecoveryTask?.cancel()
+        builtInModelRecoveryTask = nil
+    }
+
+    private func recoverBuiltInModelsAfterCancelledTermination(
+        after phase: AppTerminationCriticalPhaseResult,
+        manager: BuiltInModelManager?,
+        providerBridge: BuiltInModelProviderBridge?,
+        resumeCompute: Bool
+    ) {
+        cancelBuiltInModelRecovery()
+        builtInModelRecoveryGeneration &+= 1
+        let generation = builtInModelRecoveryGeneration
+        builtInModelRecoveryTask = phase.recoveryTask { @MainActor [weak self] in
+            guard !Task.isCancelled,
+                  let self,
+                  self.builtInModelRecoveryGeneration == generation else { return }
+            if let manager {
+                await manager.recoverAfterCancelledShutdown()
+            }
+            guard !Task.isCancelled,
+                  self.builtInModelRecoveryGeneration == generation else { return }
+            if resumeCompute {
+                await self.aiComputeCoordinator?.resume()
+            }
+            guard !Task.isCancelled,
+                  self.builtInModelRecoveryGeneration == generation else { return }
+            self.builtInModelRecoveryTask = nil
+            if let manager, let providerBridge {
+                self.restartBuiltInModelReconciliation(
+                    manager: manager,
+                    providerBridge: providerBridge
+                )
+            }
         }
     }
 
@@ -120,6 +248,12 @@ final class AppEnvironment {
     /// Startup order of background services. For now — permission probes + the Data layer; capture/server/automations
     /// will be added as the modules appear (Phase 2, steps 3+).
     func bootstrap() async {
+        await bootstrapGate.run { [weak self] in
+            await self?.bootstrapOnce()
+        }
+    }
+
+    private func bootstrapOnce() async {
         ZBSEyeHTTPServer.log("bootstrap: begin")
         rewards.applyAppIcon()   // the chosen alternate app icon (dock) — apply on startup
         // Crash marker: if the clean-exit flag wasn't set on the previous launch → the session died
@@ -145,6 +279,12 @@ final class AppEnvironment {
             return
         }
         do {
+            let resolvedDataRoot = try StorageLocation.requireAvailableDataRoot()
+                .resolvingSymlinksInPath()
+                .standardizedFileURL
+            self.dataRootProcessLock = try StorageRelocationProcessLock(
+                dataRoot: resolvedDataRoot
+            )
             let storage = try StorageManager()
             self.storage = storage
             let db = try ZBSEyeDatabase(path: ZBSEyeDatabase.defaultURL().path)
@@ -158,11 +298,85 @@ final class AppEnvironment {
             // Backup on exit (applicationShouldTerminate → terminateLater): snapshot in time before the process
             // dies (willTerminate would be too late — the process dies synchronously there). With a 30s timeout.
             ZBSEyeAppDelegate.onTerminate = { [weak self] in
-                guard let self, self.backupSettings.enabled, BackupManager.iCloudAvailable() else { return }
+                guard let self else { return true }
+                // terminateLater keeps the process alive until ScreenCaptureKit
+                // has acknowledged its CoreAudio teardown and both capture
+                // legs have flushed their final DB row. Speech recognition can
+                // resume from backfill after launch, so it must not hold Quit.
+                let recordingDrain = await self.recording.pauseForMaintenanceAndDrain(
+                    waitForTranscription: false,
+                    systemCaptureTimeout: .seconds(5)
+                )
+                guard recordingDrain.audio.systemCaptureOutcome.isConfirmedStopped else {
+                    Log.audio.error("termination cancelled: system audio teardown was not confirmed")
+                    self.recording.resumeAfterMaintenance()
+                    return false
+                }
+                self.cancelBuiltInModelRecovery()
+                let reconciliation = self.cancelBuiltInModelReconciliation()
+
+                // These two ownership barriers share the fail-closed Quit path:
+                // each is caller-bounded, but its task remains retained until it
+                // really finishes before recovery can reopen model admission.
+                let localRuntimePhase = await AppTerminationCriticalPhase.run(
+                    timeout: .seconds(5)
+                ) {
+                    await self.builtInModelManager?.shutdown() ?? true
+                }
+                guard localRuntimePhase.outcome == .completed(true) else {
+                    Log.app.error("termination cancelled: local AI runtime release was not confirmed")
+                    self.recoverBuiltInModelsAfterCancelledTermination(
+                        after: localRuntimePhase,
+                        manager: self.builtInModelManager,
+                        providerBridge: self.builtInModelProviderBridge,
+                        resumeCompute: false
+                    )
+                    if case .completed = localRuntimePhase.outcome {
+                        await self.builtInModels.refresh()
+                    }
+                    self.recording.resumeAfterMaintenance()
+                    return false
+                }
+
+                let computePhase = await AppTerminationCriticalPhase.run(
+                    timeout: .seconds(5)
+                ) {
+                    guard let coordinator = self.aiComputeCoordinator else { return true }
+                    do {
+                        try await coordinator.suspendAndDrain()
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
+                guard computePhase.outcome == .completed(true) else {
+                    Log.app.error("termination cancelled: AI compute drain was not confirmed")
+                    self.recoverBuiltInModelsAfterCancelledTermination(
+                        after: computePhase,
+                        manager: self.builtInModelManager,
+                        providerBridge: self.builtInModelProviderBridge,
+                        resumeCompute: true
+                    )
+                    await self.builtInModels.refresh()
+                    self.recording.resumeAfterMaintenance()
+                    return false
+                }
+                await reconciliation?.value
+                await self.builtInModels.shutdown()
+                self.localAIMemoryPressureSource?.cancel()
+                self.localAIMemoryPressureSource = nil
+                if let router = self.llmRouter {
+                    _ = await router.shutdown(timeout: .seconds(5))
+                }
+                if let owner = self.processProviderRuntimeOwner {
+                    _ = await owner.shutdown(timeout: .seconds(5))
+                }
+                guard self.backupSettings.enabled, BackupManager.iCloudAvailable() else { return true }
                 let keep = self.backupSettings.keepN
                 await Self.withTimeout(seconds: 30) {
                     _ = try? await backupManager.makeBackup(keepN: keep)
                 }
+                return true
             }
             ZBSEyeHTTPServer.log("bootstrap: db ok")
             self.database = db
@@ -176,6 +390,95 @@ final class AppEnvironment {
             // 449MB model load stays off the launch path.
             let indexerEmbedder = EmbeddingService()
             let backfill = VectorBackfill(db: db, embedder: indexerEmbedder)
+            let computeCoordinator = AIComputeCoordinator(
+                vectorBackfill: AIComputeVectorBackfillHooks(
+                    suspendAndDrain: { await backfill.suspendAndDrain() },
+                    resume: { await backfill.resume() }
+                )
+            )
+            await backfill.attachComputeCoordinator(computeCoordinator)
+            self.aiComputeCoordinator = computeCoordinator
+
+            let localDriver = MLXLocalRuntimeDriver()
+            let localInference = LocalInferenceService(
+                driver: localDriver,
+                computeCoordinator: computeCoordinator
+            )
+            installLocalAIMemoryPressureHandler(for: localInference)
+
+            // The data-root anti-split-brain guard has already passed. Pin the
+            // manager below that exact resolved root for its entire lifetime.
+            let modelRoot = StorageLocation.builtInModelRoot(under: resolvedDataRoot)
+            do {
+                try FileManager.default.createDirectory(
+                    at: modelRoot,
+                    withIntermediateDirectories: true
+                )
+                let hardware = await Task.detached(priority: .utility) {
+                    BuiltInModelHardwareSnapshot.current()
+                }.value
+                let hardwareSupported = hardware.supports(.regular)
+                builtInModels.setHardwareSupport(
+                    hardwareSupported
+                        ? .supported
+                        : .unsupported(
+                            reason: String(localized: "ZBS Eye Local currently requires an Apple silicon Mac16,5 with exactly 64 GB unified memory and macOS 15 or later.")
+                        )
+                )
+                let providerBridge = BuiltInModelProviderBridge(providers: ai)
+                let manager = try BuiltInModelManager(
+                    dataRoot: modelRoot,
+                    manifests: BuiltInModelManifest.all,
+                    downloadClient: BuiltInDownloadClient(
+                        allowedAssetHosts: BuiltInModelRuntimeSupport.allowedAssetHosts,
+                        capacityCheck: { progress in
+                            let available = (try? BuiltInModelRuntimeSupport.availableCapacity(
+                                at: modelRoot
+                            )) ?? 0
+                            return BuiltInModelRuntimeSupport.downloadCapacityDecision(
+                                progress,
+                                availableBytes: available
+                            )
+                        }
+                    ),
+                    hardwareEligibility: { hardware.supports($0) },
+                    capacityReader: {
+                        try BuiltInModelRuntimeSupport.availableCapacity(at: $0)
+                    },
+                    candidateLoader: localInference.candidateLoader(),
+                    runtimeDrainer: localInference.runtimeDrainer(),
+                    effectHandler: { [weak self] effect in
+                        let outcome: (BuiltInModelProviderEffectResult, LLMRouter?) = await MainActor.run {
+                            guard let self else {
+                                return (.retryablePersistenceFailure, nil)
+                            }
+                            let committed = providerBridge.handle(effect)
+                            return (committed, self.llmRouter)
+                        }
+                        if outcome.0 == .applied {
+                            await outcome.1?.selectionOrAuthorizationDidChange()
+                        }
+                        return outcome.0
+                    }
+                )
+                self.builtInModelManager = manager
+                self.builtInModelProviderBridge = providerBridge
+                await builtInModels.attach(manager: manager, providers: ai)
+                if hardwareSupported {
+                    restartBuiltInModelReconciliation(
+                        manager: manager,
+                        providerBridge: providerBridge
+                    )
+                }
+            } catch {
+                builtInModels.setHardwareSupport(
+                    .unavailable(reason: String(localized: "ZBS Eye Local could not open its model storage safely."))
+                )
+                let message = BuiltInModelFailureMessage.userFacing(error, context: .operation)
+                Log.app.error(
+                    "built-in model bootstrap failed closed: \(message, privacy: .public)"
+                )
+            }
             Task.detached(priority: .utility) {
                 try? await Task.sleep(for: .seconds(30))
                 await backfill.run()
@@ -261,7 +564,11 @@ final class AppEnvironment {
             }
 
             // Search (hybrid FTS+vector) + timeline.
-            let searchSvc = SearchService(db: db, embedder: EmbeddingService())
+            let searchSvc = SearchService(
+                db: db,
+                embedder: EmbeddingService(),
+                semanticPolicy: .coordinated(computeCoordinator)
+            )
             let timelineSvc = TimelineService(db: db)
             self.timelineStore = TimelineStore(search: searchSvc, timeline: timelineSvc,
                                                mediaDirectory: storage.mediaDirectory)
@@ -275,26 +582,89 @@ final class AppEnvironment {
             self.achievements = AchievementStore(service: AchievementStatsService(db: db, repo: activityRepo))
             rewards.achievements = self.achievements   // the rewards know what's unlocked
 
+            // One process-wide router boundary. Ask is the first migrated
+            // consumer; later consumer slices reuse this exact actor instead of
+            // creating private clients or fallback selection paths.
+            let adapterOverlay = LLMAdapterRegistry()
+            do {
+                let processProviders = try ProcessProviderRuntimeFactory.make(
+                    snapshotProvider: ai,
+                    dataRoot: resolvedDataRoot
+                )
+                self.processProviderRuntimeOwner = processProviders.owner
+                ai.configureProcessProviders(
+                    codex: processProviders.codex,
+                    claudeCode: processProviders.claudeCode,
+                    overlay: adapterOverlay
+                )
+            } catch {
+                // Process setup errors may contain executable or account paths.
+                // Fail closed without copying those details into unified logs.
+                Log.app.error("process AI providers failed closed")
+            }
+            await adapterOverlay.register(
+                LLMAdapterRegistration(
+                    providerID: AIProvider.zbsEyeLocal.rawValue,
+                    executedLocally: true,
+                    adapter: localInference
+                )
+            )
+            let adapterRegistry = ApplicationLLMAdapterRegistry(
+                providers: ai,
+                overlay: adapterOverlay
+            )
+            let llmRouter = LLMRouter(
+                snapshotProvider: ai,
+                adapterRegistry: adapterRegistry
+            )
+            self.llmRouter = llmRouter
+            ai.configureRouterChangeNotification { [weak llmRouter] in
+                guard let llmRouter else { return }
+                await llmRouter.selectionOrAuthorizationDidChange()
+            }
+
+            let consumerGenerator = RoutedAIConsumerGenerator(router: llmRouter)
+
             // "The day in activities": scenes on top of screen_captures (without a new table),
-            // grouped into blocks; optional local-LLM block labels (own stateless client, cached).
+            // grouped into blocks; generated labels share the same process-wide router.
             let sceneSvc = SceneService(repo: activityRepo)
-            self.sceneStore = SceneStore(service: sceneSvc, timeline: timelineSvc,
-                                         labeler: BlockLabelService(client: LLMClient()),
-                                         ai: ai)
+            self.sceneStore = SceneStore(
+                service: sceneSvc,
+                timeline: timelineSvc,
+                labeler: BlockLabelService(generator: consumerGenerator),
+                readiness: ai
+            )
 
-            // "Ask your memory": a RAG answer through the same hybrid search + the active processing model
-            // (its own LLMClient, a stateless actor). The egress gate is inside — local by default,
-            // a cloud provider only after the explicit opt-in in "AI Models".
-            let askService = AskService(search: searchSvc, client: LLMClient(), db: db)
-            self.ask = AskStore(service: askService, ai: ai)
+            // "Ask your memory": hybrid retrieval completes first, then the
+            // exact authorized snapshot crosses the process-wide router.
+            let askRetrieval = AskDatabaseRetrieval(search: searchSvc, db: db)
+            let askService = AskService(retrieval: askRetrieval, router: llmRouter)
+            self.ask = AskStore(
+                service: askService,
+                readiness: ai,
+                onQuestionSent: { AchievementCounters.bump(.questions) }
+            )
 
-            // Cartographer: AI insights for the day (read-only). Its own LLMClient (stateless actor).
-            let cartographerSvc = CartographerService(repo: activityRepo, client: LLMClient())
-            self.cartographer = CartographerStore(service: cartographerSvc, ai: ai)
+            // Cartographer: AI insights for the day through the shared process-wide router.
+            let cartographerSvc = CartographerService(
+                repo: activityRepo,
+                generator: consumerGenerator
+            )
+            self.cartographer = CartographerStore(
+                service: cartographerSvc,
+                readiness: ai
+            )
 
-            // Automation v1 "day summary": collect→LLM→write. Its own LLMClient (stateless actor).
-            let summarySvc = DailySummaryService(repo: activityRepo, client: LLMClient())
-            let automationsStore = DaySummaryStore(service: summarySvc, connections: connections, ai: ai)
+            // Automation v1 "day summary": collect→shared router→write.
+            let summarySvc = DailySummaryService(
+                repo: activityRepo,
+                generator: consumerGenerator
+            )
+            let automationsStore = DaySummaryStore(
+                service: summarySvc,
+                connections: connections,
+                readiness: ai
+            )
             automationsStore.startScheduler()   // "a recap by itself at the end of the day" (5-min tick, gates inside)
             self.automations = automationsStore
 
@@ -307,7 +677,7 @@ final class AppEnvironment {
             let rec = recording
             let deps = ZBSEyeHTTPServer.Deps(
                 search: searchSvc, timeline: timelineSvc, db: db, mediaDir: storage.mediaDirectory,
-                token: token, version: "0.2.1",
+                token: token, version: "0.3.0",
                 isCapturing: { await MainActor.run { rec.isCapturing } },
                 toggleCapture: { enable in
                     await MainActor.run {
@@ -424,7 +794,7 @@ final class AppEnvironment {
 
     /// History deletion (privacy): lastSeconds=nil → everything. Returns a report for the UI.
     func deleteHistory(lastSeconds: TimeInterval?) async -> PruneReport? {
-        guard let retention else { return nil }
+        guard !storageSettings.relocationInProgress, let retention else { return nil }
         // The upper bound is fixed AT THE MOMENT of the click: with recording running, "delete 15 minutes" must not
         // catch frames recorded during the deletion itself (batches take seconds).
         let now = Date()
@@ -454,24 +824,56 @@ final class AppEnvironment {
         return report
     }
 
-    /// Move all of memory to a chosen folder (T1): pause capture → online DB backup + copy media →
+    /// Move all of memory to a chosen folder (T1): pause and drain every DB writer → online DB backup + copy media →
     /// verify (integrity + COUNT parity) → flip StorageLocation → relaunch. We don't touch the source (copy);
     /// on error we resume recording, the data at the old location is intact.
     func relocate(to chosen: URL) async {
-        guard let db, let storage, !storageSettings.relocationInProgress else { return }
+        guard let db, let storage, let ingest,
+              !storageSettings.relocationInProgress else { return }
+        let previousRoot = StorageLocation.dataRoot()
+        let previousRootWasRelocated = StorageLocation.isRelocated()
+        var committedNewRoot = false
         storageSettings.relocationInProgress = true
         storageSettings.relocationError = nil
         storageSettings.relocationProgress = 0
         storageSettings.relocationStatus = "Stopping recording…"
-        recording.pauseForMaintenance()
-        audio?.stop()
-        // Drain: stop()/the VAD segment finish writing the in-flight frame/audio via detached tasks to the OLD root.
-        // We wait ~1.2s for them to commit to the DB and write media BEFORE the online-backup snapshot and the snapshot
-        // of the media list — otherwise a boundary frame/segment would be orphaned (file outside the copy / row outside the backup).
-        try? await Task.sleep(for: .milliseconds(1200))
+        let recordingDrainTask = Task { @MainActor [recording] in
+            await recording.pauseForMaintenanceAndDrain()
+        }
 
         let relocator = StorageRelocator()
         do {
+            // Ordered barrier: downloads/runtime first (cancels generation),
+            // then query/background e5. Capture/audio remain independently
+            // paused for data consistency, never because inference asked.
+            if let builtInModelManager {
+                _ = try await builtInModelManager.suspendAndDrainForRelocation()
+            }
+            if let aiComputeCoordinator {
+                try await aiComputeCoordinator.suspendAndDrain()
+            }
+
+            // These actors write directly through GRDB instead of IngestService.
+            // Suspending their admission and draining the complete async operation
+            // prevents a reentrant writer from changing COUNTs after the backup.
+            let historyDrain = await historyImporter?.suspendAndDrainForRelocation()
+            let browserHistoryDrain = await browserHistoryImporter?.suspendAndDrainForRelocation()
+            let retentionDrain = await retention?.suspendAndDrainForRelocation()
+
+            let recordingDrain = await recordingDrainTask.value
+            let ingestDrain = await ingest.drain()
+            guard recordingDrain.capture.activeCycles == 0,
+                  recordingDrain.audio.activeLegs == 0,
+                  recordingDrain.audio.systemCaptureOutcome.isConfirmedStopped,
+                  recordingDrain.audio.transcriptionDrained,
+                  ingestDrain.activeWrites == 0,
+                  (historyDrain?.activeOperations ?? 0) == 0,
+                  (browserHistoryDrain?.activeOperations ?? 0) == 0,
+                  (retentionDrain?.activeOperations ?? 0) == 0 else {
+                throw RelocationError.verifyFailed(
+                    "database writer maintenance drain was not acknowledged"
+                )
+            }
             let report = try await relocator.migrate(
                 sourcePool: db.pool,
                 sourceDBURL: try ZBSEyeDatabase.defaultURL(),
@@ -484,14 +886,36 @@ final class AppEnvironment {
                     }
                 })
             StorageLocation.setRoot(report.newDataRoot)
+            committedNewRoot = true
             AchievementCounters.set(.relocated)   // "To Your Own Disk" achievement
             storageSettings.relocationStatus = "Moved (\(report.mediaFilesCopied) media). Restarting…"
             try? await Task.sleep(for: .milliseconds(600))   // let the UI show the status
-            AppRelauncher.relaunch()
+            try AppRelauncher.relaunch()
         } catch {
+            // A failed helper launch leaves this process and its old DB graph
+            // alive. Restore path resolution before resuming any service, or
+            // helpers/settings would point at the copied root while writers
+            // still own the original one.
+            if committedNewRoot {
+                if previousRootWasRelocated {
+                    StorageLocation.setRoot(previousRoot)
+                } else {
+                    StorageLocation.resetToLegacy()
+                }
+            }
+            _ = await recordingDrainTask.value
+            await retention?.resumeAfterRelocation()
+            await browserHistoryImporter?.resumeAfterRelocation()
+            await historyImporter?.resumeAfterRelocation()
+            // Resume compute admission before reloading the old LKG: the
+            // candidate loader itself takes the MLX lease and will suspend
+            // backfill again while it warms the verified old-root model.
+            await aiComputeCoordinator?.resume()
+            try? await builtInModelManager?.resumeAfterRelocation()
+            await builtInModels.refresh()
             storageSettings.relocationInProgress = false
             storageSettings.relocationError = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-            recording.startIfWanted()   // migration failed — resume recording
+            recording.resumeAfterMaintenance()   // migration failed — resume recording
         }
     }
 

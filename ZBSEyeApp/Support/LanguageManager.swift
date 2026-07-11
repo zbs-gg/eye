@@ -32,6 +32,6 @@ enum LanguageManager {
     @MainActor static func set(_ lang: AppLanguage) {
         UserDefaults.standard.set(lang.rawValue, forKey: key)
         applyAtLaunch()
-        AppRelauncher.relaunch()
+        try? AppRelauncher.relaunch()
     }
 }

@@ -13,9 +13,10 @@ final class DaySummaryStore {
 
     @ObservationIgnored private let service: DailySummaryService
     @ObservationIgnored let connections: ConnectionStore   // destination folder (the card lives in Automations)
-    @ObservationIgnored private let ai: AIProviderStore    // the active processing model ("AI Models")
+    @ObservationIgnored private let readiness: any AIConsumerReadinessProviding
     @ObservationIgnored private let safety: AutomationSafety = .default
     @ObservationIgnored private var previewTask: Task<Void, Never>?
+    @ObservationIgnored private var activeRequest: AIConsumerRequestOwnership?
 
     /// A preview is valid only for the day it was built for. Changing the day in the DatePicker clears the preview and
     /// the write card — otherwise the "Write" button would promise a new day but write the old preview.
@@ -59,15 +60,19 @@ final class DaySummaryStore {
     var errorText: String?
     var audit: [AuditEntry] = []
 
-    init(service: DailySummaryService, connections: ConnectionStore, ai: AIProviderStore) {
+    init(
+        service: DailySummaryService,
+        connections: ConnectionStore,
+        readiness: any AIConsumerReadinessProviding
+    ) {
         self.service = service
         self.connections = connections
-        self.ai = ai
+        self.readiness = readiness
     }
 
     var isBusy: Bool { phase == .summarizing || phase == .writing }
     /// A processing model is active in "AI Models".
-    var llmReady: Bool { ai.activeConfig != nil }
+    var llmReady: Bool { readiness.currentExecutionContext(for: .manualSummary) != nil }
     /// Ready to run the automation: a processing model AND a destination folder.
     var isReady: Bool { llmReady && connections.destination.isConfigured }
 
@@ -75,15 +80,22 @@ final class DaySummaryStore {
     func startPreview() {
         guard !isBusy else { return }
         previewTask?.cancel()
-        previewTask = Task { [weak self] in await self?.buildPreview() }
+        previewTask = Task { [weak self] in await self?.buildPreview(consumer: .manualSummary) }
     }
 
-    func cancelPreview() { previewTask?.cancel() }
+    func cancelPreview() {
+        previewTask?.cancel()
+        previewTask = nil
+        activeRequest = nil
+        if phase == .summarizing { phase = .idle }
+    }
 
     /// Privacy (Pro NO-GO follow-up): clear the collected preview/write — it is an LLM inference over the history
     /// that was just deleted (deleteHistory). We don't touch the schedule/settings/audit.
     func reset() {
         previewTask?.cancel()
+        previewTask = nil
+        activeRequest = nil
         preview = nil
         lastWrite = nil
         errorText = nil
@@ -91,24 +103,61 @@ final class DaySummaryStore {
     }
 
     /// The collect+summarize stages. Does NOT write. Call via startPreview (for cancellability).
-    func buildPreview() async {
+    func buildPreview(consumer: AIConsumer = .manualSummary) async {
         guard !isBusy else { return }
+        guard consumer == .manualSummary || consumer == .scheduledSummary else { return }
         errorText = nil; lastWrite = nil; preview = nil
-        guard let llm = ai.activeConfig else {
+        guard let execution = readiness.currentExecutionContext(for: consumer) else {
             errorText = AutomationError.noLLM.errorDescription; phase = .failed; return
         }
         phase = .summarizing
+        let day = selectedDay
+        let requestID = UUID()
+        let ownership = AIConsumerRequestOwnership(
+            requestID: requestID,
+            consumer: consumer,
+            execution: execution
+        )
+        activeRequest = ownership
         do {
-            let p = try await service.preview(day: selectedDay, llm: llm, safety: safety)
-            if Task.isCancelled { phase = .idle; return }   // cancelled during the request — no error
+            let p = try await service.preview(
+                day: day,
+                execution: execution,
+                consumer: consumer,
+                requestID: requestID,
+                safety: safety
+            )
+            guard !Task.isCancelled,
+                  activeRequest == ownership,
+                  ownership.accepts(
+                      requestID: requestID,
+                      consumer: consumer,
+                      execution: readiness.currentExecutionContext(for: consumer)
+                  ),
+                  Calendar.current.startOfDay(for: selectedDay)
+                    == Calendar.current.startOfDay(for: day) else {
+                if activeRequest == ownership { activeRequest = nil; phase = .idle }
+                return
+            }
             preview = p; phase = .done
+            activeRequest = nil
         } catch is CancellationError {
-            phase = .idle
+            if activeRequest == ownership { activeRequest = nil; phase = .idle }
         } catch let urlErr as URLError where urlErr.code == .cancelled {
-            phase = .idle
+            if activeRequest == ownership { activeRequest = nil; phase = .idle }
         } catch {
+            guard activeRequest == ownership,
+                  ownership.accepts(
+                      requestID: requestID,
+                      consumer: consumer,
+                      execution: readiness.currentExecutionContext(for: consumer)
+                  ) else {
+                if activeRequest == ownership { activeRequest = nil; phase = .idle }
+                return
+            }
             errorText = (error as? AutomationError)?.errorDescription ?? error.localizedDescription
             phase = .failed
+            activeRequest = nil
         }
         await refreshAudit()
     }
@@ -151,7 +200,10 @@ final class DaySummaryStore {
     }
 
     private func scheduledTick() async {
-        guard scheduleEnabled, isReady, !isBusy else { return }
+        guard scheduleEnabled,
+              connections.destination.isConfigured,
+              readiness.currentExecutionContext(for: .scheduledSummary) != nil,
+              !isBusy else { return }
         let now = Date()
         let cal = Calendar.current
         let todayYmd = DailySummaryService.ymd(now)
@@ -193,7 +245,9 @@ final class DaySummaryStore {
         selectedDay = targetDay
         // via previewTask — the "Cancel" button also applies to a scheduled run
         previewTask?.cancel()
-        previewTask = Task { [weak self] in await self?.buildPreview() }
+        previewTask = Task { [weak self] in
+            await self?.buildPreview(consumer: .scheduledSummary)
+        }
         await previewTask?.value
         guard preview != nil, phase == .done else {
             if attempts >= 3 {

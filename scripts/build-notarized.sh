@@ -46,6 +46,7 @@ rm -rf "${APP}"
 set +e
 xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Release \
   -derivedDataPath "${DERIVED}" \
+  -onlyUsePackageVersionsFromResolvedFile \
   CODE_SIGN_IDENTITY="${IDENTITY}" CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="${TEAM}" \
   OTHER_CODE_SIGN_FLAGS="--timestamp --options runtime" \
   build 2>&1 | grep -E "error:|warning:|BUILD"
@@ -72,14 +73,25 @@ codesign --verify --strict --verbose=2 "${APP}" && echo "✅ Signature valid (De
 # ── 4. notarization (Apple checks for 5–15 min) ──
 mkdir -p dist
 ZIP="dist/ZBSEye-notarized-$(date +%Y%m%d).zip"
+rm -f "${ZIP}"
 ditto -c -k --keepParent "${APP}" "${ZIP}"
 echo "▸ Submitting to Apple notarytool (--wait, usually 2–10 min)…"
 xcrun notarytool submit "${ZIP}" --keychain-profile "${NOTARY_PROFILE}" --wait
 
 # ── 5. staple the ticket into the app + Gatekeeper check ──
 xcrun stapler staple "${APP}"
+xcrun stapler validate "${APP}"
 echo "▸ Gatekeeper:"
-spctl -a -vvv -t exec "${APP}" 2>&1 | grep -iE "accepted|rejected|source=" || true
+GATEKEEPER_OUTPUT=$(spctl -a -vvv -t exec "${APP}" 2>&1) || {
+  echo "${GATEKEEPER_OUTPUT}"
+  echo "❌ Gatekeeper rejected the notarized app."
+  exit 1
+}
+echo "${GATEKEEPER_OUTPUT}"
+echo "${GATEKEEPER_OUTPUT}" | grep -qi "accepted" || {
+  echo "❌ Gatekeeper did not report an accepted app."
+  exit 1
+}
 # final zip — with the already-stapled .app (an offline recipient passes Gatekeeper)
 rm -f "${ZIP}"; ditto -c -k --keepParent "${APP}" "${ZIP}"
 echo ""

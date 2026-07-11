@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_id": "gg.zbs.eye.eval-protocol/v3",
+  "protocol": {
+    "id": "local-ai-v3",
+    "revision": 3,
+    "status": "provisional",
+    "created_at": "2026-07-11",
+    "purpose": "Qualify Qwen3.5 behind its native no-side-effect function-call channel and the production parser/renderer used by Ask and Daily Insights.",
+    "supersedes": "local-ai-v2",
+    "change_reason": "Revision 2 showed only 70.8% strict JSON acceptance. Revision 3 uses the model's native tool-call template, fixed safety-critical renderer copy, a minimal trusted Insights ledger, source-exact output planning, original plan sampling parameters, and item-scoped numeric grounding.",
+    "provenance": {
+      "source": "Synthetic, history-like ZBS Eye Ask and Daily Insights cases. Revision 3 reuses the v2 regression inputs; it is a provisional engineering gate, not an untouched holdout.",
+      "contains_user_history": false,
+      "contains_secrets": false,
+      "license": "CC0-1.0",
+      "stability": "Prompt text, tool schema, fixture inputs, expected claims, parser/renderer, scoring, parameters, and seeds are immutable within revision 3. Corrections require a new revision."
+    }
+  },
+  "fixture_files": [
+    {
+      "path": "fixtures/local-ai-v3-en.json",
+      "language": "en",
+      "case_count": 12,
+      "sha256": "152f5c78cc55bf7619cdcc523de06c0e52b34a9540981121936d4206f66696d3"
+    },
+    {
+      "path": "fixtures/local-ai-v3-ru.json",
+      "language": "ru",
+      "case_count": 12,
+      "sha256": "c0eb0eef95be299ddcd8280443fc8efa131055d5ef37913942c1d16a5ef0db94"
+    }
+  ],
+  "structured_channel": {
+    "kind": "native model function call",
+    "function_name": "emit_zbs_eye_answer",
+    "side_effects": "none; the function is parsed but never dispatched",
+    "production_source": "ZBSEyeApp/Connections/LocalAIAnswerToolContract.swift",
+    "required_arguments": ["status", "item1_text", "item1_sources"],
+    "optional_arguments": [
+      "item2_text", "item2_sources", "item3_text", "item3_sources", "next_search"
+    ],
+    "unknown_arguments": "reject",
+    "normal_text_before_or_after_call": "reject",
+    "function_call_count": 1,
+    "repair": "none",
+    "status_by_consumer": {
+      "ask": ["supported", "uncertain", "not_found"],
+      "insights": ["supported", "conflict", "insufficient"]
+    },
+    "cardinality": {
+      "ask.supported": "1-2 nonempty items, every item grounded",
+      "ask.uncertain": "1-2 observed-state items, every item grounded",
+      "ask.not_found": "zero displayed items and one required next_search",
+      "insights.supported": "2-3 items, one unique required source per item, exact source-set coverage",
+      "insights.conflict": "one item with the exact two conflicting source IDs",
+      "insights.insufficient": "zero displayed items; model call must cite total_captures"
+    },
+    "text_rules": {
+      "maximum_unicode_scalars": 240,
+      "reject": [
+        "leading or trailing whitespace",
+        "Unicode control characters or newlines",
+        "http or https URL",
+        "Markdown bullet or numbered prefix",
+        "citation token inside text"
+      ],
+      "next_search": "Must begin with Try or Попробуйте, contain no URL or digit, and pass the same single-line text validation."
+    }
+  },
+  "deterministic_renderer": {
+    "production_source": "ZBSEyeApp/Connections/LocalAIOutputContract.swift",
+    "ask.supported": "Append sorted validated citations to items.",
+    "ask.uncertain": "Prepend a fixed localized statement that history does not confirm completion, then render grounded observed-state items.",
+    "ask.not_found": "Render a fixed localized absence statement followed by validated next_search.",
+    "insights.supported": "Render one validated item per line and hide internal source IDs.",
+    "insights.conflict": "Prepend a fixed localized conflict label to the single two-source item.",
+    "insights.insufficient": "Render one fixed localized insufficient-data line; model wording is not displayed."
+  },
+  "context_policy": {
+    "production_source": "ZBSEyeApp/Connections/LocalAIContextPolicy.swift",
+    "ask": "Evidence fragments keep citation IDs and source names but omit unused timestamps. Instruction-like text remains inert data and is called out as untrusted.",
+    "insights": {
+      "raw_activity_sent_to_model": false,
+      "internal_threshold_sent_to_model": false,
+      "captures_for_normal_mode_sent_to_model": false,
+      "insufficient_ledger": ["mode", "total_captures"],
+      "conflict_ledger": ["mode", "safe_text_fact:0", "safe_text_fact:1"],
+      "normal_ledger": [
+        "mode",
+        "top_app",
+        "safe_text_fact:0 when present otherwise second_app",
+        "context_switches"
+      ],
+      "unsafe_filter": "Samples with instruction, command, or URL markers are removed before ledger construction."
+    }
+  },
+  "prompt_contracts": {
+    "ask-v3": {
+      "canonical_source": "ZBSEyeTests/LocalAIQualityGateV3Tests.swift prompts(for:language:)",
+      "summary": "Call the answer function exactly once; use fragments only; preserve uncertainty; separate item text and source arrays; use next_search only for not_found; cover independent question parts; preserve exact requested quotes and language."
+    },
+    "insights-v3": {
+      "canonical_source": "ZBSEyeTests/LocalAIQualityGateV3Tests.swift prompts(for:language:)",
+      "summary": "Call the answer function exactly once; follow the trusted ledger order; use exact source-set coverage; keep app minutes and switch count semantics; add no productivity, intent, causality, personality, or completion inference."
+    }
+  },
+  "generation": {
+    "thinking": false,
+    "temperature": 0.2,
+    "top_p": 0.95,
+    "top_k": 0,
+    "presence_penalty": null,
+    "prefill_step_size": 256,
+    "max_output_tokens": {"ask": 256, "insights": 256},
+    "retries": 0,
+    "seed_derivation": {
+      "canonical_request": "NFC(protocol.id + '\\n' + protocol.revision + '\\n' + prompt_contract_id + '\\n' + case.id + '\\n' + sorted-key JSON(case.input))",
+      "production": "First 8 SHA-256 bytes of canonical_request, interpreted unsigned big-endian.",
+      "perturbation_1": "First 8 SHA-256 bytes of canonical_request + '\\nperturbation:1'.",
+      "perturbation_2": "First 8 SHA-256 bytes of canonical_request + '\\nperturbation:2'.",
+      "reporting": "Attempt and record all three variants. A stable case passes only when all three attempts pass. No retry, repair, or best-result selection."
+    }
+  },
+  "scoring": {
+    "mode": "binary stable-case pass",
+    "status_mapping": {
+      "ask.supported": "supported",
+      "ask.partial": "uncertain",
+      "ask.unsupported": "not_found",
+      "insights.supported": "supported",
+      "insights.partial": "conflict",
+      "insights.unsupported": "insufficient"
+    },
+    "typed_status_semantics": "uncertain satisfies the uncertainty concept; not_found satisfies absence and validated-refinement concepts; conflict satisfies conflict; insufficient satisfies insufficient-data. Other concepts still require text evidence.",
+    "item_grounding": [
+      "Every Ask item number and URL must occur in the item's cited evidence.",
+      "Every app item must name the cited app and its exact minutes.",
+      "Every context_switches item must include the exact switch count.",
+      "Every Insights number must occur in the item's cited trusted fact."
+    ],
+    "case_pass_requires_all": [
+      "one production tool call and no normal model text",
+      "production tool parser accepts without repair",
+      "status matches answerability",
+      "required concepts and Ask citations pass",
+      "item-scoped grounding passes",
+      "required quote, forbidden substring, URL, number, language, word, and line checks pass"
+    ],
+    "unsupported_denominator": "Every attempted seed for every fixture with expect.must_refuse=true; correct typed refusal status is measured independently of cosmetic scoring.",
+    "known_limit": "The 24 cases are a tuned provisional regression set. U6/U9 require a broader locked 30 EN + 30 RU suite and real-history dogfood before release."
+  },
+  "thresholds": {
+    "u1_provisional": {
+      "stable_case_pass_rate_min": 0.8,
+      "stable_per_language_case_pass_rate_min": 0.75,
+      "stable_per_consumer_case_pass_rate_min": 0.75,
+      "unsupported_refusal_rate": 1.0,
+      "parser_acceptance_rate": 1.0,
+      "attempted_seed_variants_per_case": 3
+    },
+    "u6_release": {
+      "stable_case_pass_rate_min": 0.9,
+      "stable_per_language_case_pass_rate_min": 0.85,
+      "stable_per_consumer_case_pass_rate_min": 0.85,
+      "unsupported_refusal_rate": 1.0,
+      "parser_acceptance_rate_min": 0.95,
+      "minimum_cases_per_language": 30
+    }
+  }
+}

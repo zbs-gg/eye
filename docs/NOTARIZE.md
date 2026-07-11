@@ -42,8 +42,13 @@ parentheses: `Developer ID Application: Name (ABCDE12345)`).
 bash scripts/build-notarized.sh
 ```
 The script does it all: builds Release with **Hardened Runtime**, signs with **Developer ID** + a secure
-timestamp, packages the e5 model, submits to Apple (`notarytool --wait`, ~2–10 min), runs `stapler staple`
+timestamp, packages the e5 retrieval model, submits to Apple (`notarytool --wait`, ~2–10 min), runs `stapler staple`
 and checks `spctl` (it should be `accepted, source=Notarized Developer ID`). The output is `dist/ZBSEye-notarized-*.zip`.
+
+The archive deliberately does **not** contain the multi-gigabyte generative model. On a supported Mac,
+the user starts its separate download from **AI Models → ZBS Eye Local**. The app verifies the immutable
+manifest before activation and stores the model under the resolved ZBS Eye data root. Partial assets,
+credentials, logs, and qualification reports must never appear in the release archive.
 
 ## Install on the recipient's machine
 Unzip into `/Applications`, launch with a **double-click** — Gatekeeper passes it without "Open Anyway"
@@ -56,7 +61,9 @@ granted once; the signature is stable, rebuilds don't reset them.
 The script builds Release (without `get-task-allow`) and sets `--options runtime --timestamp` on the build, so
 it usually passes on the first try.
 
-## Current state (before the program)
-- The cert right now: only self-signed "ZBS Eye Dev" + "Apple Development". Notarization is blocked until steps 1–2.
-- Until there's a program — `scripts/build-release.sh` (self-signed, install via "Open Anyway"). The downsides
-  of self-signing (cdhash/TCC churn on every rebuild) are exactly what notarization removes.
+## Maintainer release state
+
+The release Mac currently has a Developer ID Application certificate and the `zbseye-notary` keychain
+profile. Re-check both before a release; the build script fails before compiling if either is unavailable.
+Contributors without those credentials can still use `scripts/build-release.sh` for a self-signed local build,
+but that artifact is not a distributable ZBS Eye release and may churn TCC permissions.

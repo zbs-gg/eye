@@ -12,6 +12,7 @@ actor TranscriptionService {
     private var working = false
     private var idleUnloadTask: Task<Void, Never>?
     private var unloadRequested = false   // quiesce() during the drain → unload AFTER it, without a race
+    private var drainWaiters: [CheckedContinuation<Void, Never>] = []
 
     private(set) var transcribedCount = 0
     private(set) var droppedCount = 0
@@ -65,6 +66,9 @@ actor TranscriptionService {
         } else {
             scheduleIdleUnload()
         }
+        let waiters = drainWaiters
+        drainWaiters.removeAll(keepingCapacity: false)
+        for waiter in waiters { waiter.resume() }
     }
 
     private func scheduleIdleUnload() {
@@ -97,6 +101,22 @@ actor TranscriptionService {
         } else {
             idleUnloadTask?.cancel(); idleUnloadTask = nil
             await backend.unload()
+        }
+    }
+
+    /// Strong maintenance barrier. Unlike `quiesce`, this does not merely ask
+    /// an active drain to unload later; it waits for every queued transcript and
+    /// its IngestService write to complete.
+    func drainAndQuiesce() async {
+        idleUnloadTask?.cancel()
+        idleUnloadTask = nil
+        guard working || !queue.isEmpty else {
+            await backend.unload()
+            return
+        }
+        unloadRequested = true
+        await withCheckedContinuation { continuation in
+            drainWaiters.append(continuation)
         }
     }
 }

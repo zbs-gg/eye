@@ -24,9 +24,12 @@ Two product goals:
 
 ## Principles (never broken)
 
-- **Zero egress.** The server listens only on `127.0.0.1`; everything except `/health` is behind a Bearer token.
+- **Zero egress for capture, index, and storage.** The local server listens only on `127.0.0.1`; everything
+  except `/health` is behind a Bearer token. History excerpts leave the Mac only after explicit consent to
+  an activated external generation provider.
 - **Zero accounts, zero subscription, zero telemetry.** That IS the product, not a temporary stance.
-- **AI is local only** (a local LLM). No "cloud presets by default".
+- **Built-in local AI is the default path.** External local, cloud, broker, and signed-in CLI providers
+  remain deliberate choices; recommendations guide but never activate themselves.
 - **Default is to record everything**, but give the person control: pause, exclusions, delete a range.
 - **Native and lightweight.** Swift/SwiftUI, Apple Silicon hardware acceleration, minimal dependencies.
 
@@ -42,6 +45,8 @@ Two product goals:
 - Storage: retention (forever by default), move to external SSD, iCloud backup as a compressed snapshot,
   size tracking.
 - Automations: daily summary (local LLM → file/Obsidian), export.
+- Built-in local generation on qualified hardware, with one global provider/model pair and provider-owned
+  model lists; Ollama and LM Studio remain separate alternatives.
 
 ---
 
@@ -77,16 +82,18 @@ Two product goals:
 - ✅ The embedding model is bundled (`scripts/build-release.sh`) — first-run with no network.
 
 ### 6. "Ask your memory" — ✅
-- ✅ "Ask" section: question → hybrid search → a local LLM answers from fragments with links
-  (`AskService`/`AskStore`/`AskView`). Fully on-device — a local equivalent of "Ask Rewind".
-- ✅ LLM model picker from what's actually loaded in LM Studio/Ollama (`/v1/models`), not free text input.
+- ✅ "Ask" section: question → hybrid search → the active processing model answers from fragments with
+  links (`AskService`/`AskStore`/`AskView`). The built-in provider stays on-device; an external provider
+  sees excerpts only after scoped consent.
+- ✅ Provider-first "AI Models" screen: ZBS Eye Local is the one-click headline; models remain inside Codex,
+  OpenRouter, Anthropic, direct providers, Ollama, and LM Studio rather than becoming peer providers.
 
 ### 7. Packaging for distribution — ✅
 - ✅ Launch at login (`SMAppService`), first-run onboarding.
 - ✅ **Notarization (Developer ID)** — `scripts/build-notarized.sh` (Hardened Runtime + Developer ID +
   notarytool + staple). Distribution **outside the App Store** (the sandbox would kill cross-app AX — the core).
   Double-click install, no "Open Anyway"; the signature is stable — rebuilds do NOT reset TCC. Cert setup — `docs/NOTARIZE.md`.
-- ⏳ Auto-updates (Sparkle) and a test target (XCTest) — next.
+- ⏳ Auto-updates (Sparkle) — next.
 
 ### Deliberately deferred from v1 (with a reason)
 - ⏳ **VAD "speech vs music"** — currently an energy (RMS) gate. A full music classifier risks muting
@@ -97,7 +104,8 @@ text and conversations; the first launch on a fresh machine is completed without
 
 > **Built, notarized, working live** (2026-06-25): a notarized Developer ID build is installed, launches
 > with a double-click, writes to an external SSD (50k+ frames). The live-recording crash (self-AX reentrancy)
-> is fixed and verified live. For the formal "v1.0 check mark", what remains is: a test target (XCTest).
+> is fixed and verified live. The release now also has a native XCTest target covering provider,
+> provisioning, routing, adapter, and consumer contracts.
 
 ---
 

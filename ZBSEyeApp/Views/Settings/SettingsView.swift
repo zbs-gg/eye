@@ -610,7 +610,7 @@ private struct PermissionRow: View {
             case .needsRestart:
                 // permission granted, but TCC will apply it only to a new process (-3801)
                 StatusPill(text: "Restart needed", color: .orange)
-                Button("Restart ZBS Eye") { AppRelauncher.relaunch() }
+                Button("Restart ZBS Eye") { try? AppRelauncher.relaunch() }
                     .buttonStyle(.borderedProminent).controlSize(.small)
             case .denied:
                 StatusPill(text: "No access", color: .red)

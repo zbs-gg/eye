@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_id": "gg.zbs.eye.eval-protocol/v7",
+  "protocol": {
+    "id": "local-ai-v7",
+    "revision": 7,
+    "status": "release-candidate",
+    "created_at": "2026-07-11",
+    "purpose": "Release-quality multilingual qualification of the channel-separated production Ask, Daily Insights, Day Summary, and Activity Label requests through deterministic context budgets, the built-in native no-side-effect tool channel, parser, and renderer.",
+    "supersedes": "local-ai-v6",
+    "change_reason": "Revision 6 exposed that a single mixed local-tool/external-visible prompt let Qwen choose prose or bare JSON instead of its supplied native function. Revision 7 locks provider-specific production request construction: ZBS Eye Local receives only the unconditional native-tool contract, while external providers receive only visible-output instructions.",
+    "provenance": {
+      "source": "Synthetic ZBS Eye-like cases authored for this protocol; no case is copied from user history.",
+      "contains_user_history": false,
+      "contains_secrets": false,
+      "license": "CC0-1.0",
+      "stability": "Protocol text, fixture bytes and hashes, case IDs and inputs, production prompt versions, channel selection, context policy, tool schema, parser, renderer, generation parameters, seed derivation, scoring, and thresholds are immutable within revision 7. Any correction requires revision 8."
+    }
+  },
+  "fixture_files": [
+    {
+      "path": "fixtures/local-ai-v7-en.json",
+      "language": "en",
+      "case_count": 32,
+      "sha256": "5dd1171ed00403b2045a3619472431b847e04b2e1c43100ddcf6e5b53dde628a"
+    },
+    {
+      "path": "fixtures/local-ai-v7-ru.json",
+      "language": "ru",
+      "case_count": 32,
+      "sha256": "12a03ab2811c2d3d2abf700861bd3904d9c90b7d71977a575babab73b0d8160f"
+    }
+  ],
+  "negative_predecessor": {
+    "protocol_id": "local-ai-v6",
+    "summary_path": "local-ai-v6-negative-run.md",
+    "raw_report_filename": "local-ai-v6-2026-07-10T23-43-45Z.json",
+    "raw_report_sha256": "b038747c77bf44ff5a8b56209d310a8b12d85945b046e135554a766cfc8f57df",
+    "raw_report_checked_in": false
+  },
+  "case_distribution": {
+    "total": 64,
+    "per_language": {
+      "en": 32,
+      "ru": 32
+    },
+    "per_language_and_consumer": {
+      "en": {
+        "ask": 8,
+        "insights": 8,
+        "summary": 8,
+        "label": 8
+      },
+      "ru": {
+        "ask": 8,
+        "insights": 8,
+        "summary": 8,
+        "label": 8
+      }
+    },
+    "must_refuse_per_language": {
+      "en": 4,
+      "ru": 4
+    },
+    "uniqueness": "All 64 case IDs and sorted-key canonical input JSON payloads must be globally unique."
+  },
+  "production_request_construction": {
+    "ask": {
+      "source": "ZBSEyeApp/Search/AskService.swift",
+      "execution": "Fixture retrieval is injected into AskService; a capture router records the exact production LLMRequest after production status hints, citation numbering, and LocalAIContextPolicy budget."
+    },
+    "insights": {
+      "source": "ZBSEyeApp/Connections/AIConsumerGeneration.swift AIConsumerPromptFactory.dailyInsights",
+      "execution": "Fixture activity is reduced by LocalAIContextPolicy.insightsHints, then RoutedAIConsumerGenerator captures the exact production LLMRequest and structured source vocabulary."
+    },
+    "summary": {
+      "source": "ZBSEyeApp/Connections/AIConsumerGeneration.swift AIConsumerPromptFactory.dailySummary",
+      "execution": "Locked ordered slices cross the production deterministic context budget; the captured source set is the exact included subset."
+    },
+    "label": {
+      "source": "ZBSEyeApp/Connections/AIConsumerGeneration.swift AIConsumerPromptFactory.generatedLabel",
+      "execution": "The locked serialized activity block and language signals produce the production one-line label request."
+    },
+    "context_budget_source": "ZBSEyeApp/Connections/LocalAIContextPolicy.swift",
+    "context_token_ceiling": 8192,
+    "no_bypass": "Every physical generation uses the captured production LLMRequest; test-only prompt copies or overlays are forbidden."
+  },
+  "prompt_contracts": {
+    "ask-production-v7": {
+      "consumer": "ask",
+      "prompt_version": "AskService built-in native-tool production request",
+      "output_purpose": "ask"
+    },
+    "insights-production-v7": {
+      "consumer": "insights",
+      "prompt_version": "daily-insights-v4",
+      "output_purpose": "insights"
+    },
+    "summary-production-v7": {
+      "consumer": "summary",
+      "prompt_version": "daily-summary-v3",
+      "output_purpose": "summary"
+    },
+    "label-production-v7": {
+      "consumer": "label",
+      "prompt_version": "block-label-v3",
+      "output_purpose": "label"
+    }
+  },
+  "separated_channels": {
+    "built_in_local": "The captured ZBS Eye Local production request contains an unconditional instruction to call emit_zbs_eye_answer exactly once, with no normal text or bare JSON before or after it.",
+    "external": "The external-provider production request contains no function-call branch and requires only final visible lines, Markdown, or label text.",
+    "selection": "Channel selection is derived from the exact provider identity; executedLocally alone must not opt Ollama, LM Studio, or Custom into the built-in MLX tool channel.",
+    "quality_gate": "The v7 physical gate qualifies the captured built-in local production request. Synthetic external behavior remains covered by pure consumer tests."
+  },
+  "structured_channel": {
+    "kind": "native model function call",
+    "function_name": "emit_zbs_eye_answer",
+    "side_effects": "none; parsed but never dispatched",
+    "production_source": "ZBSEyeApp/Connections/LocalAIAnswerToolContract.swift",
+    "function_call_count": 1,
+    "normal_text_before_or_after_call": "reject",
+    "repair": "none",
+    "status_by_consumer": {
+      "ask": [
+        "supported",
+        "uncertain",
+        "not_found"
+      ],
+      "insights": [
+        "supported",
+        "conflict",
+        "insufficient"
+      ],
+      "summary": [
+        "supported"
+      ],
+      "label": [
+        "supported"
+      ]
+    },
+    "renderer_source": "ZBSEyeApp/Connections/LocalAIOutputContract.swift"
+  },
+  "generation": {
+    "thinking": false,
+    "temperature": 0.2,
+    "top_p": 0.95,
+    "top_k": 0,
+    "presence_penalty": null,
+    "prefill_step_size": 256,
+    "max_output_tokens": {
+      "ask": 800,
+      "insights": 400,
+      "summary": 800,
+      "label": 60
+    },
+    "retries": 0,
+    "attempted_seed_variants_per_case": 3,
+    "seed_derivation": {
+      "canonical_request": "NFC(protocol.id + '\\n' + protocol.revision + '\\n' + prompt_contract_id + '\\n' + case.id + '\\n' + sorted-key JSON(case.input))",
+      "production": "First 8 SHA-256 bytes of canonical_request, interpreted unsigned big-endian.",
+      "perturbation_1": "First 8 SHA-256 bytes of canonical_request + '\\nperturbation:1'.",
+      "perturbation_2": "First 8 SHA-256 bytes of canonical_request + '\\nperturbation:2'.",
+      "stability": "A case passes only when all three attempts pass. No retry, repair, or best-result selection."
+    }
+  },
+  "scoring": {
+    "mode": "binary stable-case pass",
+    "parser_acceptance": "Exactly one production tool call, zero normal model text, accepted by LocalAIAnswerToolContract without repair.",
+    "semantic_checks": [
+      "expected typed status for consumer and answerability",
+      "all required concepts and exact quotes",
+      "required and allowlisted structured sources",
+      "no forbidden substring or invented number",
+      "language, word, and line limits"
+    ],
+    "unsupported_denominator": "Every attempted seed of each must_refuse Ask or Insights case.",
+    "stable_rates": "Overall, language, and consumer rates use cases, not seed attempts; all three attempts must pass."
+  },
+  "thresholds": {
+    "stable_case_pass_rate_min": 0.9,
+    "stable_per_language_case_pass_rate_min": 0.85,
+    "stable_per_consumer_case_pass_rate_min": 0.85,
+    "parser_acceptance_rate_min": 0.95,
+    "unsupported_refusal_rate": 1,
+    "attempted_seed_variants_per_case": 3,
+    "minimum_cases_per_language": 30
+  }
+}
