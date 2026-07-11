@@ -142,6 +142,7 @@ targets:
       - path: ZBSEyeApp/State/RecordingMaintenanceAdmission.swift
       - path: ZBSEyeApp/Audio/SystemAudioCaptureLifecycle.swift
       - path: ZBSEyeApp/App/AppBootstrapGate.swift
+      - path: ZBSEyeApp/App/ZBSEyeAppDelegate.swift
       - path: ZBSEyeApp/Support/AppTerminationReplyPlan.swift
       - path: ZBSEyeApp/Support/AppRelaunchPlan.swift
       - path: ZBSEyeApp/Connections/ProviderHTTPAdapter.swift

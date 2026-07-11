@@ -1,7 +1,7 @@
 import Foundation
 
-/// App-lifetime admission for the service graph. SwiftUI may recreate the
-/// window task, but initialization must have exactly one owner.
+/// App-lifetime admission for the service graph. Repeated lifecycle requests
+/// must share one initialization owner.
 @MainActor
 final class AppBootstrapGate {
     private enum State {
@@ -21,9 +21,9 @@ final class AppBootstrapGate {
         case .running(let task):
             await task.value
         case .idle:
-            // This unstructured task is app-lifetime work: closing the window
-            // may cancel SwiftUI's `.task`, but must not tear down a half-built
-            // service graph or let the next window build a second one.
+            // This unstructured task is app-lifetime work. Caller cancellation
+            // must not tear down a half-built service graph or let another
+            // lifecycle request build a second one.
             let task = Task { @MainActor in await operation() }
             state = .running(task)
             await task.value
