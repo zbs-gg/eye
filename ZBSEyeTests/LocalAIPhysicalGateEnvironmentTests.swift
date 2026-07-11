@@ -15,6 +15,9 @@ final class LocalAIPhysicalGateEnvironmentTests: XCTestCase {
             ("memory", baseline.replacing(physicalMemoryBytes: baseline.physicalMemoryBytes + 1)),
             ("architecture", baseline.replacing(architecture: "x86_64")),
             ("configuration", baseline.replacing(buildConfiguration: "Debug")),
+            ("dirty source tree", baseline.replacing(sourceTreeState: "dirty")),
+            ("source tree state with whitespace", baseline.replacing(sourceTreeState: " clean ")),
+            ("source tree state with different case", baseline.replacing(sourceTreeState: "CLEAN")),
             ("hf offline", baseline.replacing(hfHubOffline: "0")),
             ("transformers offline", baseline.replacing(transformersOffline: "0")),
             ("downloads", baseline.replacing(allowModelDownloads: "1")),
@@ -96,6 +99,10 @@ final class LocalAIPhysicalGateEnvironmentTests: XCTestCase {
         )
         XCTAssertTrue(script.contains("SOURCE_REVISION="))
         XCTAssertTrue(script.contains("ZBS_EYE_SOURCE_REVISION=\"$SOURCE_REVISION\""))
+        XCTAssertTrue(script.contains(
+            "[ \"$PHYSICAL_RELEASE_COUNT\" -gt 0 ] && [ \"$SOURCE_TREE_STATE\" != \"clean\" ]"
+        ))
+        XCTAssertTrue(script.contains("physical gate requires a clean source tree"))
         XCTAssertTrue(script.contains(
             "RUN_RUNTIME_SMOKE + RUN_QUALITY_GATE + RUN_QUALITY_PROBE + RUN_PERFORMANCE_GATE"
         ))

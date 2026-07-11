@@ -126,6 +126,9 @@ SOURCE_TREE_STATE="clean"
 if ! git diff-index --quiet HEAD -- || [ -n "$(git ls-files --others --exclude-standard)" ]; then
   SOURCE_TREE_STATE="dirty"
 fi
+if [ "$PHYSICAL_RELEASE_COUNT" -gt 0 ] && [ "$SOURCE_TREE_STATE" != "clean" ]; then
+  die_usage "physical gate requires a clean source tree"
+fi
 SWIFT_COMPILER_VERSION="$(xcrun swiftc --version 2>/dev/null | head -n 1)"
 XCODE_VERSION="$(xcodebuild -version | paste -sd ' ' -)"
 SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"

@@ -53,6 +53,7 @@ struct LocalAIPhysicalGateEnvironment: Codable, Sendable, Equatable {
         physicalMemoryBytes: UInt64? = nil,
         architecture: String? = nil,
         buildConfiguration: String? = nil,
+        sourceTreeState: String? = nil,
         packageVersions: LocalAIPackageVersions? = nil,
         modelRevision: String? = nil,
         qualityProtocolID: String? = nil,
@@ -76,7 +77,7 @@ struct LocalAIPhysicalGateEnvironment: Codable, Sendable, Equatable {
             appMarketingVersion: appMarketingVersion,
             appBuildVersion: appBuildVersion,
             sourceRevision: sourceRevision,
-            sourceTreeState: sourceTreeState,
+            sourceTreeState: sourceTreeState ?? self.sourceTreeState,
             packageResolvedSHA256: packageResolvedSHA256,
             swiftLanguageVersion: swiftLanguageVersion,
             swiftCompilerVersion: swiftCompilerVersion,
@@ -157,6 +158,9 @@ enum LocalAIPhysicalGateValidator {
         if !isLowercaseHex(evidence.sourceRevision, count: 40) {
             failures.append("source revision must be a full lowercase git commit")
         }
+        if evidence.sourceTreeState != "clean" {
+            failures.append("source tree state must be exactly clean")
+        }
         if !isLowercaseHex(evidence.packageResolvedSHA256, count: 64) {
             failures.append("Package.resolved fingerprint must be a SHA-256 digest")
         }
@@ -164,7 +168,7 @@ enum LocalAIPhysicalGateValidator {
             || evidence.kernelVersion.isEmpty || evidence.processorBrand.isEmpty
             || evidence.processorCount <= 0 || evidence.activeProcessorCount <= 0
             || evidence.bundleIdentifier.isEmpty || evidence.appMarketingVersion.isEmpty
-            || evidence.appBuildVersion.isEmpty || evidence.sourceTreeState.isEmpty
+            || evidence.appBuildVersion.isEmpty
             || evidence.swiftCompilerVersion.isEmpty || evidence.xcodeVersion.isEmpty
             || evidence.sdkVersion.isEmpty || evidence.deploymentTarget.isEmpty
         {
