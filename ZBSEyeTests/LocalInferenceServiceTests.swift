@@ -200,6 +200,112 @@ final class LocalInferenceServiceTests: XCTestCase {
         XCTAssertEqual(stateAfterCancellation, .ready(fixture.installation))
     }
 
+    func testCallerCancellationWaitsForCooperativeDrainBeforeReturning() async throws {
+        let fixture = try RuntimeFixture()
+        defer { fixture.remove() }
+        let coordinator = AIComputeCoordinator(vectorBackfill: .noop)
+        let driver = FakeLocalRuntimeDriver(
+            blockGeneration: true,
+            blockRuntimeDrain: true
+        )
+        let service = LocalInferenceService(
+            driver: driver,
+            computeCoordinator: coordinator,
+            idleUnloadDelay: .seconds(60),
+            drainAcknowledgementTimeout: .seconds(1)
+        )
+        try await service.loadVerified(directory: fixture.payload, manifest: fixture.manifest)
+
+        let cancellationRequest = request(id: UUID())
+        let selection = fixture.selection
+        let generation = Task {
+            try await service.generate(
+                request: cancellationRequest,
+                selection: selection
+            )
+        }
+        await driver.waitUntilGenerating()
+
+        generation.cancel()
+        let prematureReturn = await LocalRuntimeTaskDeadline.wait(
+            for: generation,
+            timeout: .milliseconds(20)
+        )
+        XCTAssertEqual(prematureReturn, .timedOut)
+
+        await driver.releaseRuntimeDrain()
+        do {
+            _ = try await generation.value
+            XCTFail("cancelled generation returned a response")
+        } catch is CancellationError {
+            // Expected after the producer and its compute lease are drained.
+        }
+
+        let serviceState = await service.snapshot()
+        XCTAssertNil(serviceState.activeRequestID)
+        XCTAssertEqual(serviceState.state, .ready(fixture.installation))
+        let computeState = await coordinator.snapshot()
+        XCTAssertFalse(computeState.generationActive)
+    }
+
+    func testCallerCancellationReturnsBoundedWhenRuntimeDrainDoesNotAcknowledge() async throws {
+        let fixture = try RuntimeFixture()
+        defer { fixture.remove() }
+        let coordinator = AIComputeCoordinator(vectorBackfill: .noop)
+        let driver = FakeLocalRuntimeDriver(
+            blockGeneration: true,
+            blockRuntimeDrain: true
+        )
+        let service = LocalInferenceService(
+            driver: driver,
+            computeCoordinator: coordinator,
+            idleUnloadDelay: .seconds(60),
+            drainAcknowledgementTimeout: .milliseconds(20)
+        )
+        try await service.loadVerified(directory: fixture.payload, manifest: fixture.manifest)
+
+        let cancellationRequest = request(id: UUID())
+        let selection = fixture.selection
+        let generation = Task {
+            try await service.generate(
+                request: cancellationRequest,
+                selection: selection
+            )
+        }
+        await driver.waitUntilGenerating()
+
+        let started = ContinuousClock().now
+        generation.cancel()
+        let boundedReturn = await LocalRuntimeTaskDeadline.wait(
+            for: generation,
+            timeout: .milliseconds(500)
+        )
+        XCTAssertEqual(boundedReturn, .completed)
+        XCTAssertLessThan(
+            started.duration(to: ContinuousClock().now),
+            .milliseconds(500)
+        )
+        let retained = await service.snapshot()
+        XCTAssertEqual(retained.activeRequestID, cancellationRequest.id)
+        guard case .failed(let installation, _) = retained.state else {
+            return XCTFail("unacknowledged caller drain was not failed at return: \(retained.state)")
+        }
+        XCTAssertEqual(installation, fixture.installation)
+        let retainedComputeState = await coordinator.snapshot()
+        XCTAssertTrue(retainedComputeState.generationActive)
+
+        await driver.releaseRuntimeDrain()
+        do {
+            _ = try await generation.value
+            XCTFail("cancelled generation returned a response")
+        } catch is CancellationError {
+            // Expected: the caller was released at the acknowledgement deadline.
+        }
+        try await waitUntil { await service.snapshot().activeRequestID == nil }
+        let finalComputeState = await coordinator.snapshot()
+        XCTAssertFalse(finalComputeState.generationActive)
+    }
+
     func testRequestTimeoutCancelsAndDrains() async throws {
         let fixture = try RuntimeFixture()
         defer { fixture.remove() }

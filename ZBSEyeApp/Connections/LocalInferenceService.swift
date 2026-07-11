@@ -539,6 +539,7 @@ actor LocalInferenceService: LLMAdapter {
                 throw LocalInferenceError.timedOut
             case .cancelled:
                 beginActiveCancellation(requestID: requestID, reason: .caller)
+                await waitForActiveCancellationAcknowledgement(requestID: requestID)
                 throw CancellationError()
             case .completed:
                 break
@@ -765,6 +766,27 @@ actor LocalInferenceService: LLMAdapter {
             }
         }
         active?.cleanupTask = cleanupTask
+    }
+
+    private func waitForActiveCancellationAcknowledgement(requestID: UUID) async {
+        guard let current = active,
+              current.requestID == requestID,
+              let cleanupTask = current.cleanupTask else { return }
+        let timeout = drainAcknowledgementTimeout
+        // The caller is already cancelled, so a cancellation-aware wait would
+        // return immediately. A fresh detached waiter gives cooperative MLX
+        // teardown its bounded acknowledgement window without allowing a
+        // non-cooperative driver to hold the caller forever.
+        let waiter = Task.detached {
+            await LocalRuntimeTaskDeadline.wait(
+                for: cleanupTask,
+                timeout: timeout
+            )
+        }
+        let acknowledgement = await waiter.value
+        if acknowledgement != .completed {
+            markRuntimeUnhealthy()
+        }
     }
 
     private func finishGeneration(requestID: UUID) async {
