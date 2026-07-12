@@ -1,6 +1,19 @@
 import Foundation
 import MLXLMCommon
 
+/// Dispatch sources invoke their handlers on their configured queue. Build the
+/// memory-pressure callback outside `AppEnvironment`'s `@MainActor` isolation
+/// so Swift 6 does not trap when the utility queue delivers an event.
+enum LocalAIMemoryPressureDispatchHandler {
+    static func make(
+        for localInference: LocalInferenceService
+    ) -> @Sendable () -> Void {
+        {
+            Task { await localInference.handleMemoryPressure() }
+        }
+    }
+}
+
 struct LocalRuntimeGenerationRequest: Sendable, Equatable {
     let systemPrompt: String
     let userPrompt: String

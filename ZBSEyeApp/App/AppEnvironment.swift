@@ -120,9 +120,9 @@ final class AppEnvironment {
             eventMask: [.warning, .critical],
             queue: .global(qos: .utility)
         )
-        source.setEventHandler {
-            Task { await localInference.handleMemoryPressure() }
-        }
+        source.setEventHandler(
+            handler: LocalAIMemoryPressureDispatchHandler.make(for: localInference)
+        )
         source.activate()
         localAIMemoryPressureSource = source
     }

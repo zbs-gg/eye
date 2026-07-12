@@ -582,6 +582,27 @@ final class LocalInferenceServiceTests: XCTestCase {
         XCTAssertTrue(events.contains("unload"))
     }
 
+    func testMemoryPressureDispatchHandlerRunsOffMainActorWithoutTrapping() async throws {
+        let driver = FakeLocalRuntimeDriver()
+        let service = LocalInferenceService(
+            driver: driver,
+            computeCoordinator: AIComputeCoordinator(vectorBackfill: .noop),
+            idleUnloadDelay: .seconds(60)
+        )
+        let handler = LocalAIMemoryPressureDispatchHandler.make(for: service)
+
+        DispatchQueue.global(qos: .utility).async {
+            dispatchPrecondition(condition: .notOnQueue(.main))
+            handler()
+        }
+
+        try await waitUntil(timeout: .seconds(2)) {
+            await driver.events().contains("unload")
+        }
+        let state = await service.snapshot().state
+        XCTAssertEqual(state, .unloaded)
+    }
+
     func testRuntimeDrainerCancelsGenerationWaitingForSemanticQueryDrain() async throws {
         let fixture = try RuntimeFixture()
         defer { fixture.remove() }
