@@ -782,9 +782,56 @@ struct CodexProcessFrame: Sendable, Equatable {
 }
 
 protocol CodexAppServerConnection: Sendable {
-    func send(_ line: Data) async throws
+    func send(_ line: Data, promptAdmission: CodexPromptAdmission?) async throws
     func receive(maximumLineBytes: Int, timeout: Duration) async throws -> CodexProcessFrame
     func terminateProcessGroup(gracePeriod: Duration) async
+}
+
+struct CodexPromptAdmission: Sendable {
+    let snapshotProvider: any LLMSelectionSnapshotProviding
+    let selection: ProviderSelectionSnapshot
+    let consumer: AIConsumer
+    private let state = CodexPromptAdmissionState()
+
+    init(
+        snapshotProvider: any LLMSelectionSnapshotProviding,
+        selection: ProviderSelectionSnapshot,
+        consumer: AIConsumer
+    ) {
+        self.snapshotProvider = snapshotProvider
+        self.selection = selection
+        self.consumer = consumer
+    }
+
+    func cancel() { state.cancel() }
+
+    func checkCancellation() throws { try state.checkCancellation() }
+
+    func validate() async throws {
+        try state.checkCancellation()
+        guard await snapshotProvider.currentSnapshot(for: consumer) == selection else {
+            throw CodexAppServerError.staleSelection
+        }
+        try state.checkCancellation()
+    }
+}
+
+private final class CodexPromptAdmissionState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isCancelled = false
+
+    func cancel() {
+        lock.lock()
+        isCancelled = true
+        lock.unlock()
+    }
+
+    func checkCancellation() throws {
+        lock.lock()
+        let cancelled = isCancelled
+        lock.unlock()
+        if cancelled { throw CancellationError() }
+    }
 }
 
 protocol CodexAppServerProcessTransport: Sendable {
@@ -1182,38 +1229,95 @@ private final class CodexPipePump: @unchecked Sendable {
     }
 }
 
-private final class CodexStdinWriter: @unchecked Sendable {
+private final class CodexPromptValidationResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Result<Void, Error>?
+
+    func store(_ result: Result<Void, Error>) {
+        lock.lock()
+        value = result
+        lock.unlock()
+    }
+
+    func load() -> Result<Void, Error>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
+final class CodexStdinWriter: @unchecked Sendable {
     private let workQueue = DispatchQueue(label: "gg.zbs.eye.codex.stdin")
     private var descriptor: Int32?
 
     init(descriptor: Int32) { self.descriptor = descriptor }
 
-    func write(_ data: Data) async throws {
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, Error>) in
-            workQueue.async {
-                guard let descriptor = self.descriptor else {
-                    return continuation.resume(
-                        throwing: CodexAppServerError.transportUnavailable
-                    )
-                }
-                let result: Result<Void, Error> = data.withUnsafeBytes { bytes in
-                    guard let base = bytes.baseAddress else { return .success(()) }
-                    var offset = 0
-                    while offset < bytes.count {
-                        let count = Darwin.write(
-                            descriptor,
-                            base.advanced(by: offset),
-                            bytes.count - offset
+    func write(
+        _ data: Data,
+        promptAdmission: CodexPromptAdmission?
+    ) async throws {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<Void, Error>) in
+                workQueue.async {
+                    guard let descriptor = self.descriptor else {
+                        return continuation.resume(
+                            throwing: CodexAppServerError.transportUnavailable
                         )
-                        if count > 0 { offset += count; continue }
-                        if count < 0, errno == EINTR { continue }
-                        return .failure(CodexAppServerError.transportUnavailable)
                     }
-                    return .success(())
+                    // The JSON-RPC message is already serialized before it
+                    // enters this queue. The dedicated writer thread waits for
+                    // the async authority check, then performs no queue hop or
+                    // suspension before the first fd byte can leave.
+                    if let promptAdmission {
+                        let result = CodexPromptValidationResult()
+                        let ready = DispatchSemaphore(value: 0)
+                        Task {
+                            do {
+                                try await promptAdmission.validate()
+                                result.store(.success(()))
+                            } catch {
+                                result.store(.failure(error))
+                            }
+                            ready.signal()
+                        }
+                        ready.wait()
+                        guard let validation = result.load() else {
+                            return continuation.resume(
+                                throwing: CodexAppServerError.transportUnavailable
+                            )
+                        }
+                        if case .failure(let error) = validation {
+                            return continuation.resume(throwing: error)
+                        }
+                    }
+                    let writeResult: Result<Void, Error> = data.withUnsafeBytes { bytes in
+                        guard let base = bytes.baseAddress else { return .success(()) }
+                        var offset = 0
+                        let maximumChunkBytes = 4 * 1_024
+                        while offset < bytes.count {
+                            do {
+                                try promptAdmission?.checkCancellation()
+                            } catch {
+                                return .failure(error)
+                            }
+                            let chunkBytes = min(maximumChunkBytes, bytes.count - offset)
+                            let count = Darwin.write(
+                                descriptor,
+                                base.advanced(by: offset),
+                                chunkBytes
+                            )
+                            if count > 0 { offset += count; continue }
+                            if count < 0, errno == EINTR { continue }
+                            return .failure(CodexAppServerError.transportUnavailable)
+                        }
+                        return .success(())
+                    }
+                    continuation.resume(with: writeResult)
                 }
-                continuation.resume(with: result)
             }
+        } onCancel: {
+            promptAdmission?.cancel()
         }
     }
 
@@ -1296,7 +1400,10 @@ actor CodexPOSIXConnection: CodexAppServerConnection {
         }
     }
 
-    func send(_ line: Data) async throws {
+    func send(
+        _ line: Data,
+        promptAdmission: CodexPromptAdmission?
+    ) async throws {
         guard !terminationStarted,
               !line.contains(0x0A),
               line.count <= CodexAppServerClient.maximumLineBytes else {
@@ -1304,7 +1411,7 @@ actor CodexPOSIXConnection: CodexAppServerConnection {
         }
         var framed = line
         framed.append(0x0A)
-        try await writer.write(framed)
+        try await writer.write(framed, promptAdmission: promptAdmission)
     }
 
     func receive(
@@ -1447,6 +1554,11 @@ actor CodexAppServerClient: LLMAdapter {
         guard await snapshotProvider.currentSnapshot(for: request.consumer) == selection else {
             throw CodexAppServerError.staleSelection
         }
+        let promptAdmission = CodexPromptAdmission(
+            snapshotProvider: snapshotProvider,
+            selection: selection,
+            consumer: request.consumer
+        )
 
         var session: Session?
         var threadID: String?
@@ -1463,6 +1575,7 @@ actor CodexAppServerClient: LLMAdapter {
             threadID = try await startThread(
                 request: request,
                 selection: selection,
+                promptAdmission: promptAdmission,
                 session: &opened,
                 timeout: request.timeout
             )
@@ -1470,6 +1583,7 @@ actor CodexAppServerClient: LLMAdapter {
                 request: request,
                 selection: selection,
                 threadID: threadID!,
+                promptAdmission: promptAdmission,
                 session: &opened,
                 timeout: request.timeout
             )
@@ -1823,7 +1937,8 @@ actor CodexAppServerClient: LLMAdapter {
                 "id": requestID,
                 "params": ["refreshToken": true],
             ],
-            session: &session
+            session: &session,
+            promptAdmission: nil
         )
         for _ in 0..<16 {
             let object = try await receiveObject(
@@ -1933,6 +2048,7 @@ actor CodexAppServerClient: LLMAdapter {
     private func startThread(
         request: LLMRequest,
         selection: ProviderSelectionSnapshot,
+        promptAdmission: CodexPromptAdmission,
         session: inout Session,
         timeout: Duration
     ) async throws -> String {
@@ -1965,7 +2081,8 @@ actor CodexAppServerClient: LLMAdapter {
                 "persistExtendedHistory": false,
             ],
             session: &session,
-            timeout: timeout
+            timeout: timeout,
+            promptAdmission: promptAdmission
         )
         guard let thread = result["thread"] as? [String: Any],
               let threadID = thread["id"] as? String,
@@ -1991,6 +2108,7 @@ actor CodexAppServerClient: LLMAdapter {
         request: LLMRequest,
         selection: ProviderSelectionSnapshot,
         threadID: String,
+        promptAdmission: CodexPromptAdmission,
         session: inout Session,
         timeout: Duration
     ) async throws -> String {
@@ -2026,7 +2144,8 @@ actor CodexAppServerClient: LLMAdapter {
                 ],
             ],
             session: &session,
-            timeout: timeout
+            timeout: timeout,
+            promptAdmission: promptAdmission
         )
         guard let turn = result["turn"] as? [String: Any],
               let turnID = turn["id"] as? String,
@@ -2172,13 +2291,15 @@ actor CodexAppServerClient: LLMAdapter {
         method: String,
         params: [String: Any],
         session: inout Session,
-        timeout: Duration
+        timeout: Duration,
+        promptAdmission: CodexPromptAdmission? = nil
     ) async throws -> [String: Any] {
         session.nextRequestID += 1
         let requestID = session.nextRequestID
         try await send(
             ["method": method, "id": requestID, "params": params],
-            session: &session
+            session: &session,
+            promptAdmission: promptAdmission
         )
         let object = try await receiveObject(session: &session, timeout: timeout)
         guard object["method"] == nil,
@@ -2194,12 +2315,17 @@ actor CodexAppServerClient: LLMAdapter {
         method: String,
         session: inout Session
     ) async throws {
-        try await send(["method": method], session: &session)
+        try await send(
+            ["method": method],
+            session: &session,
+            promptAdmission: nil
+        )
     }
 
     private func send(
         _ object: [String: Any],
-        session: inout Session
+        session: inout Session,
+        promptAdmission: CodexPromptAdmission?
     ) async throws {
         guard JSONSerialization.isValidJSONObject(object) else {
             throw CodexAppServerError.protocolViolation
@@ -2208,7 +2334,7 @@ actor CodexAppServerClient: LLMAdapter {
         guard data.count <= Self.maximumLineBytes else {
             throw CodexAppServerError.outputLimitExceeded
         }
-        try await session.connection.send(data)
+        try await session.connection.send(data, promptAdmission: promptAdmission)
     }
 
     private func receiveObject(
@@ -2246,7 +2372,8 @@ actor CodexAppServerClient: LLMAdapter {
                 "id": session.nextRequestID,
                 "params": ["threadId": threadID, "turnId": turnID],
             ],
-            session: &session
+            session: &session,
+            promptAdmission: nil
         )
     }
 

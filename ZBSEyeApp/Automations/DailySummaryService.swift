@@ -11,10 +11,16 @@ actor DailySummaryService {
 
     private let repo: DayActivityRepository
     private let generator: any AIConsumerGenerating
+    private let auditWriter: AutomationAuditWriter
 
-    init(repo: DayActivityRepository, generator: any AIConsumerGenerating) {
+    init(
+        repo: DayActivityRepository,
+        generator: any AIConsumerGenerating,
+        auditWriter: AutomationAuditWriter = AutomationAuditWriter()
+    ) {
         self.repo = repo
         self.generator = generator
+        self.auditWriter = auditWriter
     }
 
     // MARK: stage 1 — collect
@@ -180,16 +186,7 @@ actor DailySummaryService {
     }
 
     private func audit(_ entry: AuditEntry) async {
-        guard let url = try? ZBSEyeSupport.auditLogURL(), let line = try? JSONEncoder().encode(entry) else { return }
-        var data = line
-        data.append(0x0A)
-        if let h = try? FileHandle(forWritingTo: url) {
-            defer { try? h.close() }
-            _ = try? h.seekToEnd()
-            try? h.write(contentsOf: data)
-        } else {
-            try? data.write(to: url, options: .atomic)   // file doesn't exist yet — create it
-        }
+        try? await auditWriter.append(entry)
     }
 
     // MARK: prompt + formatting

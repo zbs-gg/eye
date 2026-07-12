@@ -155,13 +155,23 @@ enum BuiltInModelVerifier {
         var buffer = [UInt8](repeating: 0, count: 1_048_576)
         while true {
             try Task.checkCancellation()
-            let count = Darwin.read(descriptor, &buffer, buffer.count)
+            let count = buffer.withUnsafeMutableBytes { bytes -> Int in
+                let count = Darwin.read(descriptor, bytes.baseAddress, bytes.count)
+                if count > 0 {
+                    hasher.update(
+                        bufferPointer: UnsafeRawBufferPointer(
+                            start: bytes.baseAddress,
+                            count: count
+                        )
+                    )
+                }
+                return count
+            }
             if count == 0 { break }
             guard count > 0 else {
                 if errno == EINTR { continue }
                 throw BuiltInModelVerificationError.unreadableFile(relativePath)
             }
-            hasher.update(data: Data(buffer[0..<count]))
         }
         try Task.checkCancellation()
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()

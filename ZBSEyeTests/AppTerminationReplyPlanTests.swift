@@ -15,6 +15,13 @@ final class AppTerminationReplyPlanTests: XCTestCase {
         )
     }
 
+    func testRelocationHandoffDefersRecoveryToRootRollbackOwner() {
+        XCTAssertTrue(AppTerminationRecoveryOwner.quit.recoversServiceGraphInline)
+        XCTAssertFalse(
+            AppTerminationRecoveryOwner.relocationHandoff.recoversServiceGraphInline
+        )
+    }
+
     @MainActor
     func testCriticalPhaseTimeoutIsCallerBoundedAndRecoveryWaitsForCompletion() async {
         let gate = AppTerminationPhaseGate()
@@ -36,6 +43,42 @@ final class AppTerminationReplyPlanTests: XCTestCase {
         let recovery = phase.recoveryTask {
             await recoveryProbe.markRecovered()
         }
+        for _ in 0..<20 { await Task.yield() }
+        let recoveredBeforeRelease = await recoveryProbe.snapshot()
+        XCTAssertFalse(recoveredBeforeRelease)
+
+        await gate.release()
+        await recovery.value
+        let recoveredAfterRelease = await recoveryProbe.snapshot()
+        XCTAssertTrue(recoveredAfterRelease)
+    }
+
+    @MainActor
+    func testNonCooperativeRecordingDrainRejectsQuitBeforeDeadlineAndDoesNotResumeEarly() async {
+        let gate = AppTerminationPhaseGate()
+        let recoveryProbe = AppTerminationRecoveryProbe()
+        let started = ContinuousClock().now
+
+        let phase = await AppTerminationCriticalPhase.run(
+            timeout: .milliseconds(20)
+        ) {
+            await gate.hold()
+            return true
+        }
+        let shouldTerminate = AppTerminationCriticalPhase.acceptsTermination(phase)
+        let recovery = phase.recoveryTask {
+            await recoveryProbe.markRecovered()
+        }
+
+        XCTAssertFalse(shouldTerminate)
+        XCTAssertEqual(
+            AppTerminationReplyPlan.actions(shouldTerminate: shouldTerminate),
+            [.reply(false), .resetTerminationGuard, .showRetryAlert]
+        )
+        XCTAssertLessThan(
+            started.duration(to: ContinuousClock().now),
+            .milliseconds(500)
+        )
         for _ in 0..<20 { await Task.yield() }
         let recoveredBeforeRelease = await recoveryProbe.snapshot()
         XCTAssertFalse(recoveredBeforeRelease)

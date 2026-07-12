@@ -9,6 +9,17 @@ final class StorageManager: Sendable {
         self.mediaDirectory = StorageLocation.mediaDirectory()   // honors relocate
     }
 
+    /// Explicit root for isolated verification harnesses. Production callers
+    /// continue to use `StorageLocation`; this seam prevents a physical gate
+    /// from writing into the user's recorder history.
+    init(mediaDirectory: URL) throws {
+        self.mediaDirectory = mediaDirectory.standardizedFileURL
+        try FileManager.default.createDirectory(
+            at: self.mediaDirectory,
+            withIntermediateDirectories: true
+        )
+    }
+
     func url(forRelative relativePath: String) -> URL {
         mediaDirectory.appendingPathComponent(relativePath)
     }

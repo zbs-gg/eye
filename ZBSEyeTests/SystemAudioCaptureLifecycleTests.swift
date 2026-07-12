@@ -39,15 +39,115 @@ final class SystemAudioCaptureLifecycleTests: XCTestCase {
         let lifecycle = SystemAudioCaptureLifecycle<TestSystemAudioSession>()
         let maybeToken = await lifecycle.beginStart()
         let token = try XCTUnwrap(maybeToken)
+        let lateSession = TestSystemAudioSession()
 
-        XCTAssertNil(lifecycle.beginStop { _ in
-            XCTFail("there is no published session to stop yet")
-            return .failed("unexpected teardown")
+        XCTAssertNil(lifecycle.beginStop { stoppedSession in
+            XCTAssertTrue(stoppedSession === lateSession)
+            return .stopped
         })
         XCTAssertFalse(
-            lifecycle.publishStarted(TestSystemAudioSession(), token: token),
+            lifecycle.publishStarted(lateSession, token: token),
             "a capture that finishes after stop must never become the running session"
         )
+        let teardownOutcome = await lifecycle.drain()
+        XCTAssertEqual(teardownOutcome, .stopped)
+    }
+
+    func testDrainWaitsForRejectedPendingStartToPublishAndStop() async throws {
+        let lifecycle = SystemAudioCaptureLifecycle<TestSystemAudioSession>()
+        let maybeToken = await lifecycle.beginStart()
+        let token = try XCTUnwrap(maybeToken)
+        let lateSession = TestSystemAudioSession()
+        let stopGate = SystemAudioLifecycleGate()
+
+        XCTAssertNil(lifecycle.beginStop { stoppedSession in
+            XCTAssertTrue(stoppedSession === lateSession)
+            await stopGate.wait()
+            return .stopped
+        })
+
+        let completion = SystemAudioLifecycleFlag()
+        let drain = Task { @MainActor in
+            let outcome = await lifecycle.drain()
+            await completion.set()
+            return outcome
+        }
+        for _ in 0..<20 { await Task.yield() }
+        let completedBeforePublish = await completion.snapshot()
+        XCTAssertFalse(completedBeforePublish)
+
+        XCTAssertFalse(lifecycle.publishStarted(lateSession, token: token))
+        await stopGate.waitUntilEntered()
+        for _ in 0..<20 { await Task.yield() }
+        let completedBeforeStop = await completion.snapshot()
+        XCTAssertFalse(completedBeforeStop)
+
+        await stopGate.open()
+        let outcome = await drain.value
+        let completedAfterStop = await completion.snapshot()
+        XCTAssertEqual(outcome, .stopped)
+        XCTAssertTrue(completedAfterStop)
+    }
+
+    func testDrainOfRejectedPendingStartCompletesWhenStartFails() async throws {
+        let lifecycle = SystemAudioCaptureLifecycle<TestSystemAudioSession>()
+        let maybeToken = await lifecycle.beginStart()
+        let token = try XCTUnwrap(maybeToken)
+
+        XCTAssertNil(lifecycle.beginStop { _ in
+            XCTFail("a failed start never published a physical session")
+            return .failed("unexpected teardown")
+        })
+        let drain = Task { @MainActor in await lifecycle.drain() }
+        for _ in 0..<20 { await Task.yield() }
+
+        lifecycle.failStart(token: token)
+        let outcome = await drain.value
+        XCTAssertEqual(outcome, .notNeeded)
+    }
+
+    func testFailedLateStartTeardownRetainsOwnershipUntilRetrySucceeds() async throws {
+        let lifecycle = SystemAudioCaptureLifecycle<TestSystemAudioSession>()
+        let maybeToken = await lifecycle.beginStart()
+        let token = try XCTUnwrap(maybeToken)
+        let session = TestSystemAudioSession()
+        let stopScript = SystemAudioRetryStopScript(session: session)
+
+        XCTAssertNil(
+            lifecycle.beginStop { stoppedSession in
+                await stopScript.stop(stoppedSession)
+            },
+            "the suspended start has not published its physical session yet"
+        )
+        XCTAssertFalse(
+            lifecycle.publishStarted(session, token: token),
+            "Stop must reject a physical session that arrives after cancellation"
+        )
+
+        let firstOutcome = await lifecycle.drain()
+        guard firstOutcome == .failed("first stop failed") else {
+            XCTFail("the lifecycle lost ownership of the failed late teardown: \(firstOutcome)")
+            return
+        }
+
+        let replacementCompleted = SystemAudioLifecycleFlag()
+        let replacement = Task { @MainActor in
+            let replacementToken = await lifecycle.beginStart()
+            await replacementCompleted.set()
+            return replacementToken
+        }
+        await stopScript.waitUntilRetryEntered()
+        for _ in 0..<20 { await Task.yield() }
+        let completedBeforeRetry = await replacementCompleted.snapshot()
+        XCTAssertFalse(
+            completedBeforeRetry,
+            "a replacement must remain blocked while the retained stop retry owns the session"
+        )
+
+        await stopScript.allowRetryToFinish()
+        let replacementToken = await replacement.value
+        XCTAssertNotNil(replacementToken)
+        XCTAssertEqual(stopScript.attempts, 2)
     }
 
     func testNextStartWaitsForPreviousPhysicalTeardown() async throws {
@@ -263,6 +363,35 @@ private final class SystemAudioStopScript {
         XCTAssertTrue(stoppedSession === session)
         attempts += 1
         return outcomes.removeFirst()
+    }
+}
+
+@MainActor
+private final class SystemAudioRetryStopScript {
+    private let session: TestSystemAudioSession
+    private let retryGate = SystemAudioLifecycleGate()
+    private(set) var attempts = 0
+
+    init(session: TestSystemAudioSession) {
+        self.session = session
+    }
+
+    func stop(
+        _ stoppedSession: TestSystemAudioSession
+    ) async -> SystemAudioCaptureTeardownOutcome {
+        XCTAssertTrue(stoppedSession === session)
+        attempts += 1
+        guard attempts > 1 else { return .failed("first stop failed") }
+        await retryGate.wait()
+        return .stopped
+    }
+
+    func waitUntilRetryEntered() async {
+        await retryGate.waitUntilEntered()
+    }
+
+    func allowRetryToFinish() async {
+        await retryGate.open()
     }
 }
 

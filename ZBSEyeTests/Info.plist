@@ -26,6 +26,10 @@
     <string>$(ZBS_EYE_LOCAL_AI_QUALITY_PROBE)</string>
     <key>ZBSEyeLocalAIPerformanceGate</key>
     <string>$(ZBS_EYE_LOCAL_AI_PERFORMANCE_GATE)</string>
+    <key>ZBSEyeLocalAIRecorderCoexistenceGate</key>
+    <string>$(ZBS_EYE_LOCAL_AI_RECORDER_COEXISTENCE_GATE)</string>
+    <key>ZBSEyeLocalAIConcurrencyStress</key>
+    <string>$(ZBS_EYE_LOCAL_AI_CONCURRENCY_STRESS)</string>
     <key>ZBSEyeLocalAIToolProbe</key>
     <string>$(ZBS_EYE_LOCAL_AI_TOOL_PROBE)</string>
     <key>ZBSEyeLocalAIResultsDirectory</key>

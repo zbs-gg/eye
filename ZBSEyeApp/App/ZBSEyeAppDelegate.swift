@@ -10,6 +10,16 @@ final class ZBSEyeAppDelegate: NSObject, NSApplicationDelegate {
     private var didStartLaunch = false
     private var isTerminating = false
 
+    private static let terminationDecision = AppTerminationDecisionRelay()
+
+    static func prepareForAcknowledgedTermination() {
+        terminationDecision.prepare()
+    }
+
+    static func awaitAcknowledgedTerminationDecision() async -> Bool {
+        await terminationDecision.wait()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !didStartLaunch, let handler = Self.onLaunch else { return }
         didStartLaunch = true
@@ -20,10 +30,14 @@ final class ZBSEyeAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if isTerminating { return .terminateLater }
-        guard let handler = Self.onTerminate else { return .terminateNow }
+        guard let handler = Self.onTerminate else {
+            Self.terminationDecision.resolve(true)
+            return .terminateNow
+        }
         isTerminating = true
         Task { @MainActor in
             let shouldTerminate = await handler()
+            Self.terminationDecision.resolve(shouldTerminate)
             for action in AppTerminationReplyPlan.actions(
                 shouldTerminate: shouldTerminate
             ) {
@@ -43,5 +57,36 @@ final class ZBSEyeAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         return .terminateLater
+    }
+}
+
+@MainActor
+private final class AppTerminationDecisionRelay {
+    private var decision: Bool?
+    private var waiter: CheckedContinuation<Bool, Never>?
+
+    func prepare() {
+        precondition(waiter == nil, "overlapping acknowledged termination requests")
+        decision = nil
+    }
+
+    func resolve(_ value: Bool) {
+        if let waiter {
+            self.waiter = nil
+            waiter.resume(returning: value)
+        } else {
+            decision = value
+        }
+    }
+
+    func wait() async -> Bool {
+        if let decision {
+            self.decision = nil
+            return decision
+        }
+        return await withCheckedContinuation { continuation in
+            precondition(waiter == nil, "only one termination decision waiter is supported")
+            waiter = continuation
+        }
     }
 }

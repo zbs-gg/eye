@@ -12,6 +12,15 @@ enum AppTerminationReplyPlan {
     }
 }
 
+enum AppTerminationRecoveryOwner: Sendable, Equatable {
+    case quit
+    case relocationHandoff
+
+    var recoversServiceGraphInline: Bool {
+        self == .quit
+    }
+}
+
 enum AppTerminationCriticalPhaseOutcome: Sendable, Equatable {
     case completed(Bool)
     case timedOut
@@ -39,6 +48,10 @@ struct AppTerminationCriticalPhaseResult {
 
 @MainActor
 enum AppTerminationCriticalPhase {
+    static func acceptsTermination(_ result: AppTerminationCriticalPhaseResult) -> Bool {
+        result.outcome == .completed(true)
+    }
+
     static func run(
         timeout: Duration,
         operation: @escaping @MainActor @Sendable () async -> Bool

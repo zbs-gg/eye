@@ -283,7 +283,7 @@ enum LocalAIPhysicalGateEvidenceCapture {
         )
     }
 
-    private static func configuredValue(
+    static func configuredValue(
         environment: String,
         bundle: Bundle,
         plist: String

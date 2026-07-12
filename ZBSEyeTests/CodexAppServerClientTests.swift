@@ -10,6 +10,30 @@ final class CodexAppServerClientTests: XCTestCase {
         authorizationEpoch: AuthorizationEpoch(rawValue: 9)
     )
 
+    func testRealStdinWriterChecksCancellationAtFileDescriptorBoundary() async throws {
+        var descriptors = [Int32](repeating: -1, count: 2)
+        XCTAssertEqual(pipe(&descriptors), 0)
+        let reader = descriptors[0]
+        let writer = CodexStdinWriter(descriptor: descriptors[1])
+        defer { Darwin.close(reader) }
+        let admission = CodexPromptAdmission(
+            snapshotProvider: CodexMockSnapshotProvider(selection),
+            selection: selection,
+            consumer: .ask
+        )
+        admission.cancel()
+
+        do {
+            try await writer.write(Data("PRIVATE-CANARY".utf8), promptAdmission: admission)
+            XCTFail("cancelled prompt reached the real fd writer")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+        await writer.close()
+        var byte: UInt8 = 0
+        XCTAssertEqual(Darwin.read(reader, &byte, 1), 0)
+    }
+
     func testBinaryPolicyAcceptsOnlyExactNativeSignedArtifact() throws {
         let trusted = CodexBinaryInspection.trustedFixture(
             url: URL(fileURLWithPath: "/trusted/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex"),
@@ -276,7 +300,7 @@ final class CodexAppServerClientTests: XCTestCase {
         var failedClosed = false
         for _ in 0..<32 {
             do {
-                try await connection.send(line)
+                try await connection.send(line, promptAdmission: nil)
             } catch CodexAppServerError.transportUnavailable {
                 failedClosed = true
                 break
@@ -677,6 +701,70 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertEqual(methods, ["initialize", "initialized", "account/read", "model/list"])
         XCTAssertNil(threadStart, "developerInstructions must not leave after consent revocation")
         XCTAssertNil(turnStart, "userPrompt must not leave after consent revocation")
+    }
+
+    func testRevocationWhileThreadStartIsQueuedInWriterPreventsAllPromptBytes() async {
+        let fixture = Fixture(selection: selection)
+        await fixture.connection.enqueue(
+            contentsOf: fixture.happyGenerationFrames(content: "must-discard")
+        )
+        await fixture.connection.pauseNextPromptWrite(method: "thread/start")
+        let request = makeRequest(user: "PRIVATE_USER_PROMPT_MUST_NOT_LEAVE")
+        let client = fixture.client
+        let expectedSelection = selection
+        let task = Task {
+            try await client.generate(
+                request: request,
+                selection: expectedSelection
+            )
+        }
+
+        await fixture.connection.waitUntilPromptWritePaused()
+        await fixture.snapshots.set(nil)
+        await fixture.connection.resumePromptWrite()
+
+        await assertError(.staleSelection, from: task)
+        let promptByteCount = await fixture.connection.sentPromptBearingByteCount()
+        XCTAssertEqual(
+            promptByteCount,
+            0,
+            "revocation at the serialized writer boundary must prevent every prompt byte"
+        )
+    }
+
+    func testRevocationWhileTurnStartIsQueuedInWriterPreventsUserPromptBytes() async {
+        let fixture = Fixture(selection: selection)
+        await fixture.connection.enqueue(
+            contentsOf: fixture.happyGenerationFrames(content: "must-discard")
+        )
+        await fixture.connection.pauseNextPromptWrite(method: "turn/start")
+        let request = makeRequest(user: "PRIVATE_USER_PROMPT_MUST_NOT_LEAVE")
+        let client = fixture.client
+        let expectedSelection = selection
+        let task = Task {
+            try await client.generate(
+                request: request,
+                selection: expectedSelection
+            )
+        }
+
+        await fixture.connection.waitUntilPromptWritePaused()
+        await fixture.snapshots.set(nil)
+        await fixture.connection.resumePromptWrite()
+
+        await assertError(.staleSelection, from: task)
+        let threadStart = await fixture.connection.sentParams(for: "thread/start")
+        let turnStart = await fixture.connection.sentParams(for: "turn/start")
+        let turnPromptBytes = await fixture.connection.sentPromptBearingByteCount(
+            for: "turn/start"
+        )
+        XCTAssertNotNil(threadStart)
+        XCTAssertNil(turnStart)
+        XCTAssertEqual(
+            turnPromptBytes,
+            0,
+            "revocation at the serialized writer boundary must prevent every user-prompt byte"
+        )
     }
 
     func testCancellationAfterModelValidationNeverSendsAnyPromptBearingRequest() async {
@@ -1281,11 +1369,29 @@ private actor CodexScriptedConnection: CodexAppServerConnection {
     private var isBlocked = false
     private var delivered = 0
     private var deliveryHooks: [Int: @Sendable () async -> Void] = [:]
+    private var promptWriteMethodToPause: String?
+    private let promptWriteGate = CodexAsyncGate()
+    private var sentPromptBearingBytes = 0
+    private var sentPromptBearingBytesByMethod: [String: Int] = [:]
 
-    func send(_ line: Data) async throws {
+    func send(
+        _ line: Data,
+        promptAdmission: CodexPromptAdmission?
+    ) async throws {
         let object = try JSONSerialization.jsonObject(with: line)
         guard let dictionary = object as? [String: Any] else {
             throw CodexAppServerError.protocolViolation
+        }
+        if dictionary["method"] as? String == promptWriteMethodToPause {
+            promptWriteMethodToPause = nil
+            await promptWriteGate.pause()
+        }
+        try await promptAdmission?.validate()
+        if Self.isPromptBearing(dictionary) {
+            sentPromptBearingBytes += line.count
+            if let method = dictionary["method"] as? String {
+                sentPromptBearingBytesByMethod[method, default: 0] += line.count
+            }
         }
         sentObjects.append(.object(try AnySendableJSON.dictionary(dictionary)))
     }
@@ -1317,6 +1423,23 @@ private actor CodexScriptedConnection: CodexAppServerConnection {
         deliveryHooks[index] = hook
     }
 
+    func pauseNextPromptWrite(method: String) {
+        promptWriteMethodToPause = method
+    }
+
+    func waitUntilPromptWritePaused() async {
+        await promptWriteGate.waitUntilPaused()
+    }
+
+    func resumePromptWrite() async {
+        await promptWriteGate.resume()
+    }
+
+    func sentPromptBearingByteCount() -> Int { sentPromptBearingBytes }
+    func sentPromptBearingByteCount(for method: String) -> Int {
+        sentPromptBearingBytesByMethod[method, default: 0]
+    }
+
     func waitUntilBlocked() async {
         for _ in 0..<2_000 {
             if isBlocked { return }
@@ -1332,6 +1455,11 @@ private actor CodexScriptedConnection: CodexAppServerConnection {
         guard let object = sentObjects.first(where: { $0.string(for: "method") == method }),
               let params = object.object(for: "params") else { return nil }
         return params
+    }
+
+    private static func isPromptBearing(_ object: [String: Any]) -> Bool {
+        guard let method = object["method"] as? String else { return false }
+        return method == "thread/start" || method == "turn/start"
     }
 }
 

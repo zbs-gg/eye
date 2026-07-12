@@ -1,17 +1,6 @@
 import Foundation
 import GRDB
 
-enum SearchSemanticMode: Sendable, Equatable {
-    case hybrid
-    case embeddingUnavailable
-    case ftsOnly(SemanticQueryFallbackReason)
-}
-
-struct SearchExecution: Sendable {
-    let results: [SearchResult]
-    let semanticMode: SearchSemanticMode
-}
-
 /// Hybrid search: FTS5 (exact words, bm25) + semantic (vec0, by meaning, screen AND transcripts) →
 /// Reciprocal Rank Fusion merge (RRF, k=60, no scale calibration). Frame dedup via ROW_NUMBER.
 /// Filters (time/app/kind) are applied in SQL where cheap and as a post-filter for the semantic legs;

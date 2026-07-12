@@ -3,12 +3,15 @@ import Foundation
 
 enum AppRelaunchPlanError: Error, LocalizedError, Sendable, Equatable {
     case executableUnavailable
+    case ownerTerminationRejected
     case openFailed(Int32)
 
     var errorDescription: String? {
         switch self {
         case .executableUnavailable:
             "The ZBS Eye executable could not be resolved for restart."
+        case .ownerTerminationRejected:
+            "ZBS Eye stayed open because its resources have not finished stopping."
         case .openFailed(let status):
             "The replacement ZBS Eye process could not be opened (status \(status))."
         }
@@ -27,6 +30,49 @@ enum AppRelaunchHandoff {
     ) throws {
         try launchHelper(executableURL, plan.helperArguments)
         terminateOwner()
+    }
+
+    /// Relocation has already committed the new root before requesting Quit,
+    /// so its helper must remain owned until AppDelegate confirms the process
+    /// will actually exit. A rejected Quit stops the waiting helper and throws,
+    /// allowing the caller to restore the old root and resume every admission
+    /// gate before any writer can observe the copied root.
+    @MainActor
+    static func launchAcknowledged(
+        plan: AppRelaunchPlan,
+        executableURL: URL,
+        launchHelper: (URL, [String]) throws -> () -> Void,
+        requestOwnerTermination: () -> Void,
+        awaitOwnerDecision: () async -> Bool
+    ) async throws {
+        let stopHelper = try launchHelper(executableURL, plan.helperArguments)
+        requestOwnerTermination()
+        guard await awaitOwnerDecision() else {
+            stopHelper()
+            throw AppRelaunchPlanError.ownerTerminationRejected
+        }
+    }
+}
+
+/// The rollback ordering shared by relocation's failure path and its
+/// deterministic handoff test. Root resolution must be restored before any
+/// old-graph admission gate reopens; recording drain ownership must complete
+/// before those resumes run.
+@MainActor
+enum AppRelocationFailureRecovery {
+    static func run(
+        committedNewRoot: Bool,
+        restorePreviousRoot: () -> Void,
+        awaitRecordingDrain: () async -> Void,
+        awaitTerminationHandoffDrain: () async -> Void,
+        resumeOldGraphAdmissions: () async -> Void
+    ) async {
+        if committedNewRoot {
+            restorePreviousRoot()
+        }
+        await awaitRecordingDrain()
+        await awaitTerminationHandoffDrain()
+        await resumeOldGraphAdmissions()
     }
 }
 

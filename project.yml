@@ -153,11 +153,21 @@ targets:
       - path: ZBSEyeApp/Views/AIModels/AIModelsPresentation.swift
       - path: ZBSEyeApp/Connections/OpenRouterOAuth.swift
       - path: ZBSEyeApp/Server/KeychainStore.swift
+      - path: ZBSEyeApp/Server/LocalPeerAuthenticator.swift
       - path: ZBSEyeApp/Automations/AutomationModels.swift
+      - path: ZBSEyeApp/Automations/AutomationAuditWriter.swift
       - path: ZBSEyeApp/Automations/AutomationMarkdownSafety.swift
       - path: ZBSEyeApp/Data/StorageLocation.swift
+      - path: ZBSEyeApp/Data/CaptureRecord.swift
+      - path: ZBSEyeApp/Data/Models.swift
+      - path: ZBSEyeApp/Data/ZBSEyeDatabase.swift
+      - path: ZBSEyeApp/Data/StorageManager.swift
+      - path: ZBSEyeApp/Data/IngestService.swift
+      - path: ZBSEyeApp/Audio/AudioModels.swift
       - path: ZBSEyeApp/Data/StorageRelocationPolicy.swift
+      - path: ZBSEyeApp/Support/Log.swift
       - path: ZBSEyeApp/Search/SearchModels.swift
+      - path: ZBSEyeApp/MCP/MCPHistorySearchRouting.swift
       - path: ZBSEyeApp/Search/AskService.swift
       - path: ZBSEyeApp/State/AskStore.swift
     dependencies:
@@ -169,6 +179,10 @@ targets:
         product: MLX
       - package: SwiftTransformers
         product: Tokenizers
+      - package: GRDB
+        product: GRDB
+      - package: ZBSEyeVec
+        product: CSqliteVec
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye.tests
@@ -180,6 +194,8 @@ targets:
         ZBS_EYE_LOCAL_AI_QUALITY_GATE: ""
         ZBS_EYE_LOCAL_AI_QUALITY_PROBE: ""
         ZBS_EYE_LOCAL_AI_PERFORMANCE_GATE: ""
+        ZBS_EYE_LOCAL_AI_RECORDER_COEXISTENCE_GATE: ""
+        ZBS_EYE_LOCAL_AI_CONCURRENCY_STRESS: ""
         ZBS_EYE_LOCAL_AI_TOOL_PROBE: ""
         ZBS_EYE_LOCAL_AI_RESULTS_DIR: ""
         ZBS_EYE_SOURCE_REVISION: ""

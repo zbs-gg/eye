@@ -57,12 +57,22 @@ final class AppEnvironment {
     private(set) var dataError: String?
     private(set) var progress: ProgressStore?
     @ObservationIgnored private(set) var usageStats: UsageStatsService?
+    @ObservationIgnored private var automationAuditWriter: AutomationAuditWriter?
     @ObservationIgnored private(set) var llmRouter: LLMRouter?
     @ObservationIgnored private(set) var aiComputeCoordinator: AIComputeCoordinator?
     @ObservationIgnored private(set) var builtInModelManager: BuiltInModelManager?
     @ObservationIgnored private var builtInModelProviderBridge: BuiltInModelProviderBridge?
     @ObservationIgnored private var builtInModelReconciliationTask: Task<Void, Never>?
     @ObservationIgnored private var builtInModelRecoveryTask: Task<Void, Never>?
+    @ObservationIgnored private var recordingTerminationRecoveryTask: Task<Void, Never>?
+    /// Relocation owns rollback while a relaunch handoff is awaiting the
+    /// AppDelegate decision. A rejected Quit must not reopen the copied-root
+    /// service graph before relocation restores the previous root.
+    @ObservationIgnored private var relocationTerminationHandoffInProgress = false
+    /// A relocation-owned Quit may time out while shutdown still owns model
+    /// state. Rollback awaits this exact retained task before reopening the old
+    /// graph, preventing a late shutdown from closing admission again.
+    @ObservationIgnored private var relocationTerminationDrainTask: Task<Bool, Never>?
     @ObservationIgnored private var builtInModelReconciliationGeneration: UInt64 = 0
     @ObservationIgnored private var builtInModelRecoveryGeneration: UInt64 = 0
     @ObservationIgnored private var localAIMemoryPressureSource: DispatchSourceMemoryPressure?
@@ -209,6 +219,17 @@ final class AppEnvironment {
         }
     }
 
+    private func recoverRecordingAfterCancelledTermination(
+        after phase: AppTerminationCriticalPhaseResult
+    ) {
+        recordingTerminationRecoveryTask?.cancel()
+        recordingTerminationRecoveryTask = phase.recoveryTask { @MainActor [weak self] in
+            guard let self else { return }
+            self.recording.resumeAfterMaintenance()
+            self.recordingTerminationRecoveryTask = nil
+        }
+    }
+
     /// 👁 Delighter: once per crossed "round" memory milestone — a friendly local notification
     /// + a visual-celebration trigger in ProgressStore.
     /// Marks all crossed ones at once (doesn't backfill old ones one by one), celebrates only the top new one.
@@ -299,18 +320,40 @@ final class AppEnvironment {
             // dies (willTerminate would be too late — the process dies synchronously there). With a 30s timeout.
             ZBSEyeAppDelegate.onTerminate = { [weak self] in
                 guard let self else { return true }
+                let recoveryOwner: AppTerminationRecoveryOwner =
+                    self.relocationTerminationHandoffInProgress
+                        ? .relocationHandoff
+                        : .quit
+                // A previous Quit timed out while capture still owned hardware.
+                // Its retained recovery reopens admission only after the real
+                // drain finishes; another Quit must not race that ownership.
+                guard self.recordingTerminationRecoveryTask == nil else {
+                    Log.audio.error("termination cancelled: recording drain is still completing")
+                    return false
+                }
                 // terminateLater keeps the process alive until ScreenCaptureKit
                 // has acknowledged its CoreAudio teardown and both capture
                 // legs have flushed their final DB row. Speech recognition can
                 // resume from backfill after launch, so it must not hold Quit.
-                let recordingDrain = await self.recording.pauseForMaintenanceAndDrain(
-                    waitForTranscription: false,
-                    systemCaptureTimeout: .seconds(5)
-                )
-                guard recordingDrain.audio.systemCaptureOutcome.isConfirmedStopped else {
-                    Log.audio.error("termination cancelled: system audio teardown was not confirmed")
-                    self.recording.resumeAfterMaintenance()
-                    return false
+                if recoveryOwner == .quit {
+                    let recordingPhase = await AppTerminationCriticalPhase.run(
+                        timeout: .seconds(6)
+                    ) {
+                        // The outer critical phase owns the only caller
+                        // deadline. The underlying hardware teardown remains
+                        // retained to real completion before recovery resumes.
+                        let recordingDrain = await self.recording.pauseForMaintenanceAndDrain(
+                            waitForTranscription: false
+                        )
+                        return recordingDrain.capture.activeCycles == 0
+                            && recordingDrain.audio.activeLegs == 0
+                            && recordingDrain.audio.systemCaptureOutcome.isConfirmedStopped
+                    }
+                    guard AppTerminationCriticalPhase.acceptsTermination(recordingPhase) else {
+                        Log.audio.error("termination cancelled: recording drain was not confirmed before deadline")
+                        self.recoverRecordingAfterCancelledTermination(after: recordingPhase)
+                        return false
+                    }
                 }
                 self.cancelBuiltInModelRecovery()
                 let reconciliation = self.cancelBuiltInModelReconciliation()
@@ -325,16 +368,20 @@ final class AppEnvironment {
                 }
                 guard localRuntimePhase.outcome == .completed(true) else {
                     Log.app.error("termination cancelled: local AI runtime release was not confirmed")
-                    self.recoverBuiltInModelsAfterCancelledTermination(
-                        after: localRuntimePhase,
-                        manager: self.builtInModelManager,
-                        providerBridge: self.builtInModelProviderBridge,
-                        resumeCompute: false
-                    )
-                    if case .completed = localRuntimePhase.outcome {
-                        await self.builtInModels.refresh()
+                    if recoveryOwner.recoversServiceGraphInline {
+                        self.recoverBuiltInModelsAfterCancelledTermination(
+                            after: localRuntimePhase,
+                            manager: self.builtInModelManager,
+                            providerBridge: self.builtInModelProviderBridge,
+                            resumeCompute: false
+                        )
+                        if case .completed = localRuntimePhase.outcome {
+                            await self.builtInModels.refresh()
+                        }
+                        self.recording.resumeAfterMaintenance()
+                    } else {
+                        self.relocationTerminationDrainTask = localRuntimePhase.operation
                     }
-                    self.recording.resumeAfterMaintenance()
                     return false
                 }
 
@@ -351,14 +398,18 @@ final class AppEnvironment {
                 }
                 guard computePhase.outcome == .completed(true) else {
                     Log.app.error("termination cancelled: AI compute drain was not confirmed")
-                    self.recoverBuiltInModelsAfterCancelledTermination(
-                        after: computePhase,
-                        manager: self.builtInModelManager,
-                        providerBridge: self.builtInModelProviderBridge,
-                        resumeCompute: true
-                    )
-                    await self.builtInModels.refresh()
-                    self.recording.resumeAfterMaintenance()
+                    if recoveryOwner.recoversServiceGraphInline {
+                        self.recoverBuiltInModelsAfterCancelledTermination(
+                            after: computePhase,
+                            manager: self.builtInModelManager,
+                            providerBridge: self.builtInModelProviderBridge,
+                            resumeCompute: true
+                        )
+                        await self.builtInModels.refresh()
+                        self.recording.resumeAfterMaintenance()
+                    } else {
+                        self.relocationTerminationDrainTask = computePhase.operation
+                    }
                     return false
                 }
                 await reconciliation?.value
@@ -624,6 +675,8 @@ final class AppEnvironment {
             }
 
             let consumerGenerator = RoutedAIConsumerGenerator(router: llmRouter)
+            let automationAuditWriter = AutomationAuditWriter()
+            self.automationAuditWriter = automationAuditWriter
 
             // "The day in activities": scenes on top of screen_captures (without a new table),
             // grouped into blocks; generated labels share the same process-wide router.
@@ -648,7 +701,8 @@ final class AppEnvironment {
             // Cartographer: AI insights for the day through the shared process-wide router.
             let cartographerSvc = CartographerService(
                 repo: activityRepo,
-                generator: consumerGenerator
+                generator: consumerGenerator,
+                auditWriter: automationAuditWriter
             )
             self.cartographer = CartographerStore(
                 service: cartographerSvc,
@@ -658,7 +712,8 @@ final class AppEnvironment {
             // Automation v1 "day summary": collect→shared router→write.
             let summarySvc = DailySummaryService(
                 repo: activityRepo,
-                generator: consumerGenerator
+                generator: consumerGenerator,
+                auditWriter: automationAuditWriter
             )
             let automationsStore = DaySummaryStore(
                 service: summarySvc,
@@ -859,6 +914,7 @@ final class AppEnvironment {
             let historyDrain = await historyImporter?.suspendAndDrainForRelocation()
             let browserHistoryDrain = await browserHistoryImporter?.suspendAndDrainForRelocation()
             let retentionDrain = await retention?.suspendAndDrainForRelocation()
+            let automationAuditDrain = await automationAuditWriter?.suspendAndDrainForRelocation()
 
             let recordingDrain = await recordingDrainTask.value
             let ingestDrain = await ingest.drain()
@@ -869,7 +925,8 @@ final class AppEnvironment {
                   ingestDrain.activeWrites == 0,
                   (historyDrain?.activeOperations ?? 0) == 0,
                   (browserHistoryDrain?.activeOperations ?? 0) == 0,
-                  (retentionDrain?.activeOperations ?? 0) == 0 else {
+                  (retentionDrain?.activeOperations ?? 0) == 0,
+                  (automationAuditDrain?.activeOperations ?? 0) == 0 else {
                 throw RelocationError.verifyFailed(
                     "database writer maintenance drain was not acknowledged"
                 )
@@ -890,32 +947,52 @@ final class AppEnvironment {
             AchievementCounters.set(.relocated)   // "To Your Own Disk" achievement
             storageSettings.relocationStatus = "Moved (\(report.mediaFilesCopied) media). Restarting…"
             try? await Task.sleep(for: .milliseconds(600))   // let the UI show the status
-            try AppRelauncher.relaunch()
+            relocationTerminationHandoffInProgress = true
+            relocationTerminationDrainTask = nil
+            do {
+                try await AppRelauncher.relaunchAcknowledged()
+            } catch {
+                relocationTerminationHandoffInProgress = false
+                throw error
+            }
         } catch {
             // A failed helper launch leaves this process and its old DB graph
             // alive. Restore path resolution before resuming any service, or
             // helpers/settings would point at the copied root while writers
             // still own the original one.
-            if committedNewRoot {
-                if previousRootWasRelocated {
-                    StorageLocation.setRoot(previousRoot)
-                } else {
-                    StorageLocation.resetToLegacy()
+            let terminationDrain = relocationTerminationDrainTask
+            relocationTerminationDrainTask = nil
+            await AppRelocationFailureRecovery.run(
+                committedNewRoot: committedNewRoot,
+                restorePreviousRoot: {
+                    if previousRootWasRelocated {
+                        StorageLocation.setRoot(previousRoot)
+                    } else {
+                        StorageLocation.resetToLegacy()
+                    }
+                },
+                awaitRecordingDrain: {
+                    _ = await recordingDrainTask.value
+                },
+                awaitTerminationHandoffDrain: {
+                    _ = await terminationDrain?.value
+                },
+                resumeOldGraphAdmissions: {
+                    await self.automationAuditWriter?.resumeAfterRelocation()
+                    await self.retention?.resumeAfterRelocation()
+                    await self.browserHistoryImporter?.resumeAfterRelocation()
+                    await self.historyImporter?.resumeAfterRelocation()
+                    // Resume compute admission before reloading the old LKG:
+                    // the candidate loader itself takes the MLX lease and
+                    // suspends backfill again while warming the old-root LKG.
+                    await self.aiComputeCoordinator?.resume()
+                    try? await self.builtInModelManager?.resumeAfterRelocation()
+                    await self.builtInModels.refresh()
+                    self.recording.resumeAfterMaintenance()
                 }
-            }
-            _ = await recordingDrainTask.value
-            await retention?.resumeAfterRelocation()
-            await browserHistoryImporter?.resumeAfterRelocation()
-            await historyImporter?.resumeAfterRelocation()
-            // Resume compute admission before reloading the old LKG: the
-            // candidate loader itself takes the MLX lease and will suspend
-            // backfill again while it warms the verified old-root model.
-            await aiComputeCoordinator?.resume()
-            try? await builtInModelManager?.resumeAfterRelocation()
-            await builtInModels.refresh()
+            )
             storageSettings.relocationInProgress = false
             storageSettings.relocationError = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-            recording.resumeAfterMaintenance()   // migration failed — resume recording
         }
     }
 

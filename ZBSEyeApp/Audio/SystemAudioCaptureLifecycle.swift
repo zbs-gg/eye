@@ -32,6 +32,41 @@ private actor SystemAudioTeardownDeadlineResult {
     }
 }
 
+/// A stop can invalidate `startCapture()` before ScreenCaptureKit returns the
+/// physical stream. Keep that unresolved ownership awaitable so callers never
+/// mistake "not published yet" for "confirmed stopped".
+private final class SystemAudioPendingStartTeardownResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var outcome: SystemAudioCaptureTeardownOutcome?
+    private var waiters: [CheckedContinuation<SystemAudioCaptureTeardownOutcome, Never>] = []
+
+    func resolve(_ outcome: SystemAudioCaptureTeardownOutcome) {
+        lock.lock()
+        guard self.outcome == nil else {
+            lock.unlock()
+            return
+        }
+        self.outcome = outcome
+        let pending = waiters
+        waiters.removeAll()
+        lock.unlock()
+        pending.forEach { $0.resume(returning: outcome) }
+    }
+
+    func value() async -> SystemAudioCaptureTeardownOutcome {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if let outcome {
+                lock.unlock()
+                continuation.resume(returning: outcome)
+            } else {
+                waiters.append(continuation)
+                lock.unlock()
+            }
+        }
+    }
+}
+
 enum SystemAudioTeardownDeadline {
     /// Bounds the caller without cancelling `teardown`: that task retains the
     /// hardware resource and must keep trying to reach its real completion.
@@ -115,8 +150,18 @@ final class SystemAudioCaptureLifecycle<Session: AnyObject> {
     )?
     private var teardownID: UInt64 = 0
     private var failedStopRecovery: StopOperation?
+    private var rejectedStartTeardown: (
+        generation: UInt64,
+        operation: StopOperation,
+        result: SystemAudioPendingStartTeardownResult,
+        task: Task<SystemAudioCaptureTeardownOutcome, Never>
+    )?
 
     func beginStart() async -> StartToken? {
+        // A physical start is still suspended after Stop invalidated its token.
+        // Do not admit a replacement until that start either fails or publishes
+        // its rejected session into the retained teardown path below.
+        guard rejectedStartTeardown == nil else { return nil }
         let entryStopIntentGeneration = stopIntentGeneration
         let previousTeardown = await drain()
         guard stopIntentGeneration == entryStopIntentGeneration else { return nil }
@@ -129,6 +174,7 @@ final class SystemAudioCaptureLifecycle<Session: AnyObject> {
         case .timedOut:
             return nil
         }
+        guard rejectedStartTeardown == nil else { return nil }
         if session != nil {
             guard await retryFailedStopIfNeeded() else { return nil }
             guard stopIntentGeneration == entryStopIntentGeneration else { return nil }
@@ -140,17 +186,43 @@ final class SystemAudioCaptureLifecycle<Session: AnyObject> {
     }
 
     func publishStarted(_ session: Session, token: StartToken) -> Bool {
-        guard startingGeneration == token.generation,
-              generation == token.generation,
-              self.session == nil else { return false }
-        startingGeneration = nil
-        self.session = session
-        return true
+        if startingGeneration == token.generation,
+           generation == token.generation,
+           self.session == nil {
+            startingGeneration = nil
+            self.session = session
+            return true
+        }
+
+        // Stop won while the concrete capture API was suspended. It could not
+        // stop a session that had not been published yet, so adopt the late
+        // physical session and run the exact retained stop operation. A failed
+        // outcome deliberately keeps both session ownership and the operation
+        // for beginStart() to retry before admitting a replacement.
+        if let rejectedStartTeardown,
+           rejectedStartTeardown.generation == token.generation,
+           self.session == nil,
+           teardown == nil {
+            self.rejectedStartTeardown = nil
+            self.session = session
+            let physicalTeardown = startTeardown(rejectedStartTeardown.operation)
+            Task { @MainActor in
+                let outcome = await physicalTeardown?.value
+                    ?? .failed("late system-audio session teardown was not retained")
+                rejectedStartTeardown.result.resolve(outcome)
+            }
+        }
+        return false
     }
 
     func failStart(token: StartToken) {
-        guard startingGeneration == token.generation else { return }
-        startingGeneration = nil
+        if startingGeneration == token.generation {
+            startingGeneration = nil
+        }
+        if rejectedStartTeardown?.generation == token.generation {
+            rejectedStartTeardown?.result.resolve(.notNeeded)
+            rejectedStartTeardown = nil
+        }
     }
 
     /// SCK already ended this exact session and invoked its delegate. There is
@@ -168,9 +240,15 @@ final class SystemAudioCaptureLifecycle<Session: AnyObject> {
     func beginStop(
         _ operation: @escaping StopOperation
     ) -> Task<SystemAudioCaptureTeardownOutcome, Never>? {
+        let rejectedGeneration = startingGeneration
         stopIntentGeneration &+= 1
         generation &+= 1
         startingGeneration = nil
+        if let rejectedGeneration, session == nil {
+            let result = SystemAudioPendingStartTeardownResult()
+            let task = Task { await result.value() }
+            rejectedStartTeardown = (rejectedGeneration, operation, result, task)
+        }
         return startTeardown(operation)
     }
 
@@ -196,8 +274,13 @@ final class SystemAudioCaptureLifecycle<Session: AnyObject> {
     }
 
     func drain() async -> SystemAudioCaptureTeardownOutcome {
-        guard let pending = teardown else { return .notNeeded }
-        return await pending.task.value
+        if let pending = teardown {
+            return await pending.task.value
+        }
+        if let pending = rejectedStartTeardown {
+            return await pending.task.value
+        }
+        return .notNeeded
     }
 
     private func retryFailedStopIfNeeded() async -> Bool {

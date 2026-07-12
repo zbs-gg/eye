@@ -52,6 +52,27 @@ scripts/verify-local-ai.sh --quality-probe --model-dir /absolute/path/to/verifie
 
 The probe uses the same production-request, purpose-specific schema, decoder-prefix generation helper, parser, renderer, and scorer path as the release gate. It requires every selected case to pass all three seeds and 100% parser acceptance, writes `local-ai-v9-probe-*.json`, and records `releaseQualification: false`. It is diagnostic evidence only: it neither changes the immutable V9 fixtures/protocol/seeds nor substitutes for the 64-case release report.
 
+## U9 recorder coexistence and concurrency gates
+
+The required model-backed safe-writer coexistence invocation is separate from ordinary fixtures:
+
+```bash
+scripts/verify-local-ai.sh --recorder-coexistence-gate --model-dir /absolute/path/to/verified/model
+```
+
+It runs a Release build on the exact qualified machine with offline guards and a clean source revision. The gate uses the production `MLXLocalRuntimeDriver → LocalInferenceService → LLMRouter → AIComputeCoordinator` chain while a fixed recorder workload writes real screen and audio records through `IngestService` and GRDB under a throwaway root. It captures an AI-off baseline, then measures 50 sequential generations, capture trigger/completion/coalescing/failure counts, capture and ingest p95, audio queue high-water/drop count, DB errors, embed-queue growth, active gaps, and process physical footprint. The checked thresholds are the KTD2 zero-error/zero-drop contract, no active gap beyond two 3-second ticks, at most 10% capture/ingest p95 regression, exact DB reconciliation, and at most 5.5 GiB incremental footprint.
+
+The JSON report deliberately records `releaseQualification: false`: the unhosted test bundle uses safe synthetic screen/audio records and does not open ScreenCaptureKit, AX/OCR, microphone, system-audio, VAD, or speech-recognition hardware. It does not replace the staging-app hardware recorder run. U9 still requires the staging app to keep real screen and explicitly enabled audio recording active through load, full-context prefill, 50 generations, cancellation, memory pressure, and unload, then reconcile its DB/media counts against the same-machine baseline. A safe-writer green report must never be presented as that physical hardware green.
+
+The bounded concurrency gate has normal and Thread Sanitizer invocations:
+
+```bash
+scripts/verify-local-ai.sh --concurrency-stress
+scripts/verify-local-ai.sh --concurrency-stress-tsan
+```
+
+Both run deterministic activation/revocation, cancellation/drain, shutdown, and relocation/compute-drain interleavings. The same dedicated invocation also runs the provisioner's activation-outbox, in-flight candidate-load relocation, suspended-verification relocation, and shutdown recovery tests. `--concurrency-stress-tsan` enables Xcode Thread Sanitizer only for these pure actor/provisioner tests. MLX/Metal performance and physical model gates are not representative under TSan and remain unsanitized; if the active Xcode/MLX toolchain refuses a TSan run, archive that failure and run `--concurrency-stress` as the required bounded compensating actor suite rather than claiming sanitizer coverage.
+
 ## Privacy and resource boundaries
 
 - Built-in prompts, history excerpts, generated tokens, and model files remain on the Mac.

@@ -1,5 +1,16 @@
 import Foundation
 
+enum SearchSemanticMode: Sendable, Equatable {
+    case hybrid
+    case embeddingUnavailable
+    case ftsOnly(SemanticQueryFallbackReason)
+}
+
+struct SearchExecution: Sendable {
+    let results: [SearchResult]
+    let semanticMode: SearchSemanticMode
+}
+
 enum SearchSemanticPolicy: Sendable {
     /// GUI policy: query e5 participates in the process-wide compute barrier.
     case coordinated(AIComputeCoordinator)

@@ -14,7 +14,7 @@ final class ClaudeCodeAdapterTests: XCTestCase {
         let accepted = ClaudeCodeExecutableIdentity(
             canonicalURL: URL(fileURLWithPath: "/trusted/claude"),
             fileIdentity: .fixture(),
-            version: "2.1.202",
+            version: "2.1.207",
             sha256: ClaudeCodeSecurityPolicy.allowedSHA256,
             signingIdentifier: ClaudeCodeSecurityPolicy.signingIdentifier,
             teamIdentifier: ClaudeCodeSecurityPolicy.teamIdentifier,
@@ -34,7 +34,7 @@ final class ClaudeCodeAdapterTests: XCTestCase {
             accepted.replacing(permissions: 0o775),
             accepted.replacing(isRegularFile: false),
             accepted.replacing(isArm64MachO: false),
-            accepted.replacing(version: "2.1.203"),
+            accepted.replacing(version: "2.1.208"),
         ]
         for identity in rejected {
             XCTAssertThrowsError(try ClaudeCodeSecurityPolicy.validate(identity))
@@ -44,13 +44,13 @@ final class ClaudeCodeAdapterTests: XCTestCase {
     func testOfficialStandaloneInstallDerivesVersionFromCanonicalExecutableName() {
         XCTAssertEqual(
             SystemClaudeCodeExecutableInspector.releaseVersion(
-                at: URL(fileURLWithPath: "/Users/test/.local/share/claude/versions/2.1.202")
+                at: URL(fileURLWithPath: "/Users/test/.local/share/claude/versions/2.1.207")
             ),
             ClaudeCodeSecurityPolicy.allowedVersion
         )
         XCTAssertEqual(
             SystemClaudeCodeExecutableInspector.releaseVersion(
-                at: URL(fileURLWithPath: "/opt/claude/2.1.202/claude")
+                at: URL(fileURLWithPath: "/opt/claude/2.1.207/claude")
             ),
             ClaudeCodeSecurityPolicy.allowedVersion
         )
@@ -341,6 +341,82 @@ final class ClaudeCodeAdapterTests: XCTestCase {
         )
     }
 
+    func testSystemTransportRejectsRevocationAfterSpawnBeforePromptDispatch() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "claude-post-spawn-admission-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let captured = directory.appending(path: "captured")
+        let snapshots = MockClaudeSnapshots(snapshot)
+        let gate = ClaudeCancellationGate()
+        let admission = ClaudeCodePromptAdmission(
+            snapshotProvider: snapshots,
+            selection: snapshot,
+            consumer: .ask
+        )
+        let invocation = processInvocation(
+            script: "cat > '\(captured.path)'",
+            stdin: Data("PRIVATE-CANARY".utf8),
+            promptAdmission: admission
+        )
+        let task = Task {
+            try await SystemClaudeCodeProcessTransport(
+                beforePromptDispatch: { await gate.wait() }
+            ).run(invocation)
+        }
+
+        await gate.waitUntilEntered()
+        await snapshots.set(nil)
+        await gate.release()
+
+        do {
+            _ = try await task.value
+            XCTFail("revocation after process spawn must stop prompt dispatch")
+        } catch {
+            XCTAssertEqual(error as? ClaudeCodeAdapterError, .authorizationChanged)
+        }
+        XCTAssertFalse(
+            (try? Data(contentsOf: captured).contains(Data("PRIVATE-CANARY".utf8))) == true,
+            "revoked prompt bytes reached provider stdin"
+        )
+    }
+
+    func testSystemTransportStopsBetweenPromptChunksAfterRevocation() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "claude-mid-prompt-revocation-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let captured = directory.appending(path: "captured")
+        let firstChunkRead = directory.appending(path: "first-chunk-read")
+        let snapshots = RevokingAfterFirstChunkClaudeSnapshots(
+            selection: snapshot,
+            firstChunkReadURL: firstChunkRead
+        )
+        let admission = ClaudeCodePromptAdmission(
+            snapshotProvider: snapshots,
+            selection: snapshot,
+            consumer: .ask
+        )
+        var prompt = Data(repeating: 65, count: 4 * 1_024)
+        prompt.append(Data("PRIVATE-CANARY".utf8))
+        let invocation = processInvocation(
+            script: "/bin/dd bs=4096 count=1 of='\(captured.path)' 2>/dev/null; : > '\(firstChunkRead.path)'; cat >> '\(captured.path)'",
+            stdin: prompt,
+            promptAdmission: admission
+        )
+
+        do {
+            _ = try await SystemClaudeCodeProcessTransport().run(invocation)
+            XCTFail("revocation between prompt chunks must stop dispatch")
+        } catch {
+            XCTAssertEqual(error as? ClaudeCodeAdapterError, .authorizationChanged)
+        }
+
+        let capturedPrompt = try Data(contentsOf: captured)
+        XCTAssertEqual(capturedPrompt.count, 4 * 1_024)
+        XCTAssertFalse(capturedPrompt.contains(Data("PRIVATE-CANARY".utf8)))
+    }
+
     func testSystemTransportCreatesAndReapsDedicatedProcessGroup() async throws {
         let state = FileManager.default.temporaryDirectory
             .appending(path: "claude-process-group-\(UUID().uuidString)")
@@ -453,7 +529,11 @@ final class ClaudeCodeAdapterTests: XCTestCase {
         )
     }
 
-    private func processInvocation(script: String) -> ClaudeCodeProcessInvocation {
+    private func processInvocation(
+        script: String,
+        stdin: Data = Data(),
+        promptAdmission: ClaudeCodePromptAdmission? = nil
+    ) -> ClaudeCodeProcessInvocation {
         let executableURL = URL(fileURLWithPath: "/bin/sh")
         let fileIdentity = try! SystemClaudeCodeExecutableInspector
             .currentFileIdentity(at: executableURL)
@@ -464,9 +544,9 @@ final class ClaudeCodeAdapterTests: XCTestCase {
                 fileIdentity: fileIdentity
             ),
             executableVerifier: AllowingClaudeVerifier(),
-            promptAdmission: nil,
+            promptAdmission: promptAdmission,
             arguments: ["-c", script],
-            stdin: Data(),
+            stdin: stdin,
             environment: ["PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"],
             workingDirectory: FileManager.default.temporaryDirectory,
             timeout: .seconds(10),
@@ -554,7 +634,7 @@ private struct FixedClaudeInspector: ClaudeCodeExecutableInspecting {
     static let identity = ClaudeCodeExecutableIdentity(
         canonicalURL: URL(fileURLWithPath: "/trusted/claude"),
         fileIdentity: .fixture(),
-        version: "2.1.202",
+        version: "2.1.207",
         sha256: ClaudeCodeSecurityPolicy.allowedSHA256,
         signingIdentifier: ClaudeCodeSecurityPolicy.signingIdentifier,
         teamIdentifier: ClaudeCodeSecurityPolicy.teamIdentifier,
@@ -616,6 +696,29 @@ private actor MockClaudeSnapshots: LLMSelectionSnapshotProviding {
     init(_ value: ProviderSelectionSnapshot?) { self.value = value }
     func currentSnapshot(for consumer: AIConsumer) async -> ProviderSelectionSnapshot? { value }
     func set(_ value: ProviderSelectionSnapshot?) { self.value = value }
+}
+
+private actor RevokingAfterFirstChunkClaudeSnapshots: LLMSelectionSnapshotProviding {
+    private let selection: ProviderSelectionSnapshot
+    private let firstChunkReadURL: URL
+    private var validationCount = 0
+
+    init(selection: ProviderSelectionSnapshot, firstChunkReadURL: URL) {
+        self.selection = selection
+        self.firstChunkReadURL = firstChunkReadURL
+    }
+
+    func currentSnapshot(for consumer: AIConsumer) async -> ProviderSelectionSnapshot? {
+        validationCount += 1
+        guard validationCount > 1 else { return selection }
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while ContinuousClock.now < deadline {
+            if FileManager.default.fileExists(atPath: firstChunkReadURL.path) { break }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return nil
+    }
 }
 
 private actor SingleClaudeAdapterRegistry: LLMAdapterRegistering {

@@ -6,6 +6,7 @@ enum APIDTO {
         let status: String
         let version: String
         let capturing: Bool
+        let proof: String?
         // We don’t expose `port`: it’s already in the port file for our own use, and in the unauthenticated
         // /health it’s an extra information signal to an attacker (no need to scan). `capturing` is kept — MCP reads it.
     }
@@ -31,6 +32,8 @@ enum APIDTO {
         let total: Int
         let limit: Int
         let offset: Int
+        let semanticMode: String
+        let semanticFallbackReason: String?
         let results: [SearchHit]
     }
     struct Transcript: Encodable {

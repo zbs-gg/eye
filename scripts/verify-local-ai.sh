@@ -23,6 +23,14 @@ Usage: scripts/verify-local-ai.sh [options]
   --performance-gate    Run only MLXRuntimeQualificationTests, fully offline,
                         serially, once, in Release. Requires an explicit
                         --model-dir PATH and writes a raw JSON report.
+  --recorder-coexistence-gate
+                        Run the opt-in U9 production-runtime + throwaway
+                        recorder-writer coexistence gate. Requires an explicit
+                        --model-dir PATH and writes a scoped JSON report.
+  --concurrency-stress  Run the bounded actor interleaving stress suite.
+  --concurrency-stress-tsan
+                        Run the same pure actor stress suite under Thread
+                        Sanitizer. This mode does not load MLX/Metal.
   --model-dir PATH      Existing local model directory for a model-backed check.
                         ZBS_EYE_MODEL_DIR may be used for --runtime-smoke only.
   -h, --help            Show this help.
@@ -44,6 +52,9 @@ RUN_RUNTIME_SMOKE=0
 RUN_QUALITY_GATE=0
 RUN_QUALITY_PROBE=0
 RUN_PERFORMANCE_GATE=0
+RUN_RECORDER_COEXISTENCE_GATE=0
+RUN_CONCURRENCY_STRESS=0
+RUN_CONCURRENCY_STRESS_TSAN=0
 MODEL_DIR="${ZBS_EYE_MODEL_DIR:-}"
 MODEL_DIR_WAS_EXPLICIT=0
 
@@ -67,6 +78,15 @@ while [ "$#" -gt 0 ]; do
     --performance-gate)
       RUN_PERFORMANCE_GATE=1
       ;;
+    --recorder-coexistence-gate)
+      RUN_RECORDER_COEXISTENCE_GATE=1
+      ;;
+    --concurrency-stress)
+      RUN_CONCURRENCY_STRESS=1
+      ;;
+    --concurrency-stress-tsan)
+      RUN_CONCURRENCY_STRESS_TSAN=1
+      ;;
     --model-dir)
       [ "$#" -ge 2 ] || die_usage "--model-dir requires a path"
       MODEL_DIR="$2"
@@ -84,7 +104,7 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-MODEL_GATE_COUNT=$((RUN_QUALITY_GATE + RUN_QUALITY_PROBE + RUN_PERFORMANCE_GATE))
+MODEL_GATE_COUNT=$((RUN_QUALITY_GATE + RUN_QUALITY_PROBE + RUN_PERFORMANCE_GATE + RUN_RECORDER_COEXISTENCE_GATE))
 if [ "$MODEL_GATE_COUNT" -gt 1 ]; then
   die_usage "--quality-gate, --quality-probe, and --performance-gate are mutually exclusive"
 fi
@@ -101,6 +121,8 @@ if [ "$MODEL_GATE_COUNT" -eq 1 ]; then
     GATE_NAME="--quality-probe"
   elif [ "$RUN_PERFORMANCE_GATE" -eq 1 ]; then
     GATE_NAME="--performance-gate"
+  elif [ "$RUN_RECORDER_COEXISTENCE_GATE" -eq 1 ]; then
+    GATE_NAME="--recorder-coexistence-gate"
   fi
   [ "$MODEL_DIR_WAS_EXPLICIT" -eq 1 ] || die_usage "$GATE_NAME requires an explicit --model-dir PATH"
   [ -n "$MODEL_DIR" ] || die_usage "$GATE_NAME requires --model-dir PATH"
@@ -115,12 +137,20 @@ elif [ -n "$MODEL_DIR" ]; then
   MODEL_DIR=""
 fi
 
+CONCURRENCY_GATE_COUNT=$((RUN_CONCURRENCY_STRESS + RUN_CONCURRENCY_STRESS_TSAN))
+if [ "$CONCURRENCY_GATE_COUNT" -gt 1 ]; then
+  die_usage "--concurrency-stress and --concurrency-stress-tsan are mutually exclusive"
+fi
+if [ "$CONCURRENCY_GATE_COUNT" -eq 1 ] && { [ "$MODEL_GATE_COUNT" -eq 1 ] || [ "$RUN_RUNTIME_SMOKE" -eq 1 ] || [ "$RUN_ALL_FIXTURES" -eq 1 ]; }; then
+  die_usage "concurrency stress modes must run as dedicated invocations"
+fi
+
 # These are defense-in-depth contracts for the runtime test. The test must load
 # ZBS_EYE_MODEL_DIR directly and must never resolve a Hub repository identifier.
 export ZBS_EYE_ALLOW_MODEL_DOWNLOADS=0
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
-PHYSICAL_RELEASE_COUNT=$((RUN_RUNTIME_SMOKE + RUN_QUALITY_GATE + RUN_QUALITY_PROBE + RUN_PERFORMANCE_GATE))
+PHYSICAL_RELEASE_COUNT=$((RUN_RUNTIME_SMOKE + RUN_QUALITY_GATE + RUN_QUALITY_PROBE + RUN_PERFORMANCE_GATE + RUN_RECORDER_COEXISTENCE_GATE))
 SOURCE_REVISION="$(git rev-parse --verify HEAD 2>/dev/null || true)"
 SOURCE_TREE_STATE="clean"
 if ! git diff-index --quiet HEAD -- || [ -n "$(git ls-files --others --exclude-standard)" ]; then
@@ -154,6 +184,17 @@ if [ "$RUN_PERFORMANCE_GATE" -eq 1 ]; then
   export ZBS_EYE_LOCAL_AI_PERFORMANCE_GATE=1
 else
   unset ZBS_EYE_LOCAL_AI_PERFORMANCE_GATE || true
+fi
+
+if [ "$RUN_RECORDER_COEXISTENCE_GATE" -eq 1 ]; then
+  export ZBS_EYE_LOCAL_AI_RECORDER_COEXISTENCE_GATE=1
+else
+  unset ZBS_EYE_LOCAL_AI_RECORDER_COEXISTENCE_GATE || true
+fi
+if [ "$CONCURRENCY_GATE_COUNT" -eq 1 ]; then
+  export ZBS_EYE_LOCAL_AI_CONCURRENCY_STRESS=1
+else
+  unset ZBS_EYE_LOCAL_AI_CONCURRENCY_STRESS || true
 fi
 
 xcodegen generate
@@ -201,6 +242,7 @@ PURE_TEST_SUITES=(
   "LocalAIEvalProtocolTests"
   "LocalAIPerformanceProtocolTests"
   "LocalAIPhysicalGateEnvironmentTests"
+  "LocalAIReleaseGateScriptTests"
 )
 
 TEST_FILTERS=()
@@ -214,8 +256,21 @@ elif [ "$RUN_QUALITY_PROBE" -eq 1 ]; then
   TEST_FILTERS=("-only-testing:ZBSEyeTests/LocalAIQualityGateV9Tests/testBoundedEnglishRussianFourConsumerProbe")
 elif [ "$RUN_PERFORMANCE_GATE" -eq 1 ]; then
   TEST_FILTERS=("-only-testing:ZBSEyeTests/MLXRuntimeQualificationTests")
+elif [ "$RUN_RECORDER_COEXISTENCE_GATE" -eq 1 ]; then
+  TEST_FILTERS=("-only-testing:ZBSEyeTests/LocalAIRecorderCoexistenceGateTests")
+elif [ "$CONCURRENCY_GATE_COUNT" -eq 1 ]; then
+  TEST_FILTERS=(
+    "-only-testing:ZBSEyeTests/LocalAIConcurrencyStressTests"
+    "-only-testing:ZBSEyeTests/BuiltInModelManagerTests/testStaleActivationOutboxIsAcknowledgedWithoutReplayAfterRestart"
+    "-only-testing:ZBSEyeTests/BuiltInModelManagerTests/testRelocationDrainWaitsForEntireInFlightCandidateLoad"
+    "-only-testing:ZBSEyeTests/BuiltInModelManagerTests/testRelocationCancelsSuspendedVerificationAndPreservesRetryableCandidate"
+    "-only-testing:ZBSEyeTests/BuiltInModelManagerTests/testShutdownCancelsSuspendedVerificationAndLeavesRestartRecoveryPoint"
+  )
 elif [ "$RUN_ALL_FIXTURES" -eq 1 ]; then
-  TEST_FILTERS=()
+  TEST_FILTERS=(
+    "-skip-testing:ZBSEyeTests/LocalAIRecorderCoexistenceGateTests"
+    "-skip-testing:ZBSEyeTests/LocalAIConcurrencyStressTests"
+  )
 elif [ "$RUN_RUNTIME_SMOKE" -eq 1 ]; then
   TEST_FILTERS+=("-only-testing:ZBSEyeTests/MLXRuntimeSmokeTests")
 fi
@@ -225,11 +280,15 @@ CONFIGURATION="Debug"
 # the unhosted bundle finishes, so xcodebuild never returns. This gate values a
 # deterministic result over a few seconds of fan-out.
 XCODE_TEST_OPTIONS=("-parallel-testing-enabled" "NO")
+SANITIZER_OPTIONS=("-enableThreadSanitizer" "NO")
 if [ "$PHYSICAL_RELEASE_COUNT" -gt 0 ]; then
   CONFIGURATION="Release"
   XCODE_TEST_OPTIONS=(
     "-parallel-testing-enabled" "NO"
   )
+fi
+if [ "$RUN_CONCURRENCY_STRESS_TSAN" -eq 1 ]; then
+  SANITIZER_OPTIONS=("-enableThreadSanitizer" "YES")
 fi
 
 set +e
@@ -241,12 +300,15 @@ xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration "$CONFIGURATI
   ZBS_EYE_LOCAL_AI_QUALITY_GATE="${ZBS_EYE_LOCAL_AI_QUALITY_GATE:-}" \
   ZBS_EYE_LOCAL_AI_QUALITY_PROBE="${ZBS_EYE_LOCAL_AI_QUALITY_PROBE:-}" \
   ZBS_EYE_LOCAL_AI_PERFORMANCE_GATE="${ZBS_EYE_LOCAL_AI_PERFORMANCE_GATE:-}" \
+  ZBS_EYE_LOCAL_AI_RECORDER_COEXISTENCE_GATE="${ZBS_EYE_LOCAL_AI_RECORDER_COEXISTENCE_GATE:-}" \
+  ZBS_EYE_LOCAL_AI_CONCURRENCY_STRESS="${ZBS_EYE_LOCAL_AI_CONCURRENCY_STRESS:-}" \
   ZBS_EYE_SOURCE_REVISION="$SOURCE_REVISION" \
   ZBS_EYE_SOURCE_TREE_STATE="$SOURCE_TREE_STATE" \
   ZBS_EYE_SWIFT_COMPILER_VERSION="$SWIFT_COMPILER_VERSION" \
   ZBS_EYE_XCODE_VERSION="$XCODE_VERSION" \
   ZBS_EYE_SDK_VERSION="$SDK_VERSION" \
   "${XCODE_TEST_OPTIONS[@]}" \
+  "${SANITIZER_OPTIONS[@]}" \
   "${TEST_FILTERS[@]}" test >"$LOG" 2>&1
 XC_STATUS=$?
 set -e
@@ -277,7 +339,16 @@ require_suite_ran_without_skip() {
   fi
 }
 
-if [ "$MODEL_GATE_COUNT" -eq 0 ]; then
+require_test_case_passed() {
+  local test_case="$1"
+  grep -E "Test Case .*${test_case}.* passed" "$LOG" >/dev/null || {
+    echo "❌ required test case $test_case did not pass; full log: $LOG" >&2
+    trap - EXIT
+    exit 1
+  }
+}
+
+if [ "$MODEL_GATE_COUNT" -eq 0 ] && [ "$CONCURRENCY_GATE_COUNT" -eq 0 ]; then
   for suite in "${PURE_TEST_SUITES[@]}"; do
     require_suite_ran_without_skip "$suite"
   done
@@ -319,6 +390,28 @@ if [ "$RUN_QUALITY_PROBE" -eq 1 ]; then
   fi
 fi
 
+if [ "$RUN_RECORDER_COEXISTENCE_GATE" -eq 1 ]; then
+  require_suite_ran_without_skip "LocalAIRecorderCoexistenceGateTests"
+  if grep -Eiq "LocalAIRecorderCoexistenceGateTests.*skipp|Executed 1 test, with 1 test skipped" "$LOG"; then
+    echo "❌ recorder coexistence gate was skipped; full log: $LOG" >&2
+    trap - EXIT
+    exit 1
+  fi
+fi
+
+if [ "$CONCURRENCY_GATE_COUNT" -eq 1 ]; then
+  require_suite_ran_without_skip "LocalAIConcurrencyStressTests"
+  if grep -Eiq "LocalAIConcurrencyStressTests.*skipp" "$LOG"; then
+    echo "❌ Local AI concurrency stress was skipped; full log: $LOG" >&2
+    trap - EXIT
+    exit 1
+  fi
+  require_test_case_passed "testStaleActivationOutboxIsAcknowledgedWithoutReplayAfterRestart"
+  require_test_case_passed "testRelocationDrainWaitsForEntireInFlightCandidateLoad"
+  require_test_case_passed "testRelocationCancelsSuspendedVerificationAndPreservesRetryableCandidate"
+  require_test_case_passed "testShutdownCancelsSuspendedVerificationAndLeavesRestartRecoveryPoint"
+fi
+
 [ -f "$RESOLVED" ] || {
   echo "❌ Swift package lockfile was not generated: $RESOLVED" >&2
   exit 1
@@ -339,12 +432,18 @@ require_pin "swift-transformers" "1.3.3"
 
 if [ "$RUN_PERFORMANCE_GATE" -eq 1 ]; then
   echo "✅ Local AI performance gate green (offline Release, serial, single run: $MODEL_DIR)"
+elif [ "$RUN_RECORDER_COEXISTENCE_GATE" -eq 1 ]; then
+  echo "✅ Local AI recorder safe-writer coexistence gate green (hardware staging run still required: $MODEL_DIR)"
 elif [ "$RUN_QUALITY_GATE" -eq 1 ]; then
   echo "✅ Local AI V9 quality gate green (offline Release, single run: $MODEL_DIR)"
 elif [ "$RUN_QUALITY_PROBE" -eq 1 ]; then
   echo "✅ Local AI V9 bounded quality probe green (offline Release, 8 cases, 24 attempts, non-qualifying: $MODEL_DIR)"
 elif [ "$RUN_RUNTIME_SMOKE" -eq 1 ]; then
   echo "✅ Local AI contracts + MLX runtime smoke green (offline: $MODEL_DIR)"
+elif [ "$RUN_CONCURRENCY_STRESS_TSAN" -eq 1 ]; then
+  echo "✅ Local AI actor stress green under Thread Sanitizer (MLX/Metal not loaded)"
+elif [ "$RUN_CONCURRENCY_STRESS" -eq 1 ]; then
+  echo "✅ Local AI bounded actor stress green"
 elif [ "$RUN_ALL_FIXTURES" -eq 1 ]; then
   echo "✅ All Local AI fixtures green (no model weights used)"
 else

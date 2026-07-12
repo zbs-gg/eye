@@ -78,9 +78,11 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
 
             guard lifecycle.publishStarted(stream, token: startToken) else {
                 // stop() won while startCapture() was suspended. SCK did create
-                // the hardware session, so this late result owns its teardown.
+                // the hardware session. The lifecycle adopted that exact stream
+                // and retained its stop operation before publishStarted returned,
+                // including across a failed teardown so restart cannot replace it.
                 cont.finish()
-                let teardownOutcome = await Self.stopStream(stream)
+                let teardownOutcome = await lifecycle.drain()
                 throw SystemAudioCaptureStartCancelled(
                     teardownOutcome: teardownOutcome
                 )

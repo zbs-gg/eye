@@ -3,9 +3,21 @@ import MCP
 import GRDB
 import CoreImage
 
-/// MCP stdio server (`ZBS Eye --mcp`). Tools on top of the existing services: search/timeline read the DB
-/// directly (WAL allows concurrent reads alongside the writing GUI instance); toggle/status are proxied
-/// to the running GUI instance over local REST (port from the port file, token from Keychain).
+private final class MCPLoopbackSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
+
+/// MCP stdio server (`ZBS Eye --mcp`). Hybrid search and mutations proxy to the GUI when it is running;
+/// search falls back to a direct FTS-only DB read when it is absent. Other read tools use the DB directly
+/// (WAL allows concurrent reads alongside the writing GUI instance).
 enum ZBSEyeMCPServer {
 
     /// Short timeout for localhost calls to the GUI instance (otherwise URLSession.shared waits 7 days).
@@ -13,7 +25,11 @@ enum ZBSEyeMCPServer {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest = 3
         cfg.timeoutIntervalForResource = 5
-        return URLSession(configuration: cfg)
+        return URLSession(
+            configuration: cfg,
+            delegate: MCPLoopbackSessionDelegate(),
+            delegateQueue: nil
+        )
     }()
 
     static func runStdio() async {
@@ -38,6 +54,18 @@ enum ZBSEyeMCPServer {
             db = nil; search = nil; timeline = nil
         }
 
+        let historySearch = MCPHistorySearchCoordinator(
+            guiSearch: { query, filters in
+                try await Self.proxyHistorySearch(query: query, filters: filters)
+            },
+            fallbackSearch: { query, filters in
+                guard let search else {
+                    throw MCPHistorySearchRoutingError.fallbackUnavailable
+                }
+                return try await search.searchWithMetadata(query: query, filters: filters)
+            }
+        )
+
         let server = Server(
             name: "zbseye",
             version: "0.3.0",
@@ -52,7 +80,7 @@ enum ZBSEyeMCPServer {
             switch params.name {
             case "search_history":
                 let q = args["query"]?.stringValue ?? ""
-                guard let search, !q.isEmpty else {
+                guard !q.isEmpty else {
                     return .init(content: [.text("No query or the DB is unavailable.")], isError: true)
                 }
                 var kind: SearchKind? = nil
@@ -85,12 +113,9 @@ enum ZBSEyeMCPServer {
                     kind: kind,
                     limit: limit ?? 25)
                 do {
-                    let execution = try await search.searchWithMetadata(
-                        query: q,
-                        filters: filters
-                    )
+                    let resolution = try await historySearch.search(query: q, filters: filters)
                     return .init(content: [
-                        .text(Self.formatResults(q, execution.results, semanticMode: execution.semanticMode))
+                        .text(Self.formatResults(q, resolution.results, semanticMode: resolution.semanticMode))
                     ])
                 } catch {
                     // honest error: the agent must distinguish "nothing found" from "DB broken"
@@ -191,7 +216,7 @@ enum ZBSEyeMCPServer {
         }
         return [
             Tool(name: "search_history",
-                 description: "Exact-word search over the user's screen and audio history. The GUI adds semantic search; this read-only helper process stays FTS-only to avoid a second model runtime.",
+                 description: "Hybrid search over the user's screen and audio history, including cross-language matches. Uses the running GUI's semantic search, with an exact-word FTS fallback when the GUI is absent.",
                  inputSchema: .object(["type": .string("object"),
                                        "properties": .object([
                                            "query": strProp("search query"),
@@ -327,9 +352,63 @@ enum ZBSEyeMCPServer {
         return obj
     }
 
+    /// Proves the peer knows the Keychain token without sending that token to
+    /// a port that may have been recycled after a stale port file.
+    private static func authenticatedHealth(port: Int, token: String) async -> [String: Any]? {
+        let challenge = LocalPeerAuthenticator.makeChallenge()
+        var components = URLComponents(string: "http://127.0.0.1:\(port)/health")!
+        components.queryItems = [URLQueryItem(name: "challenge", value: challenge)]
+        guard let url = components.url,
+              let (data, response) = try? await localSession.data(from: url),
+              let http = response as? HTTPURLResponse,
+              http.statusCode == 200,
+              http.url == url,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              obj["status"] as? String == "ok",
+              let proof = obj["proof"] as? String,
+              LocalPeerAuthenticator.verify(
+                proof: proof,
+                token: token,
+                challenge: challenge,
+                listeningPort: port
+              ) else { return nil }
+        return obj
+    }
+
     private static func mainInstanceCapturing() async -> Bool? {
         guard let port = readPort(), let obj = await healthOK(port: port) else { return nil }
         return obj["capturing"] as? Bool
+    }
+
+    private static func proxyHistorySearch(
+        query: String,
+        filters: SearchFilters
+    ) async throws -> SearchExecution? {
+        // Verify identity before sending the bearer token. A missing or stale
+        // GUI is the only condition that activates the direct-DB fallback.
+        let token = KeychainStore.apiToken()
+        guard let port = readPort(),
+              await authenticatedHealth(port: port, token: token) != nil else { return nil }
+        let client = MCPGUIHistorySearchClient { request in
+            let (data, response) = try await localSession.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw MCPHistorySearchRoutingError.invalidHTTPResponse
+            }
+            return MCPGUIHistorySearchHTTPResponse(statusCode: http.statusCode, data: data)
+        }
+        do {
+            return try await client.search(
+                port: port,
+                token: token,
+                query: query,
+                filters: filters
+            )
+        } catch let error as URLError {
+            guard await authenticatedHealth(port: port, token: token) == nil else {
+                throw error
+            }
+            return nil
+        }
     }
 
     /// Diagnostics for the self-repair flow — an agent connected over MCP calls this to get live state,
@@ -360,13 +439,15 @@ enum ZBSEyeMCPServer {
 
     private static func proxyToggle(enable: Bool?) async -> Bool? {
         // Verify identity (this is ZBS Eye) BEFORE sending the token — protection from a stale/reused port.
-        guard let port = readPort(), await healthOK(port: port) != nil else { return nil }
+        let token = KeychainStore.apiToken()
+        guard let port = readPort(),
+              await authenticatedHealth(port: port, token: token) != nil else { return nil }
         var comps = URLComponents(string: "http://127.0.0.1:\(port)/v1/capture/toggle")!
         if let enable { comps.queryItems = [URLQueryItem(name: "enable", value: enable ? "true" : "false")] }
         guard let url = comps.url else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.setValue("Bearer \(KeychainStore.apiToken())", forHTTPHeaderField: "Authorization")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         guard let (data, _) = try? await localSession.data(for: req),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         return obj["capturing"] as? Bool

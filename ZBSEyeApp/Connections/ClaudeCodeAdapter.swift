@@ -46,8 +46,8 @@ struct ClaudeCodeFileIdentity: Sendable, Equatable {
 }
 
 enum ClaudeCodeSecurityPolicy {
-    static let allowedVersion = "2.1.202"
-    static let allowedSHA256 = "7414f707861e2fe5afef33a466f888a8d2170e5028f5e9d2858f1d3ef45ffca5"
+    static let allowedVersion = "2.1.207"
+    static let allowedSHA256 = "1397a062c6889675055e3314dd956376ac51262a7734ad9e819c26975d71547a"
     static let signingIdentifier = "com.anthropic.claude-code"
     static let teamIdentifier = "Q6L2SF6YDW"
     static let maximumInputBytes = 2 * 1_024 * 1_024
@@ -156,8 +156,8 @@ struct SystemClaudeCodeExecutableInspector: ClaudeCodeExecutableInspecting {
     }
 
     /// The official standalone installer uses a version-named executable
-    /// (`.../versions/2.1.202`); packaged layouts may use
-    /// `.../2.1.202/claude`. Identity/hash/signature checks still pin the exact
+    /// (`.../versions/2.1.207`); packaged layouts may use
+    /// `.../2.1.207/claude`. Identity/hash/signature checks still pin the exact
     /// artifact after this layout-only extraction.
     static func releaseVersion(at canonicalURL: URL) -> String {
         canonicalURL.lastPathComponent == "claude"
@@ -236,11 +236,38 @@ struct ClaudeCodePromptAdmission: Sendable {
     let snapshotProvider: any LLMSelectionSnapshotProviding
     let selection: ProviderSelectionSnapshot
     let consumer: AIConsumer
+    private let state = ClaudeCodePromptAdmissionState()
+
+    func cancel() { state.cancel() }
+
+    func checkCancellation() throws {
+        try state.checkCancellation()
+    }
 
     func validate() async throws {
+        try state.checkCancellation()
         guard await snapshotProvider.currentSnapshot(for: consumer) == selection else {
             throw ClaudeCodeAdapterError.authorizationChanged
         }
+        try state.checkCancellation()
+    }
+}
+
+private final class ClaudeCodePromptAdmissionState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isCancelled = false
+
+    func cancel() {
+        lock.lock()
+        isCancelled = true
+        lock.unlock()
+    }
+
+    func checkCancellation() throws {
+        lock.lock()
+        let cancelled = isCancelled
+        lock.unlock()
+        if cancelled { throw CancellationError() }
     }
 }
 
@@ -267,6 +294,11 @@ private final class ClaudeProcessBox: @unchecked Sendable {
     }
     func markOverflow() { lock.lock(); overflow = true; lock.unlock(); terminate() }
     func didOverflow() -> Bool { lock.lock(); defer { lock.unlock() }; return overflow }
+    func shouldTerminate() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return terminationRequested
+    }
 
     func terminate() {
         lock.lock()
@@ -283,14 +315,34 @@ private final class ClaudeProcessBox: @unchecked Sendable {
     }
 }
 
-private final class ClaudeDataBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var data = Data()
-    func set(_ value: Data) { lock.lock(); data = value; lock.unlock() }
-    func get() -> Data { lock.lock(); defer { lock.unlock() }; return data }
+private struct ClaudeSpawnedProcess: Sendable {
+    let processIdentifier: pid_t
+    let stdinFileDescriptor: Int32
+    let stdoutFileDescriptor: Int32
+    let stderrFileDescriptor: Int32
+
+    init(_ process: CodexSpawnedProcess) {
+        processIdentifier = process.processIdentifier
+        stdinFileDescriptor = process.stdinFileDescriptor
+        stdoutFileDescriptor = process.stdoutFileDescriptor
+        stderrFileDescriptor = process.stderrFileDescriptor
+    }
+}
+
+private struct ClaudeWaitResult: Sendable {
+    let reaped: Bool
+    let status: Int32
 }
 
 struct SystemClaudeCodeProcessTransport: ClaudeCodeProcessTransport {
+    private let beforePromptDispatch: @Sendable () async -> Void
+
+    init(
+        beforePromptDispatch: @escaping @Sendable () async -> Void = {}
+    ) {
+        self.beforePromptDispatch = beforePromptDispatch
+    }
+
     func run(_ invocation: ClaudeCodeProcessInvocation) async throws -> ClaudeCodeProcessResult {
         guard invocation.stdin.isEmpty || invocation.promptAdmission != nil else {
             throw ClaudeCodeAdapterError.authorizationChanged
@@ -313,7 +365,11 @@ struct SystemClaudeCodeProcessTransport: ClaudeCodeProcessTransport {
             try Task.checkCancellation()
             return try await withThrowingTaskGroup(of: ClaudeCodeProcessResult.self) { group in
                 group.addTask {
-                    try await Self.spawn(invocation, box: box)
+                    try await Self.spawn(
+                        invocation,
+                        box: box,
+                        beforePromptDispatch: beforePromptDispatch
+                    )
                 }
                 group.addTask {
                     try await Task.sleep(for: invocation.timeout)
@@ -328,13 +384,15 @@ struct SystemClaudeCodeProcessTransport: ClaudeCodeProcessTransport {
                 return result
             }
         } onCancel: {
+            invocation.promptAdmission?.cancel()
             box.terminate()
         }
     }
 
     private static func spawn(
         _ invocation: ClaudeCodeProcessInvocation,
-        box: ClaudeProcessBox
+        box: ClaudeProcessBox,
+        beforePromptDispatch: @escaping @Sendable () async -> Void
     ) async throws -> ClaudeCodeProcessResult {
         try Task.checkCancellation()
         guard invocation.executableURL == invocation.trustedExecutableIdentity.canonicalURL else {
@@ -343,9 +401,24 @@ struct SystemClaudeCodeProcessTransport: ClaudeCodeProcessTransport {
         try await invocation.executableVerifier.revalidate(
             invocation.trustedExecutableIdentity
         )
-        try await invocation.promptAdmission?.validate()
         try Task.checkCancellation()
-        return try await withCheckedThrowingContinuation { continuation in
+
+        let spawned = try await launch(invocation, box: box)
+        if !invocation.stdin.isEmpty {
+            await beforePromptDispatch()
+        }
+        return try await communicate(
+            invocation,
+            spawned: spawned,
+            box: box
+        )
+    }
+
+    private static func launch(
+        _ invocation: ClaudeCodeProcessInvocation,
+        box: ClaudeProcessBox
+    ) async throws -> ClaudeSpawnedProcess {
+        try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 // The full hash/signature check above is asynchronous. Bind it
                 // to the same vnode snapshot again at the synchronous spawn
@@ -386,48 +459,63 @@ struct SystemClaudeCodeProcessTransport: ClaudeCodeProcessTransport {
                     return
                 }
                 box.setPID(pid)
-
-                let outputBox = ClaudeDataBox()
-                let errorBox = ClaudeDataBox()
-                let drains = DispatchGroup()
-                let streams = [
-                    (spawned.stdoutFileDescriptor, invocation.maximumStdoutBytes, outputBox),
-                    (spawned.stderrFileDescriptor, invocation.maximumStderrBytes, errorBox),
-                ]
-                for (descriptor, limit, dataBox) in streams {
-                    drains.enter()
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        dataBox.set(Self.drain(descriptor, limit: limit, box: box))
-                        drains.leave()
-                    }
-                }
-
-                let wroteInput = Self.writeAll(
-                    invocation.stdin,
-                    to: spawned.stdinFileDescriptor
-                )
-                Darwin.close(spawned.stdinFileDescriptor)
-                if !wroteInput { box.terminate() }
-                drains.wait()
-                Darwin.close(spawned.stdoutFileDescriptor)
-                Darwin.close(spawned.stderrFileDescriptor)
-                var waitStatus: Int32 = 0
-                let reaped = Self.reap(pid, status: &waitStatus)
-                box.markFinished()
-
-                if box.didOverflow() {
-                    continuation.resume(throwing: ClaudeCodeAdapterError.outputTooLarge)
-                } else if !wroteInput || !reaped {
-                    continuation.resume(throwing: ClaudeCodeAdapterError.processFailed)
-                } else {
-                    continuation.resume(returning: ClaudeCodeProcessResult(
-                        exitStatus: Self.exitStatus(waitStatus),
-                        stdout: outputBox.get(),
-                        stderr: errorBox.get()
-                    ))
-                }
+                continuation.resume(returning: ClaudeSpawnedProcess(spawned))
             }
         }
+    }
+
+    private static func communicate(
+        _ invocation: ClaudeCodeProcessInvocation,
+        spawned: ClaudeSpawnedProcess,
+        box: ClaudeProcessBox
+    ) async throws -> ClaudeCodeProcessResult {
+        let outputTask = Task {
+            await drainAsync(
+                spawned.stdoutFileDescriptor,
+                limit: invocation.maximumStdoutBytes,
+                box: box
+            )
+        }
+        let errorTask = Task {
+            await drainAsync(
+                spawned.stderrFileDescriptor,
+                limit: invocation.maximumStderrBytes,
+                box: box
+            )
+        }
+
+        var writeFailure: (any Error)?
+        var wroteInput = false
+        do {
+            wroteInput = try await writeAll(
+                invocation.stdin,
+                to: spawned.stdinFileDescriptor,
+                promptAdmission: invocation.promptAdmission,
+                box: box
+            )
+        } catch {
+            writeFailure = error
+        }
+        Darwin.close(spawned.stdinFileDescriptor)
+        if writeFailure != nil || !wroteInput { box.terminate() }
+
+        let output = await outputTask.value
+        let error = await errorTask.value
+        Darwin.close(spawned.stdoutFileDescriptor)
+        Darwin.close(spawned.stderrFileDescriptor)
+        let wait = await reapAsync(spawned.processIdentifier)
+        box.markFinished()
+
+        if let writeFailure { throw writeFailure }
+        if box.didOverflow() { throw ClaudeCodeAdapterError.outputTooLarge }
+        guard wroteInput, wait.reaped else {
+            throw ClaudeCodeAdapterError.processFailed
+        }
+        return ClaudeCodeProcessResult(
+            exitStatus: exitStatus(wait.status),
+            stdout: output,
+            stderr: error
+        )
     }
 
     private static func drain(_ fd: Int32, limit: Int, box: ClaudeProcessBox) -> Data {
@@ -449,25 +537,76 @@ struct SystemClaudeCodeProcessTransport: ClaudeCodeProcessTransport {
         }
     }
 
-    private static func writeAll(_ data: Data, to descriptor: Int32) -> Bool {
-        data.withUnsafeBytes { bytes in
-            guard let baseAddress = bytes.baseAddress else { return true }
-            var offset = 0
-            while offset < bytes.count {
-                let count = Darwin.write(
-                    descriptor,
-                    baseAddress.advanced(by: offset),
-                    bytes.count - offset
-                )
-                if count > 0 {
-                    offset += count
-                } else if count < 0, errno == EINTR {
-                    continue
+    private static func drainAsync(
+        _ descriptor: Int32,
+        limit: Int,
+        box: ClaudeProcessBox
+    ) async -> Data {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: drain(descriptor, limit: limit, box: box))
+            }
+        }
+    }
+
+    private static func writeAll(
+        _ data: Data,
+        to descriptor: Int32,
+        promptAdmission: ClaudeCodePromptAdmission?,
+        box: ClaudeProcessBox
+    ) async throws -> Bool {
+        var offset = 0
+        let maximumChunkBytes = 4 * 1_024
+        while offset < data.count {
+            try await promptAdmission?.validate()
+            try Task.checkCancellation()
+            guard !box.shouldTerminate() else { throw CancellationError() }
+
+            let end = min(offset + maximumChunkBytes, data.count)
+            let chunk = data.subdata(in: offset..<end)
+            let written = try await writeChunk(
+                chunk,
+                to: descriptor,
+                promptAdmission: promptAdmission,
+                box: box
+            )
+            guard written > 0 else { return false }
+            offset += written
+        }
+        return true
+    }
+
+    private static func writeChunk(
+        _ data: Data,
+        to descriptor: Int32,
+        promptAdmission: ClaudeCodePromptAdmission?,
+        box: ClaudeProcessBox
+    ) async throws -> Int {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard !box.shouldTerminate() else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                let written = data.withUnsafeBytes { bytes -> Int in
+                    guard let baseAddress = bytes.baseAddress else { return 0 }
+                    while true {
+                        do {
+                            try promptAdmission?.checkCancellation()
+                        } catch {
+                            return -2
+                        }
+                        let count = Darwin.write(descriptor, baseAddress, bytes.count)
+                        if count < 0, errno == EINTR { continue }
+                        return count
+                    }
+                }
+                if written == -2 {
+                    continuation.resume(throwing: CancellationError())
                 } else {
-                    return false
+                    continuation.resume(returning: written)
                 }
             }
-            return true
         }
     }
 
@@ -494,6 +633,16 @@ struct SystemClaudeCodeProcessTransport: ClaudeCodeProcessTransport {
             result = waitpid(processIdentifier, &status, 0)
         } while result < 0 && errno == EINTR
         return result == processIdentifier
+    }
+
+    private static func reapAsync(_ processIdentifier: pid_t) async -> ClaudeWaitResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                var status: Int32 = 0
+                let reaped = reap(processIdentifier, status: &status)
+                continuation.resume(returning: ClaudeWaitResult(reaped: reaped, status: status))
+            }
+        }
     }
 
     private static func exitStatus(_ waitStatus: Int32) -> Int32 {
