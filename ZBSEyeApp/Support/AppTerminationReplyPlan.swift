@@ -21,6 +21,14 @@ enum AppTerminationRecoveryOwner: Sendable, Equatable {
     }
 }
 
+enum AppTerminationDeadlinePolicy {
+    /// Real ScreenCaptureKit/CoreAudio teardown exceeded six seconds on the
+    /// release machine even though the remote queues stopped successfully.
+    /// Keep Quit fail-closed, but give the acknowledged hardware drain enough
+    /// time to finish instead of forcing the user through a retry loop.
+    static let recordingDrain: Duration = .seconds(15)
+}
+
 enum AppTerminationCriticalPhaseOutcome: Sendable, Equatable {
     case completed(Bool)
     case timedOut

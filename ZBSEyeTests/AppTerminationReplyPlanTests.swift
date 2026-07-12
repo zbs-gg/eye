@@ -1,6 +1,13 @@
 import XCTest
 
 final class AppTerminationReplyPlanTests: XCTestCase {
+    func testRecordingDrainDeadlineCoversObservedScreenCaptureKitTeardown() {
+        XCTAssertGreaterThanOrEqual(
+            AppTerminationDeadlinePolicy.recordingDrain,
+            .seconds(15)
+        )
+    }
+
     func testCancelledTerminationRepliesBeforeResettingGuardAndShowingAlert() {
         XCTAssertEqual(
             AppTerminationReplyPlan.actions(shouldTerminate: false),

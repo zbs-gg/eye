@@ -337,7 +337,7 @@ final class AppEnvironment {
                 // resume from backfill after launch, so it must not hold Quit.
                 if recoveryOwner == .quit {
                     let recordingPhase = await AppTerminationCriticalPhase.run(
-                        timeout: .seconds(6)
+                        timeout: AppTerminationDeadlinePolicy.recordingDrain
                     ) {
                         // The outer critical phase owns the only caller
                         // deadline. The underlying hardware teardown remains
