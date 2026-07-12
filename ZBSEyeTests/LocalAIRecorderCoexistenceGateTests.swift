@@ -321,10 +321,10 @@ final class LocalAIRecorderCoexistenceGateTests: XCTestCase {
             nativeToolUserPostamble: "\nUse only the evidence above.",
             maximumFragmentCharacters: 512,
             // The native answer tool needs enough room for the model's tool
-            // envelope as well as content. The qualified performance protocol
-            // uses the same 256-token ceiling; 64 deterministically truncates
-            // Qwen before a valid tool call and tests the wrong failure mode.
-            maximumOutputTokens: 256,
+            // envelope as well as content. Production Daily Insights uses the
+            // same 400-token ceiling; smaller probe-only ceilings can truncate
+            // Qwen before a valid tool call and test the wrong failure mode.
+            maximumOutputTokens: 400,
             timeout: .seconds(120)
         )
     }
