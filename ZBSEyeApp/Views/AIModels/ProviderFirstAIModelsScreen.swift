@@ -874,9 +874,11 @@ private struct ProviderFirstCard: View {
     }
 
     private func saveKey() {
-        ai.saveKey(keyDraft, for: provider, connectAfterSave: false)
+        guard ai.saveKey(keyDraft, for: provider, connectAfterSave: false) else {
+            return
+        }
         keyDraft = ""
-        if ai.hasKey(provider) { beginConnect() }
+        beginConnect()
     }
 
     private func beginConnect() {

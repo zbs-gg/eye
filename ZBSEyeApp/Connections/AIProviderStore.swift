@@ -1019,14 +1019,15 @@ final class AIProviderStore {
 
     // MARK: API keys (Keychain only)
 
+    @discardableResult
     func saveKey(
         _ raw: String,
         for p: AIProvider,
         connectAfterSave: Bool = true
-    ) {
-        guard let account = p.keychainAccount else { return }
+    ) -> Bool {
+        guard let account = p.keychainAccount else { return false }
         let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return }
+        guard !key.isEmpty else { return false }
         let previousKey = credentialStore.get(account)
         // Any manual credential write invalidates work that already crossed
         // the old Keychain boundary. Advance synchronously, before another
@@ -1043,7 +1044,7 @@ final class AIProviderStore {
             keyPresent[p.rawValue] = retainedCredential
             guard failedReplacementWouldRetainOldKey else {
                 statuses[p.rawValue] = .error(String(localized: "Couldn't save the API key to the Keychain. Try again."))
-                return
+                return false
             }
 
             // Update-first Keychain writes leave the old credential intact on
@@ -1058,10 +1059,10 @@ final class AIProviderStore {
             guard commitProviderSettingsWithAcknowledgement(revokedSettings) else {
                 publishSettingsWithoutPersistence(revokedSettings)
                 statuses[p.rawValue] = .error(String(localized: "Couldn't save the access revocation. The previous API key was kept; processing is paused. Try again."))
-                return
+                return false
             }
             statuses[p.rawValue] = .error(String(localized: "Couldn't replace the API key in the Keychain. The previous key was kept, and access was revoked. Try again."))
-            return
+            return false
         }
         keyPresent[p.rawValue] = true
         catalogs[p.rawValue] = .notLoaded
@@ -1070,6 +1071,7 @@ final class AIProviderStore {
         if connectAfterSave {
             Task { await connect(p) }
         }
+        return true
     }
 
     func removeKey(for p: AIProvider) {

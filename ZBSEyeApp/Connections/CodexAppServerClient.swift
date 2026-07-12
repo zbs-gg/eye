@@ -1805,7 +1805,11 @@ actor CodexAppServerClient: LLMAdapter {
                 arguments: ["app-server", "--stdio", "--strict-config"],
                 environment: [
                     "CODEX_HOME": home.homeURL.path,
-                    "HOME": home.homeURL.path,
+                    // Security.framework resolves the user's default Keychain
+                    // through HOME. CODEX_HOME remains isolated, so Codex still
+                    // cannot load the user's config, tools, MCP servers, or
+                    // conversation state.
+                    "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
                     "PATH": "/usr/bin:/bin",
                     "LANG": "en_US.UTF-8",
                     "LC_ALL": "en_US.UTF-8",

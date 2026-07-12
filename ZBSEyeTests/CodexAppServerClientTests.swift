@@ -418,6 +418,12 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertTrue(launch.createsDedicatedProcessGroup)
         XCTAssertFalse(launch.usesLoginShell)
         XCTAssertEqual(Set(launch.environment.keys), ["CODEX_HOME", "HOME", "PATH", "LANG", "LC_ALL", "TMPDIR"])
+        XCTAssertEqual(
+            launch.environment["HOME"],
+            FileManager.default.homeDirectoryForCurrentUser.path,
+            "Codex needs the real user home to resolve the default macOS Keychain"
+        )
+        XCTAssertEqual(launch.environment["CODEX_HOME"], "/safe/home")
         XCTAssertFalse(String(describing: launch).contains("SECRET_USER_PROMPT"))
         let terminationCount = await fixture.connection.terminationCount()
         let destroyCount = await fixture.home.destroyCount()

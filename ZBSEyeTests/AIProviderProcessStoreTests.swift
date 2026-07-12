@@ -764,10 +764,11 @@ final class AIProviderProcessStoreTests: XCTestCase {
 
         let staleProbe = Task { @MainActor in await store.connect(.anthropic) }
         await catalog.waitUntilFirstLoadEntered()
-        store.saveKey("new-key", for: .anthropic, connectAfterSave: false)
+        let saved = store.saveKey("new-key", for: .anthropic, connectAfterSave: false)
         await catalog.releaseFirstLoad()
         await staleProbe.value
 
+        XCTAssertTrue(saved)
         XCTAssertEqual(credentials.get("llm.anthropic"), "new-key")
         XCTAssertEqual(store.status(.anthropic), .notConfigured)
         XCTAssertEqual(store.catalogState(.anthropic), .notLoaded)
@@ -806,8 +807,9 @@ final class AIProviderProcessStoreTests: XCTestCase {
         )
         XCTAssertNotNil(store.activeConfig)
 
-        store.saveKey("new-key", for: provider, connectAfterSave: false)
+        let saved = store.saveKey("new-key", for: provider, connectAfterSave: false)
 
+        XCTAssertFalse(saved, "the view must keep the pasted key visible after a failed save")
         XCTAssertEqual(credentials.setCalls, 1)
         XCTAssertEqual(credentials.get(account), "old-key")
         XCTAssertTrue(store.hasKey(provider))
