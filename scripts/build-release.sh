@@ -43,7 +43,7 @@ if [ -d "$MODEL_CACHE" ]; then
   ditto "$MODEL_CACHE" "$APP/Contents/Resources/models/intfloat/multilingual-e5-small"
   # resources changed → re-sign. WITHOUT a silent ad-hoc fallback: ad-hoc breaks TCC
   # stability, and "✅" would print anyway. On re-sign failure — abort explicitly.
-  if ! codesign --force --sign "$IDENTITY" "$APP"; then
+  if ! codesign --force --preserve-metadata=entitlements,requirements --sign "$IDENTITY" "$APP"; then
     echo "❌ Re-signing '$IDENTITY' after bundling the model failed (keychain locked?)."
     echo "   NOT signing ad-hoc silently — that would break TCC. Unlock the keychain and re-run."
     exit 1

@@ -33,4 +33,11 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertTrue(script.contains("--preserve-metadata=entitlements"))
         XCTAssertTrue(script.contains("embedded.provisionprofile"))
     }
+
+    func testSelfSignedBuildPreservesEntitlementsWhenBundlingTheModel() throws {
+        let url = repositoryRoot.appending(path: "scripts/build-release.sh")
+        let script = try String(contentsOf: url, encoding: .utf8)
+
+        XCTAssertTrue(script.contains("--preserve-metadata=entitlements,requirements"))
+    }
 }
