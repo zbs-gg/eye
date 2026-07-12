@@ -115,6 +115,9 @@ struct ScreenUnderstandingDatasetManifest: Codable, Equatable, Sendable {
     let protocolID: String
     let revision: Int
     let snapshotSHA256: String
+    let sourceImageRows: Int
+    let availableImageRows: Int
+    let missingMediaRows: Int
     let cases: [Case]
     let temporalPairs: [TemporalPair]
     let naturalisticTraceSHA256: String
@@ -326,12 +329,35 @@ struct ScreenUnderstandingDatasetPreparer {
         )
         var snapshot: DatabaseQueue? = try DatabaseQueue(path: snapshotURL.path)
         try sourcePool.backup(to: snapshot!)
-        let candidates = try fetchCandidates(from: snapshot!)
+        let snapshotCandidates = try fetchCandidates(from: snapshot!)
+        try snapshot!.writeWithoutTransaction { database in
+            try database.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+            try database.execute(sql: "PRAGMA journal_mode=DELETE")
+        }
         snapshot = nil
         let snapshotData = try Data(contentsOf: snapshotURL, options: [.mappedIfSafe])
         let snapshotHash = Self.sha256(snapshotData)
         try fileManager.removeItem(at: snapshotURL)
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = URL(fileURLWithPath: snapshotURL.path + suffix)
+            if fileManager.fileExists(atPath: sidecar.path) {
+                try fileManager.removeItem(at: sidecar)
+            }
+        }
+        guard try fileManager.contentsOfDirectory(
+            at: staging,
+            includingPropertiesForKeys: nil
+        ).allSatisfy({ !$0.lastPathComponent.hasPrefix("source.sqlite") }) else {
+            throw ScreenUnderstandingDatasetError.invalidPolicy(
+                "Private database snapshot sidecar survived cleanup"
+            )
+        }
 
+        let reconciliation = try reconcileCandidates(
+            snapshotCandidates,
+            mediaRoot: sourceMedia
+        )
+        let candidates = reconciliation.candidates
         let selected = ScreenUnderstandingDatasetSampler.balanced(
             candidates,
             limit: labeledLimit
@@ -416,6 +442,9 @@ struct ScreenUnderstandingDatasetPreparer {
             protocolID: "screen-understanding-v1",
             revision: 1,
             snapshotSHA256: snapshotHash,
+            sourceImageRows: reconciliation.sourceImageRows,
+            availableImageRows: reconciliation.availableImageRows,
+            missingMediaRows: reconciliation.missingMediaRows,
             cases: manifestCases.sorted { $0.id < $1.id },
             temporalPairs: temporalPairs.map { pair in
                 let beforeID = Self.opaqueID(for: pair.before.sourceID)
@@ -472,6 +501,56 @@ struct ScreenUnderstandingDatasetPreparer {
                 )
             }
         }
+    }
+
+    private func reconcileCandidates(
+        _ candidates: [ScreenUnderstandingDatasetCandidate],
+        mediaRoot: URL
+    ) throws -> (
+        candidates: [ScreenUnderstandingDatasetCandidate],
+        sourceImageRows: Int,
+        availableImageRows: Int,
+        missingMediaRows: Int
+    ) {
+        var sourceImageRows = 0
+        var availableImageRows = 0
+        var missingMediaRows = 0
+        let reconciled = try candidates.map { candidate in
+            guard let relativePath = candidate.relativePath else { return candidate }
+            sourceImageRows += 1
+            let mediaURL = try ScreenUnderstandingDatasetPolicy.resolvedMediaURL(
+                mediaRoot: mediaRoot,
+                relativePath: relativePath
+            )
+            var mediaStat = stat()
+            if lstat(mediaURL.path, &mediaStat) != 0 {
+                guard errno == ENOENT else {
+                    throw ScreenUnderstandingDatasetError.invalidMedia(
+                        "Selected media could not be reconciled"
+                    )
+                }
+                missingMediaRows += 1
+                return ScreenUnderstandingDatasetCandidate(
+                    sourceID: candidate.sourceID,
+                    timestampMs: candidate.timestampMs,
+                    appName: candidate.appName,
+                    windowTitle: candidate.windowTitle,
+                    browserURL: candidate.browserURL,
+                    monitorID: candidate.monitorID,
+                    relativePath: nil,
+                    text: candidate.text,
+                    textSources: candidate.textSources
+                )
+            }
+            guard (mediaStat.st_mode & S_IFMT) == S_IFREG else {
+                throw ScreenUnderstandingDatasetError.invalidMedia(
+                    "Reconciled media must be a regular non-symlink file"
+                )
+            }
+            availableImageRows += 1
+            return candidate
+        }
+        return (reconciled, sourceImageRows, availableImageRows, missingMediaRows)
     }
 
     private func naturalisticDay(

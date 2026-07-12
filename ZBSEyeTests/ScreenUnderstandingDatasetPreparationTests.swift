@@ -29,6 +29,9 @@ final class ScreenUnderstandingDatasetPreparationTests: XCTestCase {
         XCTAssertEqual(first.cases, second.cases)
         XCTAssertEqual(first.temporalPairs, second.temporalPairs)
         XCTAssertEqual(first.temporalPairs.count, 1)
+        XCTAssertEqual(first.sourceImageRows, 3)
+        XCTAssertEqual(first.availableImageRows, 3)
+        XCTAssertEqual(first.missingMediaRows, 0)
         XCTAssertTrue(first.temporalPairs.allSatisfy { pair in
             first.cases.contains(where: { $0.id == pair.beforeCaseID })
                 && first.cases.contains(where: { $0.id == pair.afterCaseID })
@@ -53,9 +56,10 @@ final class ScreenUnderstandingDatasetPreparationTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: fixture.base.appendingPathComponent("corpus-a/.metadata_never_index").path
         ))
-        XCTAssertFalse(FileManager.default.fileExists(
-            atPath: fixture.base.appendingPathComponent("corpus-a/source.sqlite").path
-        ))
+        let sealedNames = try FileManager.default.contentsOfDirectory(
+            atPath: fixture.base.appendingPathComponent("corpus-a").path
+        )
+        XCTAssertTrue(sealedNames.allSatisfy { !$0.hasPrefix("source.sqlite") })
     }
 
     func testExistingSealedCorpusIsNeverOverwritten() throws {
@@ -73,6 +77,25 @@ final class ScreenUnderstandingDatasetPreparationTests: XCTestCase {
             labeledLimit: 1
         ))
         XCTAssertEqual(try Data(contentsOf: sentinel), Data("keep".utf8))
+    }
+
+    func testMissingMediaIsReconciledBeforeSplitWithoutCopyRetry() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.base) }
+        try FileManager.default.removeItem(at: fixture.media.appendingPathComponent("two.heic"))
+
+        let manifest = try ScreenUnderstandingDatasetPreparer().prepare(
+            sourceRoot: fixture.source,
+            outputRoot: fixture.base.appendingPathComponent("reconciled"),
+            repositoryRoot: repositoryRoot(),
+            labeledLimit: 4,
+            temporalPairLimit: 2
+        )
+
+        XCTAssertEqual(manifest.sourceImageRows, 3)
+        XCTAssertEqual(manifest.availableImageRows, 2)
+        XCTAssertEqual(manifest.missingMediaRows, 1)
+        XCTAssertTrue(manifest.cases.contains { $0.baselineOnly && $0.mediaFile == nil })
     }
 
     func testSymlinkedSelectedMediaInvalidatesWholeExport() throws {
