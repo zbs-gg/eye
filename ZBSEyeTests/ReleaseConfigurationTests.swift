@@ -39,5 +39,8 @@ final class ReleaseConfigurationTests: XCTestCase {
         let script = try String(contentsOf: url, encoding: .utf8)
 
         XCTAssertTrue(script.contains("--preserve-metadata=entitlements,requirements"))
+        XCTAssertTrue(script.contains("codesign -d --entitlements"))
+        XCTAssertTrue(script.contains("Print :com.apple.security.device.audio-input"))
+        XCTAssertTrue(script.contains("Print :keychain-access-groups:0"))
     }
 }

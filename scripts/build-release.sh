@@ -55,6 +55,16 @@ fi
 
 codesign --verify --strict "$APP" && echo "✅ Signature valid ($IDENTITY)"
 
+SIGNED_ENTITLEMENTS=$(mktemp)
+trap 'rm -f "$SIGNED_ENTITLEMENTS"' EXIT
+codesign -d --entitlements :- "$APP" > "$SIGNED_ENTITLEMENTS" 2>/dev/null
+AUDIO_INPUT=$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.device.audio-input' "$SIGNED_ENTITLEMENTS" 2>/dev/null || true)
+ACCESS_GROUP=$(/usr/libexec/PlistBuddy -c 'Print :keychain-access-groups:0' "$SIGNED_ENTITLEMENTS" 2>/dev/null || true)
+[ "$AUDIO_INPUT" = "true" ] && [ -n "$ACCESS_GROUP" ] || {
+  echo "❌ Re-signed app lost its microphone or Keychain entitlements."
+  exit 1
+}
+
 mkdir -p dist
 ZIP="dist/ZBSEye-$(date +%Y%m%d).zip"
 ditto -c -k --keepParent "$APP" "$ZIP"
