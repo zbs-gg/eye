@@ -119,10 +119,23 @@ struct ScreenUnderstandingDatasetManifest: Codable, Equatable, Sendable {
     let availableImageRows: Int
     let missingMediaRows: Int
     let cases: [Case]
+    let singleFrameCaseIDs: [String]
+    let baselineOnlyCaseIDs: [String]
     let temporalPairs: [TemporalPair]
+    let splits: ScreenUnderstandingDatasetSplits
+    let splitSHA256: String
     let naturalisticTraceSHA256: String
     let labelsLockedBeforeOutputs: Bool
     let purgeAfterDecisionDays: Int
+}
+
+struct ScreenUnderstandingDatasetSplits: Codable, Equatable, Sendable {
+    let tuneSingleFrames: [String]
+    let validationSingleFrames: [String]
+    let testSingleFrames: [String]
+    let tuneTemporalPairs: [String]
+    let validationTemporalPairs: [String]
+    let testTemporalPairs: [String]
 }
 
 struct ScreenUnderstandingPrivateContext: Codable, Equatable, Sendable {
@@ -279,7 +292,8 @@ struct ScreenUnderstandingDatasetPreparer {
         outputRoot: URL,
         repositoryRoot: URL,
         labeledLimit: Int = 200,
-        temporalPairLimit: Int = 100
+        temporalPairLimit: Int = 100,
+        baselineOnlyLimit: Int = 30
     ) throws -> ScreenUnderstandingDatasetManifest {
         try ScreenUnderstandingDatasetPolicy.validate(
             sourceRoot: sourceRoot,
@@ -359,15 +373,21 @@ struct ScreenUnderstandingDatasetPreparer {
         )
         let candidates = reconciliation.candidates
         let selected = ScreenUnderstandingDatasetSampler.balanced(
-            candidates,
+            candidates.filter { !$0.baselineOnly },
             limit: labeledLimit
+        )
+        let selectedBaselineOnly = ScreenUnderstandingDatasetSampler.balanced(
+            candidates.filter(\.baselineOnly),
+            limit: baselineOnlyLimit
         )
         let temporalPairs = ScreenUnderstandingDatasetSampler.temporalPairs(
             candidates,
             limit: temporalPairLimit,
             maximumGapMs: 300_000
         )
-        var selectedByID = Dictionary(uniqueKeysWithValues: selected.map { ($0.sourceID, $0) })
+        var selectedByID = Dictionary(
+            uniqueKeysWithValues: (selected + selectedBaselineOnly).map { ($0.sourceID, $0) }
+        )
         for pair in temporalPairs {
             selectedByID[pair.before.sourceID] = pair.before
             selectedByID[pair.after.sourceID] = pair.after
@@ -438,6 +458,25 @@ struct ScreenUnderstandingDatasetPreparer {
             traceData,
             to: staging.appendingPathComponent("naturalistic-trace.json")
         )
+        let manifestPairs = temporalPairs.map { pair in
+            let beforeID = Self.opaqueID(for: pair.before.sourceID)
+            let afterID = Self.opaqueID(for: pair.after.sourceID)
+            return ScreenUnderstandingDatasetManifest.TemporalPair(
+                id: Self.temporalPairID(beforeID: beforeID, afterID: afterID),
+                beforeCaseID: beforeID,
+                afterCaseID: afterID,
+                deltaMs: pair.deltaMs,
+                strata: pair.strata
+            )
+        }
+        let singleFrameCaseIDs = selected.map { Self.opaqueID(for: $0.sourceID) }.sorted()
+        let baselineOnlyCaseIDs = selectedBaselineOnly
+            .map { Self.opaqueID(for: $0.sourceID) }.sorted()
+        let splits = Self.makeSplits(
+            singleFrameIDs: singleFrameCaseIDs,
+            temporalPairIDs: manifestPairs.map(\.id)
+        )
+        let splitData = try Self.encoder.encode(splits)
         let manifest = ScreenUnderstandingDatasetManifest(
             protocolID: "screen-understanding-v1",
             revision: 1,
@@ -446,17 +485,11 @@ struct ScreenUnderstandingDatasetPreparer {
             availableImageRows: reconciliation.availableImageRows,
             missingMediaRows: reconciliation.missingMediaRows,
             cases: manifestCases.sorted { $0.id < $1.id },
-            temporalPairs: temporalPairs.map { pair in
-                let beforeID = Self.opaqueID(for: pair.before.sourceID)
-                let afterID = Self.opaqueID(for: pair.after.sourceID)
-                return .init(
-                    id: Self.temporalPairID(beforeID: beforeID, afterID: afterID),
-                    beforeCaseID: beforeID,
-                    afterCaseID: afterID,
-                    deltaMs: pair.deltaMs,
-                    strata: pair.strata
-                )
-            },
+            singleFrameCaseIDs: singleFrameCaseIDs,
+            baselineOnlyCaseIDs: baselineOnlyCaseIDs,
+            temporalPairs: manifestPairs,
+            splits: splits,
+            splitSHA256: Self.sha256(splitData),
             naturalisticTraceSHA256: Self.sha256(traceData),
             labelsLockedBeforeOutputs: true,
             purgeAfterDecisionDays: 30
@@ -652,6 +685,41 @@ struct ScreenUnderstandingDatasetPreparer {
 
     private static func temporalPairID(beforeID: String, afterID: String) -> String {
         String(sha256(Data("screen-understanding-v1-pair:\(beforeID):\(afterID)".utf8)).prefix(24))
+    }
+
+    private static func makeSplits(
+        singleFrameIDs: [String],
+        temporalPairIDs: [String]
+    ) -> ScreenUnderstandingDatasetSplits {
+        let single = split(singleFrameIDs)
+        let temporal = split(temporalPairIDs)
+        return .init(
+            tuneSingleFrames: single.tune,
+            validationSingleFrames: single.validation,
+            testSingleFrames: single.test,
+            tuneTemporalPairs: temporal.tune,
+            validationTemporalPairs: temporal.validation,
+            testTemporalPairs: temporal.test
+        )
+    }
+
+    private static func split(_ identifiers: [String]) -> (
+        tune: [String],
+        validation: [String],
+        test: [String]
+    ) {
+        let ordered = identifiers.sorted {
+            sha256(Data("screen-understanding-v1-split:\($0)".utf8))
+                < sha256(Data("screen-understanding-v1-split:\($1)".utf8))
+        }
+        let testCount = Int(Double(ordered.count) * 0.30)
+        let validationCount = Int(Double(ordered.count) * 0.20)
+        let test = Array(ordered.prefix(testCount)).sorted()
+        let validation = Array(
+            ordered.dropFirst(testCount).prefix(validationCount)
+        ).sorted()
+        let tune = Array(ordered.dropFirst(testCount + validationCount)).sorted()
+        return (tune, validation, test)
     }
 
     private static func sha256(_ data: Data) -> String {

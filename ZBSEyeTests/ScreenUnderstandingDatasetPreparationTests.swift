@@ -29,6 +29,11 @@ final class ScreenUnderstandingDatasetPreparationTests: XCTestCase {
         XCTAssertEqual(first.cases, second.cases)
         XCTAssertEqual(first.temporalPairs, second.temporalPairs)
         XCTAssertEqual(first.temporalPairs.count, 1)
+        XCTAssertEqual(first.singleFrameCaseIDs.count, 3)
+        XCTAssertEqual(first.baselineOnlyCaseIDs.count, 1)
+        XCTAssertEqual(first.splits, second.splits)
+        XCTAssertEqual(first.splitSHA256, second.splitSHA256)
+        XCTAssertEqual(first.splitSHA256.count, 64)
         XCTAssertEqual(first.sourceImageRows, 3)
         XCTAssertEqual(first.availableImageRows, 3)
         XCTAssertEqual(first.missingMediaRows, 0)
@@ -95,6 +100,8 @@ final class ScreenUnderstandingDatasetPreparationTests: XCTestCase {
         XCTAssertEqual(manifest.sourceImageRows, 3)
         XCTAssertEqual(manifest.availableImageRows, 2)
         XCTAssertEqual(manifest.missingMediaRows, 1)
+        XCTAssertEqual(manifest.singleFrameCaseIDs.count, 2)
+        XCTAssertEqual(manifest.baselineOnlyCaseIDs.count, 2)
         XCTAssertTrue(manifest.cases.contains { $0.baselineOnly && $0.mediaFile == nil })
     }
 
