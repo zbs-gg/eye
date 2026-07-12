@@ -122,6 +122,35 @@ final class LocalAIRecorderCoexistenceGateTests: XCTestCase {
         )
     }
 
+    func testGenerationFailureDrainsRecorderProbeBeforePropagating() async {
+        let events = RecorderGateEventLog()
+
+        do {
+            _ = try await RecorderGateGenerationSequence.run(
+                requiredGenerations: 1,
+                generate: {
+                    await events.append("generate-failed")
+                    throw RecorderGateSequenceTestError.expected
+                },
+                stopAndDrainProbe: {
+                    await events.append("probe-drained")
+                    return "metrics"
+                },
+                cleanupRuntime: {
+                    await events.append("runtime-drained")
+                }
+            )
+            XCTFail("expected generation failure")
+        } catch {
+            XCTAssertEqual(error as? RecorderGateSequenceTestError, .expected)
+        }
+        let recordedEvents = await events.snapshot()
+        XCTAssertEqual(
+            recordedEvents,
+            ["generate-failed", "probe-drained", "runtime-drained"]
+        )
+    }
+
     func testProductionRuntimeCoexistsWithRecorderWriterBaseline() async throws {
         let bundle = Bundle(for: LocalAIRecorderCoexistenceGateTests.self)
         guard LocalAIPhysicalGateEvidenceCapture.configuredValue(
@@ -209,22 +238,32 @@ final class LocalAIRecorderCoexistenceGateTests: XCTestCase {
 
         let inferenceProbe = RecorderWriterProbe(database: database, ingest: ingest)
         let inferenceTask = Task { try await inferenceProbe.run(minimumCycles: 60) }
-        var completedGenerations = 0
-        for _ in 0..<50 {
-            let output = try await generator.generate(
-                plan: plan,
-                execution: execution,
-                requestID: UUID()
-            )
-            XCTAssertFalse(output.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            completedGenerations += 1
-        }
-        await inferenceProbe.stop()
-        let inference = try await inferenceTask.value
+        let (completedGenerations, inference) = try await RecorderGateGenerationSequence.run(
+            requiredGenerations: 50,
+            generate: {
+                let output = try await generator.generate(
+                    plan: plan,
+                    execution: execution,
+                    requestID: UUID()
+                )
+                guard !output.content.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ).isEmpty else {
+                    throw RecorderGateError.emptyGeneration
+                }
+            },
+            stopAndDrainProbe: {
+                await inferenceProbe.stop()
+                return try await inferenceTask.value
+            },
+            cleanupRuntime: {
+                guard await router.shutdown(timeout: .seconds(5)) else {
+                    throw RecorderGateError.routerShutdownFailed
+                }
+                try await service.runtimeDrainer()(nil)
+            }
+        )
 
-        let routerStopped = await router.shutdown(timeout: .seconds(5))
-        XCTAssertTrue(routerStopped)
-        try await service.runtimeDrainer()(nil)
         let computeSnapshot = await compute.snapshot()
         XCTAssertFalse(computeSnapshot.generationPending)
         XCTAssertFalse(computeSnapshot.generationActive)
@@ -281,7 +320,11 @@ final class LocalAIRecorderCoexistenceGateTests: XCTestCase {
             userPostamble: "\nReturn one insight.",
             nativeToolUserPostamble: "\nUse only the evidence above.",
             maximumFragmentCharacters: 512,
-            maximumOutputTokens: 64,
+            // The native answer tool needs enough room for the model's tool
+            // envelope as well as content. The qualified performance protocol
+            // uses the same 256-token ceiling; 64 deterministically truncates
+            // Qwen before a valid tool call and tests the wrong failure mode.
+            maximumOutputTokens: 256,
             timeout: .seconds(120)
         )
     }
@@ -433,9 +476,59 @@ private enum LocalAIRecorderGatePolicy {
     }
 }
 
+private enum RecorderGateGenerationSequence {
+    static func run<Metrics: Sendable>(
+        requiredGenerations: Int,
+        generate: () async throws -> Void,
+        stopAndDrainProbe: () async throws -> Metrics,
+        cleanupRuntime: () async throws -> Void
+    ) async throws -> (completedGenerations: Int, metrics: Metrics) {
+        var completedGenerations = 0
+        var generationFailure: (any Error)?
+        do {
+            for _ in 0..<requiredGenerations {
+                try await generate()
+                completedGenerations += 1
+            }
+        } catch {
+            generationFailure = error
+        }
+
+        let metricsResult: Result<Metrics, any Error>
+        do {
+            metricsResult = .success(try await stopAndDrainProbe())
+        } catch {
+            metricsResult = .failure(error)
+        }
+        let runtimeCleanupResult: Result<Void, any Error>
+        do {
+            runtimeCleanupResult = .success(try await cleanupRuntime())
+        } catch {
+            runtimeCleanupResult = .failure(error)
+        }
+
+        if let generationFailure { throw generationFailure }
+        let metrics = try metricsResult.get()
+        try runtimeCleanupResult.get()
+        return (completedGenerations, metrics)
+    }
+}
+
+private actor RecorderGateEventLog {
+    private var events: [String] = []
+    func append(_ event: String) { events.append(event) }
+    func snapshot() -> [String] { events }
+}
+
+private enum RecorderGateSequenceTestError: Error, Equatable {
+    case expected
+}
+
 private enum RecorderGateError: Error {
     case missingModelDirectory
     case cloneFailed(String, Int32)
+    case emptyGeneration
+    case routerShutdownFailed
 }
 
 private actor RecorderGateSnapshotProvider: LLMSelectionSnapshotProviding {
