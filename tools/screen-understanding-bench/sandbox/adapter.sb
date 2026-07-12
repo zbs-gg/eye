@@ -1,0 +1,24 @@
+(version 1)
+(deny default)
+(deny network*)
+
+(allow process*)
+(allow sysctl-read)
+(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))
+(allow file-write-data
+    (literal "/dev/stdout")
+    (literal "/dev/stderr"))
+
+(allow file-read-metadata)
+(allow file-read*
+    (subpath "/System")
+    (subpath "/usr")
+    (subpath "/Library")
+    (subpath "/opt/homebrew")
+    (subpath "__RUNTIME_ROOT__")
+    (subpath "__MODEL_ROOT__")
+    (subpath "__CASE_ROOT__"))
+
+(allow file-write*
+    (subpath "__RESULT_ROOT__")
+    (subpath "__TMP_ROOT__"))

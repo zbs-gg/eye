@@ -1,0 +1,34 @@
+{
+  "protocolID": "screen-understanding-v1",
+  "date": "2026-07-13",
+  "platform": {
+    "os": "macOS 26.2",
+    "architecture": "arm64"
+  },
+  "profile": {
+    "networkDefault": "deny",
+    "filesystemDefault": "deny",
+    "descendantBoundaryRequired": true
+  },
+  "canary": {
+    "started": false,
+    "sandboxExitStatus": 134,
+    "dnsDeniedProven": false,
+    "directIPDeniedProven": false,
+    "localhostDeniedProven": false,
+    "filesystemAllowlistProven": false
+  },
+  "decision": {
+    "status": "security-unsupported",
+    "privateCorpusAccessAllowed": false,
+    "affectedAdapters": [
+      "florence-2-base",
+      "smolvlm-256m-instruct",
+      "lfm2-vl-450m",
+      "fastvlm-0.5b",
+      "smolvlm2-256m-video-instruct",
+      "omniparser-v2"
+    ],
+    "reason": "The qualification host could not prove an inherited OS-enforced filesystem boundary. Offline flags are insufficient."
+  }
+}
