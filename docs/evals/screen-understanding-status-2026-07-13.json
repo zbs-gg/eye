@@ -1,0 +1,64 @@
+{
+  "protocolID": "screen-understanding-v1",
+  "date": "2026-07-13",
+  "methods": [
+    {
+      "id": "metadata-ax-ocr",
+      "status": "contract-passed",
+      "evidence": "Protocol and normalized-output contract pass; quality awaits blind labels.",
+      "privateCorpusAccess": false
+    },
+    {
+      "id": "apple-vision",
+      "status": "smoke-passed",
+      "evidence": "Native VNClassifyImageRequest returned labels and confidence on a synthetic image.",
+      "privateCorpusAccess": false
+    },
+    {
+      "id": "deterministic-hybrid",
+      "status": "contract-passed",
+      "evidence": "Protocol contract passes; quality awaits blind labels.",
+      "privateCorpusAccess": false
+    },
+    {
+      "id": "florence-2-base",
+      "status": "security-unsupported",
+      "evidence": "Inherited OS filesystem boundary could not be proven on the qualification host.",
+      "privateCorpusAccess": false
+    },
+    {
+      "id": "smolvlm-256m-instruct",
+      "status": "security-unsupported",
+      "evidence": "Inherited OS filesystem boundary could not be proven on the qualification host.",
+      "privateCorpusAccess": false
+    },
+    {
+      "id": "lfm2-vl-450m",
+      "status": "security-unsupported",
+      "evidence": "Inherited OS filesystem boundary could not be proven on the qualification host.",
+      "privateCorpusAccess": false
+    },
+    {
+      "id": "fastvlm-0.5b",
+      "status": "security-unsupported",
+      "evidence": "Research-only method; inherited OS filesystem boundary could not be proven.",
+      "privateCorpusAccess": false
+    },
+    {
+      "id": "smolvlm2-256m-video-instruct",
+      "status": "security-unsupported",
+      "evidence": "Inherited OS filesystem boundary could not be proven on the qualification host.",
+      "privateCorpusAccess": false
+    },
+    {
+      "id": "omniparser-v2",
+      "status": "security-unsupported",
+      "evidence": "Parser-only method; inherited OS filesystem boundary could not be proven.",
+      "privateCorpusAccess": false
+    }
+  ],
+  "qualityConclusion": "not-run",
+  "qualityReason": "Blind human labels are not sealed. Publishing a quality ranking now would be invalid.",
+  "containsPersonalCorpus": false,
+  "containsCaseMaterial": false
+}
