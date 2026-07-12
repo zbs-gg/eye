@@ -104,10 +104,19 @@ struct ScreenUnderstandingDatasetManifest: Codable, Equatable, Sendable {
         let baselineOnly: Bool
     }
 
+    struct TemporalPair: Codable, Equatable, Sendable {
+        let id: String
+        let beforeCaseID: String
+        let afterCaseID: String
+        let deltaMs: Int64
+        let strata: [String]
+    }
+
     let protocolID: String
     let revision: Int
     let snapshotSHA256: String
     let cases: [Case]
+    let temporalPairs: [TemporalPair]
     let naturalisticTraceSHA256: String
     let labelsLockedBeforeOutputs: Bool
     let purgeAfterDecisionDays: Int
@@ -164,6 +173,24 @@ struct ScreenUnderstandingDatasetCandidate: Sendable, Equatable {
         if text.count >= 240 { return "text-rich" }
         return "mixed"
     }
+
+    var sceneKey: String {
+        [appName ?? "", windowTitle ?? "", browserURL ?? "", monitorID]
+            .joined(separator: "\u{1F}")
+    }
+}
+
+struct ScreenUnderstandingTemporalCandidatePair: Sendable, Equatable {
+    let before: ScreenUnderstandingDatasetCandidate
+    let after: ScreenUnderstandingDatasetCandidate
+
+    var deltaMs: Int64 { after.timestampMs - before.timestampMs }
+
+    var strata: [String] {
+        var value = Set(before.strata + after.strata)
+        value.insert("temporal-change")
+        return value.sorted()
+    }
 }
 
 enum ScreenUnderstandingDatasetSampler {
@@ -200,9 +227,40 @@ enum ScreenUnderstandingDatasetSampler {
         after.timestampMs > before.timestampMs
             && after.timestampMs - before.timestampMs <= maximumGapMs
             && before.monitorID == after.monitorID
-            && before.appName == after.appName
+            && before.sceneKey == after.sceneKey
             && before.relativePath != nil
             && after.relativePath != nil
+    }
+
+    static func temporalPairs(
+        _ candidates: [ScreenUnderstandingDatasetCandidate],
+        limit: Int,
+        maximumGapMs: Int64
+    ) -> [ScreenUnderstandingTemporalCandidatePair] {
+        guard limit > 0 else { return [] }
+        let imageBearing = candidates.filter { $0.relativePath != nil }
+        let groups = Dictionary(grouping: imageBearing, by: \.sceneKey)
+        let pairs = groups.values.flatMap { group -> [ScreenUnderstandingTemporalCandidatePair] in
+            let ordered = group.sorted {
+                if $0.timestampMs == $1.timestampMs { return $0.sourceID < $1.sourceID }
+                return $0.timestampMs < $1.timestampMs
+            }
+            guard ordered.count > 1 else { return [] }
+            return zip(ordered, ordered.dropFirst()).compactMap { before, after in
+                guard validTemporalPair(
+                    before: before,
+                    after: after,
+                    maximumGapMs: maximumGapMs
+                ) else { return nil }
+                return ScreenUnderstandingTemporalCandidatePair(before: before, after: after)
+            }
+        }.sorted {
+            if $0.after.timestampMs == $1.after.timestampMs {
+                return $0.after.sourceID < $1.after.sourceID
+            }
+            return $0.after.timestampMs < $1.after.timestampMs
+        }
+        return Array(pairs.prefix(limit))
     }
 }
 
@@ -217,7 +275,8 @@ struct ScreenUnderstandingDatasetPreparer {
         sourceRoot: URL,
         outputRoot: URL,
         repositoryRoot: URL,
-        labeledLimit: Int = 200
+        labeledLimit: Int = 200,
+        temporalPairLimit: Int = 100
     ) throws -> ScreenUnderstandingDatasetManifest {
         try ScreenUnderstandingDatasetPolicy.validate(
             sourceRoot: sourceRoot,
@@ -277,6 +336,20 @@ struct ScreenUnderstandingDatasetPreparer {
             candidates,
             limit: labeledLimit
         )
+        let temporalPairs = ScreenUnderstandingDatasetSampler.temporalPairs(
+            candidates,
+            limit: temporalPairLimit,
+            maximumGapMs: 300_000
+        )
+        var selectedByID = Dictionary(uniqueKeysWithValues: selected.map { ($0.sourceID, $0) })
+        for pair in temporalPairs {
+            selectedByID[pair.before.sourceID] = pair.before
+            selectedByID[pair.after.sourceID] = pair.after
+        }
+        let allSelected = selectedByID.values.sorted {
+            if $0.timestampMs == $1.timestampMs { return $0.sourceID < $1.sourceID }
+            return $0.timestampMs < $1.timestampMs
+        }
         let casesRoot = staging.appendingPathComponent("cases", isDirectory: true)
         try fileManager.createDirectory(
             at: casesRoot,
@@ -284,7 +357,7 @@ struct ScreenUnderstandingDatasetPreparer {
             attributes: [.posixPermissions: 0o700]
         )
         var manifestCases: [ScreenUnderstandingDatasetManifest.Case] = []
-        for candidate in selected {
+        for candidate in allSelected {
             try Task.checkCancellation()
             let caseID = Self.opaqueID(for: candidate.sourceID)
             let caseRoot = casesRoot.appendingPathComponent(caseID, isDirectory: true)
@@ -344,6 +417,17 @@ struct ScreenUnderstandingDatasetPreparer {
             revision: 1,
             snapshotSHA256: snapshotHash,
             cases: manifestCases.sorted { $0.id < $1.id },
+            temporalPairs: temporalPairs.map { pair in
+                let beforeID = Self.opaqueID(for: pair.before.sourceID)
+                let afterID = Self.opaqueID(for: pair.after.sourceID)
+                return .init(
+                    id: Self.temporalPairID(beforeID: beforeID, afterID: afterID),
+                    beforeCaseID: beforeID,
+                    afterCaseID: afterID,
+                    deltaMs: pair.deltaMs,
+                    strata: pair.strata
+                )
+            },
             naturalisticTraceSHA256: Self.sha256(traceData),
             labelsLockedBeforeOutputs: true,
             purgeAfterDecisionDays: 30
@@ -485,6 +569,10 @@ struct ScreenUnderstandingDatasetPreparer {
 
     private static func opaqueID(for sourceID: Int64) -> String {
         String(sha256(Data("screen-understanding-v1:\(sourceID)".utf8)).prefix(24))
+    }
+
+    private static func temporalPairID(beforeID: String, afterID: String) -> String {
+        String(sha256(Data("screen-understanding-v1-pair:\(beforeID):\(afterID)".utf8)).prefix(24))
     }
 
     private static func sha256(_ data: Data) -> String {

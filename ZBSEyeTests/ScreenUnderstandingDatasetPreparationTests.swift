@@ -15,16 +15,24 @@ final class ScreenUnderstandingDatasetPreparationTests: XCTestCase {
             sourceRoot: fixture.source,
             outputRoot: fixture.base.appendingPathComponent("corpus-a"),
             repositoryRoot: repositoryRoot(),
-            labeledLimit: 4
+            labeledLimit: 4,
+            temporalPairLimit: 2
         )
         let second = try preparer.prepare(
             sourceRoot: fixture.source,
             outputRoot: fixture.base.appendingPathComponent("corpus-b"),
             repositoryRoot: repositoryRoot(),
-            labeledLimit: 4
+            labeledLimit: 4,
+            temporalPairLimit: 2
         )
 
         XCTAssertEqual(first.cases, second.cases)
+        XCTAssertEqual(first.temporalPairs, second.temporalPairs)
+        XCTAssertEqual(first.temporalPairs.count, 1)
+        XCTAssertTrue(first.temporalPairs.allSatisfy { pair in
+            first.cases.contains(where: { $0.id == pair.beforeCaseID })
+                && first.cases.contains(where: { $0.id == pair.afterCaseID })
+        })
         XCTAssertEqual(first.naturalisticTraceSHA256, second.naturalisticTraceSHA256)
         XCTAssertEqual(first.purgeAfterDecisionDays, 30)
         XCTAssertTrue(first.labelsLockedBeforeOutputs)

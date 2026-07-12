@@ -79,6 +79,18 @@ final class ScreenUnderstandingDatasetPolicyTests: XCTestCase {
         ))
         XCTAssertFalse(ScreenUnderstandingDatasetSampler.validTemporalPair(
             before: before,
+            after: candidate(
+                id: 2,
+                ts: 2_000,
+                monitor: "A",
+                app: "Editor",
+                path: "b.heic",
+                window: "Another document"
+            ),
+            maximumGapMs: 2_000
+        ))
+        XCTAssertFalse(ScreenUnderstandingDatasetSampler.validTemporalPair(
+            before: before,
             after: candidate(id: 2, ts: 2_000, monitor: "A", app: "Editor", path: nil),
             maximumGapMs: 2_000
         ))
@@ -100,13 +112,14 @@ final class ScreenUnderstandingDatasetPolicyTests: XCTestCase {
         monitor: String,
         app: String,
         path: String?,
-        text: String = ""
+        text: String = "",
+        window: String? = nil
     ) -> ScreenUnderstandingDatasetCandidate {
         .init(
             sourceID: id,
             timestampMs: ts,
             appName: app,
-            windowTitle: nil,
+            windowTitle: window,
             browserURL: nil,
             monitorID: monitor,
             relativePath: path,
