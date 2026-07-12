@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zbs.gg/schemas/screen-understanding/public-aggregate-v1.json",
+  "title": "Allowlisted public screen-understanding aggregate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolHash", "corpusHash", "reportHash", "methods", "metrics", "licenses"],
+  "properties": {
+    "protocolHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "corpusHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "reportHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "methods": {"type": "array", "items": {"type": "string", "enum": ["metadata-ax-ocr", "apple-vision", "deterministic-hybrid", "florence-2-base", "smolvlm-256m-instruct", "lfm2-vl-450m", "fastvlm-0.5b", "smolvlm2-256m-video-instruct", "omniparser-v2"]}},
+    "strata": {"type": "array", "items": {"type": "string", "enum": ["text-rich", "visual-canvas", "mixed-script", "temporal-change", "no-change"]}},
+    "metrics": {"type": "object", "additionalProperties": {"type": "number"}},
+    "licenses": {"type": "object", "additionalProperties": {"type": "string"}},
+    "limitations": {"type": "array", "items": {"type": "string", "maxLength": 240}}
+  }
+}
