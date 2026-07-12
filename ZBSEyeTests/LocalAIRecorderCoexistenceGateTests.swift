@@ -151,6 +151,21 @@ final class LocalAIRecorderCoexistenceGateTests: XCTestCase {
         )
     }
 
+    func testRecorderGateUsesProductionInsightsSourceVocabulary() {
+        let plan = generationPlan()
+
+        XCTAssertEqual(plan.promptVersion, AIConsumerPromptFactory.dailyInsightsVersion)
+        XCTAssertEqual(
+            Set(plan.fragments.map(\.sourceID)),
+            [
+                LocalAISourceID.topApp,
+                LocalAISourceID.safeTextFact(0),
+                LocalAISourceID.contextSwitches,
+            ]
+        )
+        XCTAssertEqual(plan.maximumOutputTokens, 400)
+    }
+
     func testProductionRuntimeCoexistsWithRecorderWriterBaseline() async throws {
         let bundle = Bundle(for: LocalAIRecorderCoexistenceGateTests.self)
         guard LocalAIPhysicalGateEvidenceCapture.configuredValue(
@@ -299,32 +314,21 @@ final class LocalAIRecorderCoexistenceGateTests: XCTestCase {
     }
 
     private func generationPlan() -> AIConsumerGenerationPlan {
-        AIConsumerGenerationPlan(
-            consumer: .dailyInsights,
-            priority: .explicitInsight,
-            promptVersion: "recorder-coexistence-v1",
-            language: .en,
-            purpose: .insights,
-            systemPrompt: "Summarize the supplied fact.",
-            nativeToolSystemPrompt: LocalAINativeToolPrompt.system(
-                taskInstructions: "Summarize the supplied fact without invention.",
-                purposeInstructions: "Return one concise supported item and cite its allowed source ID."
-            ),
-            userPreamble: "Evidence:\n",
-            fragments: [
-                AIConsumerPromptFragment(
-                    sourceID: "insight:1",
-                    text: "The architecture review is Tuesday at 10:00 and Marina leads it."
-                )
+        let hints = LocalAIContextPolicy.insightsHints(
+            totalCaptures: 120,
+            contextSwitches: 8,
+            apps: [
+                LocalAIActivityApp(name: "Xcode", minutes: 42, captures: 64),
+                LocalAIActivityApp(name: "Safari", minutes: 31, captures: 56),
             ],
-            userPostamble: "\nReturn one insight.",
-            nativeToolUserPostamble: "\nUse only the evidence above.",
-            maximumFragmentCharacters: 512,
-            // The native answer tool needs enough room for the model's tool
-            // envelope as well as content. Production Daily Insights uses the
-            // same 400-token ceiling; smaller probe-only ceilings can truncate
-            // Qwen before a valid tool call and test the wrong failure mode.
-            maximumOutputTokens: 400,
+            textSamples: [
+                "The runtime tests passed for the architecture review.",
+            ]
+        )
+        return AIConsumerPromptFactory.dailyInsights(
+            hints: hints,
+            language: .en,
+            maximumSampleCharacters: 360,
             timeout: .seconds(120)
         )
     }
