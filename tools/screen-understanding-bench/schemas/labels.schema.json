@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zbs.gg/schemas/screen-understanding/human-label-v1.json",
+  "title": "Blind human screen-understanding label",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["case", "requiredFacts", "criticalText", "forbiddenInferences", "meaningfulChange", "ambiguity", "abstentionAllowed", "pass"],
+  "properties": {
+    "case": {"type": "string", "pattern": "^[0-9a-f]{24}$"},
+    "requiredFacts": {"type": "array", "items": {"$ref": "#/$defs/fact"}},
+    "criticalText": {"type": "array", "items": {"type": "string"}},
+    "forbiddenInferences": {"type": "array", "items": {"$ref": "#/$defs/fact"}},
+    "meaningfulChange": {"type": ["array", "null"], "items": {"$ref": "#/$defs/fact"}},
+    "ambiguity": {"type": "string", "enum": ["judgeable", "ambiguous", "unjudgeable"]},
+    "abstentionAllowed": {"type": "boolean"},
+    "pass": {"type": "integer", "enum": [1, 2]},
+    "locked": {"type": "boolean"}
+  },
+  "$defs": {
+    "fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "text"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+        "text": {"type": "string", "minLength": 1, "maxLength": 240},
+        "severity": {"type": "string", "enum": ["minor", "major", "critical"]}
+      }
+    }
+  }
+}
