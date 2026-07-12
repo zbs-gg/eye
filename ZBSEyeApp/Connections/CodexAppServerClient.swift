@@ -426,6 +426,7 @@ struct CodexSystemBinaryInspector: CodexBinaryInspecting {
 // MARK: - Isolated CODEX_HOME
 
 struct CodexPreparedHome: Sendable, Equatable {
+    let leaseID: UUID
     let homeURL: URL
     let configURL: URL
     let workingDirectoryURL: URL
@@ -446,6 +447,7 @@ protocol CodexHomeManaging: Sendable {
 
 actor CodexSystemHomeManager: CodexHomeManaging {
     let rootURL: URL
+    private var activeSessionID: UUID?
 
     init(rootURL: URL) {
         self.rootURL = rootURL
@@ -499,30 +501,50 @@ actor CodexSystemHomeManager: CodexHomeManaging {
     """
 
     func prepareSession() async throws -> CodexPreparedHome {
+        guard activeSessionID == nil else {
+            throw CodexAppServerError.unavailable
+        }
         try makePrivateDirectory(rootURL)
-        let session = rootURL.appending(path: "session-\(UUID().uuidString.lowercased())")
+        // Codex hashes the canonical CODEX_HOME path into its Keychain account.
+        // Keep that identity stable across login, probe, and generation while
+        // deleting every file-backed session artifact between processes.
+        let session = rootURL.appending(path: "session")
+        if FileManager.default.fileExists(atPath: session.path) {
+            try FileManager.default.removeItem(at: session)
+        }
         let work = session.appending(path: "work")
         let temporary = session.appending(path: "tmp")
-        try makePrivateDirectory(session)
-        try makePrivateDirectory(work)
-        try makePrivateDirectory(temporary)
-        let config = session.appending(path: "config.toml")
-        try Data(Self.minimalConfig.utf8).write(to: config, options: [.atomic])
-        guard chmod(config.path, S_IRUSR | S_IWUSR) == 0 else {
+        let leaseID = UUID()
+        do {
+            try makePrivateDirectory(session)
+            try makePrivateDirectory(work)
+            try makePrivateDirectory(temporary)
+            let config = session.appending(path: "config.toml")
+            try Data(Self.minimalConfig.utf8).write(to: config, options: [.atomic])
+            guard chmod(config.path, S_IRUSR | S_IWUSR) == 0 else {
+                throw CodexAppServerError.unexpectedStateFile
+            }
+            let prepared = CodexPreparedHome(
+                leaseID: leaseID,
+                homeURL: session,
+                configURL: config,
+                workingDirectoryURL: work,
+                temporaryDirectoryURL: temporary
+            )
+            activeSessionID = leaseID
+            try await audit(prepared, phase: .beforeLaunch)
+            return prepared
+        } catch {
+            activeSessionID = nil
             try? FileManager.default.removeItem(at: session)
-            throw CodexAppServerError.unexpectedStateFile
+            throw error
         }
-        let prepared = CodexPreparedHome(
-            homeURL: session,
-            configURL: config,
-            workingDirectoryURL: work,
-            temporaryDirectoryURL: temporary
-        )
-        try await audit(prepared, phase: .beforeLaunch)
-        return prepared
     }
 
     func audit(_ home: CodexPreparedHome, phase: CodexHomeAuditPhase) async throws {
+        guard activeSessionID == home.leaseID else {
+            throw CodexAppServerError.unavailable
+        }
         let entries = try FileManager.default.contentsOfDirectory(
             at: home.homeURL,
             includingPropertiesForKeys: nil
@@ -559,7 +581,9 @@ actor CodexSystemHomeManager: CodexHomeManaging {
     }
 
     func destroy(_ home: CodexPreparedHome) async {
+        guard activeSessionID == home.leaseID else { return }
         try? FileManager.default.removeItem(at: home.homeURL)
+        activeSessionID = nil
     }
 
     private func makePrivateDirectory(_ url: URL) throws {

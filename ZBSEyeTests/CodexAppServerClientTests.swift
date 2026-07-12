@@ -210,6 +210,56 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: prepared.homeURL.path))
     }
 
+    func testDedicatedHomeKeepsStableKeyringIdentityAcrossSessions() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = CodexSystemHomeManager(rootURL: root.appending(path: "ZBS Eye Codex"))
+
+        let login = try await manager.prepareSession()
+        do {
+            _ = try await manager.prepareSession()
+            XCTFail("a second process must not share the stable CODEX_HOME")
+        } catch {
+            XCTAssertEqual(error as? CodexAppServerError, .unavailable)
+        }
+        await manager.destroy(login)
+        let generation = try await manager.prepareSession()
+
+        XCTAssertEqual(
+            login.homeURL,
+            generation.homeURL,
+            "Codex hashes the canonical CODEX_HOME path into its Keychain account name"
+        )
+        await manager.destroy(login)
+        try await manager.audit(generation, phase: .beforeLaunch)
+        await manager.destroy(generation)
+    }
+
+    func testDedicatedHomeRemovesCrashLeftoversBeforeReuse() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let managerRoot = root.appending(path: "ZBS Eye Codex")
+        let staleSession = managerRoot.appending(path: "session")
+        try FileManager.default.createDirectory(
+            at: staleSession,
+            withIntermediateDirectories: true
+        )
+        try Data("stale prompt state".utf8).write(
+            to: staleSession.appending(path: "unexpected.json")
+        )
+        let manager = CodexSystemHomeManager(rootURL: managerRoot)
+
+        let prepared = try await manager.prepareSession()
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: prepared.homeURL.appending(path: "unexpected.json").path
+            )
+        )
+        try await manager.audit(prepared, phase: .beforeLaunch)
+        await manager.destroy(prepared)
+    }
+
     func testPOSIXTransportCreatesAndReapsDedicatedProcessGroup() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1337,6 +1387,7 @@ private actor CodexMockHomeManager: CodexHomeManaging {
 
     func prepareSession() async throws -> CodexPreparedHome {
         CodexPreparedHome(
+            leaseID: UUID(),
             homeURL: URL(fileURLWithPath: "/safe/home"),
             configURL: URL(fileURLWithPath: "/safe/home/config.toml"),
             workingDirectoryURL: URL(fileURLWithPath: "/safe/work"),
