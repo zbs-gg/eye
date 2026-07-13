@@ -8,6 +8,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest import mock
 
@@ -15,6 +16,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).parent))
 
 import claim_mapping as mapping_module  # noqa: E402
+from mapping_lib import private_io  # noqa: E402
 from claim_mapping import (  # noqa: E402
     MappingError,
     aggregate_mappings,
@@ -40,6 +42,20 @@ class ClaimMappingTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_claim_mapping_is_a_facade_over_split_mapping_lib(self) -> None:
+        package = Path(__file__).parent / "mapping_lib"
+        self.assertTrue(package.is_dir(), "mapping_lib package is missing")
+
+        from mapping_lib import contracts, private_io
+
+        self.assertIs(mapping_module.MappingError, contracts.MappingError)
+        self.assertIs(
+            mapping_module._load_private_json, private_io.load_private_json
+        )
+        self.assertIs(
+            mapping_module._atomic_private_json, private_io.atomic_private_json
+        )
 
     def test_inventory_tamper_fails_closed(self) -> None:
         with (self.results / "metadata-ax-ocr.jsonl").open("ab") as handle:
@@ -95,9 +111,9 @@ class ClaimMappingTests(unittest.TestCase):
         self.assertEqual(first_hidden, second_hidden)
         self.assertEqual(len(first_primary["items"]), 180)
         self.assertEqual(len(first_hidden["items"]), 27)
-        counts = {}
-        for item in first_hidden["items"]:
-            counts[item["anonymousMethod"]] = counts.get(item["anonymousMethod"], 0) + 1
+        counts = Counter(
+            item["anonymousMethod"] for item in first_hidden["items"]
+        )
         self.assertEqual(sorted(counts.values()), [9, 9, 9])
         self.assertTrue(
             set(item["anonymousMethod"] for item in first_primary["items"])
@@ -178,9 +194,9 @@ class ClaimMappingTests(unittest.TestCase):
                 path.write_bytes(data)
                 os.chmod(path, 0o600)
                 with mock.patch.multiple(
-                    mapping_module, create=True, **limits
+                    private_io, **limits
                 ), mock.patch.object(
-                    mapping_module.json, "loads", wraps=json.loads
+                    private_io.json, "loads", wraps=json.loads
                 ) as loads_spy:
                     with self.assertRaisesRegex(MappingError, "limit"):
                         mapping_module._load_private_json(path, subject)
@@ -525,7 +541,7 @@ class ClaimMappingTests(unittest.TestCase):
 
     def test_private_root_policy_rejects_repository_overlap_before_creation(self) -> None:
         target = self.base / "repository-overlap"
-        with mock.patch.object(mapping_module, "REPOSITORY_ROOT", self.base):
+        with mock.patch.object(private_io, "REPOSITORY_ROOT", self.base):
             with self.assertRaisesRegex(MappingError, "disjoint"):
                 prepare_mapping(
                     self.canonical, self.results, target, "overlap-seed"
