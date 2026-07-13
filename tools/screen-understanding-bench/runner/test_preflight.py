@@ -129,19 +129,34 @@ class CanonicalSealTests(unittest.TestCase):
             })
         self.labels_path = canonical_root / "labels.json"
         self._write_private_json(self.labels_path, {
-            "schema": "screen-understanding-canonical-labels-v2",
+            "schema": "screen-understanding-canonical-labels-v3",
+            "protocol": "screen-understanding-correctness-audit-v3",
             "rubricVersion": "screen-understanding-canonical-v2",
             "candidateOutputsAvailableDuringAnnotation": False,
             "labels": labels,
         })
         self.reliability_path = canonical_root / "reliability.json"
         self._write_private_json(self.reliability_path, {
-            "schema": "screen-understanding-canonical-reliability-v2",
+            "schema": "screen-understanding-canonical-reliability-v3",
+            "protocol": "screen-understanding-correctness-audit-v3",
+            "rubricVersion": "screen-understanding-canonical-v2",
             "duplicateCount": 45,
-            "factAgreement": 0.93,
-            "decisionAgreement": 0.91,
-            "minimumFactAgreement": 0.90,
-            "minimumDecisionAgreement": 0.80,
+            "rawJoint": {
+                "minimum": 0.90,
+                "overall": 0.93,
+                "singleFrame": 0.94,
+                "temporalPair": 0.91,
+            },
+            "finalReferenceAudit": {
+                "auditor": "fresh-final-auditor",
+                "caseCount": 45,
+                "slotCount": 285,
+                "materialFalseCount": 0,
+                "ambiguityErrorCount": 0,
+                "criticalErrorCount": 0,
+                "requiredCriticalErrorCount": 0,
+                "qualified": True,
+            },
             "qualified": True,
         })
 
@@ -152,7 +167,7 @@ class CanonicalSealTests(unittest.TestCase):
         path.write_text(json.dumps(value), encoding="utf-8")
         os.chmod(path, 0o600)
 
-    def test_valid_v2_seal_matches_all_manifest_cases(self) -> None:
+    def test_valid_v3_seal_matches_all_manifest_cases(self) -> None:
         summary = validate_seal(self.corpus_root, self.annotation_root)
 
         self.assertEqual(summary, {
@@ -184,6 +199,24 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.reliability_path, reliability)
 
         with self.assertRaisesRegex(PreflightError, "qualified"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
+    def test_v2_seal_is_rejected_after_correctness_protocol_upgrade(self) -> None:
+        labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
+        labels.pop("protocol")
+        labels["schema"] = "screen-understanding-canonical-labels-v2"
+        self._write_private_json(self.labels_path, labels)
+
+        with self.assertRaisesRegex(PreflightError, "schema"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
+    def test_final_reference_error_is_rejected(self) -> None:
+        reliability = json.loads(self.reliability_path.read_text(encoding="utf-8"))
+        reliability["finalReferenceAudit"]["criticalErrorCount"] = 1
+        reliability["finalReferenceAudit"]["qualified"] = False
+        self._write_private_json(self.reliability_path, reliability)
+
+        with self.assertRaisesRegex(PreflightError, "final reference"):
             validate_seal(self.corpus_root, self.annotation_root)
 
     def test_world_readable_seal_is_rejected(self) -> None:

@@ -17,6 +17,7 @@ BUILT_IN_METHODS = frozenset({
     "deterministic-hybrid",
 })
 CANONICAL_RUBRIC = "screen-understanding-canonical-v2"
+CANONICAL_PROTOCOL = "screen-understanding-correctness-audit-v3"
 CASE_ID = re.compile(r"^[0-9a-f]{24}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 EXPECTED_SPLITS = frozenset({
@@ -215,8 +216,10 @@ def _finite_number(value: Any, subject: str) -> float:
 def _validate_labels(
     labels_document: dict[str, Any], expected_ids: set[str]
 ) -> None:
-    if labels_document.get("schema") != "screen-understanding-canonical-labels-v2":
+    if labels_document.get("schema") != "screen-understanding-canonical-labels-v3":
         raise PreflightError("canonical label schema is invalid")
+    if labels_document.get("protocol") != CANONICAL_PROTOCOL:
+        raise PreflightError("canonical label protocol is invalid")
     if labels_document.get("rubricVersion") != CANONICAL_RUBRIC:
         raise PreflightError("canonical labels do not use the v2 rubric")
     if labels_document.get("candidateOutputsAvailableDuringAnnotation") is not False:
@@ -245,31 +248,46 @@ def _validate_labels(
 
 
 def _validate_reliability(reliability: dict[str, Any]) -> None:
-    if reliability.get("schema") != "screen-understanding-canonical-reliability-v2":
+    if reliability.get("schema") != "screen-understanding-canonical-reliability-v3":
         raise PreflightError("canonical reliability schema is invalid")
+    if reliability.get("protocol") != CANONICAL_PROTOCOL \
+            or reliability.get("rubricVersion") != CANONICAL_RUBRIC:
+        raise PreflightError("canonical reliability protocol is invalid")
     if reliability.get("qualified") is not True:
         raise PreflightError("canonical reliability is not qualified")
-    minimum_fact = _finite_number(
-        reliability.get("minimumFactAgreement"), "minimum fact agreement"
-    )
-    minimum_decision = _finite_number(
-        reliability.get("minimumDecisionAgreement"), "minimum decision agreement"
-    )
-    fact = _finite_number(reliability.get("factAgreement"), "fact agreement")
-    decision = _finite_number(
-        reliability.get("decisionAgreement"), "decision agreement"
-    )
-    if minimum_fact < 0.90 or minimum_decision < 0.80:
-        raise PreflightError("canonical reliability thresholds are below the protocol")
-    if fact < minimum_fact or decision < minimum_decision:
-        raise PreflightError("canonical reliability does not clear its thresholds")
+    raw_joint = reliability.get("rawJoint")
+    if not isinstance(raw_joint, dict) or set(raw_joint) != {
+        "minimum", "overall", "singleFrame", "temporalPair",
+    }:
+        raise PreflightError("canonical raw joint reliability is invalid")
+    minimum = _finite_number(raw_joint.get("minimum"), "raw joint minimum")
+    if minimum < 0.90:
+        raise PreflightError("canonical reliability threshold is below the protocol")
+    for key in ("overall", "singleFrame", "temporalPair"):
+        value = _finite_number(raw_joint.get(key), f"raw joint {key}")
+        if value < minimum:
+            raise PreflightError("canonical reliability does not clear its thresholds")
     duplicate_count = reliability.get("duplicateCount")
     if isinstance(duplicate_count, bool) or not isinstance(duplicate_count, int) \
             or duplicate_count < 45:
         raise PreflightError("canonical reliability duplicate sample is too small")
-    if "rubricVersion" in reliability \
-            and reliability["rubricVersion"] != CANONICAL_RUBRIC:
-        raise PreflightError("canonical reliability does not use the v2 rubric")
+    final_audit = reliability.get("finalReferenceAudit")
+    expected_final_keys = {
+        "auditor", "caseCount", "slotCount", "materialFalseCount",
+        "ambiguityErrorCount", "criticalErrorCount",
+        "requiredCriticalErrorCount", "qualified",
+    }
+    if not isinstance(final_audit, dict) or set(final_audit) != expected_final_keys:
+        raise PreflightError("canonical final reference audit is invalid")
+    if not isinstance(final_audit.get("auditor"), str) or not final_audit["auditor"] \
+            or final_audit.get("caseCount") != 45 \
+            or final_audit.get("slotCount") != 285 \
+            or final_audit.get("materialFalseCount") != 0 \
+            or final_audit.get("ambiguityErrorCount") != 0 \
+            or final_audit.get("criticalErrorCount") != 0 \
+            or final_audit.get("requiredCriticalErrorCount") != 0 \
+            or final_audit.get("qualified") is not True:
+        raise PreflightError("canonical final reference audit is not qualified")
 
 
 def validate_seal(corpus_root: Path, annotation_root: Path) -> dict[str, Any]:

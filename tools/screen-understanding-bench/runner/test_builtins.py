@@ -395,19 +395,33 @@ class BuiltInRunnerTests(unittest.TestCase):
             for identifier in singles + pairs
         ]
         self._write_private_json(canonical / "labels.json", {
-            "schema": "screen-understanding-canonical-labels-v2",
+            "schema": "screen-understanding-canonical-labels-v3",
+            "protocol": "screen-understanding-correctness-audit-v3",
             "rubricVersion": "screen-understanding-canonical-v2",
             "candidateOutputsAvailableDuringAnnotation": False,
             "labels": labels,
         })
         self._write_private_json(canonical / "reliability.json", {
-            "schema": "screen-understanding-canonical-reliability-v2",
+            "schema": "screen-understanding-canonical-reliability-v3",
+            "protocol": "screen-understanding-correctness-audit-v3",
             "rubricVersion": "screen-understanding-canonical-v2",
             "duplicateCount": 45,
-            "factAgreement": 0.95,
-            "decisionAgreement": 0.90,
-            "minimumFactAgreement": 0.90,
-            "minimumDecisionAgreement": 0.80,
+            "rawJoint": {
+                "minimum": 0.90,
+                "overall": 0.95,
+                "singleFrame": 0.95,
+                "temporalPair": 0.95,
+            },
+            "finalReferenceAudit": {
+                "auditor": "fresh-final-auditor",
+                "caseCount": 45,
+                "slotCount": 285,
+                "materialFalseCount": 0,
+                "ambiguityErrorCount": 0,
+                "criticalErrorCount": 0,
+                "requiredCriticalErrorCount": 0,
+                "qualified": True,
+            },
             "qualified": True,
         })
 
