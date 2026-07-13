@@ -203,6 +203,9 @@ targets:
       - path: ZBSEyeApp/Search/AskScope.swift
       - path: ZBSEyeApp/Search/AskDatabaseRetrieval.swift
       - path: ZBSEyeApp/MCP/MCPHistorySearchRouting.swift
+      - path: ZBSEyeApp/MCP/MCPToolPolicy.swift
+      - path: ZBSEyeApp/Connections/MCPSetupPresentation.swift
+      - path: ZBSEyeApp/Connections/MCPReadinessService.swift
       - path: ZBSEyeApp/Search/AskService.swift
       - path: ZBSEyeApp/State/AskStore.swift
       - path: ZBSEyeApp/State/WorkspaceStore.swift

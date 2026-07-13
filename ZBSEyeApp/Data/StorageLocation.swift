@@ -2,11 +2,14 @@ import Foundation
 
 enum StorageLocationError: LocalizedError, Equatable {
     case configuredRootUnavailable(String)
+    case dataRootMissing(String)
 
     var errorDescription: String? {
         switch self {
         case .configuredRootUnavailable(let path):
             "Data folder unavailable: \(path). Connect the disk or volume and try again."
+        case .dataRootMissing(let path):
+            "Data folder not initialized: \(path). Open ZBS Eye once and try again."
         }
     }
 }
@@ -38,6 +41,21 @@ enum StorageLocation {
         return dataRoot()
     }
 
+    /// Read-only helpers must never initialize a new root as a side effect of
+    /// checking whether memory is available.
+    static func requireExistingDataRoot() throws -> URL {
+        try validateConfiguredRootAvailability(unavailableConfiguredPath())
+        let root = resolveConfiguredRoot() ?? legacyRoot()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(
+            atPath: root.path,
+            isDirectory: &isDirectory
+        ), isDirectory.boolValue else {
+            throw StorageLocationError.dataRootMissing(root.path)
+        }
+        return root
+    }
+
     static func validateConfiguredRootAvailability(_ unavailablePath: String?) throws {
         if let unavailablePath {
             throw StorageLocationError.configuredRootUnavailable(unavailablePath)
@@ -46,13 +64,22 @@ enum StorageLocation {
 
     static func databaseURL() -> URL { dataRoot().appendingPathComponent("zbseye.sqlite") }
 
+    static func databaseURL(under dataRoot: URL) -> URL {
+        dataRoot.appendingPathComponent("zbseye.sqlite")
+    }
+
     static func mediaDirectory() -> URL {
         let dir = dataRoot().appendingPathComponent("media", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
+    static func mediaDirectory(under dataRoot: URL) -> URL {
+        dataRoot.appendingPathComponent("media", isDirectory: true)
+    }
+
     static func portURL() -> URL { dataRoot().appendingPathComponent("port") }
+    static func portURL(under dataRoot: URL) -> URL { dataRoot.appendingPathComponent("port") }
     static func serverLogURL() -> URL { dataRoot().appendingPathComponent("server.log") }
 
     /// Generative assets remain below the same relocatable root as the DB and

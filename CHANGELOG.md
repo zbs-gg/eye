@@ -16,6 +16,8 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   `Provider · Model` pair powers the product, and discovery never silently changes it.
 
 ### Changed
+- Primary Codex/Claude MCP setup is now tokenless and read-only by default, with bounded installed-app
+  readiness checks and explicit opt-in for screenshot access or recording control.
 - Every generative consumer now goes through one cancellable router with selection revision, authorization,
   deterministic context budgets, and provider/model/locality provenance. Interactive Ask takes priority over
   background work; stale or revoked output is discarded.

@@ -1,7 +1,7 @@
 import Foundation
 
-/// Entry point. By default — a SwiftUI app. With the `--mcp` flag — an MCP stdio server (to launch from
-/// Claude Desktop / Cursor: `ZBS Eye.app/Contents/MacOS/ZBS Eye --mcp`), with no GUI.
+/// Entry point. By default — a SwiftUI app. `--mcp` starts the read-only MCP
+/// profile; `--mcp-full` explicitly adds screenshots and recording control.
 @main
 struct ZBSEyeMain {
     static func main() {
@@ -22,9 +22,29 @@ struct ZBSEyeMain {
             }
         }
         LanguageManager.applyAtLaunch()   // apply the in-app language override before any UI loads
-        if CommandLine.arguments.contains("--mcp") {
+        let mcpProfile: MCPAccessProfile? = if CommandLine.arguments.contains("--mcp-full") {
+            .advancedFull
+        } else if CommandLine.arguments.contains("--mcp") {
+            .memoryReadOnly
+        } else {
+            nil
+        }
+        if let mcpProfile {
+            let dataRoot: URL
             do {
-                _ = try StorageLocation.requireAvailableDataRoot()
+                dataRoot = try StorageLocation.requireExistingDataRoot()
+                    .standardizedFileURL
+                    .resolvingSymlinksInPath()
+                if let expectedPath = ProcessInfo.processInfo.environment[
+                    SystemMCPSelfTester.expectedRootEnvironmentKey
+                ] {
+                    let expected = URL(fileURLWithPath: expectedPath, isDirectory: true)
+                        .standardizedFileURL
+                        .resolvingSymlinksInPath()
+                    guard expected == dataRoot else {
+                        throw StorageLocationError.configuredRootUnavailable(expected.path)
+                    }
+                }
             } catch {
                 FileHandle.standardError.write("MCP failed: \(error)\n".data(using: .utf8)!)
                 exit(1)
@@ -32,7 +52,10 @@ struct ZBSEyeMain {
             // MCP stdio: dispatchMain() keeps the process alive and lets the concurrency pool work
             // (DispatchSemaphore.wait would dead-block the main thread and Task would never run).
             Task.detached {
-                await ZBSEyeMCPServer.runStdio()
+                await ZBSEyeMCPServer.runStdio(
+                    profile: mcpProfile,
+                    dataRoot: dataRoot
+                )
                 exit(0)
             }
             dispatchMain()
