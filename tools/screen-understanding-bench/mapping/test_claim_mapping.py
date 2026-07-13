@@ -174,10 +174,11 @@ class ClaimMappingTests(unittest.TestCase):
         for method in METHODS:
             path = self.results / f"{method}.jsonl"
             records = [json.loads(line) for line in path.read_text().splitlines()]
-            records[0]["result"]["visibleText"] = [
-                "Keep this line\n/Users/private-name/secret file.txt\n"
-                "/Users/other-owner/other file.txt\nAlso keep this"
-            ]
+            for record in records:
+                record["result"]["visibleText"] = [
+                    "Keep this line\n/Users/private-name/secret file.txt\n"
+                    "/Users/other-owner/other file.txt\nAlso keep this"
+                ]
             data = b"".join(
                 json.dumps(record, sort_keys=True, separators=(",", ":"))
                 .encode("utf-8") + b"\n"
@@ -208,6 +209,9 @@ class ClaimMappingTests(unittest.TestCase):
         ]
         self.assertGreaterEqual(len(path_lines), 6)
         self.assertGreaterEqual(len(set(path_lines)), 2)
+        mapping_module._validate.load_mapping(
+            Path(prepared["mappingRoot"]), mapping_module._load_private_json
+        )
 
     def test_same_seed_packet_id_changes_when_claim_content_changes(self) -> None:
         first = self._prepare("content-bound-seed", "mapping-content-a")

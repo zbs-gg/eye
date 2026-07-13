@@ -324,7 +324,9 @@ def _build_item(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     alias = "method-" + _token(seed, f"{stage}-method", method, 12)
     arm_id = "arm-" + _token(seed, f"{stage}-arm", f"{method}:{case_id}")
-    redaction_namespace = f"{stage}:{method}:{case_id}"
+    # Independent mappers never see both packets, but the owner cross-link must
+    # prove that a concealed duplicate carries the same redacted semantics.
+    redaction_namespace = f"{method}:{case_id}"
     packet_result = _redact_local_path_lines(
         result, seed=seed, namespace=redaction_namespace
     )
