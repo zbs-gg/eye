@@ -1,41 +1,204 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://zbs.gg/schemas/screen-understanding/canonical-label-v1.json",
-  "title": "Blinded canonical screen-understanding reference label",
+  "$id": "https://zbs.gg/schemas/screen-understanding/canonical-labels-v3.json",
+  "title": "Sealed canonical screen-understanding labels v3",
   "type": "object",
   "additionalProperties": false,
-  "required": ["case", "targetType", "requiredFacts", "criticalText", "forbiddenInferences", "meaningfulChange", "ambiguity", "abstentionAllowed", "pass", "annotation"],
+  "required": [
+    "schema",
+    "protocol",
+    "rubricVersion",
+    "candidateOutputsAvailableDuringAnnotation",
+    "labels"
+  ],
   "properties": {
-    "case": {"type": "string", "pattern": "^[0-9a-f]{24}$"},
-    "targetType": {"type": "string", "enum": ["single-frame", "temporal-pair"]},
-    "requiredFacts": {"type": "array", "items": {"$ref": "#/$defs/fact"}},
-    "criticalText": {"type": "array", "items": {"type": "string"}},
-    "forbiddenInferences": {"type": "array", "items": {"$ref": "#/$defs/fact"}},
-    "meaningfulChange": {"type": ["array", "null"], "items": {"$ref": "#/$defs/fact"}},
-    "ambiguity": {"type": "string", "enum": ["judgeable", "ambiguous", "unjudgeable"]},
-    "abstentionAllowed": {"type": "boolean"},
-    "pass": {"type": "integer", "enum": [1, 2]},
-    "locked": {"type": "boolean"},
-    "annotation": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["producer", "annotator", "rubricVersion", "blindedToCandidateOutputs", "candidateOutputsAvailable"],
-      "properties": {
-        "producer": {"const": "frontier-vlm"},
-        "annotator": {"type": "string", "minLength": 1, "maxLength": 80},
-        "rubricVersion": {"enum": ["screen-understanding-canonical-v1", "screen-understanding-canonical-v2"]},
-        "blindedToCandidateOutputs": {"const": true},
-        "candidateOutputsAvailable": {"const": false}
-      }
+    "schema": {"const": "screen-understanding-canonical-labels-v3"},
+    "protocol": {"const": "screen-understanding-correctness-audit-v3"},
+    "rubricVersion": {"const": "screen-understanding-canonical-v2"},
+    "candidateOutputsAvailableDuringAnnotation": {"const": false},
+    "labels": {
+      "type": "array",
+      "minItems": 300,
+      "maxItems": 300,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/label"}
     }
   },
   "$defs": {
-    "fact": {
+    "label": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case",
+        "targetType",
+        "requiredFacts",
+        "criticalText",
+        "forbiddenInferences",
+        "meaningfulChange",
+        "ambiguity",
+        "abstentionAllowed",
+        "locked",
+        "annotation"
+      ],
+      "properties": {
+        "case": {"type": "string", "pattern": "^[0-9a-f]{24}$"},
+        "targetType": {"type": "string", "enum": ["single-frame", "temporal-pair"]},
+        "requiredFacts": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [
+            {"$ref": "#/$defs/requiredSurfaceFact"},
+            {"$ref": "#/$defs/requiredContentFact"},
+            {"$ref": "#/$defs/requiredStateFact"}
+          ],
+          "items": false
+        },
+        "criticalText": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {"type": "string", "minLength": 1, "maxLength": 240}
+        },
+        "forbiddenInferences": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {"$ref": "#/$defs/forbiddenIntentFact"},
+            {"$ref": "#/$defs/forbiddenOutcomeFact"}
+          ],
+          "items": false
+        },
+        "meaningfulChange": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "array",
+              "maxItems": 3,
+              "items": {"$ref": "#/$defs/changeFact"}
+            }
+          ]
+        },
+        "ambiguity": {
+          "type": "string",
+          "enum": ["judgeable", "ambiguous", "unjudgeable"]
+        },
+        "abstentionAllowed": {"type": "boolean"},
+        "locked": {"const": true},
+        "annotation": {"$ref": "#/$defs/annotation"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"targetType": {"const": "single-frame"}},
+            "required": ["targetType"]
+          },
+          "then": {"properties": {"meaningfulChange": {"type": "null"}}}
+        },
+        {
+          "if": {
+            "properties": {"targetType": {"const": "temporal-pair"}},
+            "required": ["targetType"]
+          },
+          "then": {
+            "properties": {
+              "meaningfulChange": {
+                "type": "array",
+                "maxItems": 3,
+                "items": {"$ref": "#/$defs/changeFact"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "annotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "producer",
+        "mode",
+        "annotator",
+        "rubricVersion",
+        "blindedToCandidateOutputs",
+        "candidateOutputsAvailable"
+      ],
+      "properties": {
+        "producer": {"const": "frontier-vlm"},
+        "mode": {
+          "type": "string",
+          "enum": [
+            "pass1-base",
+            "selected-pass1",
+            "selected-pass2",
+            "frontier-correction"
+          ]
+        },
+        "annotator": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,96}$"
+        },
+        "rubricVersion": {"const": "screen-understanding-canonical-v2"},
+        "blindedToCandidateOutputs": {"const": true},
+        "candidateOutputsAvailable": {"const": false}
+      }
+    },
+    "requiredSurfaceFact": {
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "text"],
       "properties": {
-        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+        "id": {"const": "required.surface"},
+        "text": {"type": "string", "minLength": 1, "maxLength": 240},
+        "severity": {"type": "string", "enum": ["minor", "major", "critical"]}
+      }
+    },
+    "requiredContentFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "text"],
+      "properties": {
+        "id": {"const": "required.content"},
+        "text": {"type": "string", "minLength": 1, "maxLength": 240},
+        "severity": {"type": "string", "enum": ["minor", "major", "critical"]}
+      }
+    },
+    "requiredStateFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "text"],
+      "properties": {
+        "id": {"const": "required.state"},
+        "text": {"type": "string", "minLength": 1, "maxLength": 240},
+        "severity": {"type": "string", "enum": ["minor", "major", "critical"]}
+      }
+    },
+    "forbiddenIntentFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "text", "severity"],
+      "properties": {
+        "id": {"const": "forbidden.intent"},
+        "text": {"type": "string", "minLength": 1, "maxLength": 240},
+        "severity": {"type": "string", "enum": ["minor", "major", "critical"]}
+      }
+    },
+    "forbiddenOutcomeFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "text", "severity"],
+      "properties": {
+        "id": {"const": "forbidden.outcome"},
+        "text": {"type": "string", "minLength": 1, "maxLength": 240},
+        "severity": {"type": "string", "enum": ["minor", "major", "critical"]}
+      }
+    },
+    "changeFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "text"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^change\\..*$"},
         "text": {"type": "string", "minLength": 1, "maxLength": 240},
         "severity": {"type": "string", "enum": ["minor", "major", "critical"]}
       }

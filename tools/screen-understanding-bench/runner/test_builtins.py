@@ -319,6 +319,43 @@ class BuiltInRunnerTests(unittest.TestCase):
             baseline["runtimeMetadata"]["textSources"], ["ax", "ocr"]
         )
 
+    @staticmethod
+    def _canonical_label(identifier: str, target_type: str) -> dict:
+        return {
+            "case": identifier,
+            "targetType": target_type,
+            "requiredFacts": [
+                {"id": "required.surface", "text": "A computer surface is visible"},
+                {"id": "required.content", "text": "Content is present"},
+                {"id": "required.state", "text": "The surface is active"},
+            ],
+            "criticalText": [],
+            "forbiddenInferences": [
+                {
+                    "id": "forbidden.intent",
+                    "text": "User intent is not established",
+                    "severity": "critical",
+                },
+                {
+                    "id": "forbidden.outcome",
+                    "text": "The outcome is not established",
+                    "severity": "major",
+                },
+            ],
+            "meaningfulChange": None if target_type == "single-frame" else [],
+            "ambiguity": "judgeable",
+            "abstentionAllowed": False,
+            "locked": True,
+            "annotation": {
+                "producer": "frontier-vlm",
+                "mode": "frontier-correction",
+                "annotator": "frontier-reference-03",
+                "rubricVersion": "screen-understanding-canonical-v2",
+                "blindedToCandidateOutputs": True,
+                "candidateOutputsAvailable": False,
+            },
+        }
+
     def _make_fixture(self, *, replace: bool = False) -> None:
         if replace:
             for root in (self.corpus, self.annotations):
@@ -328,6 +365,8 @@ class BuiltInRunnerTests(unittest.TestCase):
         self.corpus.mkdir(mode=0o700)
         canonical.mkdir(parents=True, mode=0o700)
         os.chmod(self.annotations, 0o700)
+        (self.corpus / ".metadata_never_index").touch()
+        (self.annotations / ".metadata_never_index").touch()
 
         singles = [f"{index:024x}" for index in range(200)]
         pairs = [f"{index + 10_000:024x}" for index in range(100)]
@@ -390,16 +429,11 @@ class BuiltInRunnerTests(unittest.TestCase):
         self._write_private_json(self.corpus / "manifest.json", manifest)
 
         labels = [
-            {
-                "case": identifier,
-                "locked": True,
-                "annotation": {
-                    "rubricVersion": "screen-understanding-canonical-v2",
-                    "blindedToCandidateOutputs": True,
-                    "candidateOutputsAvailable": False,
-                },
-            }
-            for identifier in singles + pairs
+            self._canonical_label(identifier, "single-frame")
+            for identifier in singles
+        ] + [
+            self._canonical_label(identifier, "temporal-pair")
+            for identifier in pairs
         ]
         self._write_private_json(canonical / "labels.json", {
             "schema": "screen-understanding-canonical-labels-v3",

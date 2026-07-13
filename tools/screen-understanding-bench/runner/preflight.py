@@ -11,6 +11,14 @@ from pathlib import Path
 from typing import Any
 
 
+COMMON_DIRECTORY = Path(__file__).parents[1] / "common"
+if str(COMMON_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(COMMON_DIRECTORY))
+
+from private_root import PrivateRootError, validate_private_root  # noqa: E402
+
+
+REPOSITORY_ROOT = Path(__file__).parents[3]
 BUILT_IN_METHODS = frozenset({
     "metadata-ax-ocr",
     "apple-vision",
@@ -19,7 +27,25 @@ BUILT_IN_METHODS = frozenset({
 CANONICAL_RUBRIC = "screen-understanding-canonical-v2"
 CANONICAL_PROTOCOL = "screen-understanding-correctness-audit-v3"
 CASE_ID = re.compile(r"^[0-9a-f]{24}$")
+SAFE_ID = re.compile(r"^[A-Za-z0-9._-]{1,96}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+CANONICAL_LABEL_ENVELOPE_FIELDS = {
+    "schema", "protocol", "rubricVersion",
+    "candidateOutputsAvailableDuringAnnotation", "labels",
+}
+CANONICAL_LABEL_FIELDS = {
+    "case", "targetType", "requiredFacts", "criticalText",
+    "forbiddenInferences", "meaningfulChange", "ambiguity",
+    "abstentionAllowed", "locked", "annotation",
+}
+CANONICAL_ANNOTATION_FIELDS = {
+    "producer", "mode", "annotator", "rubricVersion",
+    "blindedToCandidateOutputs", "candidateOutputsAvailable",
+}
+CANONICAL_ANNOTATION_MODES = {
+    "pass1-base", "selected-pass1", "selected-pass2", "frontier-correction",
+}
+FACT_SEVERITIES = {"minor", "major", "critical"}
 EXPECTED_SPLITS = frozenset({
     "tuneSingleFrames",
     "validationSingleFrames",
@@ -119,6 +145,11 @@ def _identifier_set(values: Any, subject: str) -> set[str]:
     return set(values)
 
 
+def _require_exact_fields(value: Any, expected: set[str], subject: str) -> None:
+    if not isinstance(value, dict) or set(value) != expected:
+        raise PreflightError(f"{subject} fields do not match the canonical-v3 contract")
+
+
 def _validate_manifest(manifest: dict[str, Any]) -> tuple[set[str], set[str]]:
     if manifest.get("protocolID") != "screen-understanding-v1":
         raise PreflightError("corpus protocol is invalid")
@@ -213,11 +244,138 @@ def _finite_number(value: Any, subject: str) -> float:
     return number
 
 
+def _validate_fact(
+    fact: Any,
+    expected_id: str,
+    *,
+    severity_required: bool,
+    subject: str,
+) -> None:
+    if not isinstance(fact, dict) \
+            or not {"id", "text"}.issubset(fact) \
+            or not set(fact).issubset({"id", "text", "severity"}):
+        raise PreflightError(f"{subject} fields are invalid")
+    if fact["id"] != expected_id:
+        raise PreflightError(f"{subject} slot is invalid")
+    text = fact["text"]
+    if not isinstance(text, str) or not 1 <= len(text) <= 240:
+        raise PreflightError(f"{subject} text is invalid")
+    if severity_required and "severity" not in fact:
+        raise PreflightError(f"{subject} severity is missing")
+    if "severity" in fact:
+        severity = fact["severity"]
+        if not isinstance(severity, str) or severity not in FACT_SEVERITIES:
+            raise PreflightError(f"{subject} severity is invalid")
+
+
+def _validate_reference(label: dict[str, Any], expected_target: str) -> None:
+    target = label["targetType"]
+    if target != expected_target:
+        raise PreflightError("canonical label target type does not match the corpus manifest")
+
+    required = label["requiredFacts"]
+    required_ids = [
+        fact.get("id") if isinstance(fact, dict) else None
+        for fact in required
+    ] if isinstance(required, list) else None
+    expected_required_ids = [
+        "required.surface", "required.content", "required.state",
+    ]
+    if required_ids != expected_required_ids:
+        raise PreflightError("canonical required fact slots are invalid")
+    for fact, identifier in zip(required, expected_required_ids):
+        _validate_fact(
+            fact,
+            identifier,
+            severity_required=False,
+            subject="canonical required fact",
+        )
+
+    forbidden = label["forbiddenInferences"]
+    forbidden_ids = [
+        fact.get("id") if isinstance(fact, dict) else None
+        for fact in forbidden
+    ] if isinstance(forbidden, list) else None
+    expected_forbidden_ids = ["forbidden.intent", "forbidden.outcome"]
+    if forbidden_ids != expected_forbidden_ids:
+        raise PreflightError("canonical forbidden fact slots are invalid")
+    for fact, identifier in zip(forbidden, expected_forbidden_ids):
+        _validate_fact(
+            fact,
+            identifier,
+            severity_required=True,
+            subject="canonical forbidden fact",
+        )
+
+    critical_text = label["criticalText"]
+    if not isinstance(critical_text, list) or len(critical_text) > 2 \
+            or any(
+                not isinstance(text, str) or not 1 <= len(text) <= 240
+                for text in critical_text
+            ):
+        raise PreflightError("canonical critical text is invalid")
+
+    change = label["meaningfulChange"]
+    if target == "single-frame":
+        if change is not None:
+            raise PreflightError("single-frame canonical label contains temporal change")
+    elif not isinstance(change, list) or len(change) > 3:
+        raise PreflightError("temporal canonical change list is invalid")
+    else:
+        seen_change_ids: set[str] = set()
+        for fact in change:
+            if not isinstance(fact, dict) \
+                    or not {"id", "text"}.issubset(fact) \
+                    or not set(fact).issubset({"id", "text", "severity"}):
+                raise PreflightError("canonical change fact fields are invalid")
+            identifier = fact["id"]
+            if not isinstance(identifier, str) \
+                    or not identifier.startswith("change.") \
+                    or identifier in seen_change_ids:
+                raise PreflightError("canonical change fact identifiers are invalid")
+            seen_change_ids.add(identifier)
+            text = fact["text"]
+            if not isinstance(text, str) or not 1 <= len(text) <= 240:
+                raise PreflightError("canonical change fact text is invalid")
+            if "severity" in fact:
+                severity = fact["severity"]
+                if not isinstance(severity, str) or severity not in FACT_SEVERITIES:
+                    raise PreflightError("canonical change fact severity is invalid")
+
+    if not isinstance(label["ambiguity"], str) \
+            or label["ambiguity"] not in {"judgeable", "ambiguous", "unjudgeable"} \
+            or not isinstance(label["abstentionAllowed"], bool):
+        raise PreflightError("canonical ambiguity decision is invalid")
+
+
+def _validate_annotation(annotation: Any) -> None:
+    _require_exact_fields(
+        annotation,
+        CANONICAL_ANNOTATION_FIELDS,
+        "canonical annotation",
+    )
+    if annotation["producer"] != "frontier-vlm" \
+            or not isinstance(annotation["mode"], str) \
+            or annotation["mode"] not in CANONICAL_ANNOTATION_MODES \
+            or not isinstance(annotation["annotator"], str) \
+            or not SAFE_ID.fullmatch(annotation["annotator"]) \
+            or annotation["rubricVersion"] != CANONICAL_RUBRIC \
+            or annotation["blindedToCandidateOutputs"] is not True \
+            or annotation["candidateOutputsAvailable"] is not False:
+        raise PreflightError("canonical annotation provenance is invalid")
+
+
 def _validate_labels(
-    labels_document: dict[str, Any], expected_ids: set[str]
+    labels_document: dict[str, Any],
+    expected_targets: dict[str, str],
 ) -> None:
     if labels_document.get("schema") != "screen-understanding-canonical-labels-v3":
         raise PreflightError("canonical label schema is invalid")
+    _require_exact_fields(
+        labels_document,
+        CANONICAL_LABEL_ENVELOPE_FIELDS,
+        "canonical label envelope",
+    )
     if labels_document.get("protocol") != CANONICAL_PROTOCOL:
         raise PreflightError("canonical label protocol is invalid")
     if labels_document.get("rubricVersion") != CANONICAL_RUBRIC:
@@ -229,21 +387,20 @@ def _validate_labels(
         raise PreflightError("canonical labels must contain exactly 300 cases")
     actual_ids: list[str] = []
     for label in labels:
-        if not isinstance(label, dict):
-            raise PreflightError("canonical label is invalid")
-        identifier = label.get("case")
+        _require_exact_fields(label, CANONICAL_LABEL_FIELDS, "canonical label")
+        identifier = label["case"]
         if not isinstance(identifier, str) or not CASE_ID.fullmatch(identifier):
             raise PreflightError("canonical label identifier is invalid")
         actual_ids.append(identifier)
-        if label.get("locked") is not True:
+        if label["locked"] is not True:
             raise PreflightError("every canonical label must be locked")
-        annotation = label.get("annotation")
-        if not isinstance(annotation, dict) \
-                or annotation.get("rubricVersion") != CANONICAL_RUBRIC \
-                or annotation.get("blindedToCandidateOutputs") is not True \
-                or annotation.get("candidateOutputsAvailable") is not False:
-            raise PreflightError("canonical annotation provenance is invalid")
-    if len(set(actual_ids)) != len(actual_ids) or set(actual_ids) != expected_ids:
+        expected_target = expected_targets.get(identifier)
+        if expected_target is None:
+            raise PreflightError("canonical label identifiers do not match the manifest")
+        _validate_reference(label, expected_target)
+        _validate_annotation(label["annotation"])
+    if len(set(actual_ids)) != len(actual_ids) \
+            or set(actual_ids) != set(expected_targets):
         raise PreflightError("canonical label identifiers do not match the manifest")
 
 
@@ -291,17 +448,26 @@ def _validate_reliability(reliability: dict[str, Any]) -> None:
 
 
 def validate_seal(corpus_root: Path, annotation_root: Path) -> dict[str, Any]:
-    corpus_root = corpus_root.resolve()
-    annotation_root = annotation_root.resolve()
+    try:
+        corpus_root = validate_private_root(
+            corpus_root,
+            REPOSITORY_ROOT,
+            must_exist=True,
+            require_exclusions=True,
+        )
+        annotation_root = validate_private_root(
+            annotation_root,
+            REPOSITORY_ROOT,
+            must_exist=True,
+            require_exclusions=True,
+        )
+    except PrivateRootError as error:
+        raise PreflightError(str(error)) from error
+
     canonical_root = annotation_root / "canonical"
-    for path, subject in (
-        (corpus_root, "corpus root"),
-        (annotation_root, "annotation root"),
-        (canonical_root, "canonical root"),
-    ):
-        if path.is_symlink() or not path.is_dir():
-            raise PreflightError(f"{subject} is unavailable")
-        _assert_owner_only(path, subject)
+    if canonical_root.is_symlink() or not canonical_root.is_dir():
+        raise PreflightError("canonical root is unavailable")
+    _assert_owner_only(canonical_root, "canonical root")
 
     manifest, _ = _load_json(corpus_root / "manifest.json", "corpus manifest")
     labels, _ = _load_json(canonical_root / "labels.json", "canonical labels")
@@ -311,7 +477,11 @@ def validate_seal(corpus_root: Path, annotation_root: Path) -> dict[str, Any]:
     single_ids, temporal_ids = _validate_manifest(manifest)
     _reject_private_payload(labels)
     _reject_private_payload(reliability)
-    _validate_labels(labels, single_ids | temporal_ids)
+    expected_targets = {
+        **{identifier: "single-frame" for identifier in single_ids},
+        **{identifier: "temporal-pair" for identifier in temporal_ids},
+    }
+    _validate_labels(labels, expected_targets)
     _validate_reliability(reliability)
     return {
         "labelCount": len(single_ids) + len(temporal_ids),

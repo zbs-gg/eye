@@ -71,6 +71,49 @@ class MethodSelectionTests(unittest.TestCase):
 
 
 class CanonicalSealTests(unittest.TestCase):
+    @staticmethod
+    def _canonical_label(
+        identifier: str,
+        target_type: str,
+        mode: str,
+    ) -> dict:
+        return {
+            "case": identifier,
+            "targetType": target_type,
+            "requiredFacts": [
+                {"id": "required.surface", "text": "A computer surface is visible"},
+                {"id": "required.content", "text": "Content is present"},
+                {"id": "required.state", "text": "The surface is active"},
+            ],
+            "criticalText": ["Exact text"],
+            "forbiddenInferences": [
+                {
+                    "id": "forbidden.intent",
+                    "text": "User intent is not established",
+                    "severity": "critical",
+                },
+                {
+                    "id": "forbidden.outcome",
+                    "text": "The outcome is not established",
+                    "severity": "major",
+                },
+            ],
+            "meaningfulChange": None if target_type == "single-frame" else [
+                {"id": "change.state", "text": "The visible state changes"}
+            ],
+            "ambiguity": "judgeable",
+            "abstentionAllowed": False,
+            "locked": True,
+            "annotation": {
+                "producer": "frontier-vlm",
+                "mode": mode,
+                "annotator": "frontier-reference-03",
+                "rubricVersion": "screen-understanding-canonical-v2",
+                "blindedToCandidateOutputs": True,
+                "candidateOutputsAvailable": False,
+            },
+        }
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         root = Path(self.temporary.name)
@@ -80,6 +123,8 @@ class CanonicalSealTests(unittest.TestCase):
         self.corpus_root.mkdir(mode=0o700)
         canonical_root.mkdir(parents=True, mode=0o700)
         os.chmod(self.annotation_root, 0o700)
+        (self.corpus_root / ".metadata_never_index").touch()
+        (self.annotation_root / ".metadata_never_index").touch()
 
         single_ids = [f"{index:024x}" for index in range(200)]
         pair_ids = [f"{index + 10_000:024x}" for index in range(100)]
@@ -116,17 +161,20 @@ class CanonicalSealTests(unittest.TestCase):
         self.manifest_path = self.corpus_root / "manifest.json"
         self._write_private_json(self.manifest_path, manifest)
 
-        labels = []
-        for identifier in single_ids + pair_ids:
-            labels.append({
-                "case": identifier,
-                "locked": True,
-                "annotation": {
-                    "rubricVersion": "screen-understanding-canonical-v2",
-                    "blindedToCandidateOutputs": True,
-                    "candidateOutputsAvailable": False,
-                },
-            })
+        modes = (
+            "pass1-base",
+            "selected-pass1",
+            "selected-pass2",
+            "frontier-correction",
+        )
+        targets = [
+            *(zip(single_ids, ["single-frame"] * len(single_ids))),
+            *(zip(pair_ids, ["temporal-pair"] * len(pair_ids))),
+        ]
+        labels = [
+            self._canonical_label(identifier, target_type, modes[index % len(modes)])
+            for index, (identifier, target_type) in enumerate(targets)
+        ]
         self.labels_path = canonical_root / "labels.json"
         self._write_private_json(self.labels_path, {
             "schema": "screen-understanding-canonical-labels-v3",
@@ -193,6 +241,107 @@ class CanonicalSealTests(unittest.TestCase):
         with self.assertRaisesRegex(PreflightError, "manifest"):
             validate_seal(self.corpus_root, self.annotation_root)
 
+    def test_unexpected_envelope_field_is_rejected(self) -> None:
+        labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
+        labels["unexpected"] = True
+        self._write_private_json(self.labels_path, labels)
+
+        with self.assertRaisesRegex(PreflightError, "envelope"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
+    def test_missing_label_field_is_rejected(self) -> None:
+        labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
+        labels["labels"][0].pop("requiredFacts")
+        self._write_private_json(self.labels_path, labels)
+
+        with self.assertRaisesRegex(PreflightError, "label fields"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
+    def test_unexpected_annotation_field_is_rejected(self) -> None:
+        labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
+        labels["labels"][0]["annotation"]["unexpected"] = True
+        self._write_private_json(self.labels_path, labels)
+
+        with self.assertRaisesRegex(PreflightError, "annotation fields"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
+    def test_missing_annotation_field_is_rejected(self) -> None:
+        labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
+        labels["labels"][0]["annotation"].pop("mode")
+        self._write_private_json(self.labels_path, labels)
+
+        with self.assertRaisesRegex(PreflightError, "annotation fields"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
+    def test_invalid_annotation_mode_is_rejected(self) -> None:
+        labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
+        labels["labels"][0]["annotation"]["mode"] = "hand-built"
+        self._write_private_json(self.labels_path, labels)
+
+        with self.assertRaisesRegex(PreflightError, "provenance"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
+    def test_non_scalar_annotation_mode_fails_closed(self) -> None:
+        labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
+        labels["labels"][0]["annotation"]["mode"] = ["pass1-base"]
+        self._write_private_json(self.labels_path, labels)
+
+        with self.assertRaisesRegex(PreflightError, "provenance"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
+    def test_required_fact_slots_are_exact(self) -> None:
+        labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
+        labels["labels"][0]["requiredFacts"][0]["id"] = "required.other"
+        self._write_private_json(self.labels_path, labels)
+
+        with self.assertRaisesRegex(PreflightError, "required fact slots"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
+    def test_forbidden_fact_requires_severity(self) -> None:
+        labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
+        labels["labels"][0]["forbiddenInferences"][0].pop("severity")
+        self._write_private_json(self.labels_path, labels)
+
+        with self.assertRaisesRegex(PreflightError, "severity"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
+    def test_non_scalar_fact_severity_fails_closed(self) -> None:
+        labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
+        labels["labels"][0]["forbiddenInferences"][0]["severity"] = ["critical"]
+        self._write_private_json(self.labels_path, labels)
+
+        with self.assertRaisesRegex(PreflightError, "severity"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
+    def test_label_target_must_match_manifest(self) -> None:
+        labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
+        labels["labels"][0]["targetType"] = "temporal-pair"
+        labels["labels"][0]["meaningfulChange"] = []
+        self._write_private_json(self.labels_path, labels)
+
+        with self.assertRaisesRegex(PreflightError, "target type"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
+    def test_single_frame_rejects_temporal_change(self) -> None:
+        labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
+        labels["labels"][0]["meaningfulChange"] = []
+        self._write_private_json(self.labels_path, labels)
+
+        with self.assertRaisesRegex(PreflightError, "temporal change"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
+    def test_temporal_change_ids_must_be_unique(self) -> None:
+        labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
+        temporal = labels["labels"][200]
+        temporal["meaningfulChange"] = [
+            {"id": "change.state", "text": "First change"},
+            {"id": "change.state", "text": "Duplicate slot"},
+        ]
+        self._write_private_json(self.labels_path, labels)
+
+        with self.assertRaisesRegex(PreflightError, "change fact identifiers"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
     def test_unqualified_reliability_is_rejected(self) -> None:
         reliability = json.loads(self.reliability_path.read_text(encoding="utf-8"))
         reliability["qualified"] = False
@@ -225,6 +374,19 @@ class CanonicalSealTests(unittest.TestCase):
         with self.assertRaisesRegex(PreflightError, "owner-only"):
             validate_seal(self.corpus_root, self.annotation_root)
 
+    def test_dataset_root_requires_exclusions_before_labels_are_read(self) -> None:
+        (self.corpus_root / ".metadata_never_index").unlink()
+        self.labels_path.write_text("not-json", encoding="utf-8")
+
+        with self.assertRaisesRegex(PreflightError, "Spotlight"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
+    def test_annotation_root_requires_exclusions(self) -> None:
+        (self.annotation_root / ".metadata_never_index").unlink()
+
+        with self.assertRaisesRegex(PreflightError, "Spotlight"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
     def test_private_path_field_is_rejected(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
         labels["labels"][0]["sourcePath"] = "/private/example"
@@ -232,6 +394,73 @@ class CanonicalSealTests(unittest.TestCase):
 
         with self.assertRaisesRegex(PreflightError, "path"):
             validate_seal(self.corpus_root, self.annotation_root)
+
+
+class CanonicalLabelSchemaTests(unittest.TestCase):
+    def test_schema_locks_v3_envelope_label_and_annotation_fields(self) -> None:
+        schema_path = Path(__file__).parents[1] / "schemas" / "labels.schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+        envelope_fields = {
+            "schema",
+            "protocol",
+            "rubricVersion",
+            "candidateOutputsAvailableDuringAnnotation",
+            "labels",
+        }
+        self.assertEqual(set(schema["required"]), envelope_fields)
+        self.assertEqual(set(schema["properties"]), envelope_fields)
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(
+            schema["properties"]["schema"]["const"],
+            "screen-understanding-canonical-labels-v3",
+        )
+        self.assertEqual(
+            schema["properties"]["protocol"]["const"],
+            "screen-understanding-correctness-audit-v3",
+        )
+        self.assertEqual(
+            schema["properties"]["rubricVersion"]["const"],
+            "screen-understanding-canonical-v2",
+        )
+        self.assertEqual(schema["properties"]["labels"]["minItems"], 300)
+        self.assertEqual(schema["properties"]["labels"]["maxItems"], 300)
+
+        label = schema["$defs"]["label"]
+        label_fields = {
+            "case",
+            "targetType",
+            "requiredFacts",
+            "criticalText",
+            "forbiddenInferences",
+            "meaningfulChange",
+            "ambiguity",
+            "abstentionAllowed",
+            "locked",
+            "annotation",
+        }
+        self.assertEqual(set(label["required"]), label_fields)
+        self.assertEqual(set(label["properties"]), label_fields)
+        self.assertFalse(label["additionalProperties"])
+
+        annotation = schema["$defs"]["annotation"]
+        annotation_fields = {
+            "producer",
+            "mode",
+            "annotator",
+            "rubricVersion",
+            "blindedToCandidateOutputs",
+            "candidateOutputsAvailable",
+        }
+        self.assertEqual(set(annotation["required"]), annotation_fields)
+        self.assertEqual(set(annotation["properties"]), annotation_fields)
+        self.assertFalse(annotation["additionalProperties"])
+        self.assertEqual(set(annotation["properties"]["mode"]["enum"]), {
+            "pass1-base",
+            "selected-pass1",
+            "selected-pass2",
+            "frontier-correction",
+        })
 
 
 if __name__ == "__main__":
