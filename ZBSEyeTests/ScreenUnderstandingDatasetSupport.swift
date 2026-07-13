@@ -157,6 +157,46 @@ struct ScreenUnderstandingTraceEntry: Codable, Equatable, Sendable {
     let hasOCR: Bool
 }
 
+struct ScreenUnderstandingNaturalisticTrace: Codable, Equatable, Sendable {
+    let schema: String
+    let calendarIdentifier: String
+    let timeZoneIdentifier: String
+    let localDayStartMs: Int64
+    let localDayEndMs: Int64
+    let minimumElapsedCoverageMs: Int64
+    let minimumActivityCount: Int
+    let observedElapsedMs: Int64
+    let activityCount: Int
+    let entries: [ScreenUnderstandingTraceEntry]
+}
+
+struct ScreenUnderstandingNaturalisticTracePolicy: Sendable {
+    let calendar: Calendar
+    let now: Date
+    let minimumElapsedCoverageMs: Int64
+    let minimumActivityCount: Int
+}
+
+struct ScreenUnderstandingMediaFingerprint: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+    let size: Int64
+    let modificationSeconds: Int64
+    let modificationNanoseconds: Int64
+    let changeSeconds: Int64
+    let changeNanoseconds: Int64
+
+    init(_ metadata: stat) {
+        device = UInt64(metadata.st_dev)
+        inode = UInt64(metadata.st_ino)
+        size = Int64(metadata.st_size)
+        modificationSeconds = Int64(metadata.st_mtimespec.tv_sec)
+        modificationNanoseconds = Int64(metadata.st_mtimespec.tv_nsec)
+        changeSeconds = Int64(metadata.st_ctimespec.tv_sec)
+        changeNanoseconds = Int64(metadata.st_ctimespec.tv_nsec)
+    }
+}
+
 struct ScreenUnderstandingDatasetCandidate: Sendable, Equatable {
     let sourceID: Int64
     let timestampMs: Int64
@@ -165,6 +205,7 @@ struct ScreenUnderstandingDatasetCandidate: Sendable, Equatable {
     let browserURL: String?
     let monitorID: String
     let relativePath: String?
+    let mediaFingerprint: ScreenUnderstandingMediaFingerprint?
     let text: String
     let textSources: [String]
 
@@ -282,9 +323,17 @@ enum ScreenUnderstandingDatasetSampler {
 
 struct ScreenUnderstandingDatasetPreparer {
     private let fileManager: FileManager
+    private let tracePolicy: ScreenUnderstandingNaturalisticTracePolicy
+    private let beforeMediaCopy: ((URL) throws -> Void)?
 
-    init(fileManager: FileManager = .default) {
+    init(
+        fileManager: FileManager = .default,
+        tracePolicy: ScreenUnderstandingNaturalisticTracePolicy,
+        beforeMediaCopy: ((URL) throws -> Void)? = nil
+    ) {
         self.fileManager = fileManager
+        self.tracePolicy = tracePolicy
+        self.beforeMediaCopy = beforeMediaCopy
     }
 
     func prepare(
@@ -295,6 +344,12 @@ struct ScreenUnderstandingDatasetPreparer {
         temporalPairLimit: Int = 100,
         baselineOnlyLimit: Int = 30
     ) throws -> ScreenUnderstandingDatasetManifest {
+        guard tracePolicy.minimumElapsedCoverageMs > 0,
+              tracePolicy.minimumActivityCount > 0 else {
+            throw ScreenUnderstandingDatasetError.invalidPolicy(
+                "Naturalistic trace coverage minimums must be positive"
+            )
+        }
         try ScreenUnderstandingDatasetPolicy.validate(
             sourceRoot: sourceRoot,
             outputRoot: outputRoot,
@@ -372,6 +427,8 @@ struct ScreenUnderstandingDatasetPreparer {
             mediaRoot: sourceMedia
         )
         let candidates = reconciliation.candidates
+        let trace = try naturalisticTrace(from: candidates)
+        let traceData = try Self.encoder.encode(trace)
         let selected = ScreenUnderstandingDatasetSampler.balanced(
             candidates.filter { !$0.baselineOnly },
             limit: labeledLimit
@@ -432,7 +489,16 @@ struct ScreenUnderstandingDatasetPreparer {
                     mediaRoot: sourceMedia,
                     relativePath: relativePath
                 )
-                let data = try securelyReadRegularFile(at: sourceURL)
+                guard let expectedFingerprint = candidate.mediaFingerprint else {
+                    throw ScreenUnderstandingDatasetError.sourceChanged(
+                        "Selected media has no reconciled source fingerprint"
+                    )
+                }
+                try beforeMediaCopy?(sourceURL)
+                let data = try securelyReadRegularFile(
+                    at: sourceURL,
+                    expectedFingerprint: expectedFingerprint
+                )
                 let destinationName = "image.heic"
                 try Self.writePrivate(
                     data,
@@ -451,9 +517,6 @@ struct ScreenUnderstandingDatasetPreparer {
             ))
         }
 
-        let traceCandidates = naturalisticDay(from: candidates)
-        let trace = makeTrace(traceCandidates)
-        let traceData = try Self.encoder.encode(trace)
         try Self.writePrivate(
             traceData,
             to: staging.appendingPathComponent("naturalistic-trace.json")
@@ -529,6 +592,7 @@ struct ScreenUnderstandingDatasetPreparer {
                     browserURL: row["browserUrl"],
                     monitorID: row["monitorId"],
                     relativePath: row["relativePath"],
+                    mediaFingerprint: nil,
                     text: row["text"],
                     textSources: sources.split(separator: ",").map(String.init).sorted()
                 )
@@ -571,6 +635,7 @@ struct ScreenUnderstandingDatasetPreparer {
                     browserURL: candidate.browserURL,
                     monitorID: candidate.monitorID,
                     relativePath: nil,
+                    mediaFingerprint: nil,
                     text: candidate.text,
                     textSources: candidate.textSources
                 )
@@ -581,18 +646,58 @@ struct ScreenUnderstandingDatasetPreparer {
                 )
             }
             availableImageRows += 1
-            return candidate
+            return ScreenUnderstandingDatasetCandidate(
+                sourceID: candidate.sourceID,
+                timestampMs: candidate.timestampMs,
+                appName: candidate.appName,
+                windowTitle: candidate.windowTitle,
+                browserURL: candidate.browserURL,
+                monitorID: candidate.monitorID,
+                relativePath: candidate.relativePath,
+                mediaFingerprint: ScreenUnderstandingMediaFingerprint(mediaStat),
+                text: candidate.text,
+                textSources: candidate.textSources
+            )
         }
         return (reconciled, sourceImageRows, availableImageRows, missingMediaRows)
     }
 
-    private func naturalisticDay(
+    private func naturalisticTrace(
         from candidates: [ScreenUnderstandingDatasetCandidate]
-    ) -> [ScreenUnderstandingDatasetCandidate] {
-        let dayMs: Int64 = 86_400_000
-        let grouped = Dictionary(grouping: candidates) { $0.timestampMs / dayMs }
-        guard let day = grouped.keys.sorted().last else { return [] }
-        return (grouped[day] ?? []).sorted { $0.timestampMs < $1.timestampMs }
+    ) throws -> ScreenUnderstandingNaturalisticTrace {
+        let calendar = tracePolicy.calendar
+        let grouped = Dictionary(grouping: candidates) { candidate in
+            calendar.startOfDay(for: Date(
+                timeIntervalSince1970: Double(candidate.timestampMs) / 1_000
+            ))
+        }
+        for dayStart in grouped.keys.sorted(by: >) {
+            guard let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart),
+                  dayEnd <= tracePolicy.now else { continue }
+            let ordered = (grouped[dayStart] ?? []).sorted {
+                if $0.timestampMs == $1.timestampMs { return $0.sourceID < $1.sourceID }
+                return $0.timestampMs < $1.timestampMs
+            }
+            guard let first = ordered.first, let last = ordered.last else { continue }
+            let elapsed = last.timestampMs - first.timestampMs
+            guard elapsed >= tracePolicy.minimumElapsedCoverageMs,
+                  ordered.count >= tracePolicy.minimumActivityCount else { continue }
+            return ScreenUnderstandingNaturalisticTrace(
+                schema: "screen-understanding-naturalistic-trace-v1",
+                calendarIdentifier: Self.calendarIdentifier(calendar.identifier),
+                timeZoneIdentifier: calendar.timeZone.identifier,
+                localDayStartMs: Self.milliseconds(dayStart),
+                localDayEndMs: Self.milliseconds(dayEnd),
+                minimumElapsedCoverageMs: tracePolicy.minimumElapsedCoverageMs,
+                minimumActivityCount: tracePolicy.minimumActivityCount,
+                observedElapsedMs: elapsed,
+                activityCount: ordered.count,
+                entries: makeTrace(ordered)
+            )
+        }
+        throw ScreenUnderstandingDatasetError.invalidPolicy(
+            "No completed local calendar day meets naturalistic trace coverage"
+        )
     }
 
     private func makeTrace(
@@ -612,34 +717,37 @@ struct ScreenUnderstandingDatasetPreparer {
         }
     }
 
-    private func securelyReadRegularFile(at url: URL) throws -> Data {
-        var pathStat = stat()
-        guard lstat(url.path, &pathStat) == 0,
-              (pathStat.st_mode & S_IFMT) == S_IFREG else {
-            throw ScreenUnderstandingDatasetError.invalidMedia(
-                "Selected media must be a regular non-symlink file"
+    private func securelyReadRegularFile(
+        at url: URL,
+        expectedFingerprint: ScreenUnderstandingMediaFingerprint
+    ) throws -> Data {
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            throw ScreenUnderstandingDatasetError.sourceChanged(
+                "Selected media changed before descriptor-bound copy"
             )
         }
-        let handle = try FileHandle(forReadingFrom: url)
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         defer { try? handle.close() }
         var openedStat = stat()
         guard fstat(handle.fileDescriptor, &openedStat) == 0,
-              openedStat.st_dev == pathStat.st_dev,
-              openedStat.st_ino == pathStat.st_ino,
-              openedStat.st_size == pathStat.st_size else {
+              (openedStat.st_mode & S_IFMT) == S_IFREG,
+              ScreenUnderstandingMediaFingerprint(openedStat) == expectedFingerprint else {
             throw ScreenUnderstandingDatasetError.sourceChanged(
                 "Media identity changed while opening"
             )
         }
         let data = try handle.readToEnd() ?? Data()
-        var finalStat = stat()
-        guard lstat(url.path, &finalStat) == 0,
-              finalStat.st_dev == openedStat.st_dev,
-              finalStat.st_ino == openedStat.st_ino,
-              finalStat.st_size == openedStat.st_size,
-              Int64(data.count) == openedStat.st_size else {
+        var finalDescriptorStat = stat()
+        var finalPathStat = stat()
+        guard fstat(handle.fileDescriptor, &finalDescriptorStat) == 0,
+              lstat(url.path, &finalPathStat) == 0,
+              (finalPathStat.st_mode & S_IFMT) == S_IFREG,
+              ScreenUnderstandingMediaFingerprint(finalDescriptorStat) == expectedFingerprint,
+              ScreenUnderstandingMediaFingerprint(finalPathStat) == expectedFingerprint,
+              Int64(data.count) == expectedFingerprint.size else {
             throw ScreenUnderstandingDatasetError.sourceChanged(
-                "Media was replaced or truncated during export"
+                "Media was replaced, rewritten, or truncated during export"
             )
         }
         return data
@@ -685,6 +793,18 @@ struct ScreenUnderstandingDatasetPreparer {
 
     private static func temporalPairID(beforeID: String, afterID: String) -> String {
         String(sha256(Data("screen-understanding-v1-pair:\(beforeID):\(afterID)".utf8)).prefix(24))
+    }
+
+    private static func calendarIdentifier(_ identifier: Calendar.Identifier) -> String {
+        switch identifier {
+        case .gregorian: "gregorian"
+        case .iso8601: "iso8601"
+        default: String(describing: identifier)
+        }
+    }
+
+    private static func milliseconds(_ date: Date) -> Int64 {
+        Int64((date.timeIntervalSince1970 * 1_000).rounded())
     }
 
     private static func makeSplits(
