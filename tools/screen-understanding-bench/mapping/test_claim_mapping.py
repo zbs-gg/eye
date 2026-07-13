@@ -247,7 +247,7 @@ class ClaimMappingTests(unittest.TestCase):
         hidden = self._load(prepared["hiddenPacket"])
         first = self._write_judgments(primary, "frontier-mapper-01", "primary-low.json")
         hidden_output = self._judgments(hidden, "frontier-mapper-02")
-        for item in hidden_output["items"][:10]:
+        for item in hidden_output["items"]:
             for claim in item["claimJudgments"]:
                 claim["judgment"] = {"unsupported": "critical"}
             item["criticalTextMatched"] = [False]
@@ -272,7 +272,7 @@ class ClaimMappingTests(unittest.TestCase):
         self.assertNotIn("publicAggregate", result)
         adjudication = self._load(result["adjudicationPacket"])
         self.assertGreater(len(adjudication["items"]), 0)
-        self.assertLess(len(adjudication["items"]), len(hidden["items"]))
+        self.assertEqual(len(adjudication["items"]), len(hidden["items"]))
 
     def test_reliability_is_gated_per_method_and_claim_capability(self) -> None:
         prepared = self._prepare("per-method-reliability")
@@ -300,7 +300,7 @@ class ClaimMappingTests(unittest.TestCase):
             self.base / "aggregate-per-method",
         )
 
-        self.assertEqual(result["status"], "inconclusive")
+        self.assertEqual(result["status"], "partial-adjudication-required")
         reliability = result["reliability"]
         self.assertGreaterEqual(
             reliability["claimJudgmentAgreement"],
@@ -323,6 +323,28 @@ class ClaimMappingTests(unittest.TestCase):
             not item["qualified"] for item in weak_method["capabilities"]
         ))
         self.assertFalse(reliability["qualified"])
+        packet = self._load(result["adjudicationPacket"])
+        adjudication_path = self.base / "per-method-adjudication.json"
+        self._write_private(
+            adjudication_path,
+            self._adjudication(packet, "frontier-adjudicator-partial"),
+        )
+        partial = aggregate_mappings(
+            Path(prepared["mappingRoot"]), first, second,
+            self.base / "aggregate-per-method-complete",
+            adjudication_path,
+        )
+        self.assertEqual(partial["status"], "partial-qualified")
+        public = self._load(partial["publicAggregate"])
+        self.assertNotIn(
+            "metadata-ax-ocr",
+            {method["methodID"] for method in public["methods"]},
+        )
+        self.assertEqual(
+            {method["methodID"] for method in public["methods"]},
+            {method["methodID"] for method in reliability["methods"]
+             if method["qualified"]},
+        )
 
     def test_adjudication_contains_only_disagreements_and_uses_fresh_identity(self) -> None:
         prepared = self._prepare("tie-seed")

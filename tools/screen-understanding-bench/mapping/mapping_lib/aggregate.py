@@ -430,6 +430,7 @@ def _score(
     primary_output: dict,
     reliability: dict[str, Any],
     forbidden_values: tuple[str, ...],
+    method_ids: Optional[set[str]] = None,
 ) -> dict[str, Any]:
     packet_items = {
         item["armID"]: item for item in primary_packet["items"]
@@ -437,6 +438,8 @@ def _score(
     judgments = _judgment_map(primary_output)
     methods = []
     for method_id in mapping["selectedMethods"]:
+        if method_ids is not None and method_id not in method_ids:
+            continue
         arms = [
             arm_id for arm_id, owner in mapping["primary"].items()
             if owner["methodID"] == method_id
@@ -519,6 +522,59 @@ def _score(
     return public
 
 
+def _qualified_public_reliability(
+    reliability: dict[str, Any],
+    mapping: dict[str, Any],
+    primary_packet: dict[str, Any],
+) -> tuple[dict[str, Any], set[str]] | tuple[None, set[str]]:
+    methods = [
+        method for method in reliability["methods"]
+        if method["qualified"]
+    ]
+    method_ids = {method["methodID"] for method in methods}
+    if not methods:
+        return None, method_ids
+    claim_total = sum(
+        capability["claimCount"]
+        for method in methods
+        for capability in method["capabilities"]
+    )
+    claim_equal = sum(
+        round(
+            capability["claimJudgmentAgreement"]
+            * capability["claimCount"]
+        )
+        for method in methods
+        for capability in method["capabilities"]
+    )
+    primary_items = {
+        item["armID"]: item for item in primary_packet["items"]
+    }
+    decision_total = 0
+    for owner in mapping["hidden"].values():
+        if owner["methodID"] in method_ids:
+            decision_total += (
+                len(primary_items[owner["primaryArmID"]]["criticalText"]) + 1
+            )
+    decision_equal = sum(
+        round(method["decisionAgreement"] * sum(
+            len(primary_items[owner["primaryArmID"]]["criticalText"]) + 1
+            for owner in mapping["hidden"].values()
+            if owner["methodID"] == method["methodID"]
+        ))
+        for method in methods
+    )
+    return {
+        "duplicateArmCount": sum(method["duplicateArmCount"] for method in methods),
+        "claimJudgmentAgreement": (
+            claim_equal / claim_total if claim_total else 1.0
+        ),
+        "decisionAgreement": decision_equal / decision_total,
+        "methods": methods,
+        "qualified": True,
+    }, method_ids
+
+
 def aggregate_mappings(
     mapping_root: Path,
     primary_output_path: Path,
@@ -564,6 +620,9 @@ def aggregate_mappings(
     reliability, differences = _duplicate_agreement(
         mapping, primary_output, hidden_output
     )
+    public_reliability, qualified_method_ids = _qualified_public_reliability(
+        reliability, mapping, primary_packet
+    )
     target.parent.mkdir(parents=True, exist_ok=True)
     staging_candidate = target.parent / f".{target.name}.tmp-{uuid.uuid4().hex}"
     published = False
@@ -585,7 +644,7 @@ def aggregate_mappings(
                 atomic_private_json,
             )
             result["adjudicationPacket"] = str(packet_path)
-        if not reliability["qualified"]:
+        if not reliability["qualified"] and not qualified_method_ids:
             result["status"] = "inconclusive"
             result["aggregateResult"] = str(_write_aggregate_result(
                 staging,
@@ -595,7 +654,10 @@ def aggregate_mappings(
                 packet_path,
             ))
         elif differences and adjudication_output_path is None:
-            result["status"] = "adjudication-required"
+            result["status"] = (
+                "adjudication-required" if reliability["qualified"]
+                else "partial-adjudication-required"
+            )
             result["aggregateResult"] = str(_write_aggregate_result(
                 staging,
                 result["status"],
@@ -625,13 +687,20 @@ def aggregate_mappings(
                 hidden_output["mapperIdentity"],
                 *case_ids,
             )
+            selected_reliability = (
+                reliability if reliability["qualified"] else public_reliability
+            )
+            assert selected_reliability is not None
             public = _score(
                 mapping,
                 primary_packet,
                 primary_output,
-                reliability,
+                selected_reliability,
                 declassification_secrets,
+                None if reliability["qualified"] else qualified_method_ids,
             )
+            if not reliability["qualified"]:
+                result["status"] = "partial-qualified"
             public_path = staging / "public-aggregate.json"
             atomic_private_json(public_path, public)
             result["publicAggregate"] = str(public_path)
