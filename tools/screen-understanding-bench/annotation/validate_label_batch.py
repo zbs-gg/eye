@@ -18,14 +18,24 @@ def exact_keys(value: dict, expected: set[str], subject: str) -> None:
         raise ValueError(f"{subject} keys do not match the locked schema")
 
 
-def validate_facts(facts: object, minimum: int, maximum: int, subject: str) -> None:
+def validate_facts(
+    facts: object,
+    minimum: int,
+    maximum: int,
+    subject: str,
+    severity_required: bool = False,
+) -> None:
     if not isinstance(facts, list) or not minimum <= len(facts) <= maximum:
         raise ValueError(f"{subject} count is outside the rubric")
     identifiers = set()
     for fact in facts:
         if not isinstance(fact, dict):
             raise ValueError(f"{subject} fact is not an object")
-        exact_keys(fact, {"id", "text", "severity"}, subject)
+        allowed_keys = {"id", "text", "severity"}
+        if not set(fact).issubset(allowed_keys) or not {"id", "text"}.issubset(fact):
+            raise ValueError(f"{subject} keys do not match the locked schema")
+        if severity_required and "severity" not in fact:
+            raise ValueError(f"{subject} severity is required")
         identifier = fact["id"]
         text = fact["text"]
         if not isinstance(identifier, str) or not FACT_ID.fullmatch(identifier):
@@ -35,7 +45,7 @@ def validate_facts(facts: object, minimum: int, maximum: int, subject: str) -> N
         identifiers.add(identifier)
         if not isinstance(text, str) or not 1 <= len(text) <= 240:
             raise ValueError(f"{subject} fact text is invalid")
-        if fact["severity"] not in SEVERITIES:
+        if "severity" in fact and fact["severity"] not in SEVERITIES:
             raise ValueError(f"{subject} fact severity is invalid")
 
 
@@ -90,7 +100,13 @@ def validate(work_path: Path, labels_path: Path) -> dict:
                 or not isinstance(label["abstentionAllowed"], bool):
             raise ValueError("ambiguity or abstention state is invalid")
         validate_facts(label["requiredFacts"], 3, 8, "required")
-        validate_facts(label["forbiddenInferences"], 2, 4, "forbidden")
+        validate_facts(
+            label["forbiddenInferences"],
+            2,
+            4,
+            "forbidden",
+            severity_required=True,
+        )
         critical_text = label["criticalText"]
         if not isinstance(critical_text, list) or len(critical_text) > 5 \
                 or any(not isinstance(text, str) or not 1 <= len(text) <= 240

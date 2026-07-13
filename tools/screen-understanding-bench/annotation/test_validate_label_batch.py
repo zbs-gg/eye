@@ -63,7 +63,7 @@ class ValidateLabelBatchTests(unittest.TestCase):
             "case": identifier,
             "targetType": "single-frame",
             "requiredFacts": [
-                {"id": "required.01", "text": "A window is visible", "severity": "major"},
+                {"id": "required.01", "text": "A window is visible"},
                 {"id": "required.02", "text": "Text is visible", "severity": "minor"},
                 {"id": "required.03", "text": "A toolbar is visible", "severity": "minor"},
             ],
