@@ -10,7 +10,11 @@ final class ScreenUnderstandingBenchmarkTests: XCTestCase {
         XCTAssertEqual(Set(status.methods.map(\.id)), Set(protocolDocument.methods.map(\.id)))
         XCTAssertFalse(status.containsPersonalCorpus)
         XCTAssertFalse(status.containsCaseMaterial)
-        XCTAssertEqual(status.qualityConclusion, "inconclusive")
+        XCTAssertEqual(status.qualityConclusion, "partial-qualified")
+        XCTAssertEqual(
+            status.methods.first(where: { $0.id == "apple-vision" })?.status,
+            "qualified"
+        )
         let accessByMethod = Dictionary(
             uniqueKeysWithValues: status.methods.map { ($0.id, $0.privateCorpusAccess) }
         )

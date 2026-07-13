@@ -5,19 +5,19 @@
     {
       "id": "metadata-ax-ocr",
       "status": "mapping-inconclusive",
-      "evidence": "Locked 60-case run completed; independent claim mapping did not clear the reliability floor.",
+      "evidence": "Locked 60-case run completed; summary and atomic-fact mapping did not both clear the reliability floor.",
       "privateCorpusAccess": true
     },
     {
       "id": "apple-vision",
-      "status": "mapping-inconclusive",
-      "evidence": "Locked 60-case run completed; independent label mapping did not clear the reliability floor.",
+      "status": "qualified",
+      "evidence": "Locked 60-case run completed; independent label mapping cleared the reliability floor.",
       "privateCorpusAccess": true
     },
     {
       "id": "deterministic-hybrid",
       "status": "mapping-inconclusive",
-      "evidence": "Locked 60-case run completed; independent claim mapping did not clear the reliability floor.",
+      "evidence": "Locked 60-case run completed; summary mapping did not clear the reliability floor.",
       "privateCorpusAccess": true
     },
     {
@@ -57,8 +57,8 @@
       "privateCorpusAccess": false
     }
   ],
-  "qualityConclusion": "inconclusive",
-  "qualityReason": "The private built-in run completed, but the concealed independent claim-mapping contract did not clear its reliability floor. No quality score is published.",
+  "qualityConclusion": "partial-qualified",
+  "qualityReason": "Apple Vision label mapping cleared the reliability floor; metadata and hybrid quality scores remain withheld, and downloaded micro-models were not run.",
   "containsPersonalCorpus": false,
   "containsCaseMaterial": false
 }

@@ -27,7 +27,7 @@ struct ScreenUnderstandingPublicStatus: Codable, Sendable, Equatable {
             "fastvlm-0.5b", "smolvlm2-256m-video-instruct", "omniparser-v2",
         ])
         let allowedStatuses = Set([
-            "mapping-inconclusive", "security-unsupported",
+            "qualified", "mapping-inconclusive", "security-unsupported",
         ])
         let builtInIDs = Set([
             "metadata-ax-ocr", "apple-vision", "deterministic-hybrid",
@@ -41,7 +41,7 @@ struct ScreenUnderstandingPublicStatus: Codable, Sendable, Equatable {
               }),
               !containsPersonalCorpus,
               !containsCaseMaterial,
-              qualityConclusion == "inconclusive",
+              qualityConclusion == "partial-qualified",
               !qualityReason.isEmpty else {
             throw ScreenUnderstandingProtocolError.invalid("Unsafe or incomplete public status")
         }

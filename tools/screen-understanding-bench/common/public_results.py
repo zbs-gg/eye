@@ -30,30 +30,30 @@ THIRD_PARTY_METHODS = (
     "omniparser-v2",
 )
 EXPECTED_NEXT_GATE = (
-    "redesign claim mapping so structured metadata and unsupported-claim severity "
-    "are interpreted deterministically, then repeat independent concealed mapping; "
-    "establish a proven local sandbox before any downloaded model receives private inputs"
+    "retain Apple Vision only as a lightweight label baseline, redesign metadata "
+    "and hybrid scene claims, and prove a local sandbox before any downloaded "
+    "micro-model receives private inputs"
 )
 FORBIDDEN_FRAGMENTS = (
     "/Users/", "/Volumes/", "file://", "sk-", "BEGIN PRIVATE KEY",
 )
 PUBLIC_QUALITY_REASON = (
-    "The private built-in run completed, but the concealed independent "
-    "claim-mapping contract did not clear its reliability floor. No quality "
-    "score is published."
+    "Apple Vision label mapping cleared the reliability floor; metadata and "
+    "hybrid quality scores remain withheld, and downloaded micro-models were "
+    "not run."
 )
 PUBLIC_STATUS_EVIDENCE = {
     "metadata-ax-ocr": (
-        "Locked 60-case run completed; independent claim mapping did not "
-        "clear the reliability floor."
+        "Locked 60-case run completed; summary and atomic-fact mapping did not "
+        "both clear the reliability floor."
     ),
     "apple-vision": (
-        "Locked 60-case run completed; independent label mapping did not "
-        "clear the reliability floor."
+        "Locked 60-case run completed; independent label mapping cleared the "
+        "reliability floor."
     ),
     "deterministic-hybrid": (
-        "Locked 60-case run completed; independent claim mapping did not "
-        "clear the reliability floor."
+        "Locked 60-case run completed; summary mapping did not clear the "
+        "reliability floor."
     ),
     "florence-2-base": (
         "Inherited OS filesystem boundary could not be proven on the "
@@ -118,7 +118,7 @@ def _reject_private_material(value: Any) -> None:
 
 
 def validate_public_decision(value: Any) -> dict[str, Any]:
-    """Validate the exact aggregate-only inconclusive decision currently publishable."""
+    """Validate the exact aggregate-only partial decision currently publishable."""
 
     _exact_keys(value, {
         "schema", "protocol", "status", "corpus", "referenceReliability",
@@ -127,11 +127,11 @@ def validate_public_decision(value: Any) -> dict[str, Any]:
         "qualityScorePublished", "nextGate",
     }, "public result")
     if value["schema"] != SCHEMA or value["protocol"] != PROTOCOL \
-            or value["status"] != "inconclusive" \
+            or value["status"] != "partial-qualified" \
             or value["securityUnsupportedReason"] \
                 != "strict-sandbox-boundary-unavailable-on-qualification-mac" \
             or value["privateCorpusOpenedByThirdPartyAdapter"] is not False \
-            or value["qualityScorePublished"] is not False \
+            or value["qualityScorePublished"] is not True \
             or value["nextGate"] != EXPECTED_NEXT_GATE \
             or not isinstance(value["protocolHash"], str) \
             or not SHA256.fullmatch(value["protocolHash"]):
@@ -169,18 +169,42 @@ def validate_public_decision(value: Any) -> dict[str, Any]:
             ) != expected_ids:
         raise PublicResultError("public method inventory is invalid")
     for method in methods[:len(BUILTIN_CAPABILITIES)]:
-        _exact_keys(method, {
+        method_id = method["methodID"]
+        common_keys = {
             "methodID", "status", "duplicateArmCount", "claimJudgmentAgreement",
             "decisionAgreement", "capabilityAgreement", "limitationCodes",
-        }, "built-in public result")
-        method_id = method["methodID"]
-        if method["status"] != "mapping-inconclusive" \
-                or method["duplicateArmCount"] != 15 \
-                or method["decisionAgreement"] != 1.0 \
+        }
+        _exact_keys(
+            method,
+            common_keys | ({"quality"} if method_id == "apple-vision" else set()),
+            "built-in public result",
+        )
+        if method["duplicateArmCount"] != 15 or method["decisionAgreement"] != 1.0:
+            raise PublicResultError("built-in public result is invalid")
+        if method_id == "apple-vision":
+            if method["status"] != "qualified" \
+                    or method["claimJudgmentAgreement"] != 1.0 \
+                    or method["limitationCodes"] != [
+                        "built-in-baseline", "single-image-only",
+                        "apple-vision-signals",
+                    ]:
+                raise PublicResultError("qualified Apple Vision result is invalid")
+            quality = method["quality"]
+            _exact_keys(quality, {"caseCount", "claimCount", "metrics"}, "quality")
+            if quality["caseCount"] != 60 or quality["claimCount"] != 289:
+                raise PublicResultError("qualified Apple Vision sample is invalid")
+            metrics = quality["metrics"]
+            _exact_keys(metrics, {
+                "requiredFactRecall", "criticalTextRecall",
+                "severityWeightedHallucination", "abstentionAccuracy", "overall",
+            }, "quality metrics")
+            for score in metrics.values():
+                _score(score, "quality metric")
+        elif method["status"] != "mapping-inconclusive" \
                 or method["limitationCodes"] != [
                     "claim-mapping-agreement-below-0.90", "quality-score-withheld",
                 ]:
-            raise PublicResultError("built-in public result is invalid")
+            raise PublicResultError("inconclusive built-in result is invalid")
         _score(method["claimJudgmentAgreement"], "claim agreement")
         capability = method["capabilityAgreement"]
         _exact_keys(
@@ -225,10 +249,19 @@ def render_public_decision(value: Any) -> str:
             "claim": method["claimJudgmentAgreement"],
             **method["capabilityAgreement"],
         }
-        method_rows.append(
-            f"| {display[method['methodID']]} | Mapping inconclusive | "
-            f"{evidence[method['methodID']].format(**values)} |"
-        )
+        if method["methodID"] == "apple-vision":
+            metrics = method["quality"]["metrics"]
+            outcome = "Qualified label baseline"
+            detail = (
+                f"100.00% concealed label agreement; overall {metrics['overall']:.2%}, "
+                f"required-fact recall {metrics['requiredFactRecall']:.2%}, critical-text "
+                f"recall {metrics['criticalTextRecall']:.2%}, severity-weighted "
+                f"hallucination {metrics['severityWeightedHallucination']:.2%}."
+            )
+        else:
+            outcome = "Mapping inconclusive"
+            detail = evidence[method["methodID"]].format(**values)
+        method_rows.append(f"| {display[method['methodID']]} | {outcome} | {detail} |")
     method_rows.append(
         "| Downloaded micro-models and OmniParser | Security unsupported | "
         "The strict local sandbox boundary was not proven on the qualification Mac, "
@@ -237,7 +270,7 @@ def render_public_decision(value: Any) -> str:
     return "\n".join([
         "# Screen understanding evaluation: first public run",
         "",
-        "Status: **inconclusive**. This report contains aggregate metrics only. The private frames, temporal pairs,",
+        "Status: **partial-qualified**. This report contains aggregate metrics only. The private frames, temporal pairs,",
         "references, raw model outputs, judgments, local paths, timestamps, and case identifiers are not published.",
         "",
         "## What is already trustworthy",
@@ -255,10 +288,10 @@ def render_public_decision(value: Any) -> str:
         "|---|---|---|",
         *method_rows,
         "",
-        "No candidate quality score is published. The earlier 9-arm pilot was under the locked minimum cell size.",
-        "After increasing the concealed sample to 15 arms per method, independent mappers disagreed about whether",
-        "structured claims satisfy natural-language reference facts and about unsupported-claim severity. Repeating",
-        "judges until one run passes would invalidate the evaluation.",
+        "Only Apple Vision receives a published quality score. Its label decisions were perfectly reproducible on the",
+        "concealed sample, but zero required-fact and critical-text recall make it unsuitable as a scene-description",
+        "layer by itself. Metadata + AX/OCR and the hybrid remain score-withheld because at least one capability stayed",
+        "below the pre-registered 90% mapping-agreement floor. Repeating judges until they pass is forbidden.",
         "",
         "## Next gate",
         "",

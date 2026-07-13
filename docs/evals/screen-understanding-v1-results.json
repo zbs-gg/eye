@@ -1,7 +1,7 @@
 {
   "schema": "screen-understanding-public-decision-v1",
   "protocol": "screen-understanding-v1",
-  "status": "inconclusive",
+  "status": "partial-qualified",
   "corpus": {
     "singleImageCount": 200,
     "temporalPairCount": 100,
@@ -21,11 +21,11 @@
       "methodID": "metadata-ax-ocr",
       "status": "mapping-inconclusive",
       "duplicateArmCount": 15,
-      "claimJudgmentAgreement": 0.5111111111111111,
+      "claimJudgmentAgreement": 0.8636363636363636,
       "decisionAgreement": 1.0,
       "capabilityAgreement": {
         "summary": 0.8,
-        "atomicFacts": 0.36666666666666664
+        "atomicFacts": 0.896551724137931
       },
       "limitationCodes": [
         "claim-mapping-agreement-below-0.90",
@@ -34,28 +34,40 @@
     },
     {
       "methodID": "apple-vision",
-      "status": "mapping-inconclusive",
+      "status": "qualified",
       "duplicateArmCount": 15,
-      "claimJudgmentAgreement": 0.8783783783783784,
+      "claimJudgmentAgreement": 1.0,
       "decisionAgreement": 1.0,
       "capabilityAgreement": {
-        "labels": 0.8783783783783784
+        "labels": 1.0
       },
       "limitationCodes": [
-        "claim-mapping-agreement-below-0.90",
-        "quality-score-withheld"
-      ]
+        "built-in-baseline",
+        "single-image-only",
+        "apple-vision-signals"
+      ],
+      "quality": {
+        "caseCount": 60,
+        "claimCount": 289,
+        "metrics": {
+          "requiredFactRecall": 0.0,
+          "criticalTextRecall": 0.0,
+          "severityWeightedHallucination": 0.25,
+          "abstentionAccuracy": 0.9333333333333333,
+          "overall": 0.42083333333333334
+        }
+      }
     },
     {
       "methodID": "deterministic-hybrid",
       "status": "mapping-inconclusive",
       "duplicateArmCount": 15,
-      "claimJudgmentAgreement": 0.8448275862068966,
+      "claimJudgmentAgreement": 0.9655172413793104,
       "decisionAgreement": 1.0,
       "capabilityAgreement": {
-        "summary": 0.9333333333333333,
-        "atomicFacts": 0.5333333333333333,
-        "labels": 0.9577464788732394
+        "summary": 0.8666666666666667,
+        "atomicFacts": 0.9333333333333333,
+        "labels": 1.0
       },
       "limitationCodes": [
         "claim-mapping-agreement-below-0.90",
@@ -89,7 +101,7 @@
   ],
   "securityUnsupportedReason": "strict-sandbox-boundary-unavailable-on-qualification-mac",
   "privateCorpusOpenedByThirdPartyAdapter": false,
-  "protocolHash": "2be74ec91866978ffeb63dc8a73cdfa5115b8156b182e53e9c8e4a377ac1569c",
-  "qualityScorePublished": false,
-  "nextGate": "redesign claim mapping so structured metadata and unsupported-claim severity are interpreted deterministically, then repeat independent concealed mapping; establish a proven local sandbox before any downloaded model receives private inputs"
+  "protocolHash": "ca2cf38f6718c8ae65eb4e07d6b935b41a110daf9802262e264578c59956d9a4",
+  "qualityScorePublished": true,
+  "nextGate": "retain Apple Vision only as a lightweight label baseline, redesign metadata and hybrid scene claims, and prove a local sandbox before any downloaded micro-model receives private inputs"
 }
