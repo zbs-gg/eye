@@ -71,6 +71,8 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertTrue(script.contains("sourceRevision"))
         XCTAssertTrue(script.contains("teamIdentifier"))
         XCTAssertTrue(script.contains("cdHash"))
+        XCTAssertTrue(script.contains("codesign -dvvv"))
+        XCTAssertTrue(script.contains("Could not read the candidate CDHash"))
         XCTAssertTrue(script.contains("designatedRequirement"))
     }
 

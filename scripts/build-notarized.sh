@@ -191,7 +191,11 @@ ditto -c -k --keepParent "${APP}" "${ZIP}"
 ZIP_SHA256=$(shasum -a 256 "${ZIP}" | awk '{print $1}')
 EXECUTABLE="${APP}/Contents/MacOS/ZBS Eye"
 EXECUTABLE_SHA256=$(shasum -a 256 "${EXECUTABLE}" | awk '{print $1}')
-CDHASH=$(codesign -dvv "${APP}" 2>&1 | sed -n 's/^CDHash=//p')
+CDHASH=$(codesign -dvvv "${APP}" 2>&1 | sed -n 's/^CDHash=//p')
+[ -n "${CDHASH}" ] || {
+  echo "❌ Could not read the candidate CDHash."
+  exit 1
+}
 MANIFEST_PLIST="${MANIFEST}.plist.tmp"
 rm -f "${MANIFEST_PLIST}"
 /usr/bin/plutil -create xml1 "${MANIFEST_PLIST}"
