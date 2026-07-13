@@ -1,18 +1,150 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://zbs.gg/schemas/screen-understanding/public-aggregate-v1.json",
-  "title": "Allowlisted public screen-understanding aggregate",
+  "title": "Declassified aggregate-only screen-understanding scores",
   "type": "object",
   "additionalProperties": false,
-  "required": ["protocolHash", "corpusHash", "reportHash", "methods", "metrics", "licenses"],
+  "required": [
+    "schema", "protocol", "status", "protocolHash", "corpusHash",
+    "reportHash", "reliability", "methods"
+  ],
   "properties": {
+    "schema": {"const": "screen-understanding-public-claim-scores-v1"},
+    "protocol": {"const": "screen-understanding-correctness-audit-v3"},
+    "status": {"const": "qualified"},
     "protocolHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "corpusHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "reportHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "methods": {"type": "array", "items": {"type": "string", "enum": ["metadata-ax-ocr", "apple-vision", "deterministic-hybrid", "florence-2-base", "smolvlm-256m-instruct", "lfm2-vl-450m", "fastvlm-0.5b", "smolvlm2-256m-video-instruct", "omniparser-v2"]}},
-    "strata": {"type": "array", "items": {"type": "string", "enum": ["text-rich", "visual-canvas", "mixed-script", "temporal-change", "no-change"]}},
-    "metrics": {"type": "object", "additionalProperties": {"type": "number"}},
-    "licenses": {"type": "object", "additionalProperties": {"type": "string"}},
-    "limitations": {"type": "array", "items": {"type": "string", "maxLength": 240}}
+    "reliability": {"$ref": "#/$defs/reliability"},
+    "methods": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/method"}
+    }
+  },
+  "$defs": {
+    "score": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "capabilityReliability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capability", "claimCount", "claimJudgmentAgreement", "qualified"
+      ],
+      "properties": {
+        "capability": {
+          "type": "string",
+          "enum": ["summary", "atomic-facts", "labels"]
+        },
+        "claimCount": {"type": "integer", "minimum": 1},
+        "claimJudgmentAgreement": {"$ref": "#/$defs/score"},
+        "qualified": {"const": true}
+      }
+    },
+    "methodReliability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "methodID", "duplicateArmCount", "claimJudgmentAgreement",
+        "decisionAgreement", "capabilities", "qualified"
+      ],
+      "properties": {
+        "methodID": {
+          "type": "string",
+          "enum": [
+            "metadata-ax-ocr", "apple-vision", "deterministic-hybrid"
+          ]
+        },
+        "duplicateArmCount": {"const": 9},
+        "claimJudgmentAgreement": {"$ref": "#/$defs/score"},
+        "decisionAgreement": {"$ref": "#/$defs/score"},
+        "capabilities": {
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/capabilityReliability"}
+        },
+        "qualified": {"const": true}
+      }
+    },
+    "reliability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "duplicateArmCount", "claimJudgmentAgreement", "decisionAgreement",
+        "methods", "qualified"
+      ],
+      "properties": {
+        "duplicateArmCount": {"type": "integer", "minimum": 9, "maximum": 27},
+        "claimJudgmentAgreement": {"$ref": "#/$defs/score"},
+        "decisionAgreement": {"$ref": "#/$defs/score"},
+        "methods": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/methodReliability"}
+        },
+        "qualified": {"const": true}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requiredFactRecall", "criticalTextRecall",
+        "severityWeightedHallucination", "abstentionAccuracy", "overall"
+      ],
+      "properties": {
+        "requiredFactRecall": {"$ref": "#/$defs/score"},
+        "criticalTextRecall": {"$ref": "#/$defs/score"},
+        "severityWeightedHallucination": {"$ref": "#/$defs/score"},
+        "abstentionAccuracy": {"$ref": "#/$defs/score"},
+        "overall": {"$ref": "#/$defs/score"}
+      }
+    },
+    "method": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "methodID", "stratum", "license", "limitationCodes",
+        "caseCount", "claimCount", "metrics"
+      ],
+      "properties": {
+        "methodID": {
+          "type": "string",
+          "enum": [
+            "metadata-ax-ocr", "apple-vision", "deterministic-hybrid"
+          ]
+        },
+        "stratum": {"type": "string", "enum": ["single-frame"]},
+        "license": {
+          "type": "string",
+          "enum": ["AGPL-3.0-or-later", "Apple-SDK"]
+        },
+        "limitationCodes": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "built-in-baseline", "single-frame-only",
+              "accessibility-ocr-signals", "apple-vision-signals",
+              "deterministic-signal-fusion"
+            ]
+          }
+        },
+        "caseCount": {"const": 60},
+        "claimCount": {"type": "integer", "minimum": 0},
+        "metrics": {"$ref": "#/$defs/metrics"}
+      }
+    }
   }
 }

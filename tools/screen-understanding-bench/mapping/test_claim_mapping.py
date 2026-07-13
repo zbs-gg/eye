@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 
+import copy
 import hashlib
 import json
 import os
@@ -8,10 +9,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import claim_mapping as mapping_module  # noqa: E402
 from claim_mapping import (  # noqa: E402
     MappingError,
     aggregate_mappings,
@@ -128,6 +131,70 @@ class ClaimMappingTests(unittest.TestCase):
                 self.base / "aggregate-same-identity",
             )
 
+    def test_mapper_json_is_opened_descriptor_bound_with_no_follow(self) -> None:
+        prepared = self._prepare("descriptor-bound")
+        primary = self._load(prepared["primaryPacket"])
+        output_path = self._write_judgments(
+            primary, "frontier-mapper-01", "descriptor-bound.json"
+        )
+
+        with mock.patch.object(
+            mapping_module.os, "open", wraps=os.open
+        ) as open_spy, mock.patch.object(
+            mapping_module.os, "fstat", wraps=os.fstat
+        ) as fstat_spy:
+            validate_mapper_output(Path(prepared["primaryPacket"]), output_path)
+
+        matching = [
+            call for call in open_spy.call_args_list
+            if Path(call.args[0]) == output_path
+        ]
+        self.assertEqual(len(matching), 1)
+        self.assertTrue(matching[0].args[1] & os.O_NOFOLLOW)
+        self.assertTrue(fstat_spy.called)
+
+    def test_mapper_json_caps_fail_before_json_decode(self) -> None:
+        cases = (
+            (
+                "byte limit", b'{"value":"' + (b"x" * 64) + b'"}\n',
+                {"MAX_PRIVATE_JSON_BYTES": 32},
+            ),
+            (
+                "depth limit", b'{"value":[[[[0]]]]}\n',
+                {"MAX_JSON_DEPTH": 3},
+            ),
+            (
+                "item limit", b'{"value":[0,1,2,3]}\n',
+                {"MAX_JSON_ITEMS": 3},
+            ),
+            (
+                "string limit", b'{"value":"abcdef"}\n',
+                {"MAX_JSON_STRING_BYTES": 5},
+            ),
+        )
+        for subject, data, limits in cases:
+            with self.subTest(subject=subject):
+                path = self.base / f"capped-{subject.replace(' ', '-')}.json"
+                path.write_bytes(data)
+                os.chmod(path, 0o600)
+                with mock.patch.multiple(
+                    mapping_module, create=True, **limits
+                ), mock.patch.object(
+                    mapping_module.json, "loads", wraps=json.loads
+                ) as loads_spy:
+                    with self.assertRaisesRegex(MappingError, "limit"):
+                        mapping_module._load_private_json(path, subject)
+                loads_spy.assert_not_called()
+
+    def test_mapper_json_symlink_is_rejected_without_opening_target(self) -> None:
+        target = self.base / "target.json"
+        self._write_private(target, {"secret": "must-not-be-read"})
+        link = self.base / "mapper-link.json"
+        link.symlink_to(target)
+
+        with self.assertRaisesRegex(MappingError, "unavailable"):
+            mapping_module._load_private_json(link, "mapper judgments")
+
     def test_reliability_below_floor_is_inconclusive(self) -> None:
         prepared = self._prepare("low-reliability")
         primary = self._load(prepared["primaryPacket"])
@@ -161,15 +228,63 @@ class ClaimMappingTests(unittest.TestCase):
         self.assertGreater(len(adjudication["items"]), 0)
         self.assertLess(len(adjudication["items"]), len(hidden["items"]))
 
+    def test_reliability_is_gated_per_method_and_claim_capability(self) -> None:
+        prepared = self._prepare("per-method-reliability")
+        mapping = self._load(Path(prepared["mappingRoot"]) / "owner-mapping.json")
+        primary = self._load(prepared["primaryPacket"])
+        hidden = self._load(prepared["hiddenPacket"])
+        first = self._write_judgments(
+            primary, "frontier-mapper-01", "primary-per-method.json"
+        )
+        hidden_output = self._judgments(hidden, "frontier-mapper-02")
+        weak_arm = next(
+            arm_id for arm_id, owner in mapping["hidden"].items()
+            if owner["methodID"] == "metadata-ax-ocr"
+        )
+        weak_item = next(
+            item for item in hidden_output["items"] if item["armID"] == weak_arm
+        )
+        for claim in weak_item["claimJudgments"]:
+            claim["judgment"] = {"unsupported": "critical"}
+        second = self.base / "hidden-per-method.json"
+        self._write_private(second, hidden_output)
+
+        result = aggregate_mappings(
+            Path(prepared["mappingRoot"]), first, second,
+            self.base / "aggregate-per-method",
+        )
+
+        self.assertEqual(result["status"], "inconclusive")
+        reliability = result["reliability"]
+        self.assertGreaterEqual(
+            reliability["claimJudgmentAgreement"],
+            mapping_module.CLAIM_AGREEMENT_FLOOR,
+        )
+        weak_method = next(
+            method for method in reliability["methods"]
+            if method["methodID"] == "metadata-ax-ocr"
+        )
+        self.assertLess(
+            weak_method["claimJudgmentAgreement"],
+            mapping_module.CLAIM_AGREEMENT_FLOOR,
+        )
+        self.assertFalse(weak_method["qualified"])
+        self.assertEqual(
+            {item["capability"] for item in weak_method["capabilities"]},
+            {"summary", "atomic-facts", "labels"},
+        )
+        self.assertTrue(any(
+            not item["qualified"] for item in weak_method["capabilities"]
+        ))
+        self.assertFalse(reliability["qualified"])
+
     def test_adjudication_contains_only_disagreements_and_uses_fresh_identity(self) -> None:
         prepared = self._prepare("tie-seed")
         primary = self._load(prepared["primaryPacket"])
         hidden = self._load(prepared["hiddenPacket"])
         first = self._write_judgments(primary, "frontier-mapper-01", "primary-tie.json")
         hidden_output = self._judgments(hidden, "frontier-mapper-02")
-        hidden_output["items"][0]["claimJudgments"][0]["judgment"] = {
-            "matchedForbidden": "forbidden.intent"
-        }
+        hidden_output["items"][0]["criticalTextMatched"] = [False]
         second = self.base / "hidden-tie.json"
         self._write_private(second, hidden_output)
 
@@ -186,7 +301,8 @@ class ClaimMappingTests(unittest.TestCase):
         self.assertIsNone(pending_result["publicAggregate"])
         packet = self._load(pending["adjudicationPacket"])
         self.assertEqual(len(packet["items"]), 1)
-        self.assertEqual(len(packet["items"][0]["claimJudgments"]), 1)
+        self.assertEqual(len(packet["items"][0]["claimJudgments"]), 0)
+        self.assertEqual(len(packet["items"][0]["criticalTextDisagreements"]), 1)
 
         stale = self._adjudication(packet, "frontier-mapper-01")
         stale_path = self.base / "stale-adjudication.json"
@@ -254,18 +370,32 @@ class ClaimMappingTests(unittest.TestCase):
         right_public = self._load(right["publicAggregate"])
 
         self.assertEqual(left_public, right_public)
+        inventory_bytes = (self.results / "run-inventory.json").read_bytes()
+        self.assertEqual(left_public["protocolHash"], "c" * 64)
+        self.assertEqual(left_public["corpusHash"], "a" * 64)
+        self.assertEqual(
+            left_public["reportHash"], hashlib.sha256(inventory_bytes).hexdigest()
+        )
         self.assertEqual(
             [method["methodID"] for method in left_public["methods"]],
             list(METHODS),
         )
         for method in left_public["methods"]:
+            self.assertEqual(method["stratum"], "single-frame")
+            self.assertIn(method["license"], {"AGPL-3.0-or-later", "Apple-SDK"})
+            self.assertEqual(method["limitationCodes"][:2], [
+                "built-in-baseline", "single-frame-only",
+            ])
             self.assertEqual(method["caseCount"], 60)
-            self.assertAlmostEqual(method["requiredFactRecall"], 2 / 3)
-            self.assertEqual(method["criticalTextRecall"], 1.0)
-            self.assertAlmostEqual(method["severityWeightedHallucination"], 0.25 / 3)
-            self.assertEqual(method["abstentionAccuracy"], 1.0)
+            metrics = method["metrics"]
+            self.assertAlmostEqual(metrics["requiredFactRecall"], 2 / 3)
+            self.assertEqual(metrics["criticalTextRecall"], 1.0)
+            self.assertAlmostEqual(
+                metrics["severityWeightedHallucination"], 0.25 / 3
+            )
+            self.assertEqual(metrics["abstentionAccuracy"], 1.0)
             expected = ((2 / 3) + 1.0 + (1.0 - 0.25 / 3) + 1.0) / 4
-            self.assertAlmostEqual(method["overall"], expected)
+            self.assertAlmostEqual(metrics["overall"], expected)
 
         packet_text = Path(prepared["primaryPacket"]).read_text(encoding="utf-8")
         mapper_text = first.read_text(encoding="utf-8")
@@ -274,30 +404,90 @@ class ClaimMappingTests(unittest.TestCase):
             self.assertNotIn(method, mapper_text)
 
     def test_public_output_rejects_private_or_case_level_fields(self) -> None:
-        payload = {
-            "schema": "screen-understanding-public-claim-scores-v1",
-            "protocol": "screen-understanding-correctness-audit-v3",
-            "status": "qualified",
-            "reliability": {
-                "duplicateArmCount": 27,
-                "claimJudgmentAgreement": 1.0,
-                "decisionAgreement": 1.0,
-                "qualified": True,
+        prepared = self._prepare("public-declassification")
+        primary = self._load(prepared["primaryPacket"])
+        hidden = self._load(prepared["hiddenPacket"])
+        first = self._write_judgments(
+            primary, "frontier-mapper-01", "primary-public.json"
+        )
+        second = self._write_judgments(
+            hidden, "frontier-mapper-02", "hidden-public.json"
+        )
+        result = aggregate_mappings(
+            Path(prepared["mappingRoot"]), first, second,
+            self.base / "aggregate-public",
+        )
+        valid = self._load(result["publicAggregate"])
+        validate_public_output(valid)
+
+        secret = self._load(
+            Path(prepared["mappingRoot"]) / "owner-mapping.json"
+        )["seedSHA256"]
+        mutations = []
+        with_case = copy.deepcopy(valid)
+        with_case["methods"][0]["caseID"] = self.case_ids[0]
+        mutations.append(with_case)
+        with_path = copy.deepcopy(valid)
+        with_path["methods"][0]["limitationCodes"][0] = "/Users/nik/private"
+        mutations.append(with_path)
+        with_timestamp = copy.deepcopy(valid)
+        with_timestamp["timestamp"] = "2026-07-13T00:00:00Z"
+        mutations.append(with_timestamp)
+        with_raw_error = copy.deepcopy(valid)
+        with_raw_error["rawError"] = "mapper failed with private output"
+        mutations.append(with_raw_error)
+        with_bad_license = copy.deepcopy(valid)
+        with_bad_license["methods"][0]["license"] = "private-license-text"
+        mutations.append(with_bad_license)
+        for payload in mutations:
+            with self.subTest(keys=sorted(payload)):
+                with self.assertRaisesRegex(MappingError, "public aggregate"):
+                    validate_public_output(payload)
+
+        with_secret = copy.deepcopy(valid)
+        with_secret["reportHash"] = secret
+        with self.assertRaisesRegex(MappingError, "private"):
+            validate_public_output(with_secret, forbidden_values=(secret,))
+
+    def test_public_schema_has_no_free_form_object_channels(self) -> None:
+        schema_path = (
+            Path(__file__).parents[1] / "schemas" / "public-aggregate.schema.json"
+        )
+        schema = self._load(schema_path)
+
+        def assert_closed(node: object) -> None:
+            if isinstance(node, dict):
+                if node.get("type") == "object":
+                    self.assertIs(
+                        node.get("additionalProperties"), False,
+                        msg=f"open object schema: {sorted(node)}",
+                    )
+                for child in node.values():
+                    assert_closed(child)
+            elif isinstance(node, list):
+                for child in node:
+                    assert_closed(child)
+
+        assert_closed(schema)
+        method = schema["$defs"]["method"]
+        self.assertEqual(
+            set(method["properties"]["methodID"]["enum"]), set(METHODS)
+        )
+        self.assertEqual(
+            method["properties"]["stratum"]["enum"], ["single-frame"]
+        )
+        self.assertEqual(
+            set(schema["$defs"]["metrics"]["properties"]),
+            set(mapping_module.PUBLIC_METRICS),
+        )
+        self.assertEqual(
+            set(method["properties"]["limitationCodes"]["items"]["enum"]),
+            {
+                code
+                for metadata in mapping_module.PUBLIC_METHOD_METADATA.values()
+                for code in metadata["limitationCodes"]
             },
-            "methods": [{
-                "methodID": "metadata-ax-ocr",
-                "caseCount": 60,
-                "claimCount": 180,
-                "requiredFactRecall": 1.0,
-                "criticalTextRecall": 1.0,
-                "severityWeightedHallucination": 0.0,
-                "abstentionAccuracy": 1.0,
-                "overall": 1.0,
-                "caseID": self.case_ids[0],
-            }],
-        }
-        with self.assertRaisesRegex(MappingError, "public aggregate"):
-            validate_public_output(payload)
+        )
 
     def test_private_artifacts_are_owner_only(self) -> None:
         prepared = self._prepare("permission-seed")
@@ -309,6 +499,9 @@ class ClaimMappingTests(unittest.TestCase):
                 stat.S_IMODE((Path(prepared["mappingRoot"]) / name).stat().st_mode),
                 0o600,
             )
+        marker = Path(prepared["mappingRoot"]) / ".metadata_never_index"
+        self.assertTrue(marker.is_file())
+        self.assertEqual(stat.S_IMODE(marker.stat().st_mode), 0o600)
         primary = self._load(prepared["primaryPacket"])
         hidden = self._load(prepared["hiddenPacket"])
         first = self._write_judgments(primary, "frontier-mapper-01", "primary-mode.json")
@@ -320,12 +513,59 @@ class ClaimMappingTests(unittest.TestCase):
         self.assertEqual(
             stat.S_IMODE((self.base / "aggregate-mode").stat().st_mode), 0o700
         )
+        aggregate_marker = self.base / "aggregate-mode" / ".metadata_never_index"
+        self.assertTrue(aggregate_marker.is_file())
+        self.assertEqual(stat.S_IMODE(aggregate_marker.stat().st_mode), 0o600)
         self.assertEqual(
             stat.S_IMODE(Path(result["publicAggregate"]).stat().st_mode), 0o600
         )
         self.assertEqual(
             stat.S_IMODE(Path(result["aggregateResult"]).stat().st_mode), 0o600
         )
+
+    def test_private_root_policy_rejects_repository_overlap_before_creation(self) -> None:
+        target = self.base / "repository-overlap"
+        with mock.patch.object(mapping_module, "REPOSITORY_ROOT", self.base):
+            with self.assertRaisesRegex(MappingError, "disjoint"):
+                prepare_mapping(
+                    self.canonical, self.results, target, "overlap-seed"
+                )
+        self.assertFalse(target.exists())
+
+    def test_aggregate_publication_is_transactional_and_fault_cleanup_allows_retry(self) -> None:
+        prepared = self._prepare("aggregate-transaction")
+        primary = self._load(prepared["primaryPacket"])
+        hidden = self._load(prepared["hiddenPacket"])
+        first = self._write_judgments(
+            primary, "frontier-mapper-01", "primary-transaction.json"
+        )
+        second = self._write_judgments(
+            hidden, "frontier-mapper-02", "hidden-transaction.json"
+        )
+        target = self.base / "aggregate-transaction"
+        original_write = mapping_module._atomic_private_json
+
+        def fail_after_public(path: Path, value: object) -> bytes:
+            if path.name == "aggregate-result.json":
+                raise OSError("seeded publication fault")
+            return original_write(path, value)
+
+        with mock.patch.object(
+            mapping_module, "_atomic_private_json", side_effect=fail_after_public
+        ):
+            with self.assertRaisesRegex(OSError, "seeded publication fault"):
+                aggregate_mappings(
+                    Path(prepared["mappingRoot"]), first, second, target
+                )
+
+        self.assertFalse(target.exists())
+        self.assertEqual(list(self.base.glob(f".{target.name}.tmp-*")), [])
+
+        result = aggregate_mappings(
+            Path(prepared["mappingRoot"]), first, second, target
+        )
+        self.assertEqual(result["status"], "qualified")
+        self.assertTrue(Path(result["publicAggregate"]).is_file())
 
     def _prepare(self, seed: str, name: str = "mapping") -> dict:
         return prepare_mapping(
@@ -448,7 +688,10 @@ class ClaimMappingTests(unittest.TestCase):
                 }
                 for method in METHODS
             },
-            "runnerSourceSHA256": {"orchestrator": "c" * 64},
+            "runnerSourceSHA256": {
+                "protocolManifest": "c" * 64,
+                "orchestrator": "d" * 64,
+            },
             "outputSHA256": output_hashes,
         }
         self._write_private(self.results / "run-inventory.json", inventory)

@@ -13,15 +13,23 @@ import re
 import shutil
 import stat
 import sys
-import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Optional
 
 
-RUNNER_DIRECTORY = Path(__file__).parents[1] / "runner"
+BENCHMARK_DIRECTORY = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+RUNNER_DIRECTORY = BENCHMARK_DIRECTORY / "runner"
+COMMON_DIRECTORY = BENCHMARK_DIRECTORY / "common"
 sys.path.insert(0, str(RUNNER_DIRECTORY))
+sys.path.insert(0, str(COMMON_DIRECTORY))
 
+from private_root import (  # noqa: E402
+    PrivateRootError,
+    prepare_private_root,
+    validate_private_root,
+)
 from preflight import (  # noqa: E402
     _reject_private_payload,
     _validate_labels,
@@ -48,6 +56,39 @@ METHOD_FILES = {
     "apple-vision": "apple-vision.jsonl",
     "deterministic-hybrid": "deterministic-hybrid.jsonl",
 }
+CLAIM_SOURCE_CAPABILITIES = {
+    "summary": "summary",
+    "atomicFact": "atomic-facts",
+    "label": "labels",
+}
+CAPABILITY_ORDER = ("summary", "atomic-facts", "labels")
+PUBLIC_METRICS = (
+    "requiredFactRecall", "criticalTextRecall",
+    "severityWeightedHallucination", "abstentionAccuracy", "overall",
+)
+PUBLIC_METHOD_METADATA = {
+    "metadata-ax-ocr": {
+        "license": "AGPL-3.0-or-later",
+        "limitationCodes": (
+            "built-in-baseline", "single-frame-only",
+            "accessibility-ocr-signals",
+        ),
+    },
+    "apple-vision": {
+        "license": "Apple-SDK",
+        "limitationCodes": (
+            "built-in-baseline", "single-frame-only",
+            "apple-vision-signals",
+        ),
+    },
+    "deterministic-hybrid": {
+        "license": "AGPL-3.0-or-later",
+        "limitationCodes": (
+            "built-in-baseline", "single-frame-only",
+            "deterministic-signal-fusion",
+        ),
+    },
+}
 REQUIRED_FACT_IDS = (
     "required.surface", "required.content", "required.state",
 )
@@ -57,6 +98,11 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 CASE_ID = re.compile(r"^[0-9a-f]{24}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 FORBIDDEN_FRAGMENTS = ("/Users/", "/Volumes/", "file://")
+MAX_PRIVATE_FILE_BYTES = 64 * 1024 * 1024
+MAX_PRIVATE_JSON_BYTES = 16 * 1024 * 1024
+MAX_JSON_DEPTH = 32
+MAX_JSON_ITEMS = 250_000
+MAX_JSON_STRING_BYTES = 256 * 1024
 PACKET_FORBIDDEN_KEYS = {
     "methodid", "caseid", "candidateoutput", "candidateoutputs",
     "timing", "timings", "split", "splits",
@@ -65,6 +111,34 @@ PACKET_FORBIDDEN_KEYS = {
 
 class MappingError(ValueError):
     """The private mapping pipeline must fail closed."""
+
+
+def _validate_output_root_path(path: Path) -> Path:
+    try:
+        return validate_private_root(
+            path, REPOSITORY_ROOT,
+            must_exist=False, require_exclusions=False,
+        )
+    except PrivateRootError as error:
+        raise MappingError(str(error)) from error
+
+
+def _prepare_output_root(path: Path) -> Path:
+    try:
+        return prepare_private_root(
+            path, REPOSITORY_ROOT, apply_backup_exclusion=False
+        )
+    except PrivateRootError as error:
+        raise MappingError(str(error)) from error
+
+
+def _validate_existing_output_root(path: Path) -> Path:
+    try:
+        return validate_private_root(
+            path, REPOSITORY_ROOT, must_exist=True
+        )
+    except PrivateRootError as error:
+        raise MappingError(str(error)) from error
 
 
 def _sha256(data: bytes) -> str:
@@ -90,19 +164,97 @@ def _assert_owner_only(path: Path, subject: str, *, directory: bool) -> None:
         raise MappingError(f"{subject} must use owner-only permissions")
 
 
-def _read_private_bytes(path: Path, subject: str) -> bytes:
-    _assert_owner_only(path, subject, directory=False)
+def _read_private_bytes(
+    path: Path,
+    subject: str,
+    *,
+    max_bytes: int = MAX_PRIVATE_FILE_BYTES,
+) -> bytes:
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
     try:
-        return path.read_bytes()
+        descriptor = os.open(path, flags)
     except OSError as error:
         raise MappingError(f"{subject} is unavailable") from error
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) \
+                or metadata.st_uid != os.geteuid() \
+                or stat.S_IMODE(metadata.st_mode) & 0o077:
+            raise MappingError(
+                f"{subject} must be an owner-only regular file"
+            )
+        chunks = []
+        remaining = max_bytes + 1
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        if len(data) > max_bytes:
+            raise MappingError(f"{subject} exceeds the size limit")
+        return data
+    except MappingError:
+        raise
+    except OSError as error:
+        raise MappingError(f"{subject} is unavailable") from error
+    finally:
+        os.close(descriptor)
+
+
+def _preflight_json_text(data: bytes, subject: str) -> str:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise MappingError(f"{subject} is not valid JSON") from error
+    depth = 0
+    items = 0
+    string_bytes = 0
+    in_string = False
+    escaped = False
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+                string_bytes += len(character.encode("utf-8"))
+            elif character == "\\":
+                escaped = True
+                string_bytes += 1
+            elif character == '"':
+                in_string = False
+            else:
+                string_bytes += len(character.encode("utf-8"))
+            if string_bytes > MAX_JSON_STRING_BYTES:
+                raise MappingError(f"{subject} exceeds the string limit")
+            continue
+        if character == '"':
+            in_string = True
+            string_bytes = 0
+        elif character in "[{":
+            depth += 1
+            items += 1
+            if depth > MAX_JSON_DEPTH:
+                raise MappingError(f"{subject} exceeds the depth limit")
+        elif character in "]}":
+            depth -= 1
+        elif character in ",:":
+            items += 1
+        if items > MAX_JSON_ITEMS:
+            raise MappingError(f"{subject} exceeds the item limit")
+    return text
 
 
 def _load_private_json(path: Path, subject: str) -> tuple[dict[str, Any], bytes]:
-    data = _read_private_bytes(path, subject)
+    data = _read_private_bytes(
+        path, subject, max_bytes=MAX_PRIVATE_JSON_BYTES
+    )
+    text = _preflight_json_text(data, subject)
     try:
-        value = json.loads(data)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        value = json.loads(text)
+    except json.JSONDecodeError as error:
         raise MappingError(f"{subject} is not valid JSON") from error
     if not isinstance(value, dict):
         raise MappingError(f"{subject} root must be an object")
@@ -137,11 +289,6 @@ def _atomic_private_json(path: Path, value: Any) -> bytes:
         raise
 
 
-def _make_private_directory(path: Path) -> None:
-    path.mkdir(mode=0o700)
-    path.chmod(0o700)
-
-
 def _exact_keys(value: Any, expected: set[str], subject: str) -> None:
     if not isinstance(value, dict) or set(value) != expected:
         raise MappingError(f"{subject} keys do not match the locked schema")
@@ -173,7 +320,11 @@ def _reject_leaks(
             raise MappingError(f"{subject} contains a private identifier or path")
 
 
-def _reject_public_leaks(value: Any) -> None:
+def _reject_public_leaks(
+    value: Any,
+    *,
+    forbidden_values: tuple[str, ...] = (),
+) -> None:
     """Allow methodID only inside the locked aggregate method object."""
     forbidden = {
         "caseid", "claimid", "text", "raw", "rawoutput", "errors",
@@ -183,16 +334,19 @@ def _reject_public_leaks(value: Any) -> None:
     if isinstance(value, dict):
         for key, child in value.items():
             lowered = key.lower()
-            if lowered in forbidden or lowered.endswith("path") or lowered.endswith("paths"):
+            if lowered in forbidden or "timestamp" in lowered \
+                    or "error" in lowered or lowered.endswith("path") \
+                    or lowered.endswith("paths"):
                 raise MappingError("public aggregate contains a forbidden field")
-            _reject_public_leaks(child)
+            _reject_public_leaks(child, forbidden_values=forbidden_values)
     elif isinstance(value, list):
         for child in value:
-            _reject_public_leaks(child)
-    elif isinstance(value, str) and any(
-        fragment in value for fragment in FORBIDDEN_FRAGMENTS
-    ):
-        raise MappingError("public aggregate contains a private path")
+            _reject_public_leaks(child, forbidden_values=forbidden_values)
+    elif isinstance(value, str):
+        if any(fragment in value for fragment in FORBIDDEN_FRAGMENTS):
+            raise MappingError("public aggregate contains a private path")
+        if any(secret and secret in value for secret in forbidden_values):
+            raise MappingError("public aggregate contains a private identifier")
 
 
 def _validate_reference(label: dict[str, Any]) -> dict[str, Any]:
@@ -250,10 +404,11 @@ def _load_canonical(canonical_root: Path) -> tuple[dict[str, dict], bytes, bytes
         raw_labels = labels_document.get("labels")
         if not isinstance(raw_labels, list):
             raise MappingError("canonical labels are invalid")
-        identifiers = {
-            label.get("case") for label in raw_labels if isinstance(label, dict)
+        expected_targets = {
+            label.get("case"): label.get("targetType")
+            for label in raw_labels if isinstance(label, dict)
         }
-        _validate_labels(labels_document, identifiers)
+        _validate_labels(labels_document, expected_targets)
         _validate_reliability(reliability)
     except MappingError:
         raise
@@ -300,10 +455,15 @@ def _load_run(
     result_root: Path,
     labels_bytes: bytes,
     reliability_bytes: bytes,
-) -> tuple[list[str], list[str], dict[tuple[str, str], dict[str, Any]]]:
+) -> tuple[
+    list[str],
+    list[str],
+    dict[tuple[str, str], dict[str, Any]],
+    dict[str, str],
+]:
     result_root = Path(result_root)
     _assert_owner_only(result_root, "result root", directory=True)
-    inventory, _ = _load_private_json(
+    inventory, inventory_bytes = _load_private_json(
         result_root / "run-inventory.json", "run inventory"
     )
     if inventory.get("schema") != RUN_SCHEMA \
@@ -324,11 +484,21 @@ def _load_run(
         raise MappingError("run inventory does not bind the canonical seal")
     methods = inventory.get("selectedMethods")
     output_hashes = inventory.get("outputSHA256")
+    source_hashes = inventory.get("runnerSourceSHA256")
+    protocol_hash = (
+        source_hashes.get("protocolManifest")
+        if isinstance(source_hashes, dict) else None
+    )
+    corpus_hash = inventory.get("datasetManifestSHA256")
     if not isinstance(methods, list) or not methods \
             or len(set(methods)) != len(methods) \
             or any(method not in METHOD_FILES for method in methods) \
             or not isinstance(output_hashes, dict) \
-            or set(output_hashes) != set(methods):
+            or set(output_hashes) != set(methods) \
+            or not isinstance(protocol_hash, str) \
+            or not SHA256.fullmatch(protocol_hash) \
+            or not isinstance(corpus_hash, str) \
+            or not SHA256.fullmatch(corpus_hash):
         raise MappingError("run method inventory is invalid")
     records: dict[tuple[str, str], dict[str, Any]] = {}
     common_ids: Optional[set[str]] = None
@@ -371,7 +541,12 @@ def _load_run(
             ordered_ids = sorted(actual)
         elif actual != common_ids:
             raise MappingError("methods do not cover identical case identifiers")
-    return list(methods), ordered_ids, records
+    provenance = {
+        "protocolHash": protocol_hash,
+        "corpusHash": corpus_hash,
+        "reportHash": _sha256(inventory_bytes),
+    }
+    return list(methods), ordered_ids, records, provenance
 
 
 def _build_item(
@@ -422,10 +597,13 @@ def prepare_mapping(
     """Seal primary and concealed duplicate packets after canonical validation."""
     if not isinstance(seed, str) or not seed:
         raise MappingError("mapping seed must be non-empty")
+    target = _validate_output_root_path(Path(mapping_root))
+    if target.exists():
+        raise MappingError("mapping root already exists")
     # This ordering is deliberate: candidate result files are not opened until
     # the v3 canonical seal and reliability gate have both passed.
     labels, labels_bytes, reliability_bytes = _load_canonical(Path(canonical_root))
-    methods, case_ids, results = _load_run(
+    methods, case_ids, results, public_provenance = _load_run(
         Path(result_root), labels_bytes, reliability_bytes
     )
     if any(identifier not in labels for identifier in case_ids):
@@ -435,13 +613,11 @@ def prepare_mapping(
         for identifier in case_ids
     }
 
-    target = Path(mapping_root)
-    if target.exists():
-        raise MappingError("mapping root already exists")
     target.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{target.name}.tmp-", dir=target.parent))
-    staging.chmod(0o700)
+    staging_candidate = target.parent / f".{target.name}.tmp-{uuid.uuid4().hex}"
+    staging = staging_candidate
     try:
+        staging = _prepare_output_root(staging_candidate)
         primary_items = []
         primary_owners: dict[str, dict[str, Any]] = {}
         primary_by_key: dict[tuple[str, str], tuple[dict, dict]] = {}
@@ -480,10 +656,13 @@ def prepare_mapping(
                         {
                             "hiddenClaimID": hidden_claim,
                             "primaryClaimID": primary_claim,
+                            "capability": CLAIM_SOURCE_CAPABILITIES[
+                                primary_item["claims"][index]["source"]
+                            ],
                         }
-                        for hidden_claim, primary_claim in zip(
+                        for index, (hidden_claim, primary_claim) in enumerate(zip(
                             hidden_owner.pop("claimIDs"), primary_owner["claimIDs"]
-                        )
+                        ))
                     ],
                 })
                 hidden_items.append(hidden_item)
@@ -518,6 +697,7 @@ def prepare_mapping(
             "protocol": PROTOCOL,
             "seedSHA256": _sha256(seed.encode("utf-8")),
             "selectedMethods": methods,
+            "publicProvenance": public_provenance,
             "caseCountPerMethod": EXPECTED_CASES,
             "duplicateCountPerMethod": duplicate_count,
             "primaryPacketSHA256": _sha256(primary_bytes),
@@ -527,9 +707,9 @@ def prepare_mapping(
         }
         _atomic_private_json(staging / "owner-mapping.json", owner_mapping)
         os.replace(staging, target)
-        target.chmod(0o700)
+        target = _validate_existing_output_root(target)
     except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
+        shutil.rmtree(staging_candidate, ignore_errors=True)
         raise
     return {
         "mappingRoot": str(target),
@@ -622,7 +802,9 @@ def validate_mapper_output(
     output_path: Path,
     forbidden_identity: Optional[str] = None,
 ) -> dict[str, Any]:
-    packet, _ = _load_packet(Path(packet_path))
+    packet_path = Path(packet_path)
+    packet_root = _validate_existing_output_root(packet_path.parent)
+    packet, _ = _load_packet(packet_root / packet_path.name)
     output, _ = _load_private_json(Path(output_path), "mapper judgments")
     _exact_keys(output, {
         "schema", "protocol", "packetID", "mapperIdentity", "items",
@@ -676,8 +858,7 @@ def validate_mapper_output(
 
 
 def _load_mapping(mapping_root: Path) -> tuple[dict, dict, dict]:
-    mapping_root = Path(mapping_root)
-    _assert_owner_only(mapping_root, "mapping root", directory=True)
+    mapping_root = _validate_existing_output_root(Path(mapping_root))
     mapping, _ = _load_private_json(
         mapping_root / "owner-mapping.json", "owner mapping"
     )
@@ -693,9 +874,22 @@ def _load_mapping(mapping_root: Path) -> tuple[dict, dict, dict]:
             ):
         raise MappingError("owner mapping or packet integrity is invalid")
     methods = mapping.get("selectedMethods")
+    public_provenance = mapping.get("publicProvenance")
+    if isinstance(public_provenance, dict):
+        _exact_keys(
+            public_provenance,
+            {"protocolHash", "corpusHash", "reportHash"},
+            "owner mapping public provenance",
+        )
     if not isinstance(methods, list) or not methods \
             or len(set(methods)) != len(methods) \
             or any(method not in METHOD_FILES for method in methods) \
+            or not isinstance(public_provenance, dict) \
+            or any(
+                not isinstance(public_provenance.get(key), str)
+                or not SHA256.fullmatch(public_provenance[key])
+                for key in ("protocolHash", "corpusHash", "reportHash")
+            ) \
             or mapping.get("caseCountPerMethod") != EXPECTED_CASES \
             or mapping.get("duplicateCountPerMethod") != math.ceil(
                 EXPECTED_CASES * DUPLICATE_FRACTION
@@ -752,7 +946,7 @@ def _load_mapping(mapping_root: Path) -> tuple[dict, dict, dict]:
         primary_claims = []
         for pair in pairs:
             _exact_keys(
-                pair, {"hiddenClaimID", "primaryClaimID"},
+                pair, {"hiddenClaimID", "primaryClaimID", "capability"},
                 "hidden claim cross-link",
             )
             hidden_claims.append(pair["hiddenClaimID"])
@@ -781,6 +975,12 @@ def _load_mapping(mapping_root: Path) -> tuple[dict, dict, dict]:
             for claim in primary_item["claims"]
         ]:
             raise MappingError("hidden owner mapping claim cross-link is invalid")
+        expected_capabilities = [
+            CLAIM_SOURCE_CAPABILITIES[claim["source"]]
+            for claim in primary_item["claims"]
+        ]
+        if [pair["capability"] for pair in pairs] != expected_capabilities:
+            raise MappingError("hidden owner mapping capability cross-link is invalid")
     expected_duplicates = mapping["duplicateCountPerMethod"]
     if any(count != expected_duplicates for count in hidden_counts.values()):
         raise MappingError("hidden owner mapping stratification is invalid")
@@ -845,12 +1045,27 @@ def _duplicate_agreement(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     primary = _judgment_map(primary_output)
     hidden = _judgment_map(hidden_output)
-    claim_equal = 0
-    claim_total = 0
-    decision_equal = 0
-    decision_total = 0
+    overall = {
+        "claimEqual": 0,
+        "claimTotal": 0,
+        "decisionEqual": 0,
+        "decisionTotal": 0,
+    }
+    by_method = {
+        method: {
+            "duplicateArmCount": 0,
+            "claimEqual": 0,
+            "claimTotal": 0,
+            "decisionEqual": 0,
+            "decisionTotal": 0,
+            "capabilities": {},
+        }
+        for method in mapping["selectedMethods"]
+    }
     differences = []
     for hidden_arm, owner in mapping["hidden"].items():
+        method_stats = by_method[owner["methodID"]]
+        method_stats["duplicateArmCount"] += 1
         primary_arm = owner["primaryArmID"]
         left = primary[primary_arm]
         right = hidden[hidden_arm]
@@ -860,9 +1075,16 @@ def _duplicate_agreement(
         for pair in owner["claimPairs"]:
             primary_claim = pair["primaryClaimID"]
             hidden_claim = pair["hiddenClaimID"]
-            claim_total += 1
+            capability_stats = method_stats["capabilities"].setdefault(
+                pair["capability"], {"claimEqual": 0, "claimTotal": 0}
+            )
+            overall["claimTotal"] += 1
+            method_stats["claimTotal"] += 1
+            capability_stats["claimTotal"] += 1
             if left_claims[primary_claim] == right_claims[hidden_claim]:
-                claim_equal += 1
+                overall["claimEqual"] += 1
+                method_stats["claimEqual"] += 1
+                capability_stats["claimEqual"] += 1
             else:
                 claim_differences.append({
                     "primaryClaimID": primary_claim,
@@ -872,17 +1094,21 @@ def _duplicate_agreement(
         for index, (left_value, right_value) in enumerate(zip(
             left["criticalTextMatched"], right["criticalTextMatched"]
         )):
-            decision_total += 1
+            overall["decisionTotal"] += 1
+            method_stats["decisionTotal"] += 1
             if left_value == right_value:
-                decision_equal += 1
+                overall["decisionEqual"] += 1
+                method_stats["decisionEqual"] += 1
             else:
                 critical_differences.append(index)
-        decision_total += 1
+        overall["decisionTotal"] += 1
+        method_stats["decisionTotal"] += 1
         abstention_difference = (
             left["abstentionCorrect"] != right["abstentionCorrect"]
         )
         if not abstention_difference:
-            decision_equal += 1
+            overall["decisionEqual"] += 1
+            method_stats["decisionEqual"] += 1
         if claim_differences or critical_differences or abstention_difference:
             differences.append({
                 "primaryArmID": primary_arm,
@@ -891,15 +1117,59 @@ def _duplicate_agreement(
                 "criticalDifferences": critical_differences,
                 "abstentionDifference": abstention_difference,
             })
-    claim_agreement = claim_equal / claim_total if claim_total else 1.0
-    decision_agreement = decision_equal / decision_total if decision_total else 1.0
+    claim_agreement = (
+        overall["claimEqual"] / overall["claimTotal"]
+        if overall["claimTotal"] else 1.0
+    )
+    decision_agreement = (
+        overall["decisionEqual"] / overall["decisionTotal"]
+        if overall["decisionTotal"] else 1.0
+    )
+    method_reliability = []
+    for method_id in mapping["selectedMethods"]:
+        stats = by_method[method_id]
+        method_claim_agreement = (
+            stats["claimEqual"] / stats["claimTotal"]
+            if stats["claimTotal"] else 1.0
+        )
+        method_decision_agreement = (
+            stats["decisionEqual"] / stats["decisionTotal"]
+            if stats["decisionTotal"] else 1.0
+        )
+        capabilities = []
+        for capability in CAPABILITY_ORDER:
+            capability_stats = stats["capabilities"].get(capability)
+            if capability_stats is None:
+                continue
+            capability_agreement = (
+                capability_stats["claimEqual"]
+                / capability_stats["claimTotal"]
+            )
+            capabilities.append({
+                "capability": capability,
+                "claimCount": capability_stats["claimTotal"],
+                "claimJudgmentAgreement": capability_agreement,
+                "qualified": capability_agreement >= CLAIM_AGREEMENT_FLOOR,
+            })
+        method_reliability.append({
+            "methodID": method_id,
+            "duplicateArmCount": stats["duplicateArmCount"],
+            "claimJudgmentAgreement": method_claim_agreement,
+            "decisionAgreement": method_decision_agreement,
+            "capabilities": capabilities,
+            "qualified": (
+                method_claim_agreement >= CLAIM_AGREEMENT_FLOOR
+                and method_decision_agreement >= DECISION_AGREEMENT_FLOOR
+                and all(item["qualified"] for item in capabilities)
+            ),
+        })
     reliability = {
         "duplicateArmCount": len(mapping["hidden"]),
         "claimJudgmentAgreement": claim_agreement,
         "decisionAgreement": decision_agreement,
-        "qualified": (
-            claim_agreement >= CLAIM_AGREEMENT_FLOOR
-            and decision_agreement >= DECISION_AGREEMENT_FLOOR
+        "methods": method_reliability,
+        "qualified": all(
+            method["qualified"] for method in method_reliability
         ),
     }
     return reliability, differences
@@ -1071,6 +1341,7 @@ def _score(
     primary_packet: dict,
     primary_output: dict,
     reliability: dict[str, Any],
+    forbidden_values: tuple[str, ...],
 ) -> dict[str, Any]:
     packet_items = {item["armID"]: item for item in primary_packet["items"]}
     judgments = _judgment_map(primary_output)
@@ -1122,76 +1393,162 @@ def _score(
             required_recall + critical_recall + (1.0 - hallucination)
             + abstention_accuracy
         ) / 4.0
+        public_metadata = PUBLIC_METHOD_METADATA[method_id]
         methods.append({
             "methodID": method_id,
+            "stratum": "single-frame",
+            "license": public_metadata["license"],
+            "limitationCodes": list(public_metadata["limitationCodes"]),
             "caseCount": len(arms),
             "claimCount": claim_count,
-            "requiredFactRecall": required_recall,
-            "criticalTextRecall": critical_recall,
-            "severityWeightedHallucination": hallucination,
-            "abstentionAccuracy": abstention_accuracy,
-            "overall": overall,
+            "metrics": {
+                "requiredFactRecall": required_recall,
+                "criticalTextRecall": critical_recall,
+                "severityWeightedHallucination": hallucination,
+                "abstentionAccuracy": abstention_accuracy,
+                "overall": overall,
+            },
         })
     public = {
         "schema": PUBLIC_SCHEMA,
         "protocol": PROTOCOL,
         "status": "qualified",
+        **mapping["publicProvenance"],
         "reliability": reliability,
         "methods": methods,
     }
-    validate_public_output(public)
+    validate_public_output(public, forbidden_values=forbidden_values)
     return public
 
 
-def validate_public_output(value: Any) -> None:
+def _validate_public_score(value: Any, subject: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) \
+            or not math.isfinite(float(value)) \
+            or not 0.0 <= float(value) <= 1.0:
+        raise MappingError(f"{subject} is invalid")
+
+
+def _validate_public_reliability(value: Any) -> set[str]:
     _exact_keys(value, {
-        "schema", "protocol", "status", "reliability", "methods",
+        "duplicateArmCount", "claimJudgmentAgreement",
+        "decisionAgreement", "methods", "qualified",
+    }, "public aggregate reliability")
+    if not isinstance(value["duplicateArmCount"], int) \
+            or value["duplicateArmCount"] < 1 \
+            or value["qualified"] is not True:
+        raise MappingError("public aggregate reliability is invalid")
+    _validate_public_score(
+        value["claimJudgmentAgreement"], "public aggregate reliability"
+    )
+    _validate_public_score(
+        value["decisionAgreement"], "public aggregate reliability"
+    )
+    methods = value["methods"]
+    if not isinstance(methods, list) or not methods:
+        raise MappingError("public aggregate reliability methods are invalid")
+    seen_methods = set()
+    for method in methods:
+        _exact_keys(method, {
+            "methodID", "duplicateArmCount", "claimJudgmentAgreement",
+            "decisionAgreement", "capabilities", "qualified",
+        }, "public aggregate method reliability")
+        method_id = method["methodID"]
+        if method_id not in METHOD_FILES or method_id in seen_methods \
+                or method["duplicateArmCount"] != math.ceil(
+                    EXPECTED_CASES * DUPLICATE_FRACTION
+                ) \
+                or method["qualified"] is not True:
+            raise MappingError("public aggregate method reliability is invalid")
+        seen_methods.add(method_id)
+        _validate_public_score(
+            method["claimJudgmentAgreement"],
+            "public aggregate method reliability",
+        )
+        _validate_public_score(
+            method["decisionAgreement"],
+            "public aggregate method reliability",
+        )
+        if method["claimJudgmentAgreement"] < CLAIM_AGREEMENT_FLOOR \
+                or method["decisionAgreement"] < DECISION_AGREEMENT_FLOOR:
+            raise MappingError("public aggregate method reliability is below floor")
+        capabilities = method["capabilities"]
+        if not isinstance(capabilities, list):
+            raise MappingError("public aggregate capability reliability is invalid")
+        seen_capabilities = set()
+        for capability in capabilities:
+            _exact_keys(capability, {
+                "capability", "claimCount", "claimJudgmentAgreement",
+                "qualified",
+            }, "public aggregate capability reliability")
+            capability_id = capability["capability"]
+            if capability_id not in CAPABILITY_ORDER \
+                    or capability_id in seen_capabilities \
+                    or not isinstance(capability["claimCount"], int) \
+                    or capability["claimCount"] < 1 \
+                    or capability["qualified"] is not True:
+                raise MappingError(
+                    "public aggregate capability reliability is invalid"
+                )
+            seen_capabilities.add(capability_id)
+            _validate_public_score(
+                capability["claimJudgmentAgreement"],
+                "public aggregate capability reliability",
+            )
+            if capability["claimJudgmentAgreement"] < CLAIM_AGREEMENT_FLOOR:
+                raise MappingError(
+                    "public aggregate capability reliability is below floor"
+                )
+    return seen_methods
+
+
+def validate_public_output(
+    value: Any,
+    *,
+    forbidden_values: tuple[str, ...] = (),
+) -> None:
+    _exact_keys(value, {
+        "schema", "protocol", "status", "protocolHash", "corpusHash",
+        "reportHash", "reliability", "methods",
     }, "public aggregate")
     if value["schema"] != PUBLIC_SCHEMA or value["protocol"] != PROTOCOL \
             or value["status"] != "qualified":
         raise MappingError("public aggregate provenance is invalid")
-    reliability = value["reliability"]
-    _exact_keys(reliability, {
-        "duplicateArmCount", "claimJudgmentAgreement",
-        "decisionAgreement", "qualified",
-    }, "public aggregate reliability")
-    if not isinstance(reliability["duplicateArmCount"], int) \
-            or reliability["duplicateArmCount"] < 1 \
-            or reliability["qualified"] is not True:
-        raise MappingError("public aggregate reliability is invalid")
-    for key in ("claimJudgmentAgreement", "decisionAgreement"):
-        score = reliability[key]
-        if isinstance(score, bool) or not isinstance(score, (int, float)) \
-                or not 0.0 <= float(score) <= 1.0:
-            raise MappingError("public aggregate reliability is invalid")
+    for key in ("protocolHash", "corpusHash", "reportHash"):
+        digest = value[key]
+        if not isinstance(digest, str) or not SHA256.fullmatch(digest):
+            raise MappingError("public aggregate provenance hash is invalid")
+    reliability_methods = _validate_public_reliability(value["reliability"])
     methods = value["methods"]
     if not isinstance(methods, list) or not methods:
         raise MappingError("public aggregate methods are invalid")
     seen = set()
     for method in methods:
         _exact_keys(method, {
-            "methodID", "caseCount", "claimCount", "requiredFactRecall",
-            "criticalTextRecall", "severityWeightedHallucination",
-            "abstentionAccuracy", "overall",
+            "methodID", "stratum", "license", "limitationCodes",
+            "caseCount", "claimCount", "metrics",
         }, "public aggregate method")
         method_id = method["methodID"]
+        public_metadata = PUBLIC_METHOD_METADATA.get(method_id)
         if method_id not in METHOD_FILES or method_id in seen \
+                or method["stratum"] != "single-frame" \
+                or not isinstance(public_metadata, dict) \
+                or method["license"] != public_metadata["license"] \
+                or method["limitationCodes"] != list(
+                    public_metadata["limitationCodes"]
+                ) \
                 or not isinstance(method["caseCount"], int) \
-                or method["caseCount"] < EXPECTED_CASES \
+                or method["caseCount"] != EXPECTED_CASES \
                 or not isinstance(method["claimCount"], int) \
                 or method["claimCount"] < 0:
             raise MappingError("public aggregate method inventory is invalid")
         seen.add(method_id)
-        for key in (
-            "requiredFactRecall", "criticalTextRecall",
-            "severityWeightedHallucination", "abstentionAccuracy", "overall",
-        ):
-            score = method[key]
-            if isinstance(score, bool) or not isinstance(score, (int, float)) \
-                    or not math.isfinite(float(score)) \
-                    or not 0.0 <= float(score) <= 1.0:
-                raise MappingError("public aggregate metric is invalid")
-    _reject_public_leaks(value)
+        metrics = method["metrics"]
+        _exact_keys(metrics, set(PUBLIC_METRICS), "public aggregate metrics")
+        for key in PUBLIC_METRICS:
+            _validate_public_score(metrics[key], "public aggregate metric")
+    if seen != reliability_methods:
+        raise MappingError("public aggregate reliability inventory is invalid")
+    _reject_public_leaks(value, forbidden_values=forbidden_values)
 
 
 def aggregate_mappings(
@@ -1201,12 +1558,16 @@ def aggregate_mappings(
     aggregate_root: Path,
     adjudication_output_path: Optional[Path] = None,
 ) -> dict[str, Any]:
-    mapping, primary_packet, hidden_packet = _load_mapping(Path(mapping_root))
+    target = _validate_output_root_path(Path(aggregate_root))
+    if target.exists():
+        raise MappingError("aggregate root already exists")
+    mapping_root = _validate_existing_output_root(Path(mapping_root))
+    mapping, primary_packet, hidden_packet = _load_mapping(mapping_root)
     primary_output = validate_mapper_output(
-        Path(mapping_root) / "primary-packet.json", Path(primary_output_path)
+        mapping_root / "primary-packet.json", Path(primary_output_path)
     )
     hidden_output = validate_mapper_output(
-        Path(mapping_root) / "hidden-packet.json", Path(hidden_output_path),
+        mapping_root / "hidden-packet.json", Path(hidden_output_path),
         primary_output["mapperIdentity"],
     )
     forbidden_values = tuple(mapping["selectedMethods"]) + tuple(
@@ -1217,50 +1578,74 @@ def aggregate_mappings(
     reliability, differences = _duplicate_agreement(
         mapping, primary_output, hidden_output
     )
-    target = Path(aggregate_root)
-    if target.exists():
-        raise MappingError("aggregate root already exists")
-    _make_private_directory(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging_candidate = target.parent / f".{target.name}.tmp-{uuid.uuid4().hex}"
+    staging = staging_candidate
+    published = False
     result: dict[str, Any] = {
         "status": "qualified",
         "reliability": reliability,
     }
-    packet_path = None
-    owner_path = None
-    if differences:
-        packet_path, owner_path, _ = _build_adjudication(
-            target, mapping, primary_packet, differences
-        )
-        result["adjudicationPacket"] = str(packet_path)
-    if not reliability["qualified"]:
-        result["status"] = "inconclusive"
-        result["aggregateResult"] = str(_write_aggregate_result(
-            target, result["status"], reliability, packet_path
-        ))
-        return result
-    if differences and adjudication_output_path is None:
-        result["status"] = "adjudication-required"
-        result["aggregateResult"] = str(_write_aggregate_result(
-            target, result["status"], reliability, packet_path
-        ))
-        return result
-    if differences:
-        assert packet_path is not None and owner_path is not None
-        _apply_adjudication(
-            packet_path, owner_path, Path(adjudication_output_path),
-            primary_output,
-            {
+    try:
+        staging = _prepare_output_root(staging_candidate)
+        packet_path = None
+        owner_path = None
+        if differences:
+            packet_path, owner_path, _ = _build_adjudication(
+                staging, mapping, primary_packet, differences
+            )
+            result["adjudicationPacket"] = str(packet_path)
+        if not reliability["qualified"]:
+            result["status"] = "inconclusive"
+            result["aggregateResult"] = str(_write_aggregate_result(
+                staging, result["status"], reliability, packet_path
+            ))
+        elif differences and adjudication_output_path is None:
+            result["status"] = "adjudication-required"
+            result["aggregateResult"] = str(_write_aggregate_result(
+                staging, result["status"], reliability, packet_path
+            ))
+        else:
+            if differences:
+                assert packet_path is not None and owner_path is not None
+                _apply_adjudication(
+                    packet_path, owner_path, Path(adjudication_output_path),
+                    primary_output,
+                    {
+                        primary_output["mapperIdentity"],
+                        hidden_output["mapperIdentity"],
+                    },
+                )
+            declassification_secrets = (
+                mapping["seedSHA256"],
+                mapping["primaryPacketSHA256"],
+                mapping["hiddenPacketSHA256"],
                 primary_output["mapperIdentity"],
                 hidden_output["mapperIdentity"],
-            },
-        )
-    public = _score(mapping, primary_packet, primary_output, reliability)
-    public_path = target / "public-aggregate.json"
-    _atomic_private_json(public_path, public)
-    result["publicAggregate"] = str(public_path)
-    result["aggregateResult"] = str(_write_aggregate_result(
-        target, result["status"], reliability, packet_path, public_path
-    ))
+                *(owner["caseID"] for owner in mapping["primary"].values()),
+            )
+            public = _score(
+                mapping, primary_packet, primary_output, reliability,
+                declassification_secrets,
+            )
+            public_path = staging / "public-aggregate.json"
+            _atomic_private_json(public_path, public)
+            result["publicAggregate"] = str(public_path)
+            result["aggregateResult"] = str(_write_aggregate_result(
+                staging, result["status"], reliability,
+                packet_path, public_path,
+            ))
+        os.replace(staging, target)
+        published = True
+        target = _validate_existing_output_root(target)
+    except BaseException:
+        shutil.rmtree(staging_candidate, ignore_errors=True)
+        if published:
+            shutil.rmtree(target, ignore_errors=True)
+        raise
+    for key in ("adjudicationPacket", "publicAggregate", "aggregateResult"):
+        if key in result:
+            result[key] = str(target / Path(result[key]).name)
     return result
 
 
