@@ -73,6 +73,7 @@ done
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export ZBS_EYE_ALLOW_MODEL_DOWNLOADS=0
+export PYTHONDONTWRITEBYTECODE=1
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy || true
 
 if [ "$MODE" = "quality" ]; then
@@ -161,3 +162,7 @@ xcodebuild \
   -only-testing:ZBSEyeTests/ScreenUnderstandingScoringTests \
   -only-testing:ZBSEyeTests/ScreenUnderstandingPerformanceProtocolTests \
   -only-testing:ZBSEyeTests/ScreenUnderstandingBenchmarkTests
+
+/usr/bin/python3 -m unittest discover -s tools/screen-understanding-bench/annotation -p 'test_*.py'
+/usr/bin/python3 -m unittest discover -s tools/screen-understanding-bench/mapping -p 'test_*.py'
+/usr/bin/python3 -m unittest discover -s tools/screen-understanding-bench/runner -p 'test_*.py'

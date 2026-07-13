@@ -32,6 +32,18 @@ class VerifyEntrypointTests(unittest.TestCase):
         )
         self.assertNotIn("runner execution not yet implemented", source)
 
+    def test_fixture_mode_runs_every_python_suite_without_bytecode(self) -> None:
+        source = ENTRYPOINT.read_text(encoding="utf-8")
+
+        self.assertIn("export PYTHONDONTWRITEBYTECODE=1", source)
+        for suite in ("annotation", "mapping", "runner"):
+            self.assertIn(
+                "-m unittest discover "
+                f"-s tools/screen-understanding-bench/{suite} "
+                "-p 'test_*.py'",
+                source,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
