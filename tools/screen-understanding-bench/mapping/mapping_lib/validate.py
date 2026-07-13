@@ -28,6 +28,7 @@ from .contracts import (
     SAFE_ID,
     SEVERITY_WEIGHTS,
     SHA256,
+    UNSUPPORTED_SEVERITY_BY_SOURCE,
     MappingError,
     exact_keys as _exact_keys,
     reject_leaks as _reject_leaks,
@@ -183,6 +184,9 @@ def validate_mapper_output(
         expected_claims = {
             claim["claimID"] for claim in packet_item["claims"]
         }
+        packet_claims = {
+            claim["claimID"]: claim for claim in packet_item["claims"]
+        }
         if not isinstance(item["claimJudgments"], list):
             raise MappingError("claim judgments are invalid")
         actual_claims = set()
@@ -195,6 +199,14 @@ def validate_mapper_output(
             validate_decision(
                 claim["judgment"], required_ids, forbidden_ids
             )
+            if "unsupported" in claim["judgment"] \
+                    and claim["judgment"]["unsupported"] \
+                        != UNSUPPORTED_SEVERITY_BY_SOURCE[
+                            packet_claims[claim_id]["source"]
+                        ]:
+                raise MappingError(
+                    "unsupported severity does not match the claim source"
+                )
         if actual_claims != expected_claims:
             raise MappingError("claim judgments do not cover the packet")
         critical = item["criticalTextMatched"]
@@ -274,7 +286,9 @@ def load_mapping(
     cases_by_method = {method: set() for method in methods}
     for arm_id, owner in primary_owners.items():
         _exact_keys(
-            owner, {"methodID", "caseID", "claimIDs"},
+            owner, {
+                "methodID", "caseID", "claimIDs", "deterministicClaims",
+            },
             "primary owner mapping item",
         )
         method = owner["methodID"]
@@ -283,6 +297,20 @@ def load_mapping(
         expected_claims = [
             claim["claimID"] for claim in primary_items[arm_id]["claims"]
         ]
+        deterministic = owner["deterministicClaims"]
+        if not isinstance(deterministic, list):
+            raise MappingError("primary deterministic claims are invalid")
+        for claim in deterministic:
+            _exact_keys(
+                claim, {"source", "judgment"}, "deterministic claim"
+            )
+            if claim["source"] not in CLAIM_SOURCE_CAPABILITIES:
+                raise MappingError("deterministic claim source is invalid")
+            validate_decision(
+                claim["judgment"], set(REQUIRED_FACT_IDS), set(FORBIDDEN_FACT_IDS)
+            )
+            if "ambiguous" in claim["judgment"]:
+                raise MappingError("deterministic claim cannot be ambiguous")
         if method not in cases_by_method \
                 or not isinstance(case_id, str) \
                 or not CASE_ID.fullmatch(case_id) \
@@ -304,13 +332,16 @@ def load_mapping(
     for hidden_arm, owner in hidden_owners.items():
         _exact_keys(owner, {
             "methodID", "caseID", "primaryArmID", "claimPairs",
+            "deterministicClaims",
         }, "hidden owner mapping item")
         primary_arm = owner["primaryArmID"]
         if primary_arm not in primary_owners:
             raise MappingError("hidden owner mapping cross-link is invalid")
         primary_owner = primary_owners[primary_arm]
         if owner["methodID"] != primary_owner["methodID"] \
-                or owner["caseID"] != primary_owner["caseID"]:
+                or owner["caseID"] != primary_owner["caseID"] \
+                or owner["deterministicClaims"] \
+                    != primary_owner["deterministicClaims"]:
             raise MappingError("hidden owner mapping cross-link is invalid")
         method = owner["methodID"]
         hidden_counts[method] += 1

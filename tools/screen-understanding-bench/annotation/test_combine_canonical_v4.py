@@ -5,12 +5,20 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from annotation.combine_canonical_v4 import combine
-from common.provenance import file_evidence
+from common.evaluator_receipt import issue_receipt
+from common.provenance import (
+    HASH_ALGORITHM,
+    file_evidence,
+    final_audit_evidence,
+    tree_evidence,
+)
 from runner.preflight import validate_seal
 
 
@@ -154,9 +162,23 @@ class CombineCanonicalV4Tests(unittest.TestCase):
             "schema": "screen-understanding-single-frame-commit-v4",
             "protocol": "screen-understanding-single-frame-lane-v4",
             "rubricVersion": "screen-understanding-canonical-v2",
+            "hashAlgorithm": HASH_ALGORITHM,
+            "candidateOutputsAvailableDuringAnnotation": False,
             "canonical": {
                 "labelsSHA256": file_evidence(canonical / "labels.json")["sha256"],
                 "reliabilitySHA256": file_evidence(canonical / "reliability.json")["sha256"],
+            },
+            "producer": {
+                "finalizerSHA256": file_evidence(
+                    Path(__file__).with_name("single_frame_lane_v4.py")
+                )["sha256"],
+            },
+            "evidence": {"finalAudit": final_audit_evidence(self.single)},
+            "counts": {
+                "labelCount": 200,
+                "duplicateCount": 30,
+                "finalAuditCaseCount": 30,
+                "finalAuditSlotCount": 180,
             },
         })
 
@@ -204,6 +226,51 @@ class CombineCanonicalV4Tests(unittest.TestCase):
             "qualified": True,
         })
         self._json(self.temporal / "result.json", {"qualified": True, "pairCount": 100})
+        packet_root = self.temporal_audit / "packet"
+        packet_root.mkdir(mode=0o700)
+        self._json(packet_root / "packet.json", {"packetID": "fixture-temporal-final"})
+        evidence = self.temporal / "evidence"
+        evidence.mkdir(mode=0o700)
+        self._json(evidence / "final-output.json", {"auditor": "fresh-temporal-auditor"})
+        issue_receipt(
+            packet_path=packet_root / "packet.json",
+            output_path=evidence / "final-output.json",
+            receipt_path=evidence / "final-receipt.json",
+            role="final-reference-auditor",
+            session_id="fixture-temporal-final-session",
+            provider="openai",
+            model_family="frontier-vision-fixture",
+        )
+        self._json(self.temporal / "commit.json", {
+            "schema": "screen-understanding-temporal-commit-v4",
+            "protocol": "screen-understanding-temporal-annotation-v4",
+            "rubricVersion": "screen-understanding-temporal-v4",
+            "hashAlgorithm": HASH_ALGORITHM,
+            "candidateOutputsAvailable": False,
+            "canonical": {
+                "labelsSHA256": file_evidence(self.temporal / "labels.json")["sha256"],
+                "reliabilitySHA256": file_evidence(
+                    self.temporal / "reliability.json"
+                )["sha256"],
+                "resultSHA256": file_evidence(self.temporal / "result.json")["sha256"],
+            },
+            "producer": {
+                "finalizerSHA256": file_evidence(
+                    Path(__file__).parent / "temporal_v4" / "pipeline.py"
+                )["sha256"],
+            },
+            "evidence": {
+                "finalAuditRoot": tree_evidence(self.temporal_audit),
+                "finalOutput": file_evidence(evidence / "final-output.json"),
+                "finalReceipt": file_evidence(evidence / "final-receipt.json"),
+            },
+            "counts": {
+                "labelCount": 100,
+                "duplicateCount": 15,
+                "finalAuditCaseCount": 15,
+                "finalAuditSlotCount": 75,
+            },
+        })
 
     def test_combines_300_labels_and_binds_255_audit_slots(self) -> None:
         output = self.root / "combined"
@@ -250,6 +317,35 @@ class CombineCanonicalV4Tests(unittest.TestCase):
                 output,
             )
         self.assertFalse(output.exists())
+
+    def test_rejects_temporal_audit_drift_without_publishing(self) -> None:
+        self._json(self.temporal_audit / "late-drift.json", {"changed": True})
+        output = self.root / "drifted-combined"
+
+        with self.assertRaisesRegex(ValueError, "temporal commit"):
+            combine(
+                self.corpus,
+                self.single,
+                self.temporal,
+                self.temporal_audit,
+                output,
+            )
+
+        self.assertFalse(output.exists())
+
+    def test_documented_combiner_cli_is_discoverable_from_the_repository(self) -> None:
+        script = Path(__file__).with_name("combine_canonical_v4.py")
+        result = subprocess.run(
+            [sys.executable, str(script), "--help"],
+            cwd=Path(__file__).parents[3],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--single-root", result.stdout)
+        self.assertIn("--temporal-root", result.stdout)
 
 
 if __name__ == "__main__":

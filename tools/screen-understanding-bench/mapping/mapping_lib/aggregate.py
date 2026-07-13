@@ -9,6 +9,11 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from common.evaluator_receipt import (
+    validate_independent_sessions,
+    validate_receipt,
+)
+
 from .contracts import (
     ADJUDICATION_OWNER_SCHEMA,
     ADJUDICATION_PACKET_SCHEMA,
@@ -16,13 +21,16 @@ from .contracts import (
     AGGREGATE_RESULT_SCHEMA,
     CAPABILITY_ORDER,
     CLAIM_AGREEMENT_FLOOR,
+    CLAIM_SOURCE_CAPABILITIES,
     DECISION_AGREEMENT_FLOOR,
     EXPECTED_CASES,
+    METHOD_CAPABILITIES,
     PROTOCOL,
     PUBLIC_METHOD_METADATA,
     PUBLIC_SCHEMA,
     SAFE_ID,
     SEVERITY_WEIGHTS,
+    UNSUPPORTED_SEVERITY_BY_SOURCE,
     MappingError,
     exact_keys as _exact_keys,
     reject_leaks as _reject_leaks,
@@ -122,6 +130,17 @@ def _duplicate_agreement(
     for hidden_arm, owner in mapping["hidden"].items():
         method_stats = by_method[owner["methodID"]]
         method_stats["duplicateArmCount"] += 1
+        for deterministic in owner["deterministicClaims"]:
+            capability = CLAIM_SOURCE_CAPABILITIES[deterministic["source"]]
+            capability_stats = method_stats["capabilities"].setdefault(
+                capability, {"claimEqual": 0, "claimTotal": 0}
+            )
+            overall["claimTotal"] += 1
+            overall["claimEqual"] += 1
+            method_stats["claimTotal"] += 1
+            method_stats["claimEqual"] += 1
+            capability_stats["claimTotal"] += 1
+            capability_stats["claimEqual"] += 1
         primary_arm = owner["primaryArmID"]
         left = primary[primary_arm]
         right = hidden[hidden_arm]
@@ -193,19 +212,29 @@ def _duplicate_agreement(
             if stats["decisionTotal"] else 1.0
         )
         capabilities = []
+        expected_capabilities = set(METHOD_CAPABILITIES[method_id]) | set(
+            stats["capabilities"]
+        )
         for capability in CAPABILITY_ORDER:
+            if capability not in expected_capabilities:
+                continue
             capability_stats = stats["capabilities"].get(capability)
             if capability_stats is None:
-                continue
-            capability_agreement = (
-                capability_stats["claimEqual"]
-                / capability_stats["claimTotal"]
-            )
+                capability_agreement = 0.0
+                claim_count = 0
+            else:
+                claim_count = capability_stats["claimTotal"]
+                capability_agreement = (
+                    capability_stats["claimEqual"] / claim_count
+                )
             capabilities.append({
                 "capability": capability,
-                "claimCount": capability_stats["claimTotal"],
+                "claimCount": claim_count,
                 "claimJudgmentAgreement": capability_agreement,
-                "qualified": capability_agreement >= CLAIM_AGREEMENT_FLOOR,
+                "qualified": (
+                    claim_count > 0
+                    and capability_agreement >= CLAIM_AGREEMENT_FLOOR
+                ),
             })
         method_reliability.append({
             "methodID": method_id,
@@ -383,6 +412,9 @@ def _apply_adjudication(
             claim["claimID"]: claim
             for claim in primary_arm["claimJudgments"]
         }
+        adjudication_claims = {
+            claim["claimID"]: claim for claim in item["claimJudgments"]
+        }
         for claim in result["claimJudgments"]:
             _exact_keys(claim, {"claimID", "judgment"}, "adjudicated claim")
             claim_id = claim["claimID"]
@@ -392,6 +424,13 @@ def _apply_adjudication(
             validate_decision(
                 claim["judgment"], required_ids, forbidden_ids
             )
+            claim_source = adjudication_claims[claim_id]["source"]
+            if "unsupported" in claim["judgment"] \
+                    and claim["judgment"]["unsupported"] \
+                        != UNSUPPORTED_SEVERITY_BY_SOURCE[claim_source]:
+                raise MappingError(
+                    "unsupported severity does not match the claim source"
+                )
             primary_claims[claim_owner[claim_id]]["judgment"] = (
                 claim["judgment"]
             )
@@ -464,8 +503,13 @@ def _score(
                 fact["id"]: fact["severity"]
                 for fact in packet["forbiddenInferences"]
             }
-            for claim in judgment["claimJudgments"]:
-                decision = claim["judgment"]
+            decisions = [
+                claim["judgment"] for claim in judgment["claimJudgments"]
+            ] + [
+                claim["judgment"]
+                for claim in mapping["primary"][arm_id]["deterministicClaims"]
+            ]
+            for decision in decisions:
                 claim_count += 1
                 if "matchedRequired" in decision:
                     matched.add(decision["matchedRequired"])
@@ -581,6 +625,9 @@ def aggregate_mappings(
     hidden_output_path: Path,
     aggregate_root: Path,
     adjudication_output_path: Optional[Path] = None,
+    primary_receipt_path: Optional[Path] = None,
+    hidden_receipt_path: Optional[Path] = None,
+    adjudication_receipt_path: Optional[Path] = None,
     *,
     load_private_json: PrivateJSONLoader,
     atomic_private_json: PrivateJSONWriter,
@@ -602,6 +649,29 @@ def aggregate_mappings(
         Path(hidden_output_path),
         primary_output["mapperIdentity"],
         load_private_json=load_private_json,
+    )
+    primary_receipt_path = primary_receipt_path or Path(
+        primary_output_path
+    ).with_suffix(".receipt.json")
+    hidden_receipt_path = hidden_receipt_path or Path(
+        hidden_output_path
+    ).with_suffix(".receipt.json")
+    mapper_receipts = [
+        validate_receipt(
+            primary_receipt_path,
+            mapping_root / "primary-packet.json",
+            Path(primary_output_path),
+            "claim-mapper-primary",
+        ),
+        validate_receipt(
+            hidden_receipt_path,
+            mapping_root / "hidden-packet.json",
+            Path(hidden_output_path),
+            "claim-mapper-hidden",
+        ),
+    ]
+    validate_independent_sessions(
+        mapper_receipts, {"claim-mapper-primary", "claim-mapper-hidden"}
     )
     case_ids = tuple(sorted({
         owner["caseID"] for owner in mapping["primary"].values()
@@ -678,6 +748,22 @@ def aggregate_mappings(
                         hidden_output["mapperIdentity"],
                     },
                     load_private_json,
+                )
+                adjudication_receipt_path = adjudication_receipt_path or Path(
+                    adjudication_output_path
+                ).with_suffix(".receipt.json")
+                adjudicator_receipt = validate_receipt(
+                    adjudication_receipt_path,
+                    packet_path,
+                    Path(adjudication_output_path),
+                    "claim-adjudicator",
+                )
+                validate_independent_sessions(
+                    [*mapper_receipts, adjudicator_receipt],
+                    {
+                        "claim-mapper-primary", "claim-mapper-hidden",
+                        "claim-adjudicator",
+                    },
                 )
             declassification_secrets = (
                 mapping["seedSHA256"],

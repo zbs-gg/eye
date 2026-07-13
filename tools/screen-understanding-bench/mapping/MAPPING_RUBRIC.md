@@ -7,18 +7,25 @@ sharing decisions.
 
 ## One decision per claim
 
+The packet contains only claims that still require semantic judgment. The preparation stage resolves three
+classes deterministically and keeps them out of the mapper packet:
+
+- `appName=...` is structured runtime evidence for `required.surface`;
+- `windowTitle=...` is structured runtime evidence for `required.content`;
+- `label:...` uses normalized exact containment in a required fact, otherwise it is `unsupported: minor`.
+
+Do not reconstruct or second-guess those decisions. They are receipt-bound in the private owner mapping and
+count as exact-agreement decisions in the scorer.
+
 Every candidate claim receives exactly one decision:
 
 - `matchedRequired: <fact-id>` — the claim semantically entails that locked required fact. The wording may
   differ, but the claim must assert the same observable fact. A merely related topic is not a match.
 - `matchedForbidden: <fact-id>` — the claim directly asserts that locked forbidden inference. Use the exact
   forbidden fact ID. Missing detail, weak wording, or low confidence alone is not a forbidden match.
-- `unsupported: minor` — an unsupported but low-impact label or incidental detail that does not materially
-  change the scene, state, actor, or action.
-- `unsupported: major` — an unsupported entity, action, state, or relationship that materially changes what
-  the screen says is happening.
-- `unsupported: critical` — a fabricated sensitive fact, intent, outcome, commitment, or safety-relevant
-  assertion that could materially mislead downstream use.
+- `unsupported: major` — use this exact severity for every unsupported summary or remaining free-form atomic
+  fact. Severity is fixed by claim source; the mapper decides only whether the claim is unsupported.
+- `unsupported: minor` — reserved for deterministic label claims and therefore never emitted by the mapper.
 - `ambiguous: true` — the locked reference and supplied evidence genuinely do not permit a reliable decision.
   Do not use ambiguity as a substitute for choosing between a supported and unsupported claim.
 

@@ -10,7 +10,14 @@ final class ScreenUnderstandingBenchmarkTests: XCTestCase {
         XCTAssertEqual(Set(status.methods.map(\.id)), Set(protocolDocument.methods.map(\.id)))
         XCTAssertFalse(status.containsPersonalCorpus)
         XCTAssertFalse(status.containsCaseMaterial)
-        XCTAssertEqual(status.qualityConclusion, "not-run")
+        XCTAssertEqual(status.qualityConclusion, "inconclusive")
+        let accessByMethod = Dictionary(
+            uniqueKeysWithValues: status.methods.map { ($0.id, $0.privateCorpusAccess) }
+        )
+        XCTAssertEqual(accessByMethod["metadata-ax-ocr"], true)
+        XCTAssertEqual(accessByMethod["apple-vision"], true)
+        XCTAssertEqual(accessByMethod["deterministic-hybrid"], true)
+        XCTAssertEqual(accessByMethod["florence-2-base"], false)
     }
 
     func testPublicStatusRejectsCaseOrPersonalCorpusFlags() throws {
@@ -19,6 +26,15 @@ final class ScreenUnderstandingBenchmarkTests: XCTestCase {
         XCTAssertThrowsError(try status.validate())
         status = try ScreenUnderstandingPublicStatus.load(from: statusURL())
         status.containsPersonalCorpus = true
+        XCTAssertThrowsError(try status.validate())
+    }
+
+    func testPublicStatusRejectsFalsePrivateAccessAccounting() throws {
+        var status = try ScreenUnderstandingPublicStatus.load(from: statusURL())
+        let index = try XCTUnwrap(
+            status.methods.firstIndex(where: { $0.id == "apple-vision" })
+        )
+        status.methods[index].privateCorpusAccess = false
         XCTAssertThrowsError(try status.validate())
     }
 

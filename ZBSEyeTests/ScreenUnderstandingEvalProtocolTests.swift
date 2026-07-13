@@ -47,9 +47,14 @@ final class ScreenUnderstandingEvalProtocolTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(benchmark.corpus.minimumHeldOutSingleFrames, 60)
         XCTAssertGreaterThanOrEqual(benchmark.corpus.minimumHeldOutTemporalPairs, 30)
         XCTAssertEqual(benchmark.publication.allowCaseMaterial, false)
+        XCTAssertEqual(benchmark.publication.schema, "public-decision.schema.json")
+        XCTAssertEqual(
+            benchmark.publication.qualifiedSchema,
+            "public-aggregate.schema.json"
+        )
 
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        XCTAssertEqual(digest, "2be74ec91866978ffeb63dc8a73cdfa5115b8156b182e53e9c8e4a377ac1569c")
+        XCTAssertEqual(digest, "3a932fa4e411b12c572b0a73c7a4c0dc4e41a76a82c49dd945b36953437a97a6")
     }
 
     func testValidationRejectsForbiddenExecutionAndUnpinnedMethods() throws {

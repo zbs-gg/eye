@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -510,6 +511,45 @@ def _commit_staged_run(
         raise RunnerError("private result commit failed") from error
 
 
+def _run_bounded_process_group(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout: float,
+    subject: str,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a local command and reap its whole descendant group on timeout."""
+
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+        raise RunnerError(f"{subject} timed out")
+    return subprocess.CompletedProcess(
+        command, process.returncode, stdout=stdout, stderr=stderr
+    )
+
+
 class NativeVisionBackend:
     """Compile and run the native Apple Vision JSONL worker without network access."""
 
@@ -549,7 +589,7 @@ class NativeVisionBackend:
                 "TRANSFORMERS_OFFLINE": "1",
                 "ZBS_EYE_ALLOW_MODEL_DOWNLOADS": "0",
             }
-            compile_result = subprocess.run(
+            compile_result = _run_bounded_process_group(
                 [
                     "/usr/bin/sandbox-exec", "-p", NETWORK_DENY_PROFILE,
                     "/usr/bin/xcrun", "swiftc", str(source_path),
@@ -558,22 +598,20 @@ class NativeVisionBackend:
                 ],
                 cwd=scratch,
                 env=environment,
-                check=False,
-                capture_output=True,
                 timeout=300,
+                subject="native Vision compiler",
             )
             if compile_result.returncode != 0:
                 raise RunnerError("native Vision compiler failed")
-            run_result = subprocess.run(
+            run_result = _run_bounded_process_group(
                 [
                     "/usr/bin/sandbox-exec", "-p", NETWORK_DENY_PROFILE,
                     str(binary), str(job_path),
                 ],
                 cwd=scratch,
                 env=environment,
-                check=False,
-                capture_output=True,
                 timeout=600,
+                subject="native Vision execution",
             )
             if run_result.returncode != 0:
                 raise RunnerError("native Vision execution failed")
@@ -668,7 +706,7 @@ def run_quality(
     native_runtime_identity = _validated_native_runtime_identity(
         runtime_identity_collector or collect_native_runtime_identity
     )
-    validate_seal(
+    seal = validate_seal(
         dataset_root,
         annotation_root,
         source_annotation_root=source_annotation_root,
@@ -687,6 +725,8 @@ def run_quality(
         raise RunnerError("corpus manifest is invalid") from error
     if not isinstance(manifest, dict):
         raise RunnerError("corpus manifest is invalid")
+    if _sha256(manifest_data) != seal["datasetManifestSHA256"]:
+        raise RunnerError("corpus manifest changed after seal validation")
     split_ids = manifest.get("splits", {}).get(LOCKED_SPLIT)
     if not isinstance(split_ids, list) or len(split_ids) != EXPECTED_TEST_CASES \
             or len(set(split_ids)) != EXPECTED_TEST_CASES:
@@ -756,6 +796,16 @@ def run_quality(
     target_names.append("run-inventory.json")
     if any((result_root / name).exists() for name in target_names):
         raise RunnerError("private result target already exists")
+    canonical_paths = {
+        "canonicalLabelsSHA256": annotation_root / "canonical" / "labels.json",
+        "canonicalReliabilitySHA256": (
+            annotation_root / "canonical" / "reliability.json"
+        ),
+        "canonicalCommitSHA256": annotation_root / "canonical" / "commit.json",
+    }
+    for key, path in canonical_paths.items():
+        if _sha256(_read_private_regular(path)) != seal[key]:
+            raise RunnerError("canonical seal changed after validation")
     staging = Path(tempfile.mkdtemp(prefix=".screen-run-", dir=result_root))
     os.chmod(staging, 0o700)
     try:
@@ -774,16 +824,10 @@ def run_quality(
             "complete": True,
             "commitFile": "run-inventory.json",
             "partialOutputsValidWithoutInventory": False,
-            "datasetManifestSHA256": _sha256(manifest_data),
-            "canonicalLabelsSHA256": _sha256(
-                _read_private_regular(annotation_root / "canonical" / "labels.json")
-            ),
-            "canonicalReliabilitySHA256": _sha256(
-                _read_private_regular(annotation_root / "canonical" / "reliability.json")
-            ),
-            "canonicalCommitSHA256": _sha256(
-                _read_private_regular(annotation_root / "canonical" / "commit.json")
-            ),
+            "datasetManifestSHA256": seal["datasetManifestSHA256"],
+            "canonicalLabelsSHA256": seal["canonicalLabelsSHA256"],
+            "canonicalReliabilitySHA256": seal["canonicalReliabilitySHA256"],
+            "canonicalCommitSHA256": seal["canonicalCommitSHA256"],
             "nativeRuntimeIdentity": native_runtime_identity,
             "nativeRuntimeIdentitySHA256": _sha256(
                 _json_bytes(native_runtime_identity)

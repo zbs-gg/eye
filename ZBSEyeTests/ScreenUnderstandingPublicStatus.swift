@@ -27,16 +27,21 @@ struct ScreenUnderstandingPublicStatus: Codable, Sendable, Equatable {
             "fastvlm-0.5b", "smolvlm2-256m-video-instruct", "omniparser-v2",
         ])
         let allowedStatuses = Set([
-            "contract-passed", "smoke-passed", "pending-blind-labels", "security-unsupported",
+            "mapping-inconclusive", "security-unsupported",
+        ])
+        let builtInIDs = Set([
+            "metadata-ax-ocr", "apple-vision", "deterministic-hybrid",
         ])
         guard protocolID == "screen-understanding-v1",
               Set(methods.map(\.id)) == allowedIDs,
               methods.count == allowedIDs.count,
               methods.allSatisfy({ allowedStatuses.contains($0.status) }),
-              methods.allSatisfy({ !$0.privateCorpusAccess }),
+              methods.allSatisfy({ method in
+                  method.privateCorpusAccess == builtInIDs.contains(method.id)
+              }),
               !containsPersonalCorpus,
               !containsCaseMaterial,
-              qualityConclusion == "not-run",
+              qualityConclusion == "inconclusive",
               !qualityReason.isEmpty else {
             throw ScreenUnderstandingProtocolError.invalid("Unsafe or incomplete public status")
         }

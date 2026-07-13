@@ -280,12 +280,17 @@ class CanonicalSealTests(unittest.TestCase):
     def test_valid_v3_seal_matches_all_manifest_cases(self) -> None:
         summary = self._validate()
 
-        self.assertEqual(summary, {
-            "labelCount": 300,
-            "singleFrameCount": 200,
-            "temporalPairCount": 100,
-            "rubricVersion": "screen-understanding-canonical-v2",
-        })
+        self.assertEqual(summary["labelCount"], 300)
+        self.assertEqual(summary["singleFrameCount"], 200)
+        self.assertEqual(summary["temporalPairCount"], 100)
+        self.assertEqual(
+            summary["rubricVersion"], "screen-understanding-canonical-v2"
+        )
+        for key in (
+            "datasetManifestSHA256", "canonicalLabelsSHA256",
+            "canonicalReliabilitySHA256", "canonicalCommitSHA256",
+        ):
+            self.assertRegex(summary[key], r"^[0-9a-f]{64}$")
 
     def test_shaped_seal_without_commit_is_rejected(self) -> None:
         self.commit_path.unlink()
@@ -545,6 +550,7 @@ class CanonicalLabelSchemaTests(unittest.TestCase):
             "pass1-base",
             "selected-pass1",
             "selected-pass2",
+            "selected-merge",
             "frontier-correction",
         })
 

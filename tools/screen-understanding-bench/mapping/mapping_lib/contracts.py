@@ -29,10 +29,20 @@ METHOD_FILES = {
     "apple-vision": "apple-vision.jsonl",
     "deterministic-hybrid": "deterministic-hybrid.jsonl",
 }
+METHOD_CAPABILITIES = {
+    "metadata-ax-ocr": ("summary", "atomic-facts"),
+    "apple-vision": ("labels",),
+    "deterministic-hybrid": ("summary", "atomic-facts", "labels"),
+}
 CLAIM_SOURCE_CAPABILITIES = {
     "summary": "summary",
     "atomicFact": "atomic-facts",
     "label": "labels",
+}
+UNSUPPORTED_SEVERITY_BY_SOURCE = {
+    "summary": "major",
+    "atomicFact": "major",
+    "label": "minor",
 }
 CAPABILITY_ORDER = ("summary", "atomic-facts", "labels")
 PUBLIC_METRICS = (

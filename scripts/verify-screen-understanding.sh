@@ -312,7 +312,13 @@ jq empty \
   tools/screen-understanding-bench/schemas/labels.schema.json \
   tools/screen-understanding-bench/schemas/normalized-result.schema.json \
   tools/screen-understanding-bench/schemas/public-aggregate.schema.json \
+  tools/screen-understanding-bench/schemas/public-decision.schema.json \
   tools/screen-understanding-bench/schemas/report.schema.json
+
+/usr/bin/python3 tools/screen-understanding-bench/common/public_results.py \
+  docs/evals/screen-understanding-v1-results.json \
+  docs/evals/screen-understanding-v1-results.md \
+  docs/evals/screen-understanding-status-2026-07-13.json
 
 xcodegen generate
 LOG="$(mktemp -t zbseye-screen-understanding.XXXXXX)"

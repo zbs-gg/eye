@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -119,6 +120,28 @@ class BuiltInRunnerTests(unittest.TestCase):
                 "metadata-ax-ocr",
                 **self._evidence_args(),
             )
+
+    def test_quality_rejects_canonical_drift_after_seal_validation(self) -> None:
+        original = runner_module.validate_seal
+        labels_path = self.annotations / "canonical" / "labels.json"
+
+        def validate_then_drift(*args, **kwargs):
+            summary = original(*args, **kwargs)
+            labels_path.write_bytes(labels_path.read_bytes() + b"\n")
+            os.chmod(labels_path, 0o600)
+            return summary
+
+        with mock.patch.object(
+            runner_module, "validate_seal", side_effect=validate_then_drift
+        ):
+            with self.assertRaisesRegex(RunnerError, "changed after validation"):
+                run_quality(
+                    self.corpus,
+                    self.annotations,
+                    self._result_root("canonical-drift"),
+                    "metadata-ax-ocr",
+                    **self._evidence_args(),
+                )
 
     def test_builtin_artifact_identity_is_method_and_source_bound(self) -> None:
         runner = b"runner-source"
@@ -363,6 +386,34 @@ class BuiltInRunnerTests(unittest.TestCase):
         })
         self.assertNotIn("artifactRevision", identity)
         self.assertNotIn("artifactIdentitySHA256", identity)
+
+    def test_bounded_local_process_reaps_descendants_on_timeout(self) -> None:
+        pid_file = self.base / "native-child.pid"
+        script = (
+            "import pathlib,subprocess,sys,time; "
+            "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+            f"pathlib.Path({str(pid_file)!r}).write_text(str(child.pid)); "
+            "time.sleep(60)"
+        )
+
+        with self.assertRaisesRegex(RunnerError, "timed out"):
+            runner_module._run_bounded_process_group(
+                [sys.executable, "-c", script],
+                cwd=self.base,
+                env={"PATH": "/usr/bin:/bin"},
+                timeout=0.2,
+                subject="fixture worker",
+            )
+
+        child_pid = int(pid_file.read_text())
+        for _ in range(100):
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.01)
+        else:
+            self.fail("timed-out descendant process survived")
 
     def test_native_runtime_identity_rejects_missing_keys(self) -> None:
         evidence = self._evidence_args()

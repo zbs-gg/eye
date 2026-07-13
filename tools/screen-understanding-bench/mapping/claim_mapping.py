@@ -53,6 +53,7 @@ from mapping_lib.contracts import (
     MAX_PRIVATE_FILE_BYTES,
     MAX_PRIVATE_JSON_BYTES,
     METHOD_FILES,
+    METHOD_CAPABILITIES,
     PACKET_FORBIDDEN_KEYS,
     PACKET_SCHEMA,
     PROTOCOL,
@@ -65,6 +66,7 @@ from mapping_lib.contracts import (
     RUN_SCHEMA,
     SAFE_ID,
     SEVERITY_WEIGHTS,
+    UNSUPPORTED_SEVERITY_BY_SOURCE,
     SHA256,
     MappingError,
 )
@@ -125,6 +127,9 @@ def aggregate_mappings(
     hidden_output_path: Path,
     aggregate_root: Path,
     adjudication_output_path: Optional[Path] = None,
+    primary_receipt_path: Optional[Path] = None,
+    hidden_receipt_path: Optional[Path] = None,
+    adjudication_receipt_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     return _aggregate.aggregate_mappings(
         mapping_root,
@@ -132,6 +137,9 @@ def aggregate_mappings(
         hidden_output_path,
         aggregate_root,
         adjudication_output_path,
+        primary_receipt_path,
+        hidden_receipt_path,
+        adjudication_receipt_path,
         load_private_json=_load_private_json,
         atomic_private_json=_atomic_private_json,
     )
@@ -155,6 +163,9 @@ def main() -> int:
     aggregate.add_argument("--hidden-output", required=True, type=Path)
     aggregate.add_argument("--aggregate-root", required=True, type=Path)
     aggregate.add_argument("--adjudication-output", type=Path)
+    aggregate.add_argument("--primary-receipt", required=True, type=Path)
+    aggregate.add_argument("--hidden-receipt", required=True, type=Path)
+    aggregate.add_argument("--adjudication-receipt", type=Path)
     args = parser.parse_args()
     try:
         if args.command == "prepare":
@@ -179,6 +190,9 @@ def main() -> int:
                 args.hidden_output,
                 args.aggregate_root,
                 args.adjudication_output,
+                args.primary_receipt,
+                args.hidden_receipt,
+                args.adjudication_receipt,
             )
     except MappingError as error:
         print(f"claim mapping failed: {error}", file=sys.stderr)

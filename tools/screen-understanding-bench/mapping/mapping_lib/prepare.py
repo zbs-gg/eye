@@ -59,18 +59,33 @@ PrivateJSONLoader = Callable[[Path, str], tuple[dict[str, Any], bytes]]
 PrivateJSONWriter = Callable[[Path, Any], bytes]
 
 
-def _redact_local_path_lines(value: Any) -> Any:
-    """Remove private path-bearing lines while preserving unrelated screen text."""
+def _redact_local_path_lines(
+    value: Any,
+    *,
+    seed: str,
+    namespace: str,
+) -> Any:
+    """Replace path-bearing lines with equality-preserving packet-local tokens."""
 
     if isinstance(value, dict):
-        return {key: _redact_local_path_lines(child) for key, child in value.items()}
+        return {
+            key: _redact_local_path_lines(
+                child, seed=seed, namespace=namespace
+            )
+            for key, child in value.items()
+        }
     if isinstance(value, list):
-        return [_redact_local_path_lines(child) for child in value]
+        return [
+            _redact_local_path_lines(child, seed=seed, namespace=namespace)
+            for child in value
+        ]
     if not isinstance(value, str):
         return value
     lines = value.split("\n")
     return "\n".join(
-        "[LOCAL_PATH_REDACTED]"
+        "[LOCAL_PATH_REDACTED:" + _token(
+            seed, f"path-redaction:{namespace}", line, 24
+        ) + "]"
         if any(fragment in line for fragment in FORBIDDEN_FRAGMENTS)
         else line
         for line in lines
@@ -120,7 +135,7 @@ def _validate_reference(label: dict[str, Any]) -> dict[str, Any]:
 def _load_canonical(
     canonical_root: Path,
     load_private_json: PrivateJSONLoader,
-) -> tuple[dict[str, dict], bytes, bytes]:
+) -> tuple[dict[str, dict], bytes, bytes, bytes]:
     canonical_root = Path(canonical_root)
     _assert_owner_only_directory(canonical_root, "canonical root")
     labels_document, labels_bytes = load_private_json(
@@ -128,6 +143,9 @@ def _load_canonical(
     )
     reliability, reliability_bytes = load_private_json(
         canonical_root / "reliability.json", "canonical reliability"
+    )
+    _, commit_bytes = load_private_json(
+        canonical_root / "commit.json", "canonical commit"
     )
     try:
         _reject_private_payload(labels_document)
@@ -152,7 +170,7 @@ def _load_canonical(
                 or identifier in labels:
             raise MappingError("canonical label identifier is invalid or duplicated")
         labels[identifier] = label
-    return labels, labels_bytes, reliability_bytes
+    return labels, labels_bytes, reliability_bytes, commit_bytes
 
 
 def _extract_claims(
@@ -189,10 +207,36 @@ def _extract_claims(
     return claims, list(visible), abstention
 
 
+def _deterministic_judgment(
+    claim: dict[str, str],
+    reference: dict[str, Any],
+) -> dict[str, str] | None:
+    """Resolve claims backed by structured runtime evidence or exact labels."""
+
+    source = claim["source"]
+    text = claim["text"]
+    if source == "atomicFact":
+        key, separator, value = text.partition("=")
+        if separator and value.strip():
+            if key == "appName":
+                return {"matchedRequired": "required.surface"}
+            if key == "windowTitle":
+                return {"matchedRequired": "required.content"}
+    if source == "label" and text.startswith("label:"):
+        label = " ".join(text.removeprefix("label:").casefold().split())
+        for fact in reference["requiredFacts"]:
+            fact_text = " ".join(fact["text"].casefold().split())
+            if label and label in fact_text:
+                return {"matchedRequired": fact["id"]}
+        return {"unsupported": "minor"}
+    return None
+
+
 def _load_run(
     result_root: Path,
     labels_bytes: bytes,
     reliability_bytes: bytes,
+    commit_bytes: bytes,
     load_private_json: PrivateJSONLoader,
 ) -> tuple[
     list[str],
@@ -219,6 +263,9 @@ def _load_run(
     ) or not hmac.compare_digest(
         str(inventory.get("canonicalReliabilitySHA256")),
         _sha256(reliability_bytes),
+    ) or not hmac.compare_digest(
+        str(inventory.get("canonicalCommitSHA256")),
+        _sha256(commit_bytes),
     ):
         raise MappingError("run inventory does not bind the canonical seal")
     methods = inventory.get("selectedMethods")
@@ -302,12 +349,25 @@ def _build_item(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     alias = "method-" + _token(seed, f"{stage}-method", method, 12)
     arm_id = "arm-" + _token(seed, f"{stage}-arm", f"{method}:{case_id}")
-    packet_result = _redact_local_path_lines(result)
-    packet_reference = _redact_local_path_lines(reference)
+    redaction_namespace = f"{stage}:{method}:{case_id}"
+    packet_result = _redact_local_path_lines(
+        result, seed=seed, namespace=redaction_namespace
+    )
+    packet_reference = _redact_local_path_lines(
+        reference, seed=seed, namespace=redaction_namespace
+    )
     raw_claims, visible, abstention = _extract_claims(packet_result)
     claims = []
     claim_ids = []
+    deterministic_claims = []
     for index, claim in enumerate(raw_claims):
+        deterministic = _deterministic_judgment(claim, packet_reference)
+        if deterministic is not None:
+            deterministic_claims.append({
+                "source": claim["source"],
+                "judgment": deterministic,
+            })
+            continue
         claim_id = "claim-" + _token(
             seed, f"{stage}-claim", f"{method}:{case_id}:{index}"
         )
@@ -329,6 +389,7 @@ def _build_item(
         "methodID": method,
         "caseID": case_id,
         "claimIDs": claim_ids,
+        "deterministicClaims": deterministic_claims,
     }
     return item, owner
 
@@ -350,11 +411,12 @@ def prepare_mapping(
         raise MappingError("mapping root already exists")
     # This ordering is deliberate: candidate result files are not opened until
     # the v3 canonical seal and reliability gate have both passed.
-    labels, labels_bytes, reliability_bytes = _load_canonical(
+    labels, labels_bytes, reliability_bytes, commit_bytes = _load_canonical(
         Path(canonical_root), load_private_json
     )
     methods, case_ids, results, public_provenance = _load_run(
-        Path(result_root), labels_bytes, reliability_bytes, load_private_json
+        Path(result_root), labels_bytes, reliability_bytes, commit_bytes,
+        load_private_json,
     )
     if any(identifier not in labels for identifier in case_ids):
         raise MappingError("candidate case is absent from canonical labels")
@@ -424,9 +486,7 @@ def prepare_mapping(
         primary_packet = {
             "schema": PACKET_SCHEMA,
             "protocol": PROTOCOL,
-            "packetID": "packet-primary-" + _token(
-                seed, "packet", "primary", 16
-            ),
+            "packetID": "",
             "stage": "primary",
             "sealVerifiedBeforePreparation": True,
             "items": primary_items,
@@ -434,13 +494,21 @@ def prepare_mapping(
         hidden_packet = {
             "schema": PACKET_SCHEMA,
             "protocol": PROTOCOL,
-            "packetID": "packet-hidden-" + _token(
-                seed, "packet", "hidden", 16
-            ),
+            "packetID": "",
             "stage": "hidden-duplicate",
             "sealVerifiedBeforePreparation": True,
             "items": hidden_items,
         }
+        for packet in (primary_packet, hidden_packet):
+            packet_material = json.dumps(
+                {key: value for key, value in packet.items() if key != "packetID"},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+            packet["packetID"] = (
+                f"packet-{packet['stage']}-" + _sha256(packet_material)[:16]
+            )
         forbidden = tuple(methods) + tuple(case_ids)
         _reject_leaks(primary_packet, forbidden_values=forbidden)
         _reject_leaks(hidden_packet, forbidden_values=forbidden)

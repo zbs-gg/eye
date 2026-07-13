@@ -102,11 +102,23 @@
           },
           "then": {
             "properties": {
+              "annotation": {"$ref": "#/$defs/temporalAnnotation"},
               "meaningfulChange": {
                 "type": "array",
                 "maxItems": 3,
                 "items": {"$ref": "#/$defs/changeFact"}
               }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"targetType": {"const": "single-frame"}},
+            "required": ["targetType"]
+          },
+          "then": {
+            "properties": {
+              "annotation": {"$ref": "#/$defs/singleFrameAnnotation"}
             }
           }
         }
@@ -131,6 +143,7 @@
             "pass1-base",
             "selected-pass1",
             "selected-pass2",
+            "selected-merge",
             "frontier-correction"
           ]
         },
@@ -138,10 +151,42 @@
           "type": "string",
           "pattern": "^[A-Za-z0-9._-]{1,96}$"
         },
-        "rubricVersion": {"const": "screen-understanding-canonical-v2"},
+        "rubricVersion": {
+          "type": "string",
+          "enum": [
+            "screen-understanding-canonical-v2",
+            "screen-understanding-temporal-v4"
+          ]
+        },
         "blindedToCandidateOutputs": {"const": true},
         "candidateOutputsAvailable": {"const": false}
       }
+    },
+    "singleFrameAnnotation": {
+      "allOf": [
+        {"$ref": "#/$defs/annotation"},
+        {
+          "properties": {
+            "mode": {"enum": ["pass1-base", "frontier-correction"]},
+            "rubricVersion": {"const": "screen-understanding-canonical-v2"}
+          }
+        }
+      ]
+    },
+    "temporalAnnotation": {
+      "allOf": [
+        {"$ref": "#/$defs/annotation"},
+        {
+          "properties": {
+            "mode": {
+              "enum": [
+                "pass1-base", "selected-pass1", "selected-pass2", "selected-merge"
+              ]
+            },
+            "rubricVersion": {"const": "screen-understanding-temporal-v4"}
+          }
+        }
+      ]
     },
     "requiredSurfaceFact": {
       "type": "object",

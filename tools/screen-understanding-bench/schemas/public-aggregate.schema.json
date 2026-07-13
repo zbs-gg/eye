@@ -60,7 +60,7 @@
             "metadata-ax-ocr", "apple-vision", "deterministic-hybrid"
           ]
         },
-        "duplicateArmCount": {"const": 9},
+        "duplicateArmCount": {"const": 15},
         "claimJudgmentAgreement": {"$ref": "#/$defs/score"},
         "decisionAgreement": {"$ref": "#/$defs/score"},
         "capabilities": {
@@ -80,7 +80,7 @@
         "methods", "qualified"
       ],
       "properties": {
-        "duplicateArmCount": {"type": "integer", "minimum": 9, "maximum": 27},
+        "duplicateArmCount": {"type": "integer", "minimum": 15, "maximum": 45},
         "claimJudgmentAgreement": {"$ref": "#/$defs/score"},
         "decisionAgreement": {"$ref": "#/$defs/score"},
         "methods": {

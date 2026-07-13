@@ -14,10 +14,11 @@ final class ScreenUnderstandingAdapterContractTests: XCTestCase {
         )
 
         XCTAssertEqual(responses.map(\.id), ["1", "2", "3"])
-        XCTAssertEqual(responses[0].status, "ready")
-        XCTAssertEqual(responses[1].status, "ok")
+        XCTAssertEqual(responses[0].status, .ready)
+        XCTAssertEqual(responses[1].status, .ok)
         XCTAssertEqual(responses[1].normalized?.summary, "Synthetic visible activity")
-        XCTAssertEqual(responses[2].status, "bye")
+        XCTAssertEqual(responses[1].normalized?.methodID, "synthetic-contract")
+        XCTAssertEqual(responses[2].status, .bye)
     }
 
     func testExplicitUnsupportedIsAuditableAndNotRetried() throws {
@@ -27,7 +28,7 @@ final class ScreenUnderstandingAdapterContractTests: XCTestCase {
             timeoutSeconds: 5
         )
         XCTAssertEqual(responses.count, 1)
-        XCTAssertEqual(responses[0].status, "unsupported")
+        XCTAssertEqual(responses[0].status, .unsupported)
         XCTAssertTrue(responses[0].error?.contains("runtime not provisioned") == true)
     }
 
@@ -45,6 +46,18 @@ final class ScreenUnderstandingAdapterContractTests: XCTestCase {
             timeoutSeconds: 0.2
         )) { error in
             XCTAssertTrue(error.localizedDescription.contains("timeout"))
+        }
+    }
+
+    func testPhaseStatusMismatchFailsClosed() throws {
+        XCTAssertThrowsError(try makeRunner(mode: "wrong-status").run(
+            messages: [
+                .hello(id: "1", protocolID: "screen-understanding-v1"),
+                .caseRequest(id: "2", caseID: "abc", imagePath: "/case/image.heic"),
+            ],
+            timeoutSeconds: 5
+        )) { error in
+            XCTAssertTrue(error.localizedDescription.contains("did not match"))
         }
     }
 

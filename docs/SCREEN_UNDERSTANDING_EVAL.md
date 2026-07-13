@@ -1,35 +1,38 @@
 # Screen understanding evaluation
 
-Status: protocol and harness implementation in progress. The public status artifact contains no personal
-corpus material, case identifiers, captions, labels, timestamps, file paths, or raw adapter errors.
+Status: **inconclusive after the first private built-in run**. The public artifacts contain aggregate evidence
+only: no personal frames, case identifiers, captions, labels, timestamps, local paths, or raw adapter output.
 
 ## Current evidence (2026-07-13)
 
-- The protocol, private-corpus policy, normalized schemas, and deterministic canonical-reference scorer are
-  locked and pass standalone contract checks.
-- The native Apple Vision baseline completed a synthetic smoke test and emitted only labels/confidence.
-- The process adapter passes handshake, case, shutdown, unsupported, malformed-output, crash, and timeout
-  checks on synthetic messages.
-- The qualification host could not prove the strict inherited filesystem sandbox: the sandbox exits before
-  its malicious canary starts. All six third-party model/parser adapters are therefore recorded as
-  `security-unsupported` and have received zero private-corpus access.
-- No quality ranking is published yet. Blinded frontier-model canonical annotations are being sealed first.
+- A frontier vision model created the canonical references; independent evaluator sessions audited them.
+  The final reference set contains 200 single images and 100 temporal pairs, with a zero-error final audit
+  over 45 cases and 255 slots. This frontier model is evaluation infrastructure and is absent from ZBS Eye.
+- Metadata + AX/OCR, Apple Vision, and their deterministic hybrid completed the locked 60-image private
+  test split offline.
+- Their quality scores are withheld. The correctly powered 15-arm concealed mapping repeat exposed an
+  underdetermined scorer contract for structured metadata and unsupported-claim severity.
+- All six downloaded model/parser adapters remain `security-unsupported`: the qualification Mac did not
+  prove the required descendant filesystem sandbox, so they received zero private inputs.
 
-Machine-readable public status:
+Machine-readable current status:
 `docs/evals/screen-understanding-status-2026-07-13.json`.
+
+Aggregate result and reliability details:
+[`docs/evals/screen-understanding-v1-results.json`](evals/screen-understanding-v1-results.json) and
+[`docs/evals/screen-understanding-v1-results.md`](evals/screen-understanding-v1-results.md).
 
 ## Interpretation
 
-`security-unsupported` does not mean a model is inaccurate. It means this Mac did not prove the required
-privacy boundary, so the model was deliberately not run against personal history. `smoke-passed` also does
-not mean quality-qualified. Product consideration requires the locked private test split, independent
-canonical reference annotations, the R20 quality gate, the exact Apple Silicon runtime, and the R19 resource gate.
+`mapping-inconclusive` means the candidate ran, but the independent scorer did not clear the pre-registered
+reliability floor. It is not a quality verdict. `security-unsupported` is also not an accuracy verdict: the
+adapter was deliberately blocked before private-corpus access.
 
 ## Next valid gate
 
-1. Restore or replace the descendant-process filesystem sandbox and re-run all malicious canaries.
-2. Prepare the opaque private corpus without changing the live ZBS Eye database or media.
-3. Complete the blinded frontier-model canonical pass, the concealed 15% duplicate pass, and adjudication.
-4. Run official-checkpoint quality once, with zero retries, followed by exact-runtime quality.
-5. Run footprint and recorder/screenshot coexistence only for quality-qualified finalists.
-6. Publish only the allowlisted aggregate matrix; keep every case-level artifact private.
+1. Make structured metadata matching and unsupported-claim severity deterministic and testable.
+2. Bind mapper receipts and packet contents so judgments cannot be replayed or self-certified.
+3. Repeat the independent concealed 15-arm mapping once; do not rerun judges until one passes.
+4. Publish quality only for methods whose mapping contract clears the floor.
+5. Qualify a strict descendant filesystem/network sandbox before any downloaded model sees private data.
+6. Run footprint and recorder/screenshot coexistence only for quality-qualified finalists.

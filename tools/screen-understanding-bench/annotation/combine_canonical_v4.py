@@ -7,11 +7,19 @@ import argparse
 import copy
 import json
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
+BENCHMARK_DIRECTORY = Path(__file__).resolve().parents[1]
+if str(BENCHMARK_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(BENCHMARK_DIRECTORY))
+
+from common.contracts import exact_keys
+from common.evaluator_receipt import validate_receipt
 from common.private_io import (
     atomic_private_json,
+    load_private_json,
     make_private_directory,
     prepare_private_output,
     publish_private_output,
@@ -19,7 +27,13 @@ from common.private_io import (
     validate_private_input_file,
     validate_private_output,
 )
-from common.provenance import build_canonical_commit, file_evidence
+from common.provenance import (
+    HASH_ALGORITHM,
+    build_canonical_commit,
+    file_evidence,
+    final_audit_evidence,
+    tree_evidence,
+)
 
 
 PROTOCOL = "screen-understanding-correctness-audit-v3"
@@ -31,13 +45,10 @@ FINALIZER = Path(__file__)
 
 
 def _load(path: Path, subject: str) -> dict[str, Any]:
-    source = validate_private_input_file(path)
     try:
-        value = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        value, _ = load_private_json(path, subject)
+    except ValueError as error:
         raise ValueError(f"{subject} is not valid JSON") from error
-    if not isinstance(value, dict):
-        raise ValueError(f"{subject} must be an object")
     return value
 
 
@@ -117,23 +128,49 @@ def _single_source(single: Path, expected: set[str]) -> tuple[list[dict], dict]:
             or audit.get("ambiguityErrorCount") != 0 \
             or audit.get("slotErrorCount") != 0 or audit.get("qualified") is not True:
         raise ValueError("single-image reliability is not qualified")
-    canonical_commit = commit.get("canonical")
-    if commit.get("schema") != "screen-understanding-single-frame-commit-v4" \
-            or commit.get("protocol") != SINGLE_PROTOCOL \
-            or commit.get("rubricVersion") != RUBRIC \
-            or not isinstance(canonical_commit, dict) \
-            or canonical_commit.get("labelsSHA256") \
+    exact_keys(commit, {
+        "schema", "protocol", "rubricVersion", "hashAlgorithm",
+        "candidateOutputsAvailableDuringAnnotation", "canonical", "producer",
+        "evidence", "counts",
+    }, "single-image commit")
+    canonical_commit = commit["canonical"]
+    exact_keys(
+        canonical_commit, {"labelsSHA256", "reliabilitySHA256"},
+        "single-image canonical commit",
+    )
+    exact_keys(commit["producer"], {"finalizerSHA256"}, "single-image producer")
+    if commit["schema"] != "screen-understanding-single-frame-commit-v4" \
+            or commit["protocol"] != SINGLE_PROTOCOL \
+            or commit["rubricVersion"] != RUBRIC \
+            or commit["hashAlgorithm"] != HASH_ALGORITHM \
+            or commit["candidateOutputsAvailableDuringAnnotation"] is not False \
+            or canonical_commit["labelsSHA256"] \
                 != file_evidence(canonical / "labels.json")["sha256"] \
-            or canonical_commit.get("reliabilitySHA256") \
-                != file_evidence(canonical / "reliability.json")["sha256"]:
+            or canonical_commit["reliabilitySHA256"] \
+                != file_evidence(canonical / "reliability.json")["sha256"] \
+            or commit["producer"]["finalizerSHA256"] \
+                != file_evidence(Path(__file__).with_name("single_frame_lane_v4.py"))["sha256"] \
+            or commit["evidence"].get("finalAudit") \
+                != final_audit_evidence(single) \
+            or commit["counts"] != {
+                "labelCount": 200,
+                "duplicateCount": 30,
+                "finalAuditCaseCount": 30,
+                "finalAuditSlotCount": 180,
+            }:
         raise ValueError("single-image commit does not bind its canonical files")
     return values, reliability
 
 
-def _temporal_source(temporal: Path, expected: set[str]) -> tuple[list[dict], dict]:
+def _temporal_source(
+    temporal: Path,
+    temporal_audit: Path,
+    expected: set[str],
+) -> tuple[list[dict], dict]:
     labels = _load(temporal / "labels.json", "temporal labels")
     reliability = _load(temporal / "reliability.json", "temporal reliability")
     result = _load(temporal / "result.json", "temporal final result")
+    commit = _load(temporal / "commit.json", "temporal commit")
     if labels.get("schema") != "screen-understanding-temporal-final-labels-v4" \
             or labels.get("protocol") != TEMPORAL_PROTOCOL \
             or labels.get("rubricVersion") != TEMPORAL_RUBRIC \
@@ -165,6 +202,53 @@ def _temporal_source(temporal: Path, expected: set[str]) -> tuple[list[dict], di
             or audit.get("qualified") is not True \
             or result.get("qualified") is not True or result.get("pairCount") != 100:
         raise ValueError("temporal reliability is not qualified")
+    exact_keys(commit, {
+        "schema", "protocol", "rubricVersion", "hashAlgorithm",
+        "candidateOutputsAvailable", "canonical", "producer", "evidence",
+        "counts",
+    }, "temporal commit")
+    exact_keys(commit["canonical"], {
+        "labelsSHA256", "reliabilitySHA256", "resultSHA256",
+    }, "temporal canonical commit")
+    exact_keys(commit["producer"], {"finalizerSHA256"}, "temporal producer")
+    exact_keys(commit["evidence"], {
+        "finalAuditRoot", "finalOutput", "finalReceipt",
+    }, "temporal evidence")
+    evidence = temporal / "evidence"
+    output_path = evidence / "final-output.json"
+    receipt_path = evidence / "final-receipt.json"
+    if commit["schema"] != "screen-understanding-temporal-commit-v4" \
+            or commit["protocol"] != TEMPORAL_PROTOCOL \
+            or commit["rubricVersion"] != TEMPORAL_RUBRIC \
+            or commit["hashAlgorithm"] != HASH_ALGORITHM \
+            or commit["candidateOutputsAvailable"] is not False \
+            or commit["canonical"] != {
+                "labelsSHA256": file_evidence(temporal / "labels.json")["sha256"],
+                "reliabilitySHA256": file_evidence(
+                    temporal / "reliability.json"
+                )["sha256"],
+                "resultSHA256": file_evidence(temporal / "result.json")["sha256"],
+            } \
+            or commit["producer"]["finalizerSHA256"] \
+                != file_evidence(Path(__file__).parent / "temporal_v4" / "pipeline.py")["sha256"] \
+            or commit["evidence"] != {
+                "finalAuditRoot": tree_evidence(temporal_audit),
+                "finalOutput": file_evidence(output_path),
+                "finalReceipt": file_evidence(receipt_path),
+            } \
+            or commit["counts"] != {
+                "labelCount": 100,
+                "duplicateCount": 15,
+                "finalAuditCaseCount": 15,
+                "finalAuditSlotCount": 75,
+            }:
+        raise ValueError("temporal commit does not bind its evidence")
+    validate_receipt(
+        receipt_path,
+        temporal_audit / "packet" / "packet.json",
+        output_path,
+        "final-reference-auditor",
+    )
     return values, reliability
 
 
@@ -199,7 +283,9 @@ def combine(
         raise ValueError("combined canonical root must be disjoint from every private input")
     single_ids, pair_ids = _corpus_ids(corpus)
     single_labels, single_reliability = _single_source(single, single_ids)
-    temporal_labels, temporal_reliability = _temporal_source(temporal, pair_ids)
+    temporal_labels, temporal_reliability = _temporal_source(
+        temporal, temporal_audit, pair_ids
+    )
     single_correct = round(single_reliability["rawJointSingleFrame"] * 180)
     temporal_correct = temporal_reliability["rawJoint"]["correctCount"]
     overall_rate = (single_correct + temporal_correct) / 255
@@ -265,6 +351,7 @@ def combine(
                 "labels": file_evidence(temporal / "labels.json"),
                 "reliability": file_evidence(temporal / "reliability.json"),
                 "result": file_evidence(temporal / "result.json"),
+                "commit": file_evidence(temporal / "commit.json"),
             },
         })
         atomic_private_json(final_judgments_path, {

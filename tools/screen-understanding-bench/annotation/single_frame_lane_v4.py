@@ -28,6 +28,7 @@ from common.evaluator_receipt import (  # noqa: E402
 from common.private_io import (  # noqa: E402
     atomic_private_json,
     copy_private,
+    load_private_json,
     make_private_directory,
     prepare_private_output,
     publish_private_output,
@@ -90,13 +91,7 @@ class V3EvidencePaths:
 
 
 def _read_json(path: Path, subject: str) -> dict:
-    source = validate_private_input_file(path)
-    try:
-        value = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ValueError(f"{subject} is invalid JSON") from error
-    if not isinstance(value, dict):
-        raise ValueError(f"{subject} must be an object")
+    value, _ = load_private_json(path, subject)
     return value
 
 

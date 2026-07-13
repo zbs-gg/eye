@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import claim_mapping as mapping_module  # noqa: E402
 from mapping_lib import private_io  # noqa: E402
+from common.evaluator_receipt import issue_receipt  # noqa: E402
 from claim_mapping import (  # noqa: E402
     MappingError,
     aggregate_mappings,
@@ -37,6 +38,7 @@ class ClaimMappingTests(unittest.TestCase):
         self.results = self.base / "results"
         self.canonical.mkdir(mode=0o700)
         self.results.mkdir(mode=0o700)
+        self.packet_paths: dict[str, Path] = {}
         self.case_ids = [f"{index + 1:024x}" for index in range(60)]
         self._write_fixture()
 
@@ -99,7 +101,14 @@ class ClaimMappingTests(unittest.TestCase):
         self.assertEqual(first["visibleText"], ["Exact OCR text"])
         claim_texts = [claim["text"] for claim in first["claims"]]
         self.assertNotIn("Exact OCR text", claim_texts)
-        self.assertIn("label:computer screen", claim_texts)
+        self.assertNotIn("label:computer screen", claim_texts)
+        owner = self._load(Path(prepared["mappingRoot"]) / "owner-mapping.json")
+        deterministic = [
+            claim
+            for item in owner["primary"].values()
+            for claim in item["deterministicClaims"]
+        ]
+        self.assertTrue(any(claim["source"] == "label" for claim in deterministic))
 
     def test_visible_local_path_lines_are_redacted_without_dropping_other_text(self) -> None:
         inventory_path = self.results / "run-inventory.json"
@@ -108,7 +117,8 @@ class ClaimMappingTests(unittest.TestCase):
             path = self.results / f"{method}.jsonl"
             records = [json.loads(line) for line in path.read_text().splitlines()]
             records[0]["result"]["visibleText"] = [
-                "Keep this line\n/Users/private-name/secret file.txt\nAlso keep this"
+                "Keep this line\n/Users/private-name/secret file.txt\n"
+                "/Users/other-owner/other file.txt\nAlso keep this"
             ]
             data = b"".join(
                 json.dumps(record, sort_keys=True, separators=(",", ":"))
@@ -128,8 +138,42 @@ class ClaimMappingTests(unittest.TestCase):
         self.assertNotIn("/Users/", serialized)
         self.assertNotIn("private-name", serialized)
         self.assertIn("Keep this line", serialized)
-        self.assertIn("[LOCAL_PATH_REDACTED]", serialized)
+        self.assertIn("[LOCAL_PATH_REDACTED:", serialized)
         self.assertIn("Also keep this", serialized)
+        primary = self._load(prepared["primaryPacket"])
+        path_lines = [
+            line
+            for item in primary["items"]
+            for text in item["visibleText"]
+            for line in text.split("\n")
+            if line.startswith("[LOCAL_PATH_REDACTED:")
+        ]
+        self.assertGreaterEqual(len(path_lines), 6)
+        self.assertGreaterEqual(len(set(path_lines)), 2)
+
+    def test_same_seed_packet_id_changes_when_claim_content_changes(self) -> None:
+        first = self._prepare("content-bound-seed", "mapping-content-a")
+        first_packet = self._load(first["primaryPacket"])
+        inventory_path = self.results / "run-inventory.json"
+        inventory = self._load(inventory_path)
+        for method in METHODS:
+            path = self.results / f"{method}.jsonl"
+            records = [json.loads(line) for line in path.read_text().splitlines()]
+            records[0]["result"]["summary"] = "Different candidate content"
+            data = b"".join(
+                json.dumps(record, sort_keys=True, separators=(",", ":"))
+                .encode("utf-8") + b"\n"
+                for record in records
+            )
+            path.write_bytes(data)
+            os.chmod(path, 0o600)
+            inventory["outputSHA256"][method] = hashlib.sha256(data).hexdigest()
+        self._write_private(inventory_path, inventory)
+
+        second = self._prepare("content-bound-seed", "mapping-content-b")
+        second_packet = self._load(second["primaryPacket"])
+
+        self.assertNotEqual(first_packet["packetID"], second_packet["packetID"])
 
     def test_hidden_duplicates_are_deterministic_stratified_twenty_five_percent(self) -> None:
         first = self._prepare("stable-seed", "mapping-a")
@@ -175,6 +219,28 @@ class ClaimMappingTests(unittest.TestCase):
             aggregate_mappings(
                 Path(prepared["mappingRoot"]), first, second,
                 self.base / "aggregate-same-identity",
+            )
+
+    def test_distinct_mapper_names_still_require_independent_session_receipts(self) -> None:
+        prepared = self._prepare("receipt-independence")
+        primary = self._load(prepared["primaryPacket"])
+        hidden = self._load(prepared["hiddenPacket"])
+        first = self._write_judgments(
+            primary, "frontier-mapper-01", "primary-receipt.json"
+        )
+        second = self._write_judgments(
+            hidden, "frontier-mapper-02", "hidden-receipt.json"
+        )
+        first_receipt = self._load(first.with_suffix(".receipt.json"))
+        hidden_receipt_path = second.with_suffix(".receipt.json")
+        hidden_receipt = self._load(hidden_receipt_path)
+        hidden_receipt["sessionID"] = first_receipt["sessionID"]
+        self._write_private(hidden_receipt_path, hidden_receipt)
+
+        with self.assertRaisesRegex(ValueError, "independent"):
+            aggregate_mappings(
+                Path(prepared["mappingRoot"]), first, second,
+                self.base / "aggregate-reused-session",
             )
 
     def test_mapper_json_is_opened_descriptor_bound_with_no_follow(self) -> None:
@@ -247,13 +313,24 @@ class ClaimMappingTests(unittest.TestCase):
         hidden = self._load(prepared["hiddenPacket"])
         first = self._write_judgments(primary, "frontier-mapper-01", "primary-low.json")
         hidden_output = self._judgments(hidden, "frontier-mapper-02")
+        hidden_claims = {
+            item["armID"]: {
+                claim["claimID"]: claim["source"] for claim in item["claims"]
+            }
+            for item in hidden["items"]
+        }
         for item in hidden_output["items"]:
             for claim in item["claimJudgments"]:
-                claim["judgment"] = {"unsupported": "critical"}
+                source = hidden_claims[item["armID"]][claim["claimID"]]
+                claim["judgment"] = {
+                    "unsupported": mapping_module.UNSUPPORTED_SEVERITY_BY_SOURCE[source]
+                }
             item["criticalTextMatched"] = [False]
             item["abstentionCorrect"] = False
         second = self.base / "hidden-low.json"
-        self._write_private(second, hidden_output)
+        self._write_mapper_output(
+            hidden, hidden_output, "frontier-mapper-02", second
+        )
 
         result = aggregate_mappings(
             Path(prepared["mappingRoot"]), first, second,
@@ -283,18 +360,29 @@ class ClaimMappingTests(unittest.TestCase):
             primary, "frontier-mapper-01", "primary-per-method.json"
         )
         hidden_output = self._judgments(hidden, "frontier-mapper-02")
+        hidden_claims = {
+            item["armID"]: {
+                claim["claimID"]: claim["source"] for claim in item["claims"]
+            }
+            for item in hidden["items"]
+        }
         weak_arms = [
             arm_id for arm_id, owner in mapping["hidden"].items()
             if owner["methodID"] == "metadata-ax-ocr"
-        ][:2]
+        ][:3]
         for weak_item in (
             item for item in hidden_output["items"]
             if item["armID"] in weak_arms
         ):
             for claim in weak_item["claimJudgments"]:
-                claim["judgment"] = {"unsupported": "critical"}
+                source = hidden_claims[weak_item["armID"]][claim["claimID"]]
+                claim["judgment"] = {
+                    "unsupported": mapping_module.UNSUPPORTED_SEVERITY_BY_SOURCE[source]
+                }
         second = self.base / "hidden-per-method.json"
-        self._write_private(second, hidden_output)
+        self._write_mapper_output(
+            hidden, hidden_output, "frontier-mapper-02", second
+        )
 
         result = aggregate_mappings(
             Path(prepared["mappingRoot"]), first, second,
@@ -330,6 +418,10 @@ class ClaimMappingTests(unittest.TestCase):
             adjudication_path,
             self._adjudication(packet, "frontier-adjudicator-partial"),
         )
+        self._issue_mapping_receipt(
+            Path(result["adjudicationPacket"]), adjudication_path,
+            "claim-adjudicator", "frontier-adjudicator-partial",
+        )
         partial = aggregate_mappings(
             Path(prepared["mappingRoot"]), first, second,
             self.base / "aggregate-per-method-complete",
@@ -347,6 +439,49 @@ class ClaimMappingTests(unittest.TestCase):
              if method["qualified"]},
         )
 
+    def test_declared_capability_with_no_hidden_claims_cannot_qualify(self) -> None:
+        inventory_path = self.results / "run-inventory.json"
+        inventory = self._load(inventory_path)
+        path = self.results / "metadata-ax-ocr.jsonl"
+        records = [json.loads(line) for line in path.read_text().splitlines()]
+        for record in records:
+            record["result"]["atomicFacts"] = []
+        data = b"".join(
+            json.dumps(record, sort_keys=True, separators=(",", ":"))
+            .encode("utf-8") + b"\n"
+            for record in records
+        )
+        path.write_bytes(data)
+        os.chmod(path, 0o600)
+        inventory["outputSHA256"]["metadata-ax-ocr"] = hashlib.sha256(data).hexdigest()
+        self._write_private(inventory_path, inventory)
+        prepared = self._prepare("missing-capability")
+        primary = self._load(prepared["primaryPacket"])
+        hidden = self._load(prepared["hiddenPacket"])
+        first = self._write_judgments(
+            primary, "frontier-mapper-01", "primary-missing-capability.json"
+        )
+        second = self._write_judgments(
+            hidden, "frontier-mapper-02", "hidden-missing-capability.json"
+        )
+
+        result = aggregate_mappings(
+            Path(prepared["mappingRoot"]), first, second,
+            self.base / "aggregate-missing-capability",
+        )
+
+        method = next(
+            item for item in result["reliability"]["methods"]
+            if item["methodID"] == "metadata-ax-ocr"
+        )
+        atomic = next(
+            item for item in method["capabilities"]
+            if item["capability"] == "atomic-facts"
+        )
+        self.assertEqual(atomic["claimCount"], 0)
+        self.assertFalse(atomic["qualified"])
+        self.assertFalse(method["qualified"])
+
     def test_adjudication_contains_only_disagreements_and_uses_fresh_identity(self) -> None:
         prepared = self._prepare("tie-seed")
         primary = self._load(prepared["primaryPacket"])
@@ -355,7 +490,9 @@ class ClaimMappingTests(unittest.TestCase):
         hidden_output = self._judgments(hidden, "frontier-mapper-02")
         hidden_output["items"][0]["criticalTextMatched"] = [False]
         second = self.base / "hidden-tie.json"
-        self._write_private(second, hidden_output)
+        self._write_mapper_output(
+            hidden, hidden_output, "frontier-mapper-02", second
+        )
 
         pending = aggregate_mappings(
             Path(prepared["mappingRoot"]), first, second,
@@ -385,6 +522,10 @@ class ClaimMappingTests(unittest.TestCase):
         adjudication = self._adjudication(packet, "frontier-adjudicator-03")
         adjudication_path = self.base / "adjudication.json"
         self._write_private(adjudication_path, adjudication)
+        self._issue_mapping_receipt(
+            Path(pending["adjudicationPacket"]), adjudication_path,
+            "claim-adjudicator", "frontier-adjudicator-03",
+        )
         complete = aggregate_mappings(
             Path(prepared["mappingRoot"]), first, second,
             self.base / "aggregate-complete", adjudication_path,
@@ -637,9 +778,13 @@ class ClaimMappingTests(unittest.TestCase):
         self.assertTrue(Path(result["publicAggregate"]).is_file())
 
     def _prepare(self, seed: str, name: str = "mapping") -> dict:
-        return prepare_mapping(
+        result = prepare_mapping(
             self.canonical, self.results, self.base / name, seed
         )
+        for key in ("primaryPacket", "hiddenPacket"):
+            path = Path(result[key])
+            self.packet_paths[self._load(path)["packetID"]] = path
+        return result
 
     def _write_fixture(self) -> None:
         labels = []
@@ -705,6 +850,9 @@ class ClaimMappingTests(unittest.TestCase):
         reliability_bytes = self._write_private(
             self.canonical / "reliability.json", reliability
         )
+        commit_bytes = self._write_private(
+            self.canonical / "commit.json", {"schema": "fixture-canonical-commit"}
+        )
 
         output_hashes = {}
         for method in METHODS:
@@ -750,6 +898,7 @@ class ClaimMappingTests(unittest.TestCase):
             "datasetManifestSHA256": "a" * 64,
             "canonicalLabelsSHA256": hashlib.sha256(labels_bytes).hexdigest(),
             "canonicalReliabilitySHA256": hashlib.sha256(reliability_bytes).hexdigest(),
+            "canonicalCommitSHA256": hashlib.sha256(commit_bytes).hexdigest(),
             "methodArtifacts": {
                 method: {
                     "artifactRevision": "runner-fixture",
@@ -796,8 +945,44 @@ class ClaimMappingTests(unittest.TestCase):
 
     def _write_judgments(self, packet: dict, identity: str, name: str) -> Path:
         path = self.base / name
-        self._write_private(path, self._judgments(packet, identity))
+        self._write_mapper_output(
+            packet, self._judgments(packet, identity), identity, path
+        )
         return path
+
+    def _write_mapper_output(
+        self,
+        packet: dict,
+        output: dict,
+        identity: str,
+        path: Path,
+    ) -> None:
+        self._write_private(path, output)
+        role = (
+            "claim-mapper-primary"
+            if packet["stage"] == "primary"
+            else "claim-mapper-hidden"
+        )
+        self._issue_mapping_receipt(
+            self.packet_paths[packet["packetID"]], path, role, identity
+        )
+
+    @staticmethod
+    def _issue_mapping_receipt(
+        packet_path: Path,
+        output_path: Path,
+        role: str,
+        session_id: str,
+    ) -> None:
+        issue_receipt(
+            packet_path=packet_path,
+            output_path=output_path,
+            receipt_path=output_path.with_suffix(".receipt.json"),
+            role=role,
+            session_id="session-" + session_id,
+            provider="openai",
+            model_family="frontier-mapper-fixture",
+        )
 
     def _adjudication(self, packet: dict, identity: str) -> dict:
         items = []

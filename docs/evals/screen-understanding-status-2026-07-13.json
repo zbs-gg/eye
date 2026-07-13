@@ -4,21 +4,21 @@
   "methods": [
     {
       "id": "metadata-ax-ocr",
-      "status": "contract-passed",
-      "evidence": "Protocol and normalized-output contract pass; quality awaits blind labels.",
-      "privateCorpusAccess": false
+      "status": "mapping-inconclusive",
+      "evidence": "Locked 60-case run completed; independent claim mapping did not clear the reliability floor.",
+      "privateCorpusAccess": true
     },
     {
       "id": "apple-vision",
-      "status": "smoke-passed",
-      "evidence": "Native VNClassifyImageRequest returned labels and confidence on a synthetic image.",
-      "privateCorpusAccess": false
+      "status": "mapping-inconclusive",
+      "evidence": "Locked 60-case run completed; independent label mapping did not clear the reliability floor.",
+      "privateCorpusAccess": true
     },
     {
       "id": "deterministic-hybrid",
-      "status": "contract-passed",
-      "evidence": "Protocol contract passes; quality awaits blind labels.",
-      "privateCorpusAccess": false
+      "status": "mapping-inconclusive",
+      "evidence": "Locked 60-case run completed; independent claim mapping did not clear the reliability floor.",
+      "privateCorpusAccess": true
     },
     {
       "id": "florence-2-base",
@@ -57,8 +57,8 @@
       "privateCorpusAccess": false
     }
   ],
-  "qualityConclusion": "not-run",
-  "qualityReason": "Blinded frontier-model canonical annotations are not sealed yet. Publishing a quality ranking now would be invalid.",
+  "qualityConclusion": "inconclusive",
+  "qualityReason": "The private built-in run completed, but the concealed independent claim-mapping contract did not clear its reliability floor. No quality score is published.",
   "containsPersonalCorpus": false,
   "containsCaseMaterial": false
 }

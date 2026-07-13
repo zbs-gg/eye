@@ -16,6 +16,7 @@ if str(BENCHMARK_DIRECTORY) not in sys.path:
 
 from common.private_io import (  # noqa: E402
     atomic_private_json,
+    load_private_json,
     validate_private_input_file,
 )
 from common.provenance import file_evidence  # noqa: E402
@@ -34,6 +35,9 @@ ROLES = frozenset({
     "claim-mapper-primary",
     "claim-mapper-hidden",
     "claim-adjudicator",
+})
+CLAIM_MAPPING_ROLES = frozenset({
+    "claim-mapper-primary", "claim-mapper-hidden", "claim-adjudicator",
 })
 PROVIDERS = frozenset({"openai", "anthropic", "local"})
 SAFE_ID = re.compile(r"^[A-Za-z0-9._:/-]{1,160}$")
@@ -80,7 +84,7 @@ def issue_receipt(
         "modelFamily": model_family,
         "packetSHA256": file_evidence(packet)["sha256"],
         "outputSHA256": file_evidence(output)["sha256"],
-        "candidateOutputsAvailable": False,
+        "candidateOutputsAvailable": role in CLAIM_MAPPING_ROLES,
     }
     atomic_private_json(receipt_path, payload)
     return payload
@@ -96,8 +100,8 @@ def validate_receipt(
     packet = validate_private_input_file(packet_path)
     output = validate_private_input_file(output_path)
     try:
-        payload = json.loads(receipt.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        payload, _ = load_private_json(receipt, "evaluator receipt")
+    except ValueError as error:
         raise EvaluatorReceiptError("evaluator receipt is invalid JSON") from error
     expected_keys = {
         "schema", "issuer", "role", "sessionID", "provider", "modelFamily",
@@ -107,7 +111,8 @@ def validate_receipt(
             or payload["schema"] != RECEIPT_SCHEMA or payload["issuer"] != ISSUER \
             or payload["role"] != expected_role or expected_role not in ROLES \
             or payload["provider"] not in PROVIDERS \
-            or payload["candidateOutputsAvailable"] is not False:
+            or payload["candidateOutputsAvailable"] \
+                is not (expected_role in CLAIM_MAPPING_ROLES):
         raise EvaluatorReceiptError("evaluator receipt contract is invalid")
     _safe_identifier(payload["sessionID"], "session ID")
     _safe_identifier(payload["modelFamily"], "model family")

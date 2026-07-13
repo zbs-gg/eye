@@ -411,6 +411,14 @@ class SingleFrameLaneV4Tests(unittest.TestCase):
             correctness / "packets" / "auditor-02" / "packet.json",
             outputs[1], "correctness-auditor-2", f"task:/root/{prefix}auditor-2/turn:1",
         )
+        for private_root in [annotation, correctness, aggregate]:
+            for path in private_root.rglob("*"):
+                if path.is_dir():
+                    os.chmod(path, 0o700)
+                elif path.is_file():
+                    os.chmod(path, 0o600)
+        for output in outputs:
+            os.chmod(output, 0o600)
         return self.lane.V3EvidencePaths(
             annotation, correctness, aggregate,
             outputs[0], one_receipt, outputs[1], two_receipt,
@@ -501,6 +509,7 @@ class SingleFrameLaneV4Tests(unittest.TestCase):
                 for item in packet["items"]
             ],
         }))
+        os.chmod(path, 0o600)
         return path
 
     def _write_final_judgments(self, packet_path: Path) -> Path:
@@ -521,6 +530,7 @@ class SingleFrameLaneV4Tests(unittest.TestCase):
                 "ambiguityDecision": True,
             } for item in packet["items"]],
         }))
+        os.chmod(path, 0o600)
         return path
 
     def _issue(self, packet: Path, output: Path, role: str, session: str) -> Path:

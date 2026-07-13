@@ -19,7 +19,7 @@ def main() -> int:
         "--mode",
         choices=(
             "synthetic", "unsupported", "malformed", "crash", "hang", "hang-child",
-            "flood",
+            "flood", "wrong-status",
         ),
         default="synthetic",
     )
@@ -65,6 +65,9 @@ def main() -> int:
             return 0
 
         message_type = message["type"]
+        if args.mode == "wrong-status":
+            respond({"id": message["id"], "status": "ready"})
+            continue
         if message_type == "hello":
             respond({"id": message["id"], "status": "ready"})
         elif message_type == "case":
@@ -73,10 +76,15 @@ def main() -> int:
                     "id": message["id"],
                     "status": "ok",
                     "normalized": {
+                        "methodID": "synthetic-contract",
+                        "capabilities": [
+                            "summary", "atomic-facts", "visible-text", "labels"
+                        ],
                         "summary": "Synthetic visible activity",
                         "atomicFacts": ["A synthetic window is visible"],
                         "visibleText": [],
                         "labels": ["synthetic"],
+                        "runtimeMetadata": {"networkUsed": False},
                     },
                 }
             )

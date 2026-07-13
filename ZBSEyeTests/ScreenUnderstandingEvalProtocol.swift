@@ -126,6 +126,7 @@ struct ScreenUnderstandingEvalProtocol: Codable, Sendable, Equatable {
     struct Publication: Codable, Sendable, Equatable {
         var allowCaseMaterial: Bool
         var schema: String
+        var qualifiedSchema: String
         var allowedClasses: [String]
     }
 
@@ -210,7 +211,8 @@ struct ScreenUnderstandingEvalProtocol: Codable, Sendable, Equatable {
             throw ScreenUnderstandingProtocolError.invalid("Private raw reports must use atomic writes")
         }
         guard !publication.allowCaseMaterial,
-              publication.schema == "public-aggregate.schema.json" else {
+              publication.schema == "public-decision.schema.json",
+              publication.qualifiedSchema == "public-aggregate.schema.json" else {
             throw ScreenUnderstandingProtocolError.invalid("Publication must reject case material")
         }
     }

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -17,7 +18,10 @@ BENCHMARK_DIRECTORY = Path(__file__).parents[1]
 if str(BENCHMARK_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(BENCHMARK_DIRECTORY))
 
-from common.private_io import validate_private_input_file  # noqa: E402
+from common.private_io import (  # noqa: E402
+    load_private_json,
+    validate_private_input_file,
+)
 from common.private_root import (  # noqa: E402
     PrivateRootError,
     validate_private_root,
@@ -143,7 +147,10 @@ def _load_json(
     if path.is_symlink() or not path.is_file():
         raise PreflightError(f"{subject} is unavailable")
     if require_owner_only:
-        _assert_owner_only(path, subject)
+        try:
+            return load_private_json(path, subject)
+        except ValueError as error:
+            raise PreflightError(str(error)) from error
     try:
         raw = path.read_text(encoding="utf-8")
         value = json.loads(raw)
@@ -612,12 +619,18 @@ def validate_seal(
         raise PreflightError("canonical root is unavailable")
     _assert_owner_only(canonical_root, "canonical root")
 
-    manifest, _ = _load_json(corpus_root / "manifest.json", "corpus manifest")
-    labels, _ = _load_json(canonical_root / "labels.json", "canonical labels")
-    reliability, _ = _load_json(
+    manifest, manifest_raw = _load_json(
+        corpus_root / "manifest.json", "corpus manifest"
+    )
+    labels, labels_raw = _load_json(
+        canonical_root / "labels.json", "canonical labels"
+    )
+    reliability, reliability_raw = _load_json(
         canonical_root / "reliability.json", "canonical reliability"
     )
-    commit, _ = _load_json(canonical_root / "commit.json", "canonical commit")
+    commit, commit_raw = _load_json(
+        canonical_root / "commit.json", "canonical commit"
+    )
     single_ids, temporal_ids = _validate_manifest(manifest)
     _reject_private_payload(labels)
     _reject_private_payload(reliability)
@@ -658,6 +671,18 @@ def validate_seal(
         "singleFrameCount": len(single_ids),
         "temporalPairCount": len(temporal_ids),
         "rubricVersion": CANONICAL_RUBRIC,
+        "datasetManifestSHA256": hashlib.sha256(
+            manifest_raw.encode("utf-8")
+        ).hexdigest(),
+        "canonicalLabelsSHA256": hashlib.sha256(
+            labels_raw.encode("utf-8")
+        ).hexdigest(),
+        "canonicalReliabilitySHA256": hashlib.sha256(
+            reliability_raw.encode("utf-8")
+        ).hexdigest(),
+        "canonicalCommitSHA256": hashlib.sha256(
+            commit_raw.encode("utf-8")
+        ).hexdigest(),
     }
 
 

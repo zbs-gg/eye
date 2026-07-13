@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import uuid
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from .private_root import (
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+MAX_PRIVATE_JSON_BYTES = 16 * 1024 * 1024
 
 
 def validate_private_input(path: Path) -> Path:
@@ -57,6 +59,64 @@ def validate_private_output(path: Path) -> Path:
     if output.exists():
         raise PrivateRootError("private output root already exists")
     return output
+
+
+def read_private_bytes(
+    path: Path,
+    subject: str,
+    *,
+    max_bytes: int = MAX_PRIVATE_JSON_BYTES,
+) -> bytes:
+    """Read one owner-only regular file without following links or exceeding a bound."""
+
+    source = validate_private_input_file(path)
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    try:
+        descriptor = os.open(source, flags)
+    except OSError as error:
+        raise PrivateRootError(f"{subject} is unavailable") from error
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) \
+                or metadata.st_uid != os.geteuid() \
+                or stat.S_IMODE(metadata.st_mode) & 0o077:
+            raise PrivateRootError(
+                f"{subject} must be an owner-only regular file"
+            )
+        chunks = []
+        remaining = max_bytes + 1
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        if len(data) > max_bytes:
+            raise PrivateRootError(f"{subject} exceeds the size limit")
+        return data
+    except PrivateRootError:
+        raise
+    except OSError as error:
+        raise PrivateRootError(f"{subject} is unavailable") from error
+    finally:
+        os.close(descriptor)
+
+
+def load_private_json(path: Path, subject: str) -> tuple[dict, str]:
+    """Load a bounded owner-only JSON object and return its exact source text."""
+
+    data = read_private_bytes(path, subject)
+    try:
+        text = data.decode("utf-8")
+        value = json.loads(text)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise PrivateRootError(f"{subject} is not valid JSON") from error
+    if not isinstance(value, dict):
+        raise PrivateRootError(f"{subject} must be an object")
+    return value, text
 
 
 def prepare_private_output(path: Path) -> tuple[Path, Path]:

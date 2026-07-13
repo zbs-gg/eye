@@ -85,16 +85,66 @@ struct ScreenUnderstandingAdapterMessage: Codable, Sendable, Equatable {
     }
 }
 
+indirect enum ScreenUnderstandingJSONValue: Codable, Sendable, Equatable {
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case array([ScreenUnderstandingJSONValue])
+    case object([String: ScreenUnderstandingJSONValue])
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() { self = .null }
+        else if let value = try? container.decode(Bool.self) { self = .bool(value) }
+        else if let value = try? container.decode(Double.self) { self = .number(value) }
+        else if let value = try? container.decode(String.self) { self = .string(value) }
+        else if let value = try? container.decode([ScreenUnderstandingJSONValue].self) {
+            self = .array(value)
+        } else {
+            self = .object(try container.decode([String: ScreenUnderstandingJSONValue].self))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value): try container.encode(value)
+        case .number(let value): try container.encode(value)
+        case .bool(let value): try container.encode(value)
+        case .array(let value): try container.encode(value)
+        case .object(let value): try container.encode(value)
+        case .null: try container.encodeNil()
+        }
+    }
+}
+
 struct ScreenUnderstandingNormalizedAdapterResult: Codable, Sendable, Equatable {
+    var methodID: String
+    var capabilities: [String]
     var summary: String?
-    var atomicFacts: [String]
-    var visibleText: [String]
-    var labels: [String]
+    var atomicFacts: [String]?
+    var visibleText: [String]?
+    var labels: [String]?
+    var regions: [ScreenUnderstandingJSONValue]?
+    var changeFacts: [String]?
+    var confidence: Double?
+    var abstention: Bool?
+    var errors: [String]?
+    var runtimeMetadata: [String: ScreenUnderstandingJSONValue]
+}
+
+enum ScreenUnderstandingAdapterStatus: String, Codable, Sendable, Equatable {
+    case ready
+    case ok
+    case bye
+    case unsupported
+    case error
 }
 
 struct ScreenUnderstandingAdapterResponse: Codable, Sendable, Equatable {
     var id: String
-    var status: String
+    var status: ScreenUnderstandingAdapterStatus
     var normalized: ScreenUnderstandingNormalizedAdapterResult?
     var error: String?
 }
@@ -191,9 +241,41 @@ struct ScreenUnderstandingAdapterProcess: Sendable {
             }
         }
 
-        guard responses.map(\.id) == messages.prefix(responses.count).map(\.id),
-              responses.count == messages.count || responses.last?.status == "unsupported" else {
+        guard responses.map(\.id) == messages.prefix(responses.count).map(\.id) else {
             throw ScreenUnderstandingAdapterError.responseMismatch
+        }
+        if responses.last?.status == .unsupported {
+            guard responses.count == 1,
+                  responses[0].normalized == nil,
+                  !(responses[0].error ?? "").isEmpty else {
+                throw ScreenUnderstandingAdapterError.responseMismatch
+            }
+            return responses
+        }
+        guard responses.count == messages.count else {
+            throw ScreenUnderstandingAdapterError.responseMismatch
+        }
+        for (message, response) in zip(messages, responses) {
+            switch message.type {
+            case "hello":
+                guard response.status == .ready, response.normalized == nil else {
+                    throw ScreenUnderstandingAdapterError.responseMismatch
+                }
+            case "case":
+                guard response.status == .ok,
+                      let normalized = response.normalized,
+                      !normalized.methodID.isEmpty,
+                      !normalized.capabilities.isEmpty,
+                      normalized.confidence.map({ 0.0 ... 1.0 ~= $0 }) ?? true else {
+                    throw ScreenUnderstandingAdapterError.responseMismatch
+                }
+            case "shutdown":
+                guard response.status == .bye, response.normalized == nil else {
+                    throw ScreenUnderstandingAdapterError.responseMismatch
+                }
+            default:
+                throw ScreenUnderstandingAdapterError.responseMismatch
+            }
         }
         return responses
     }

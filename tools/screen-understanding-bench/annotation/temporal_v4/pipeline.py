@@ -21,6 +21,7 @@ from common.evaluator_receipt import (
 from common.private_io import (
     atomic_private_json,
     copy_private,
+    load_private_json,
     make_private_directory,
     prepare_private_output,
     publish_private_output,
@@ -28,7 +29,7 @@ from common.private_io import (
     validate_private_input_file,
     validate_private_output,
 )
-from common.provenance import file_evidence
+from common.provenance import HASH_ALGORITHM, file_evidence, tree_evidence
 
 
 PROTOCOL = "screen-understanding-temporal-annotation-v4"
@@ -66,14 +67,10 @@ def _digest(value: str) -> str:
 
 
 def _load_json(path: Path, subject: str) -> tuple[dict[str, Any], str]:
-    source = validate_private_input_file(path)
     try:
-        text = source.read_text(encoding="utf-8")
-        value = json.loads(text)
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        value, text = load_private_json(path, subject)
+    except ValueError as error:
         raise ValueError(f"{subject} is not valid JSON") from error
-    if not isinstance(value, dict):
-        raise ValueError(f"{subject} must be an object")
     return value, text
 
 
@@ -1757,39 +1754,77 @@ def finalize(
         "candidateOutputsAvailable": False,
         "qualified": True,
     }
+    labels_document = {
+        "schema": "screen-understanding-temporal-final-labels-v4",
+        "protocol": PROTOCOL,
+        "rubricVersion": RUBRIC,
+        "candidateOutputsAvailable": False,
+        "labels": labels,
+    }
+    reliability_document = {
+        "schema": "screen-understanding-temporal-reliability-v4",
+        "protocol": PROTOCOL,
+        "rubricVersion": RUBRIC,
+        "rawJoint": {
+            "minimum": aggregate_result["rawJointGate"]["minimum"],
+            "correctCount": aggregate_result["jointCorrectCount"],
+            "opportunityCount": 75,
+            "rate": aggregate_result["jointRate"],
+            "qualified": aggregate_result["rawJointGate"]["qualified"],
+        },
+        "finalAudit": {
+            "auditor": output_payload["auditor"],
+            "pairCount": 15,
+            "opportunityCount": 75,
+            "materialFalseCount": 0,
+            "incorrectCount": 0,
+            "qualified": True,
+        },
+        "independence": independence,
+        "candidateOutputsAvailable": False,
+        "qualified": True,
+    }
     output, staging = prepare_private_output(output)
     try:
-        atomic_private_json(staging / "labels.json", {
-            "schema": "screen-understanding-temporal-final-labels-v4",
-            "protocol": PROTOCOL,
-            "rubricVersion": RUBRIC,
-            "candidateOutputsAvailable": False,
-            "labels": labels,
-        })
-        atomic_private_json(staging / "reliability.json", {
-            "schema": "screen-understanding-temporal-reliability-v4",
-            "protocol": PROTOCOL,
-            "rubricVersion": RUBRIC,
-            "rawJoint": {
-                "minimum": aggregate_result["rawJointGate"]["minimum"],
-                "correctCount": aggregate_result["jointCorrectCount"],
-                "opportunityCount": 75,
-                "rate": aggregate_result["jointRate"],
-                "qualified": aggregate_result["rawJointGate"]["qualified"],
-            },
-            "finalAudit": {
-                "auditor": output_payload["auditor"],
-                "pairCount": 15,
-                "opportunityCount": 75,
-                "materialFalseCount": 0,
-                "incorrectCount": 0,
-                "qualified": True,
-            },
-            "independence": independence,
-            "candidateOutputsAvailable": False,
-            "qualified": True,
-        })
+        atomic_private_json(staging / "labels.json", labels_document)
+        atomic_private_json(staging / "reliability.json", reliability_document)
         atomic_private_json(staging / "result.json", result)
+        make_private_directory(staging / "evidence")
+        copy_private(final_output, staging / "evidence" / "final-output.json")
+        copy_private(final_receipt, staging / "evidence" / "final-receipt.json")
+        commit = {
+            "schema": "screen-understanding-temporal-commit-v4",
+            "protocol": PROTOCOL,
+            "rubricVersion": RUBRIC,
+            "hashAlgorithm": HASH_ALGORITHM,
+            "candidateOutputsAvailable": False,
+            "canonical": {
+                "labelsSHA256": file_evidence(staging / "labels.json")["sha256"],
+                "reliabilitySHA256": file_evidence(
+                    staging / "reliability.json"
+                )["sha256"],
+                "resultSHA256": file_evidence(staging / "result.json")["sha256"],
+            },
+            "producer": {
+                "finalizerSHA256": file_evidence(Path(__file__))["sha256"],
+            },
+            "evidence": {
+                "finalAuditRoot": tree_evidence(final_root),
+                "finalOutput": file_evidence(
+                    staging / "evidence" / "final-output.json"
+                ),
+                "finalReceipt": file_evidence(
+                    staging / "evidence" / "final-receipt.json"
+                ),
+            },
+            "counts": {
+                "labelCount": 100,
+                "duplicateCount": 15,
+                "finalAuditCaseCount": 15,
+                "finalAuditSlotCount": 75,
+            },
+        }
+        atomic_private_json(staging / "commit.json", commit)
         publish_private_output(staging, output)
         return result
     except BaseException:
