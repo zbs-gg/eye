@@ -493,7 +493,7 @@ def validate_public_output(
         method_id = method["methodID"]
         public_metadata = PUBLIC_METHOD_METADATA.get(method_id)
         if method_id not in METHOD_FILES or method_id in seen \
-                or method["stratum"] != "single-frame" \
+                or method["stratum"] != "single-image" \
                 or not isinstance(public_metadata, dict) \
                 or method["license"] != public_metadata["license"] \
                 or method["limitationCodes"] != list(

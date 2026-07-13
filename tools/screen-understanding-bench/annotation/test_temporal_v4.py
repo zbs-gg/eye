@@ -678,7 +678,15 @@ class TemporalV4Tests(unittest.TestCase):
             (self.root / "temporal-final" / "reliability.json").read_text()
         )
         self.assertTrue(result["qualified"])
-        self.assertEqual(len(labels["labels"]), 15)
+        expected_pairs = {
+            item["id"]
+            for item in json.loads((self.corpus / "manifest.json").read_text())[
+                "temporalPairs"
+            ]
+        }
+        self.assertEqual(result["pairCount"], 100)
+        self.assertEqual(len(labels["labels"]), 100)
+        self.assertEqual({label["pair"] for label in labels["labels"]}, expected_pairs)
         self.assertTrue(all(label["locked"] is True for label in labels["labels"]))
         self.assertEqual(reliability["finalAudit"]["opportunityCount"], 75)
         self.assertEqual(reliability["finalAudit"]["materialFalseCount"], 0)

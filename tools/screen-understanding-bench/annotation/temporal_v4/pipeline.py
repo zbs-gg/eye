@@ -468,6 +468,10 @@ def prepare_audit(
                 validate_private_input_file(source_receipt),
                 staging / "sources" / f"pass{pass_number}-receipt.json",
             )
+        copy_private(
+            work / "owner-mapping.json",
+            staging / "sources" / "work-owner-mapping.json",
+        )
 
         auditor_mappings: dict[str, dict[str, dict[str, Any]]] = {}
         for auditor_number in (1, 2):
@@ -1221,6 +1225,10 @@ def _copy_aggregate_sources(
     tiebreak_output: Path | None,
     tiebreak_receipt: Path | None,
 ) -> None:
+    copy_private(
+        audit / "sources" / "work-owner-mapping.json",
+        destination / "work-owner-mapping.json",
+    )
     for pass_number in (1, 2):
         for kind in ("packet", "output", "receipt"):
             source = audit / "sources" / f"pass{pass_number}-{kind}.json"
@@ -1563,6 +1571,39 @@ def finalize(
         final_root / "sources",
         final_root / "sources" / "aggregate-session-context.json",
     )
+    pass1 = validate_labels(
+        final_root / "sources" / "pass1-packet.json",
+        final_root / "sources" / "pass1-output.json",
+        final_root / "sources" / "pass1-receipt.json",
+        "annotation-pass1",
+    )
+    work_mapping, _ = _load_json(
+        final_root / "sources" / "work-owner-mapping.json",
+        "temporal work owner mapping",
+    )
+    exact_keys(work_mapping, {
+        "schema", "protocol", "rubricVersion", "seedSHA256",
+        "candidateOutputsAvailable", "passes",
+    }, "temporal work owner mapping")
+    passes = work_mapping.get("passes")
+    pass1_owners = passes.get("pass1") if isinstance(passes, dict) else None
+    if work_mapping["schema"] != "screen-understanding-temporal-owner-mapping-v4" \
+            or work_mapping["protocol"] != PROTOCOL \
+            or work_mapping["rubricVersion"] != RUBRIC \
+            or work_mapping["candidateOutputsAvailable"] is not False \
+            or not isinstance(pass1_owners, dict) \
+            or len(pass1_owners) != 100 \
+            or set(pass1_owners) != set(pass1["labels"]):
+        raise ValueError("temporal pass1 owner mapping is invalid")
+    all_pairs = set()
+    for opaque_id, owner in pass1_owners.items():
+        exact_keys(owner, {"pair", "before", "after"}, "temporal pass1 owner")
+        if any(
+            not isinstance(owner[key], str) or not CASE_ID.fullmatch(owner[key])
+            for key in ("pair", "before", "after")
+        ) or owner["pair"] in all_pairs:
+            raise ValueError("temporal pass1 owner identity is invalid")
+        all_pairs.add(owner["pair"])
     required_roles = {value["role"] for value in prior_receipts}
     independence = validate_independent_sessions(
         [*prior_receipts, receipt],
@@ -1630,17 +1671,26 @@ def finalize(
             or owner_mapping["candidateOutputsAvailable"] is not False \
             or set(owner_mapping["items"]) != set(packet_items):
         raise ValueError("temporal final owner mapping is invalid")
-    labels = []
+    selected_references = {}
     for opaque_id, packet_item in packet_items.items():
         owner = owner_mapping["items"][opaque_id]
         exact_keys(owner, {"pair"}, "temporal final owner item")
         pair = owner["pair"]
         if not isinstance(pair, str) or not CASE_ID.fullmatch(pair):
             raise ValueError("temporal final owner pair is invalid")
+        selected_references[pair] = copy.deepcopy(packet_item["reference"])
+    if not set(selected_references).issubset(all_pairs):
+        raise ValueError("temporal final references are outside the pass1 corpus")
+    labels = []
+    for opaque_id, owner in pass1_owners.items():
+        pair = owner["pair"]
+        reference = selected_references.get(pair)
+        if reference is None:
+            reference = _reference_from_label(pass1["labels"][opaque_id])
         labels.append({
             "pair": pair,
             "targetType": "temporal-pair",
-            **copy.deepcopy(packet_item["reference"]),
+            **copy.deepcopy(reference),
             "locked": True,
         })
     labels.sort(key=lambda item: item["pair"])
@@ -1652,7 +1702,8 @@ def finalize(
         "schema": "screen-understanding-temporal-final-result-v4",
         "protocol": PROTOCOL,
         "rubricVersion": RUBRIC,
-        "pairCount": 15,
+        "pairCount": 100,
+        "auditPairCount": 15,
         "opportunityCount": 75,
         "materialFalseCount": 0,
         "incorrectCount": 0,

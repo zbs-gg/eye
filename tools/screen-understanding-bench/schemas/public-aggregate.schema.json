@@ -122,7 +122,7 @@
             "metadata-ax-ocr", "apple-vision", "deterministic-hybrid"
           ]
         },
-        "stratum": {"type": "string", "enum": ["single-frame"]},
+        "stratum": {"type": "string", "enum": ["single-image"]},
         "license": {
           "type": "string",
           "enum": ["AGPL-3.0-or-later", "Apple-SDK"]
@@ -135,7 +135,7 @@
           "items": {
             "type": "string",
             "enum": [
-              "built-in-baseline", "single-frame-only",
+              "built-in-baseline", "single-image-only",
               "accessibility-ocr-signals", "apple-vision-signals",
               "deterministic-signal-fusion"
             ]

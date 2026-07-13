@@ -494,7 +494,7 @@ def _score(
         public_metadata = PUBLIC_METHOD_METADATA[method_id]
         methods.append({
             "methodID": method_id,
-            "stratum": "single-frame",
+            "stratum": "single-image",
             "license": public_metadata["license"],
             "limitationCodes": list(public_metadata["limitationCodes"]),
             "caseCount": len(arms),

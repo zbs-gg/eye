@@ -42,21 +42,21 @@ PUBLIC_METHOD_METADATA = {
     "metadata-ax-ocr": {
         "license": "AGPL-3.0-or-later",
         "limitationCodes": (
-            "built-in-baseline", "single-frame-only",
+            "built-in-baseline", "single-image-only",
             "accessibility-ocr-signals",
         ),
     },
     "apple-vision": {
         "license": "Apple-SDK",
         "limitationCodes": (
-            "built-in-baseline", "single-frame-only",
+            "built-in-baseline", "single-image-only",
             "apple-vision-signals",
         ),
     },
     "deterministic-hybrid": {
         "license": "AGPL-3.0-or-later",
         "limitationCodes": (
-            "built-in-baseline", "single-frame-only",
+            "built-in-baseline", "single-image-only",
             "deterministic-signal-fusion",
         ),
     },
@@ -153,4 +153,3 @@ def reject_public_leaks(
             raise MappingError("public aggregate contains a private path")
         if any(secret and secret in value for secret in forbidden_values):
             raise MappingError("public aggregate contains a private identifier")
-

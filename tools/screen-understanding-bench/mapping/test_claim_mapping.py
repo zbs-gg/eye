@@ -397,10 +397,10 @@ class ClaimMappingTests(unittest.TestCase):
             list(METHODS),
         )
         for method in left_public["methods"]:
-            self.assertEqual(method["stratum"], "single-frame")
+            self.assertEqual(method["stratum"], "single-image")
             self.assertIn(method["license"], {"AGPL-3.0-or-later", "Apple-SDK"})
             self.assertEqual(method["limitationCodes"][:2], [
-                "built-in-baseline", "single-frame-only",
+                "built-in-baseline", "single-image-only",
             ])
             self.assertEqual(method["caseCount"], 60)
             metrics = method["metrics"]
@@ -490,7 +490,7 @@ class ClaimMappingTests(unittest.TestCase):
             set(method["properties"]["methodID"]["enum"]), set(METHODS)
         )
         self.assertEqual(
-            method["properties"]["stratum"]["enum"], ["single-frame"]
+            method["properties"]["stratum"]["enum"], ["single-image"]
         )
         self.assertEqual(
             set(schema["$defs"]["metrics"]["properties"]),
