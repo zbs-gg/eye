@@ -4,21 +4,19 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import re
+import sys
 from pathlib import Path
+
+BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
+if str(BENCHMARK_ROOT) not in sys.path:
+    sys.path.insert(0, str(BENCHMARK_ROOT))
+
+from annotation import validate_correctness_audit as correctness_validator
 
 
 SAFE_ID = re.compile(r"^[A-Za-z0-9._-]{1,96}$")
-
-
-def base_validator():
-    path = Path(__file__).with_name("validate_correctness_audit.py")
-    spec = importlib.util.spec_from_file_location("correctness_validator_v3", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def validate_forbidden_auditors(values: list[str] | tuple[str, ...]) -> set[str]:
@@ -34,8 +32,7 @@ def validate(
     judgments_path: Path,
     forbidden_auditors: list[str] | tuple[str, ...],
 ) -> dict:
-    validator = base_validator()
-    counts = validator.validate(packet_path, judgments_path)
+    counts = correctness_validator.validate(packet_path, judgments_path)
     if counts != {"count": 45, "singleFrames": 30, "temporalPairs": 15}:
         raise ValueError("final audit must match the locked 45/30/15 set")
     forbidden = validate_forbidden_auditors(forbidden_auditors)

@@ -52,6 +52,7 @@ class PrepareAnnotationBatchesTests(unittest.TestCase):
                 stat.S_IMODE(path.stat().st_mode) == 0o600
                 for path in output.rglob("*.json")
             ))
+            self.assertTrue((output / ".metadata_never_index").is_file())
 
     def test_existing_annotation_root_is_rejected(self):
         module = load_module()

@@ -57,6 +57,7 @@ class FinalReferenceToolingTests(unittest.TestCase):
                 set(item) == {"opaqueID", "targetType", "reference", "images"}
                 for item in packet["items"]
             ))
+            self.assertTrue((output / ".metadata_never_index").is_file())
 
             draft = json.loads((output / "draft-final-labels.json").read_text())
             self.assertEqual(len(draft["labels"]), 300)
@@ -176,6 +177,7 @@ class FinalReferenceToolingTests(unittest.TestCase):
             self.assertNotIn('"images"', canonical_text)
             self.assertNotIn("/users/", canonical_text)
             self.assertEqual(os.stat(labels_path).st_mode & 0o777, 0o600)
+            self.assertTrue((audit / "canonical" / ".metadata_never_index").is_file())
             with self.assertRaisesRegex(ValueError, "already exists"):
                 finalize.finalize(annotation, correctness, aggregate, audit, good)
 

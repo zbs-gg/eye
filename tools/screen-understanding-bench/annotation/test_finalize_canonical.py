@@ -33,6 +33,7 @@ class FinalizeCanonicalTests(unittest.TestCase):
             self.assertEqual(by_id["b" * 24]["requiredFacts"][0]["text"], "Merged")
             self.assertTrue(all(label["locked"] for label in labels))
             self.assertEqual(os.stat(root / "canonical" / "labels.json").st_mode & 0o777, 0o600)
+            self.assertTrue((root / "canonical" / ".metadata_never_index").is_file())
 
     def test_fails_closed_below_reliability_floor(self):
         module = load_module()

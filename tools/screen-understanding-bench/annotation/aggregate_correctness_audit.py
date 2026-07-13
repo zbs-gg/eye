@@ -5,13 +5,27 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
-import os
 import re
 import shutil
-import uuid
+import sys
 from pathlib import Path
+
+BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
+if str(BENCHMARK_ROOT) not in sys.path:
+    sys.path.insert(0, str(BENCHMARK_ROOT))
+
+from annotation import validate_correctness_audit as correctness_validator
+from common.contracts import exact_keys
+from common.private_io import (
+    atomic_private_json,
+    copy_private,
+    make_private_directory,
+    prepare_private_output,
+    publish_private_output,
+    validate_private_input,
+    validate_private_output,
+)
 
 
 PROTOCOL = "screen-understanding-correctness-audit-v3"
@@ -24,67 +38,12 @@ SLOT_ORDER = [
 ]
 
 
-def validation_module():
-    path = Path(__file__).with_name("validate_correctness_audit.py")
-    spec = importlib.util.spec_from_file_location("validate_correctness_audit_v3", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def make_directory(path: Path) -> None:
-    path.mkdir(mode=0o700)
-    path.chmod(0o700)
-
-
-def atomic_private_json(path: Path, value: object) -> None:
-    temporary = path.with_name(f".{path.name}.tmp-{uuid.uuid4().hex}")
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, indent=2, sort_keys=True, ensure_ascii=False)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        path.chmod(0o600)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-
-
-def copy_private(source: Path, destination: Path) -> None:
-    descriptor = os.open(
-        destination,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
-    )
-    try:
-        with source.open("rb") as input_handle, os.fdopen(descriptor, "wb") as output_handle:
-            shutil.copyfileobj(input_handle, output_handle)
-            output_handle.flush()
-            os.fsync(output_handle.fileno())
-        destination.chmod(0o600)
-    except BaseException:
-        destination.unlink(missing_ok=True)
-        raise
-
-
-def exact_keys(value: object, expected: set[str], subject: str) -> None:
-    if not isinstance(value, dict) or set(value) != expected:
-        raise ValueError(f"{subject} keys do not match the locked schema")
-
-
 def load_audit(root: Path, judgment_paths: tuple[Path, Path]) -> tuple[dict, dict, list[dict]]:
-    validator = validation_module()
+    validator = correctness_validator
     manifest = json.loads((root / "audit-manifest.json").read_text(encoding="utf-8"))
     exact_keys(manifest, {
         "schema", "protocol", "rubricVersion", "caseCount", "singleFrameCount",
@@ -223,8 +182,8 @@ def build_tiebreak(
     loaded: list[dict],
 ) -> tuple[Path, dict]:
     tiebreak_root = staging / "tiebreak"
-    make_directory(tiebreak_root)
-    make_directory(tiebreak_root / "images")
+    make_private_directory(tiebreak_root)
+    make_private_directory(tiebreak_root / "images")
     work_items = []
     owner_mapping = {}
     for key in sorted(differences):
@@ -372,17 +331,14 @@ def aggregate(
     output_root: Path,
     tiebreak_output: Path | None = None,
 ) -> dict:
-    audit = audit_root.resolve(strict=True)
-    output = output_root.resolve(strict=False)
-    if output.exists():
-        raise ValueError("correctness aggregation output already exists")
+    output = validate_private_output(output_root)
+    audit = validate_private_input(audit_root)
     manifest, mapping, loaded = load_audit(audit, (auditor_one, auditor_two))
     differences = disagreements(loaded)
     if not differences and tiebreak_output is not None:
         raise ValueError("tiebreak output was supplied without disagreements")
 
-    staging = output.parent / f".{output.name}.staging-{uuid.uuid4().hex}"
-    make_directory(staging)
+    output, staging = prepare_private_output(output)
     try:
         tiebreak_values = {}
         tiebreak_mapping = {}
@@ -403,10 +359,9 @@ def aggregate(
                     "disputedBooleanCount": sum(len(value) for value in differences.values()),
                 }
                 atomic_private_json(staging / "result.json", pending)
-                staging.rename(output)
-                output.chmod(0o700)
+                publish_private_output(staging, output)
                 return pending
-            validator = validation_module()
+            validator = correctness_validator
             tiebreak_values = validator.validate_tiebreak(packet_path, tiebreak_output)
             third = json.loads(tiebreak_output.read_text(encoding="utf-8"))
             third_text = tiebreak_output.read_text(encoding="utf-8")
@@ -479,8 +434,7 @@ def aggregate(
             "qualified": False,
         }
         atomic_private_json(staging / "result.json", result)
-        staging.rename(output)
-        output.chmod(0o700)
+        publish_private_output(staging, output)
         return result
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)

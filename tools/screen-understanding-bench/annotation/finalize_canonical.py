@@ -3,9 +3,23 @@
 
 import argparse
 import json
-import os
 import re
+import shutil
+import sys
 from pathlib import Path
+
+BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
+if str(BENCHMARK_ROOT) not in sys.path:
+    sys.path.insert(0, str(BENCHMARK_ROOT))
+
+from common.contracts import exact_keys
+from common.private_io import (
+    atomic_private_json,
+    prepare_private_output,
+    publish_private_output,
+    validate_private_input,
+    validate_private_output,
+)
 
 
 CASE_ID = re.compile(r"^[0-9a-f]{24}$")
@@ -23,11 +37,6 @@ REFERENCE_KEYS = {
     "targetType", "requiredFacts", "criticalText", "forbiddenInferences",
     "meaningfulChange", "ambiguity", "abstentionAllowed",
 }
-
-
-def exact_keys(value: dict, expected: set[str], subject: str) -> None:
-    if not isinstance(value, dict) or set(value) != expected:
-        raise ValueError(f"{subject} keys do not match the locked schema")
 
 
 def validate_reference(reference: object, target_type: str) -> dict:
@@ -128,26 +137,6 @@ def validate_decisions(work: dict, decisions: dict) -> tuple[dict, float, float]
     return by_id, fact_agreement, decision_agreement
 
 
-def atomic_json(path: Path, value: object) -> None:
-    temporary = path.with_name(f".{path.name}.tmp")
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, indent=2, sort_keys=True, ensure_ascii=False)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        os.chmod(path, 0o600)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-
-
 def final_label(identifier: str, reference: dict, annotator: str) -> dict:
     target_type = reference["targetType"]
     validate_reference(reference, target_type)
@@ -167,10 +156,8 @@ def final_label(identifier: str, reference: dict, annotator: str) -> dict:
 
 
 def finalize(root: Path) -> dict:
-    root = root.resolve(strict=True)
-    canonical = root / "canonical"
-    if canonical.exists():
-        raise ValueError("canonical output already exists")
+    root = validate_private_input(root)
+    canonical = validate_private_output(root / "canonical")
     labels = load_pass1(root)
     work, decisions = load_adjudication(root)
     by_id, fact_agreement, decision_agreement = validate_decisions(work, decisions)
@@ -220,15 +207,13 @@ def finalize(root: Path) -> dict:
     if any(fragment in serialized for fragment in FORBIDDEN_FRAGMENTS):
         raise ValueError("canonical output contains a forbidden field or local path")
 
-    canonical.mkdir(mode=0o700)
-    os.chmod(canonical, 0o700)
+    canonical, staging = prepare_private_output(canonical)
     try:
-        atomic_json(canonical / "labels.json", payload)
-        atomic_json(canonical / "reliability.json", reliability)
+        atomic_private_json(staging / "labels.json", payload)
+        atomic_private_json(staging / "reliability.json", reliability)
+        publish_private_output(staging, canonical)
     except BaseException:
-        for path in canonical.iterdir():
-            path.unlink()
-        canonical.rmdir()
+        shutil.rmtree(staging, ignore_errors=True)
         raise
     return {
         "labelCount": len(labels),

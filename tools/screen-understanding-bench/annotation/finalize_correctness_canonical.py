@@ -4,13 +4,28 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import os
 import re
 import shutil
-import uuid
+import sys
 from pathlib import Path
+
+BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
+if str(BENCHMARK_ROOT) not in sys.path:
+    sys.path.insert(0, str(BENCHMARK_ROOT))
+
+from annotation import prepare_final_reference_audit as final_reference_preparer
+from annotation import validate_correctness_audit as correctness_validator
+from annotation import validate_final_reference_audit as final_reference_validator
+from common.contracts import exact_keys
+from common.private_io import (
+    atomic_private_json,
+    prepare_private_output,
+    publish_private_output,
+    validate_private_input,
+    validate_private_output,
+)
 
 
 PROTOCOL = "screen-understanding-correctness-audit-v3"
@@ -29,47 +44,6 @@ FORBIDDEN_FRAGMENTS = (
     '"candidateOutput"', '"methodID"', '"opaqueID"', '"images"',
     "/Users/", "/Volumes/", "file://",
 )
-
-
-def load_module(filename: str, module_name: str):
-    path = Path(__file__).with_name(filename)
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def prepare_module():
-    return load_module("prepare_final_reference_audit.py", "prepare_final_reference_v3")
-
-
-def final_validator():
-    return load_module("validate_final_reference_audit.py", "validate_final_reference_v3")
-
-
-def exact_keys(value: object, expected: set[str], subject: str) -> None:
-    if not isinstance(value, dict) or set(value) != expected:
-        raise ValueError(f"{subject} keys do not match the locked schema")
-
-
-def atomic_private_json(path: Path, value: object) -> None:
-    temporary = path.with_name(f".{path.name}.tmp-{uuid.uuid4().hex}")
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, indent=2, sort_keys=True, ensure_ascii=False)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        path.chmod(0o600)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
 
 
 def load_manifest(root: Path) -> dict:
@@ -190,7 +164,7 @@ def validate_cross_links(
     }:
         raise ValueError("aggregate selection differs from its correctness audit owner set")
 
-    packet = final_validator().base_validator().load_packet(
+    packet = correctness_validator.load_packet(
         audit / "packet" / "packet.json"
     )
     packet_items = {item["opaqueID"]: item for item in packet["items"]}
@@ -256,15 +230,13 @@ def finalize(
     final_audit_root: Path,
     judgments_path: Path,
 ) -> dict:
-    annotation = annotation_root.resolve(strict=True)
-    correctness_audit = correctness_audit_root.resolve(strict=True)
-    aggregate = aggregate_root.resolve(strict=True)
-    audit = final_audit_root.resolve(strict=True)
-    canonical = audit / "canonical"
-    if canonical.exists():
-        raise ValueError("canonical output already exists")
+    annotation = validate_private_input(annotation_root)
+    correctness_audit = validate_private_input(correctness_audit_root)
+    aggregate = validate_private_input(aggregate_root)
+    audit = validate_private_input(final_audit_root)
+    canonical = validate_private_output(audit / "canonical")
 
-    prepare = prepare_module()
+    prepare = final_reference_preparer
     result, _ = prepare.load_aggregate(aggregate)
     manifest = load_manifest(audit)
     mapping = load_mapping(audit)
@@ -274,7 +246,7 @@ def finalize(
     )
     if manifest["rawJoint"] != result["joint"]:
         raise ValueError("final audit manifest raw joint rates were changed")
-    final_result = final_validator().validate(
+    final_result = final_reference_validator.validate(
         audit / "packet" / "packet.json",
         judgments_path,
         mapping["forbiddenAuditors"],
@@ -325,18 +297,15 @@ def finalize(
 
     lock_path = audit / ".canonical-seal.lock"
     lock = acquire_lock(lock_path)
-    staging = audit / f".canonical.staging-{uuid.uuid4().hex}"
+    staging = None
     try:
-        if canonical.exists():
-            raise ValueError("canonical output already exists")
-        staging.mkdir(mode=0o700)
-        staging.chmod(0o700)
+        canonical, staging = prepare_private_output(canonical)
         atomic_private_json(staging / "labels.json", labels_payload)
         atomic_private_json(staging / "reliability.json", reliability)
-        staging.rename(canonical)
-        canonical.chmod(0o700)
+        publish_private_output(staging, canonical)
     except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
         raise
     finally:
         os.close(lock)

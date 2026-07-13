@@ -75,6 +75,7 @@ class PrepareCorrectnessAuditTests(unittest.TestCase):
                     (second / "packets" / f"auditor-{number:02d}" / "packet.json").read_text(),
                 )
             self.assertEqual(stat.S_IMODE((first / "owner-mapping.json").stat().st_mode), 0o600)
+            self.assertTrue((first / ".metadata_never_index").is_file())
             self.assertTrue(all(
                 stat.S_IMODE(path.stat().st_mode) == 0o700
                 for path in [first, first / "packets", *[p for p in first.rglob("*") if p.is_dir()]]

@@ -4,12 +4,24 @@
 import argparse
 import hashlib
 import json
-import os
 import re
 import shutil
 import subprocess
-import uuid
+import sys
 from pathlib import Path
+
+BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
+if str(BENCHMARK_ROOT) not in sys.path:
+    sys.path.insert(0, str(BENCHMARK_ROOT))
+
+from common.private_io import (
+    atomic_private_json,
+    make_private_directory,
+    prepare_private_output,
+    publish_private_output,
+    validate_private_input,
+    validate_private_output,
+)
 
 
 CASE_ID = re.compile(r"^[0-9a-f]{24}$")
@@ -21,22 +33,6 @@ def digest(data: bytes) -> str:
 
 def locked_order(items: list[dict], seed: str) -> list[dict]:
     return sorted(items, key=lambda item: digest(f"{seed}:{item['id']}".encode()))
-
-
-def write_private_json(path: Path, value: object) -> None:
-    descriptor = os.open(
-        path,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
-    )
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        json.dump(value, handle, indent=2, sort_keys=True, ensure_ascii=False)
-        handle.write("\n")
-
-
-def make_directory(path: Path) -> None:
-    path.mkdir(mode=0o700)
-    path.chmod(0o700)
 
 
 def render_case(corpus: Path, staging: Path, case_id: str) -> None:
@@ -62,20 +58,14 @@ def prepare_batches(
     render: bool,
     rubric_version: str = "screen-understanding-canonical-v1",
 ) -> dict:
-    corpus = corpus_root.resolve(strict=True)
-    output = annotation_root.resolve(strict=False)
-    if output.exists():
-        raise ValueError("annotation root already exists")
+    output = validate_private_output(annotation_root)
+    corpus = validate_private_input(corpus_root)
     if batch_count < 2:
         raise ValueError("at least two annotator batches are required")
     if not 0 < duplicate_fraction <= 0.5:
         raise ValueError("duplicate fraction must be within (0, 0.5]")
     if corpus == output or corpus in output.parents or output in corpus.parents:
         raise ValueError("corpus and annotation roots must be disjoint")
-    lowered = str(output).lower()
-    if "/library/mobile documents/" in lowered or "/cloudstorage/" in lowered:
-        raise ValueError("annotation root cannot use cloud-synchronized storage")
-
     manifest_path = corpus / "manifest.json"
     manifest_data = manifest_path.read_bytes()
     manifest = json.loads(manifest_data)
@@ -131,19 +121,18 @@ def prepare_batches(
         different_batch = (pass_one_assignment[item["id"]] + 1) % batch_count
         pass_two_batches[different_batch].append(item)
 
-    staging = output.parent / f".{output.name}.staging-{uuid.uuid4()}"
-    make_directory(staging)
+    output, staging = prepare_private_output(output)
     try:
         for name in ["renders", "batches", "labels", "adjudication"]:
-            make_directory(staging / name)
-        make_directory(staging / "labels" / "pass1")
-        make_directory(staging / "labels" / "pass2")
+            make_private_directory(staging / name)
+        make_private_directory(staging / "labels" / "pass1")
+        make_private_directory(staging / "labels" / "pass2")
         if render:
             for case_id in sorted(render_ids):
                 render_case(corpus, staging, case_id)
 
         for index, items in enumerate(pass_one_batches, start=1):
-            write_private_json(staging / "batches" / f"pass1-{index:02d}.json", {
+            atomic_private_json(staging / "batches" / f"pass1-{index:02d}.json", {
                 "schema": "screen-understanding-annotation-batch-v1",
                 "pass": 1,
                 "annotatorSlot": f"frontier-{index:02d}",
@@ -152,7 +141,7 @@ def prepare_batches(
                 "items": items,
             })
         for index, items in enumerate(pass_two_batches, start=1):
-            write_private_json(staging / "batches" / f"pass2-{index:02d}.json", {
+            atomic_private_json(staging / "batches" / f"pass2-{index:02d}.json", {
                 "schema": "screen-understanding-annotation-batch-v1",
                 "pass": 2,
                 "annotatorSlot": f"frontier-audit-{index:02d}",
@@ -174,8 +163,8 @@ def prepare_batches(
             "batchCount": batch_count,
             "renderCount": len(render_ids) if render else 0,
         }
-        write_private_json(staging / "annotation-manifest.json", result)
-        staging.rename(output)
+        atomic_private_json(staging / "annotation-manifest.json", result)
+        publish_private_output(staging, output)
         return result
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)

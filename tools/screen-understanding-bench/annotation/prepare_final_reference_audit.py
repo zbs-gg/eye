@@ -5,13 +5,28 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
-import os
 import re
 import shutil
-import uuid
+import sys
 from pathlib import Path
+
+BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
+if str(BENCHMARK_ROOT) not in sys.path:
+    sys.path.insert(0, str(BENCHMARK_ROOT))
+
+from annotation import validate_correctness_audit as correctness_validator
+from common.contracts import exact_keys
+from common.private_io import (
+    atomic_private_json,
+    copy_private,
+    make_private_directory,
+    prepare_private_output,
+    publish_private_output,
+    validate_private_input,
+    validate_private_input_file,
+    validate_private_output,
+)
 
 
 PROTOCOL = "screen-understanding-correctness-audit-v3"
@@ -29,63 +44,8 @@ FORBIDDEN_PACKET_FRAGMENTS = (
 )
 
 
-def correctness_validator():
-    path = Path(__file__).with_name("validate_correctness_audit.py")
-    spec = importlib.util.spec_from_file_location("correctness_validator_v3", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def exact_keys(value: object, expected: set[str], subject: str) -> None:
-    if not isinstance(value, dict) or set(value) != expected:
-        raise ValueError(f"{subject} keys do not match the locked schema")
-
-
-def make_directory(path: Path) -> None:
-    path.mkdir(mode=0o700)
-    path.chmod(0o700)
-
-
-def atomic_private_json(path: Path, value: object) -> None:
-    temporary = path.with_name(f".{path.name}.tmp-{uuid.uuid4().hex}")
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, indent=2, sort_keys=True, ensure_ascii=False)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        path.chmod(0o600)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-
-
-def copy_private(source: Path, destination: Path) -> None:
-    descriptor = os.open(
-        destination,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
-    )
-    try:
-        with source.open("rb") as input_handle, os.fdopen(descriptor, "wb") as output_handle:
-            shutil.copyfileobj(input_handle, output_handle)
-            output_handle.flush()
-            os.fsync(output_handle.fileno())
-        destination.chmod(0o600)
-    except BaseException:
-        destination.unlink(missing_ok=True)
-        raise
 
 
 def validate_fact(fact: object, expected_id: str, severity_required: bool) -> None:
@@ -104,7 +64,7 @@ def validate_fact(fact: object, expected_id: str, severity_required: bool) -> No
 
 def validate_reference(reference: object, target_type: str) -> dict:
     exact_keys(reference, REFERENCE_KEYS, "reference")
-    correctness_validator().validate_reference(reference, target_type)
+    correctness_validator.validate_reference(reference, target_type)
     for fact, expected in zip(reference["requiredFacts"], [
         "required.surface", "required.content", "required.state",
     ]):
@@ -347,6 +307,7 @@ def load_corrections(path: Path | None, required_ids: set[str]) -> tuple[dict[st
         return {}, None
     if path is None:
         raise ValueError("a correction is required for every merge-required case")
+    path = validate_private_input_file(path)
     text = path.read_text(encoding="utf-8")
     lowered = text.lower()
     if any(fragment in lowered for fragment in [
@@ -430,12 +391,10 @@ def prepare(
     corrections_path: Path | None = None,
     forbidden_auditors: list[str] | tuple[str, ...] = (),
 ) -> dict:
-    annotation = annotation_root.resolve(strict=True)
-    correctness_audit = correctness_audit_root.resolve(strict=True)
-    aggregate = aggregate_root.resolve(strict=True)
-    output = output_root.resolve(strict=False)
-    if output.exists():
-        raise ValueError("final-reference audit output already exists")
+    output = validate_private_output(output_root)
+    annotation = validate_private_input(annotation_root)
+    correctness_audit = validate_private_input(correctness_audit_root)
+    aggregate = validate_private_input(aggregate_root)
     if not seed:
         raise ValueError("final-reference audit seed is required")
     for source in [annotation, correctness_audit, aggregate]:
@@ -490,11 +449,10 @@ def prepare(
     if len(draft_labels) != 300 or any(label["locked"] for label in draft_labels.values()):
         raise ValueError("draft final labels do not match the locked 300-case protocol")
 
-    staging = output.parent / f".{output.name}.staging-{uuid.uuid4().hex}"
-    make_directory(staging)
+    output, staging = prepare_private_output(output)
     try:
-        make_directory(staging / "packet")
-        make_directory(staging / "packet" / "images")
+        make_private_directory(staging / "packet")
+        make_private_directory(staging / "packet" / "images")
         packet_items = []
         owner_items = {}
         source_basenames = set()
@@ -567,8 +525,7 @@ def prepare(
         atomic_private_json(staging / "owner-mapping.json", owner_mapping)
         atomic_private_json(staging / "draft-final-labels.json", draft_payload)
         atomic_private_json(staging / "audit-manifest.json", manifest)
-        staging.rename(output)
-        output.chmod(0o700)
+        publish_private_output(staging, output)
         return manifest
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)

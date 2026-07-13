@@ -4,18 +4,21 @@
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
+
+BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
+if str(BENCHMARK_ROOT) not in sys.path:
+    sys.path.insert(0, str(BENCHMARK_ROOT))
+
+from common.contracts import exact_keys
+from common.private_io import validate_private_input_file
 
 
 CASE_ID = re.compile(r"^[0-9a-f]{24}$")
 FACT_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 SEVERITIES = {"minor", "major", "critical"}
 AMBIGUITIES = {"judgeable", "ambiguous", "unjudgeable"}
-
-
-def exact_keys(value: dict, expected: set[str], subject: str) -> None:
-    if set(value) != expected:
-        raise ValueError(f"{subject} keys do not match the locked schema")
 
 
 def validate_facts(
@@ -50,6 +53,8 @@ def validate_facts(
 
 
 def validate(work_path: Path, labels_path: Path) -> dict:
+    work_path = validate_private_input_file(work_path)
+    labels_path = validate_private_input_file(labels_path)
     work = json.loads(work_path.read_text(encoding="utf-8"))
     output_text = labels_path.read_text(encoding="utf-8")
     if any(fragment in output_text for fragment in [

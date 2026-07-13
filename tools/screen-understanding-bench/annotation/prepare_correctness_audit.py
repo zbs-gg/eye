@@ -4,11 +4,25 @@
 import argparse
 import hashlib
 import json
-import os
 import re
 import shutil
-import uuid
+import sys
 from pathlib import Path
+
+BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
+if str(BENCHMARK_ROOT) not in sys.path:
+    sys.path.insert(0, str(BENCHMARK_ROOT))
+
+from common.contracts import exact_keys
+from common.private_io import (
+    atomic_private_json,
+    copy_private,
+    make_private_directory,
+    prepare_private_output,
+    publish_private_output,
+    validate_private_input,
+    validate_private_output,
+)
 
 
 PROTOCOL = "screen-understanding-correctness-audit-v3"
@@ -22,36 +36,6 @@ REFERENCE_KEYS = {
 
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def make_directory(path: Path) -> None:
-    path.mkdir(mode=0o700)
-    path.chmod(0o700)
-
-
-def atomic_private_json(path: Path, value: object) -> None:
-    temporary = path.with_name(f".{path.name}.tmp-{uuid.uuid4().hex}")
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, indent=2, sort_keys=True, ensure_ascii=False)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        path.chmod(0o600)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-
-
-def exact_keys(value: object, expected: set[str], subject: str) -> None:
-    if not isinstance(value, dict) or set(value) != expected:
-        raise ValueError(f"{subject} keys do not match the locked schema")
 
 
 def reference_from_label(label: dict, target_type: str) -> dict:
@@ -153,23 +137,6 @@ def resolve_render(root: Path, relative: str) -> Path:
     return candidate
 
 
-def copy_private(source: Path, destination: Path) -> None:
-    descriptor = os.open(
-        destination,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
-    )
-    try:
-        with source.open("rb") as input_handle, os.fdopen(descriptor, "wb") as output_handle:
-            shutil.copyfileobj(input_handle, output_handle)
-            output_handle.flush()
-            os.fsync(output_handle.fileno())
-        destination.chmod(0o600)
-    except BaseException:
-        destination.unlink(missing_ok=True)
-        raise
-
-
 def source_images(root: Path, item: dict) -> list[Path]:
     if item["targetType"] == "single-frame":
         return [resolve_render(root, item["image"])]
@@ -180,10 +147,8 @@ def source_images(root: Path, item: dict) -> list[Path]:
 
 
 def prepare_audit(annotation_root: Path, output_root: Path, seed: str) -> dict:
-    annotation = annotation_root.resolve(strict=True)
-    output = output_root.resolve(strict=False)
-    if output.exists():
-        raise ValueError("correctness audit output already exists")
+    output = validate_private_output(output_root)
+    annotation = validate_private_input(annotation_root)
     if annotation == output or annotation in output.parents or output in annotation.parents:
         raise ValueError("annotation and audit roots must be disjoint")
     if not seed:
@@ -203,17 +168,16 @@ def prepare_audit(annotation_root: Path, output_root: Path, seed: str) -> dict:
     if (single_count, temporal_count) != (30, 15):
         raise ValueError("correctness audit requires the locked 30/15 duplicate set")
     paired_opportunities = single_count * 6 + temporal_count * 7
-    staging = output.parent / f".{output.name}.staging-{uuid.uuid4().hex}"
-    make_directory(staging)
+    output, staging = prepare_private_output(output)
     try:
-        make_directory(staging / "packets")
+        make_private_directory(staging / "packets")
         mapping: dict[str, dict] = {}
         source_basenames: set[str] = set()
         for auditor_number in (1, 2):
             auditor_slot = f"auditor-{auditor_number:02d}"
             packet_root = staging / "packets" / auditor_slot
-            make_directory(packet_root)
-            make_directory(packet_root / "images")
+            make_private_directory(packet_root)
+            make_private_directory(packet_root / "images")
             packet_items = []
             auditor_mapping = {}
             for identifier, work_item in duplicate_work.items():
@@ -282,8 +246,7 @@ def prepare_audit(annotation_root: Path, output_root: Path, seed: str) -> dict:
         }
         atomic_private_json(staging / "owner-mapping.json", owner_mapping)
         atomic_private_json(staging / "audit-manifest.json", manifest)
-        staging.rename(output)
-        output.chmod(0o700)
+        publish_private_output(staging, output)
         return manifest
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)

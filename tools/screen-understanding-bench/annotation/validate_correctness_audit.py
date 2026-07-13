@@ -4,7 +4,15 @@
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
+
+BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
+if str(BENCHMARK_ROOT) not in sys.path:
+    sys.path.insert(0, str(BENCHMARK_ROOT))
+
+from common.contracts import exact_keys
+from common.private_io import validate_private_input_file
 
 
 PROTOCOL = "screen-understanding-correctness-audit-v3"
@@ -15,11 +23,6 @@ REFERENCE_KEYS = {
     "targetType", "requiredFacts", "criticalText", "forbiddenInferences",
     "meaningfulChange", "ambiguity", "abstentionAllowed",
 }
-
-
-def exact_keys(value: object, expected: set[str], subject: str) -> None:
-    if not isinstance(value, dict) or set(value) != expected:
-        raise ValueError(f"{subject} keys do not match the locked schema")
 
 
 def contains_forbidden(value: str) -> bool:
@@ -108,6 +111,7 @@ def validate_packet_item(item: object, tiebreak: bool = False) -> None:
 
 
 def load_packet(packet_path: Path) -> dict:
+    packet_path = validate_private_input_file(packet_path)
     packet = json.loads(packet_path.read_text(encoding="utf-8"))
     exact_keys(packet, {
         "schema", "protocol", "rubricVersion", "packetID", "items",
@@ -133,6 +137,7 @@ def load_packet(packet_path: Path) -> dict:
 
 def validate(packet_path: Path, judgments_path: Path) -> dict:
     packet = load_packet(packet_path)
+    judgments_path = validate_private_input_file(judgments_path)
     output_text = judgments_path.read_text(encoding="utf-8")
     if contains_forbidden(output_text):
         raise ValueError("audit judgments contain a forbidden field or local path")
@@ -189,6 +194,8 @@ def validate(packet_path: Path, judgments_path: Path) -> dict:
 
 
 def validate_tiebreak(packet_path: Path, judgments_path: Path) -> dict:
+    packet_path = validate_private_input_file(packet_path)
+    judgments_path = validate_private_input_file(judgments_path)
     packet = json.loads(packet_path.read_text(encoding="utf-8"))
     exact_keys(packet, {
         "schema", "protocol", "rubricVersion", "packetID", "items",

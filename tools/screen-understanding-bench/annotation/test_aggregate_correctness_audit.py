@@ -40,6 +40,7 @@ class AggregateCorrectnessAuditTests(unittest.TestCase):
             self.assertFalse(result["rawJointGate"]["qualified"])
             self.assertEqual(result["finalReferenceAudit"]["state"], "pending")
             self.assertIsNone(result["finalReferenceAudit"]["criticalErrorCount"])
+            self.assertTrue((result_root / ".metadata_never_index").is_file())
 
     def test_material_false_is_an_error_and_selects_clean_reference(self):
         module = load_module()
