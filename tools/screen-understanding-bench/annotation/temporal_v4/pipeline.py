@@ -24,7 +24,10 @@ from common.private_io import (
     load_private_json,
     make_private_directory,
     prepare_private_output,
+    prepare_private_temporary,
     publish_private_output,
+    snapshot_private_file,
+    snapshot_private_tree,
     validate_private_input,
     validate_private_input_file,
     validate_private_output,
@@ -327,6 +330,7 @@ def validate_labels(
         packet_path,
         output_path,
         expected_role,
+        allow_legacy=True,
     )
     expected = _validate_work_packet(packet)
     exact_keys(output, {
@@ -629,6 +633,7 @@ def validate_audit(
         packet_path,
         output_path,
         expected_role,
+        allow_legacy=True,
     )
     expected = _validate_audit_packet(packet)
     exact_keys(output, {
@@ -1014,6 +1019,7 @@ def _validate_tiebreak(
         packet_path,
         output_path,
         "correctness-tiebreak",
+        allow_legacy=True,
     )
     exact_keys(packet, {
         "schema", "protocol", "rubricVersion", "packetID",
@@ -1459,6 +1465,7 @@ def _validate_copied_receipts(
             sources / f"pass{pass_number}-packet.json",
             sources / f"pass{pass_number}-output.json",
             f"annotation-pass{pass_number}",
+            allow_legacy=True,
         ))
     for number in (1, 2):
         receipts.append(validate_receipt(
@@ -1466,6 +1473,7 @@ def _validate_copied_receipts(
             sources / f"auditor{number}-packet.json",
             sources / f"auditor{number}-output.json",
             f"correctness-auditor-{number}",
+            allow_legacy=True,
         ))
     required_roles = {
         "annotation-pass1", "annotation-pass2", "correctness-auditor-1",
@@ -1483,6 +1491,7 @@ def _validate_copied_receipts(
             tiebreak_files[0],
             tiebreak_files[1],
             "correctness-tiebreak",
+            allow_legacy=True,
         ))
         required_roles.add("correctness-tiebreak")
     validate_independent_sessions(receipts, required_roles)
@@ -1533,6 +1542,51 @@ def finalize(
     final_receipt: Path,
     output_root: Path,
 ) -> dict:
+    """Finalize from one stable snapshot so validation and provenance cannot diverge."""
+
+    output = validate_private_output(output_root)
+    source_root = validate_private_input(final_audit_root)
+    if source_root == output or source_root in output.parents or output in source_root.parents:
+        raise ValueError("final audit and temporal output roots must be disjoint")
+    snapshot_root = prepare_private_temporary(
+        output.parent,
+        "temporal-final-inputs",
+    )
+    try:
+        final_root_snapshot = snapshot_private_tree(
+            source_root,
+            snapshot_root / "final-audit",
+            "temporal final audit root",
+        )
+        make_private_directory(snapshot_root / "frontier")
+        output_snapshot = snapshot_root / "frontier" / "final-output.json"
+        receipt_snapshot = snapshot_root / "frontier" / "final-receipt.json"
+        snapshot_private_file(
+            final_output,
+            output_snapshot,
+            "temporal final audit output",
+        )
+        snapshot_private_file(
+            final_receipt,
+            receipt_snapshot,
+            "temporal final audit receipt",
+        )
+        return _finalize_snapshot(
+            final_root_snapshot,
+            output_snapshot,
+            receipt_snapshot,
+            output,
+        )
+    finally:
+        shutil.rmtree(snapshot_root, ignore_errors=True)
+
+
+def _finalize_snapshot(
+    final_audit_root: Path,
+    final_output: Path,
+    final_receipt: Path,
+    output_root: Path,
+) -> dict:
     output = validate_private_output(output_root)
     final_root = validate_private_input(final_audit_root)
     if final_root == output or final_root in output.parents or output in final_root.parents:
@@ -1563,6 +1617,7 @@ def finalize(
         packet_path,
         final_output,
         "final-reference-auditor",
+        allow_legacy=True,
     )
     prior_receipts = _validate_copied_receipts(
         final_root / "sources",

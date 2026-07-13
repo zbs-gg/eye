@@ -126,12 +126,99 @@ struct ScreenUnderstandingNormalizedAdapterResult: Codable, Sendable, Equatable 
     var atomicFacts: [String]?
     var visibleText: [String]?
     var labels: [String]?
-    var regions: [ScreenUnderstandingJSONValue]?
+    var regions: [[String: ScreenUnderstandingJSONValue]]?
     var changeFacts: [String]?
     var confidence: Double?
     var abstention: Bool?
     var errors: [String]?
     var runtimeMetadata: [String: ScreenUnderstandingJSONValue]
+}
+
+private struct ScreenUnderstandingAnyCodingKey: CodingKey {
+    var stringValue: String
+    var intValue: Int?
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+    }
+
+    init?(intValue: Int) {
+        self.stringValue = String(intValue)
+        self.intValue = intValue
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func decodePresent<T: Decodable>(
+        _ type: T.Type,
+        forKey key: Key
+    ) throws -> T? {
+        guard contains(key) else { return nil }
+        guard try !decodeNil(forKey: key) else {
+            throw DecodingError.valueNotFound(
+                type,
+                .init(codingPath: codingPath + [key], debugDescription: "Explicit null is forbidden")
+            )
+        }
+        return try decode(type, forKey: key)
+    }
+}
+
+extension ScreenUnderstandingNormalizedAdapterResult {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case methodID
+        case capabilities
+        case summary
+        case atomicFacts
+        case visibleText
+        case labels
+        case regions
+        case changeFacts
+        case confidence
+        case abstention
+        case errors
+        case runtimeMetadata
+    }
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.container(keyedBy: ScreenUnderstandingAnyCodingKey.self)
+        let allowed = Set(CodingKeys.allCases.map(\.rawValue))
+        guard Set(raw.allKeys.map(\.stringValue)).isSubset(of: allowed) else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "Unknown normalized result key")
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        methodID = try container.decode(String.self, forKey: .methodID)
+        capabilities = try container.decode([String].self, forKey: .capabilities)
+        runtimeMetadata = try container.decode(
+            [String: ScreenUnderstandingJSONValue].self,
+            forKey: .runtimeMetadata
+        )
+        guard !methodID.isEmpty, Set(capabilities).count == capabilities.count else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "Invalid result identity")
+            )
+        }
+
+        summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        atomicFacts = try container.decodePresent([String].self, forKey: .atomicFacts)
+        visibleText = try container.decodePresent([String].self, forKey: .visibleText)
+        labels = try container.decodePresent([String].self, forKey: .labels)
+        regions = try container.decodePresent(
+            [[String: ScreenUnderstandingJSONValue]].self,
+            forKey: .regions
+        )
+        changeFacts = try container.decodePresent([String].self, forKey: .changeFacts)
+        confidence = try container.decodeIfPresent(Double.self, forKey: .confidence)
+        abstention = try container.decodeIfPresent(Bool.self, forKey: .abstention)
+        errors = try container.decodePresent([String].self, forKey: .errors)
+        guard confidence.map({ 0.0 ... 1.0 ~= $0 }) ?? true else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "Confidence is outside 0...1")
+            )
+        }
+    }
 }
 
 enum ScreenUnderstandingAdapterStatus: String, Codable, Sendable, Equatable {
@@ -147,6 +234,33 @@ struct ScreenUnderstandingAdapterResponse: Codable, Sendable, Equatable {
     var status: ScreenUnderstandingAdapterStatus
     var normalized: ScreenUnderstandingNormalizedAdapterResult?
     var error: String?
+}
+
+extension ScreenUnderstandingAdapterResponse {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id
+        case status
+        case normalized
+        case error
+    }
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.container(keyedBy: ScreenUnderstandingAnyCodingKey.self)
+        let allowed = Set(CodingKeys.allCases.map(\.rawValue))
+        guard Set(raw.allKeys.map(\.stringValue)).isSubset(of: allowed) else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "Unknown adapter response key")
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        status = try container.decode(ScreenUnderstandingAdapterStatus.self, forKey: .status)
+        normalized = try container.decodeIfPresent(
+            ScreenUnderstandingNormalizedAdapterResult.self,
+            forKey: .normalized
+        )
+        error = try container.decodeIfPresent(String.self, forKey: .error)
+    }
 }
 
 struct ScreenUnderstandingAdapterProcess: Sendable {
@@ -241,16 +355,25 @@ struct ScreenUnderstandingAdapterProcess: Sendable {
             }
         }
 
+        try validate(messages: messages, responses: responses)
+        return responses
+    }
+
+    func validate(
+        messages: [ScreenUnderstandingAdapterMessage],
+        responses: [ScreenUnderstandingAdapterResponse]
+    ) throws {
         guard responses.map(\.id) == messages.prefix(responses.count).map(\.id) else {
             throw ScreenUnderstandingAdapterError.responseMismatch
         }
         if responses.last?.status == .unsupported {
             guard responses.count == 1,
                   responses[0].normalized == nil,
-                  !(responses[0].error ?? "").isEmpty else {
+                  !(responses[0].error ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw ScreenUnderstandingAdapterError.responseMismatch
             }
-            return responses
+            return
         }
         guard responses.count == messages.count else {
             throw ScreenUnderstandingAdapterError.responseMismatch
@@ -258,7 +381,9 @@ struct ScreenUnderstandingAdapterProcess: Sendable {
         for (message, response) in zip(messages, responses) {
             switch message.type {
             case "hello":
-                guard response.status == .ready, response.normalized == nil else {
+                guard response.status == .ready,
+                      response.normalized == nil,
+                      response.error == nil else {
                     throw ScreenUnderstandingAdapterError.responseMismatch
                 }
             case "case":
@@ -266,18 +391,20 @@ struct ScreenUnderstandingAdapterProcess: Sendable {
                       let normalized = response.normalized,
                       !normalized.methodID.isEmpty,
                       !normalized.capabilities.isEmpty,
-                      normalized.confidence.map({ 0.0 ... 1.0 ~= $0 }) ?? true else {
+                      normalized.confidence.map({ 0.0 ... 1.0 ~= $0 }) ?? true,
+                      response.error == nil else {
                     throw ScreenUnderstandingAdapterError.responseMismatch
                 }
             case "shutdown":
-                guard response.status == .bye, response.normalized == nil else {
+                guard response.status == .bye,
+                      response.normalized == nil,
+                      response.error == nil else {
                     throw ScreenUnderstandingAdapterError.responseMismatch
                 }
             default:
                 throw ScreenUnderstandingAdapterError.responseMismatch
             }
         }
-        return responses
     }
 
     private func processGroupExists(_ identifier: Int32) -> Bool {

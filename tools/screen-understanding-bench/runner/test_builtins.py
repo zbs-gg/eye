@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import signal
 import shutil
 import stat
 import subprocess
@@ -389,11 +390,23 @@ class BuiltInRunnerTests(unittest.TestCase):
 
     def test_bounded_local_process_reaps_descendants_on_timeout(self) -> None:
         pid_file = self.base / "native-child.pid"
+        ready_file = self.base / "native-child.ready"
+        child_script = (
+            "import os,pathlib,signal,time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "os.close(1)\n"
+            "os.close(2)\n"
+            f"pathlib.Path({str(ready_file)!r}).write_text('ready')\n"
+            "time.sleep(60)\n"
+        )
         script = (
-            "import pathlib,subprocess,sys,time; "
-            "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
-            f"pathlib.Path({str(pid_file)!r}).write_text(str(child.pid)); "
-            "time.sleep(60)"
+            "import pathlib,subprocess,sys,time\n"
+            f"child=subprocess.Popen([sys.executable,'-c',{child_script!r}])\n"
+            f"pathlib.Path({str(pid_file)!r}).write_text(str(child.pid))\n"
+            f"ready=pathlib.Path({str(ready_file)!r})\n"
+            "while not ready.exists():\n"
+            "    time.sleep(0.01)\n"
+            "time.sleep(60)\n"
         )
 
         with self.assertRaisesRegex(RunnerError, "timed out"):
@@ -413,6 +426,7 @@ class BuiltInRunnerTests(unittest.TestCase):
                 break
             time.sleep(0.01)
         else:
+            os.kill(child_pid, signal.SIGKILL)
             self.fail("timed-out descendant process survived")
 
     def test_native_runtime_identity_rejects_missing_keys(self) -> None:

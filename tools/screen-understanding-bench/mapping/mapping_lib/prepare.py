@@ -207,31 +207,6 @@ def _extract_claims(
     return claims, list(visible), abstention
 
 
-def _deterministic_judgment(
-    claim: dict[str, str],
-    reference: dict[str, Any],
-) -> dict[str, str] | None:
-    """Resolve claims backed by structured runtime evidence or exact labels."""
-
-    source = claim["source"]
-    text = claim["text"]
-    if source == "atomicFact":
-        key, separator, value = text.partition("=")
-        if separator and value.strip():
-            if key == "appName":
-                return {"matchedRequired": "required.surface"}
-            if key == "windowTitle":
-                return {"matchedRequired": "required.content"}
-    if source == "label" and text.startswith("label:"):
-        label = " ".join(text.removeprefix("label:").casefold().split())
-        for fact in reference["requiredFacts"]:
-            fact_text = " ".join(fact["text"].casefold().split())
-            if label and label in fact_text:
-                return {"matchedRequired": fact["id"]}
-        return {"unsupported": "minor"}
-    return None
-
-
 def _load_run(
     result_root: Path,
     labels_bytes: bytes,
@@ -359,15 +334,7 @@ def _build_item(
     raw_claims, visible, abstention = _extract_claims(packet_result)
     claims = []
     claim_ids = []
-    deterministic_claims = []
     for index, claim in enumerate(raw_claims):
-        deterministic = _deterministic_judgment(claim, packet_reference)
-        if deterministic is not None:
-            deterministic_claims.append({
-                "source": claim["source"],
-                "judgment": deterministic,
-            })
-            continue
         claim_id = "claim-" + _token(
             seed, f"{stage}-claim", f"{method}:{case_id}:{index}"
         )
@@ -389,7 +356,6 @@ def _build_item(
         "methodID": method,
         "caseID": case_id,
         "claimIDs": claim_ids,
-        "deterministicClaims": deterministic_claims,
     }
     return item, owner
 

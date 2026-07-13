@@ -164,6 +164,8 @@ class PrepareCorrectnessAuditTests(unittest.TestCase):
             "candidateOutputsAvailable": False,
             "items": work,
         }))
+        for path in root.rglob("*"):
+            os.chmod(path, 0o700 if path.is_dir() else 0o600)
         return root
 
     def write_labels(self, path: Path, pass_number: int, labels: list[dict]) -> None:

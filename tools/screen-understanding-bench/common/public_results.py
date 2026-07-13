@@ -14,7 +14,8 @@ from typing import Any
 SCHEMA = "screen-understanding-public-decision-v1"
 PROTOCOL = "screen-understanding-v1"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-CASE_ID = re.compile(r"^[0-9a-f]{24}$")
+CASE_ID = re.compile(r"(?<![0-9a-f])[0-9a-f]{24}(?![0-9a-f])", re.IGNORECASE)
+EMAIL = re.compile(r"\b[^\s@]+@[^\s@]+\.[^\s@]+\b")
 BUILTIN_CAPABILITIES = {
     "metadata-ax-ocr": ("summary", "atomicFacts"),
     "apple-vision": ("labels",),
@@ -36,6 +37,49 @@ EXPECTED_NEXT_GATE = (
 FORBIDDEN_FRAGMENTS = (
     "/Users/", "/Volumes/", "file://", "sk-", "BEGIN PRIVATE KEY",
 )
+PUBLIC_QUALITY_REASON = (
+    "The private built-in run completed, but the concealed independent "
+    "claim-mapping contract did not clear its reliability floor. No quality "
+    "score is published."
+)
+PUBLIC_STATUS_EVIDENCE = {
+    "metadata-ax-ocr": (
+        "Locked 60-case run completed; independent claim mapping did not "
+        "clear the reliability floor."
+    ),
+    "apple-vision": (
+        "Locked 60-case run completed; independent label mapping did not "
+        "clear the reliability floor."
+    ),
+    "deterministic-hybrid": (
+        "Locked 60-case run completed; independent claim mapping did not "
+        "clear the reliability floor."
+    ),
+    "florence-2-base": (
+        "Inherited OS filesystem boundary could not be proven on the "
+        "qualification host."
+    ),
+    "smolvlm-256m-instruct": (
+        "Inherited OS filesystem boundary could not be proven on the "
+        "qualification host."
+    ),
+    "lfm2-vl-450m": (
+        "Inherited OS filesystem boundary could not be proven on the "
+        "qualification host."
+    ),
+    "fastvlm-0.5b": (
+        "Research-only method; inherited OS filesystem boundary could not "
+        "be proven."
+    ),
+    "smolvlm2-256m-video-instruct": (
+        "Inherited OS filesystem boundary could not be proven on the "
+        "qualification host."
+    ),
+    "omniparser-v2": (
+        "Parser-only method; inherited OS filesystem boundary could not be "
+        "proven."
+    ),
+}
 
 
 class PublicResultError(ValueError):
@@ -69,7 +113,7 @@ def _reject_private_material(value: Any) -> None:
             _reject_private_material(child)
     elif isinstance(value, str):
         if any(fragment in value for fragment in FORBIDDEN_FRAGMENTS) \
-                or CASE_ID.fullmatch(value):
+                or CASE_ID.search(value) or EMAIL.search(value):
             raise PublicResultError("public result contains private material")
 
 
@@ -235,11 +279,11 @@ def validate_public_status(value: Any, decision: dict[str, Any]) -> dict[str, An
     }, "public status")
     if value["protocolID"] != PROTOCOL or value["date"] != "2026-07-13" \
             or value["qualityConclusion"] != decision["status"] \
-            or not isinstance(value["qualityReason"], str) \
-            or not value["qualityReason"].strip() \
             or value["containsPersonalCorpus"] is not False \
             or value["containsCaseMaterial"] is not False:
         raise PublicResultError("public status metadata is invalid")
+    if value["qualityReason"] != PUBLIC_QUALITY_REASON:
+        raise PublicResultError("public status quality reason is invalid")
     expected = [
         (
             method["methodID"], method["status"],
@@ -256,7 +300,7 @@ def validate_public_status(value: Any, decision: dict[str, Any]) -> dict[str, An
             method, {"id", "status", "evidence", "privateCorpusAccess"},
             "public status method",
         )
-        if not isinstance(method["evidence"], str) or not method["evidence"].strip():
+        if method["evidence"] != PUBLIC_STATUS_EVIDENCE.get(method["id"]):
             raise PublicResultError("public status evidence is invalid")
         actual.append((method["id"], method["status"], method["privateCorpusAccess"]))
     if actual != expected:

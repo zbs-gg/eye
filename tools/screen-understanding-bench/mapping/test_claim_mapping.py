@@ -17,7 +17,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import claim_mapping as mapping_module  # noqa: E402
 from mapping_lib import private_io  # noqa: E402
-from common.evaluator_receipt import issue_receipt  # noqa: E402
+from common.evaluator_receipt import (  # noqa: E402
+    AUTHORITY_ENVIRONMENT,
+    issue_receipt,
+    preissue_challenge,
+)
 from claim_mapping import (  # noqa: E402
     MappingError,
     aggregate_mappings,
@@ -38,12 +42,21 @@ class ClaimMappingTests(unittest.TestCase):
         self.results = self.base / "results"
         self.canonical.mkdir(mode=0o700)
         self.results.mkdir(mode=0o700)
+        self.authority_temporary = tempfile.TemporaryDirectory()
+        self.receipt_authority = Path(self.authority_temporary.name) / "authority"
+        self.previous_receipt_authority = os.environ.get(AUTHORITY_ENVIRONMENT)
+        os.environ[AUTHORITY_ENVIRONMENT] = str(self.receipt_authority)
         self.packet_paths: dict[str, Path] = {}
         self.case_ids = [f"{index + 1:024x}" for index in range(60)]
         self._write_fixture()
 
     def tearDown(self) -> None:
+        if self.previous_receipt_authority is None:
+            os.environ.pop(AUTHORITY_ENVIRONMENT, None)
+        else:
+            os.environ[AUTHORITY_ENVIRONMENT] = self.previous_receipt_authority
         self.temporary.cleanup()
+        self.authority_temporary.cleanup()
 
     def test_claim_mapping_is_a_facade_over_split_mapping_lib(self) -> None:
         package = Path(__file__).parent / "mapping_lib"
@@ -101,14 +114,59 @@ class ClaimMappingTests(unittest.TestCase):
         self.assertEqual(first["visibleText"], ["Exact OCR text"])
         claim_texts = [claim["text"] for claim in first["claims"]]
         self.assertNotIn("Exact OCR text", claim_texts)
-        self.assertNotIn("label:computer screen", claim_texts)
+        self.assertTrue(any(text.startswith("label:") for text in claim_texts))
         owner = self._load(Path(prepared["mappingRoot"]) / "owner-mapping.json")
-        deterministic = [
-            claim
+        self.assertTrue(all(
+            set(item) == {"methodID", "caseID", "claimIDs"}
             for item in owner["primary"].values()
-            for claim in item["deterministicClaims"]
-        ]
-        self.assertTrue(any(claim["source"] == "label" for claim in deterministic))
+        ))
+
+    def test_structured_metadata_requires_blinded_semantic_judgment(self) -> None:
+        inventory_path = self.results / "run-inventory.json"
+        inventory = self._load(inventory_path)
+        for method in METHODS:
+            path = self.results / f"{method}.jsonl"
+            records = [json.loads(line) for line in path.read_text().splitlines()]
+            records[0]["result"]["atomicFacts"] = [
+                "appName=Unrelated App",
+                "windowTitle=Unrelated Title",
+            ]
+            data = b"".join(
+                json.dumps(record, sort_keys=True, separators=(",", ":"))
+                .encode("utf-8") + b"\n"
+                for record in records
+            )
+            path.write_bytes(data)
+            os.chmod(path, 0o600)
+            inventory["outputSHA256"][method] = hashlib.sha256(data).hexdigest()
+        self._write_private(inventory_path, inventory)
+
+        prepared = self._prepare("structured-metadata")
+        primary = self._load(prepared["primaryPacket"])
+        claim_texts = {
+            claim["text"]
+            for item in primary["items"]
+            for claim in item["claims"]
+        }
+        self.assertIn("appName=Unrelated App", claim_texts)
+        self.assertIn("windowTitle=Unrelated Title", claim_texts)
+
+    def test_owner_mapping_cannot_inject_automatic_claim_credit(self) -> None:
+        prepared = self._prepare("owner-injection")
+        root = Path(prepared["mappingRoot"])
+        owner_path = root / "owner-mapping.json"
+        owner = self._load(owner_path)
+        first = next(iter(owner["primary"].values()))
+        first["deterministicClaims"] = [{
+            "source": "summary",
+            "judgment": {"matchedRequired": "required.surface"},
+        }]
+        self._write_private(owner_path, owner)
+
+        with self.assertRaisesRegex(MappingError, "keys|schema"):
+            mapping_module._validate.load_mapping(
+                root, mapping_module._load_private_json
+            )
 
     def test_visible_local_path_lines_are_redacted_without_dropping_other_text(self) -> None:
         inventory_path = self.results / "run-inventory.json"
@@ -237,7 +295,7 @@ class ClaimMappingTests(unittest.TestCase):
         hidden_receipt["sessionID"] = first_receipt["sessionID"]
         self._write_private(hidden_receipt_path, hidden_receipt)
 
-        with self.assertRaisesRegex(ValueError, "independent"):
+        with self.assertRaisesRegex(ValueError, "signature is invalid"):
             aggregate_mappings(
                 Path(prepared["mappingRoot"]), first, second,
                 self.base / "aggregate-reused-session",
@@ -974,14 +1032,21 @@ class ClaimMappingTests(unittest.TestCase):
         role: str,
         session_id: str,
     ) -> None:
+        challenge = preissue_challenge(
+            packet_path=packet_path,
+            role=role,
+            authority_root=Path(os.environ[AUTHORITY_ENVIRONMENT]),
+        )
         issue_receipt(
             packet_path=packet_path,
             output_path=output_path,
             receipt_path=output_path.with_suffix(".receipt.json"),
             role=role,
-            session_id="session-" + session_id,
+            session_id=f"session-{role}-{session_id}",
             provider="openai",
             model_family="frontier-mapper-fixture",
+            challenge_id=challenge["challengeID"],
+            authority_root=Path(os.environ[AUTHORITY_ENVIRONMENT]),
         )
 
     def _adjudication(self, packet: dict, identity: str) -> dict:

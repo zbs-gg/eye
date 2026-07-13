@@ -374,6 +374,9 @@ class FinalReferenceToolingTests(unittest.TestCase):
             },
             "qualified": False,
         }))
+        for root in (annotation, correctness, aggregate):
+            for path in root.rglob("*"):
+                os.chmod(path, 0o700 if path.is_dir() else 0o600)
         return annotation, correctness, aggregate
 
     def write_batch(self, path: Path, pass_number: int, labels: list[dict]) -> None:

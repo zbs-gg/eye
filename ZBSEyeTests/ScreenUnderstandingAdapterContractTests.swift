@@ -2,6 +2,83 @@ import Foundation
 import XCTest
 
 final class ScreenUnderstandingAdapterContractTests: XCTestCase {
+    func testNormalizedResultRejectsUnknownKeysNullArraysNonObjectRegionsAndDuplicates() throws {
+        let invalidNormalizedResults = [
+            """
+            {"methodID":"test","capabilities":["summary"],"runtimeMetadata":{},"extra":true}
+            """,
+            """
+            {"methodID":"test","capabilities":["summary"],"runtimeMetadata":{},"atomicFacts":null}
+            """,
+            """
+            {"methodID":"test","capabilities":["regions"],"runtimeMetadata":{},"regions":["not-an-object"]}
+            """,
+            """
+            {"methodID":"test","capabilities":["summary","summary"],"runtimeMetadata":{}}
+            """,
+        ]
+
+        for json in invalidNormalizedResults {
+            XCTAssertThrowsError(try JSONDecoder().decode(
+                ScreenUnderstandingNormalizedAdapterResult.self,
+                from: Data(json.utf8)
+            ), "Accepted invalid normalized result: \(json)")
+        }
+    }
+
+    func testAdapterRejectsSuccessErrorsAndStatusSpecificPayloads() throws {
+        let runner = try makeRunner(mode: "synthetic")
+        let messages: [ScreenUnderstandingAdapterMessage] = [
+            .hello(id: "1", protocolID: "screen-understanding-v1"),
+            .caseRequest(id: "2", caseID: "abc", imagePath: "/case/image.heic"),
+            .shutdown(id: "3"),
+        ]
+        let normalized = try decodeResponse(
+            """
+            {"id":"2","status":"ok","normalized":{"methodID":"test","capabilities":["summary"],"runtimeMetadata":{}}}
+            """
+        ).normalized
+        let invalidResponses: [[ScreenUnderstandingAdapterResponse]] = [
+            [
+                try decodeResponse(#"{"id":"1","status":"ready","error":"warning"}"#),
+                ScreenUnderstandingAdapterResponse(id: "2", status: .ok, normalized: normalized),
+                try decodeResponse(#"{"id":"3","status":"bye"}"#),
+            ],
+            [
+                try decodeResponse(#"{"id":"1","status":"ready","normalized":{"methodID":"test","capabilities":["summary"],"runtimeMetadata":{}}}"#),
+                ScreenUnderstandingAdapterResponse(id: "2", status: .ok, normalized: normalized),
+                try decodeResponse(#"{"id":"3","status":"bye"}"#),
+            ],
+            [
+                try decodeResponse(#"{"id":"1","status":"ready"}"#),
+                try decodeResponse(#"{"id":"2","status":"ok","normalized":{"methodID":"test","capabilities":["summary"],"runtimeMetadata":{}},"error":"partial failure"}"#),
+                try decodeResponse(#"{"id":"3","status":"bye"}"#),
+            ],
+            [
+                try decodeResponse(#"{"id":"1","status":"ready"}"#),
+                ScreenUnderstandingAdapterResponse(id: "2", status: .ok, normalized: normalized),
+                try decodeResponse(#"{"id":"3","status":"bye","error":"warning"}"#),
+            ],
+        ]
+
+        for responses in invalidResponses {
+            XCTAssertThrowsError(try runner.validate(messages: messages, responses: responses))
+        }
+
+        XCTAssertThrowsError(try runner.validate(
+            messages: [.hello(id: "1", protocolID: "screen-understanding-v1")],
+            responses: [try decodeResponse(#"{"id":"1","status":"unsupported"}"#)]
+        ))
+        XCTAssertThrowsError(try runner.validate(
+            messages: [.hello(id: "1", protocolID: "screen-understanding-v1")],
+            responses: [try decodeResponse(
+                """
+                {"id":"1","status":"unsupported","error":"not provisioned","normalized":{"methodID":"test","capabilities":["summary"],"runtimeMetadata":{}}}
+                """
+            )]
+        ))
+    }
+
     func testSyntheticAdapterCompletesHandshakeCaseAndShutdown() throws {
         let runner = try makeRunner(mode: "synthetic")
         let responses = try runner.run(
@@ -147,6 +224,13 @@ final class ScreenUnderstandingAdapterContractTests: XCTestCase {
                 ephemeralHome: FileManager.default.temporaryDirectory
             ),
             processGroupLauncher: processGroupLauncherURL()
+        )
+    }
+
+    private func decodeResponse(_ json: String) throws -> ScreenUnderstandingAdapterResponse {
+        try JSONDecoder().decode(
+            ScreenUnderstandingAdapterResponse.self,
+            from: Data(json.utf8)
         )
     }
 

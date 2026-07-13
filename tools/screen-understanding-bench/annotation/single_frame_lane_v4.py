@@ -297,6 +297,7 @@ def _load_tiebreak(
         packet_path,
         sources.tiebreak_output,
         "correctness-tiebreak",
+        allow_legacy=True,
     )
     output = _read_json(sources.tiebreak_output, "tiebreak judgments")
     if output["auditor"] in {loaded[0]["auditor"], loaded[1]["auditor"]}:
@@ -339,12 +340,14 @@ def _load_v3_evidence(sources: V3EvidencePaths) -> dict[str, Any]:
         correctness / "packets" / "auditor-01" / "packet.json",
         sources.auditor_one_output,
         "correctness-auditor-1",
+        allow_legacy=True,
     )
     receipt2 = validate_receipt(
         sources.auditor_two_receipt,
         correctness / "packets" / "auditor-02" / "packet.json",
         sources.auditor_two_output,
         "correctness-auditor-2",
+        allow_legacy=True,
     )
     differences = legacy_aggregate.disagreements(loaded)
     tie_values, tie_mapping, tie_receipt = _load_tiebreak(
@@ -672,7 +675,8 @@ def _load_corrections(
     if seen_opaque != packet_ids or set(corrections) != expected_corrections:
         raise ValueError("corrections must cover every requested single-frame correction")
     receipt = validate_receipt(
-        correction_receipt, packet_path, correction_output, "reference-correction"
+        correction_receipt, packet_path, correction_output, "reference-correction",
+        allow_legacy=True,
     )
     return corrections, output, receipt
 
@@ -1014,6 +1018,7 @@ def seal(
         audit / "packet" / "packet.json",
         judgments,
         "final-reference-auditor",
+        allow_legacy=True,
     )
     all_pairs = [*prior_pairs, (final_receipt_path, final_receipt)]
     validate_independent_sessions(

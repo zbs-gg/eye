@@ -22,7 +22,10 @@ from common.private_io import (
     load_private_json,
     make_private_directory,
     prepare_private_output,
+    prepare_private_temporary,
     publish_private_output,
+    snapshot_private_file,
+    snapshot_private_tree,
     validate_private_input,
     validate_private_input_file,
     validate_private_output,
@@ -248,6 +251,7 @@ def _temporal_source(
         temporal_audit / "packet" / "packet.json",
         output_path,
         "final-reference-auditor",
+        allow_legacy=True,
     )
     return values, reliability
 
@@ -271,7 +275,7 @@ def combine(
     temporal_audit_root: Path,
     output_root: Path,
 ) -> dict[str, Any]:
-    """Publish one runner-compatible canonical root after both lanes qualify."""
+    """Publish one canonical root from stable, bounded snapshots of every input."""
 
     output = validate_private_output(output_root)
     corpus = validate_private_input(corpus_root)
@@ -281,6 +285,58 @@ def combine(
     roots = (corpus, single, temporal, temporal_audit)
     if any(output == root or output in root.parents or root in output.parents for root in roots):
         raise ValueError("combined canonical root must be disjoint from every private input")
+    snapshot_root = prepare_private_temporary(
+        output.parent,
+        "combined-canonical-inputs",
+    )
+    try:
+        corpus_snapshot = snapshot_root / "corpus"
+        make_private_directory(corpus_snapshot)
+        snapshot_private_file(
+            corpus / "manifest.json",
+            corpus_snapshot / "manifest.json",
+            "combined corpus manifest",
+        )
+        single_snapshot = snapshot_private_tree(
+            single,
+            snapshot_root / "single",
+            "single-image canonical source",
+        )
+        temporal_snapshot = snapshot_private_tree(
+            temporal,
+            snapshot_root / "temporal",
+            "temporal canonical source",
+        )
+        temporal_audit_snapshot = snapshot_private_tree(
+            temporal_audit,
+            snapshot_root / "temporal-audit",
+            "temporal final audit source",
+        )
+        return _combine_snapshots(
+            corpus_snapshot,
+            single_snapshot,
+            temporal_snapshot,
+            temporal_audit_snapshot,
+            output,
+        )
+    finally:
+        shutil.rmtree(snapshot_root, ignore_errors=True)
+
+
+def _combine_snapshots(
+    corpus_root: Path,
+    single_root: Path,
+    temporal_root: Path,
+    temporal_audit_root: Path,
+    output_root: Path,
+) -> dict[str, Any]:
+    """Validate and publish using immutable private snapshots only."""
+
+    output = validate_private_output(output_root)
+    corpus = validate_private_input(corpus_root)
+    single = validate_private_input(single_root)
+    temporal = validate_private_input(temporal_root)
+    temporal_audit = validate_private_input(temporal_audit_root)
     single_ids, pair_ids = _corpus_ids(corpus)
     single_labels, single_reliability = _single_source(single, single_ids)
     temporal_labels, temporal_reliability = _temporal_source(

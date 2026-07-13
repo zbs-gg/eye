@@ -539,8 +539,19 @@ def _run_bounded_process_group(
         try:
             process.communicate(timeout=0.5)
         except subprocess.TimeoutExpired:
+            pass
+        # The direct child may exit on SIGTERM while a descendant ignores it
+        # after closing inherited stdio. Always kill the original process
+        # group after the grace period, even when communicate() returned.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=0.5)
+        except subprocess.TimeoutExpired:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                process.kill()
             except ProcessLookupError:
                 pass
             process.communicate()

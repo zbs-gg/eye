@@ -3,8 +3,8 @@
   "adapters": [
     {
       "id": "metadata-ax-ocr",
-      "artifactRevision": "runner-80225112a7af",
-      "artifactIdentitySHA256": "80225112a7af9b41c5d7a90680ac9f3deb6e807954a9e15ec4e8eafba443c98d",
+      "artifactRevision": "runner-9c9b2addae6d",
+      "artifactIdentitySHA256": "9c9b2addae6dabf006dd70de363f695064dfb0e29fe16631e7c99bdf380857a7",
       "license": "AGPL-3.0-or-later",
       "remote": false,
       "retryCount": 0,
@@ -13,8 +13,8 @@
     },
     {
       "id": "apple-vision",
-      "artifactRevision": "runner-92d20999fc81",
-      "artifactIdentitySHA256": "92d20999fc81d2fc62b90f268c65de2b348beecac3839ade440dd6bd931d7e6c",
+      "artifactRevision": "runner-8972234e2243",
+      "artifactIdentitySHA256": "8972234e224367e7dc0213822029cdfac3742e06537c8618dd092ee7dab55fa9",
       "license": "Apple-SDK",
       "remote": false,
       "retryCount": 0,
@@ -23,8 +23,8 @@
     },
     {
       "id": "deterministic-hybrid",
-      "artifactRevision": "runner-3c3399894922",
-      "artifactIdentitySHA256": "3c339989492244013e51699e04d7a3e6dc23eb0980f39905b9012fd1d836f83b",
+      "artifactRevision": "runner-10a16897aa1d",
+      "artifactIdentitySHA256": "10a16897aa1d91ae1e57d6ffe309f1fe738c0169192845105919301312038761",
       "license": "AGPL-3.0-or-later",
       "remote": false,
       "retryCount": 0,

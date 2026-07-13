@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -187,6 +188,10 @@ class AggregateCorrectnessAuditTests(unittest.TestCase):
                 "items": [self.judgment(item) for item in packets[auditor]],
             }))
             outputs.append(output)
+        for path in audit.rglob("*"):
+            os.chmod(path, 0o700 if path.is_dir() else 0o600)
+        for output in outputs:
+            os.chmod(output, 0o600)
         return audit, outputs[0], outputs[1]
 
     def reference(self, target: str) -> dict:

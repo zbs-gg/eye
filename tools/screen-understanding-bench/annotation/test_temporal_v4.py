@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 from annotation.temporal_v4.pipeline import (
@@ -29,6 +30,11 @@ from annotation.temporal_v4.pipeline import (
     validate_labels,
 )
 from common.evaluator_receipt import issue_receipt
+from common.private_io import (
+    snapshot_private_file as real_snapshot_private_file,
+    snapshot_private_tree as real_snapshot_private_tree,
+)
+from common.provenance import file_evidence, tree_evidence
 
 
 class TemporalV4Tests(unittest.TestCase):
@@ -131,6 +137,7 @@ class TemporalV4Tests(unittest.TestCase):
             session_id=session,
             provider="openai",
             model_family="gpt-5",
+            legacy=True,
         )
         return output, receipt
 
@@ -211,6 +218,7 @@ class TemporalV4Tests(unittest.TestCase):
             session_id=session,
             provider="openai",
             model_family="gpt-5",
+            legacy=True,
         )
         return output, receipt
 
@@ -595,6 +603,7 @@ class TemporalV4Tests(unittest.TestCase):
             session_id="task:/root/tiebreak/turn:1",
             provider="openai",
             model_family="gpt-5",
+            legacy=True,
         )
         complete = aggregate(
             audit,
@@ -618,6 +627,7 @@ class TemporalV4Tests(unittest.TestCase):
             session_id="task:/root/pass1/turn:1",
             provider="openai",
             model_family="gpt-5",
+            legacy=True,
         )
         with self.assertRaisesRegex(ValueError, "independent"):
             aggregate(
@@ -663,6 +673,7 @@ class TemporalV4Tests(unittest.TestCase):
             session_id="task:/root/final-auditor/turn:1",
             provider="openai",
             model_family="gpt-5",
+            legacy=True,
         )
 
         result = finalize(
@@ -730,6 +741,7 @@ class TemporalV4Tests(unittest.TestCase):
             session_id="task:/root/material-final/turn:1",
             provider="openai",
             model_family="gpt-5",
+            legacy=True,
         )
         with self.assertRaisesRegex(ValueError, "zero material"):
             finalize(final_audit, output, receipt, self.root / "bad-final")
@@ -749,6 +761,7 @@ class TemporalV4Tests(unittest.TestCase):
             session_id="task:/root/pass1/turn:1",
             provider="openai",
             model_family="gpt-5",
+            legacy=True,
         )
         with self.assertRaisesRegex(ValueError, "independent"):
             finalize(
@@ -757,6 +770,84 @@ class TemporalV4Tests(unittest.TestCase):
                 reused_receipt,
                 self.root / "reused-final",
             )
+
+    def test_finalize_never_mixes_paths_replaced_after_snapshot(self) -> None:
+        _, aggregate_root = self._complete_aggregate()
+        final_audit = self.root / "final-audit"
+        prepare_final(
+            self.work,
+            aggregate_root,
+            final_audit,
+            "temporal-v4-final-seed",
+        )
+        packet = final_audit / "packet" / "packet.json"
+        output = self.root / "stable-final-output.json"
+        receipt = self.root / "stable-final-receipt.json"
+        self._write_json(output, self._final_output(packet, "snapshot-auditor-a"))
+        issue_receipt(
+            packet_path=packet,
+            output_path=output,
+            receipt_path=receipt,
+            role="final-reference-auditor",
+            session_id="task:/root/snapshot-final/turn:1",
+            provider="openai",
+            model_family="gpt-5",
+            legacy=True,
+        )
+        output_a = output.read_bytes()
+        tree_mutated = False
+        output_mutated = False
+
+        def snapshot_tree_then_replace(source, destination, subject, **kwargs):
+            nonlocal tree_mutated
+            result = real_snapshot_private_tree(
+                source, destination, subject, **kwargs
+            )
+            if source.resolve() == final_audit.resolve() and not tree_mutated:
+                tree_mutated = True
+                self._write_json(
+                    final_audit / "final-audit-manifest.json",
+                    {"schema": "replacement-b"},
+                )
+            return result
+
+        def snapshot_file_then_replace(source, destination, subject, **kwargs):
+            nonlocal output_mutated
+            result = real_snapshot_private_file(
+                source, destination, subject, **kwargs
+            )
+            if source.resolve() == output.resolve() and not output_mutated:
+                output_mutated = True
+                self._write_json(
+                    output,
+                    self._final_output(packet, "replacement-auditor-b"),
+                )
+            return result
+
+        published = self.root / "snapshot-final"
+        with patch(
+            "annotation.temporal_v4.pipeline.snapshot_private_tree",
+            side_effect=snapshot_tree_then_replace,
+        ), patch(
+            "annotation.temporal_v4.pipeline.snapshot_private_file",
+            side_effect=snapshot_file_then_replace,
+        ):
+            result = finalize(final_audit, output, receipt, published)
+
+        reliability = json.loads((published / "reliability.json").read_text())
+        commit = json.loads((published / "commit.json").read_text())
+        evidence_output = published / "evidence" / "final-output.json"
+        self.assertTrue(result["qualified"])
+        self.assertEqual(reliability["finalAudit"]["auditor"], "snapshot-auditor-a")
+        self.assertEqual(evidence_output.read_bytes(), output_a)
+        self.assertEqual(
+            commit["evidence"]["finalOutput"],
+            file_evidence(evidence_output),
+        )
+        self.assertNotEqual(
+            commit["evidence"]["finalAuditRoot"],
+            tree_evidence(final_audit),
+        )
 
     def test_prepare_final_rejects_below_floor_and_tampered_selection(self) -> None:
         audit, _ = self._prepare_audit_fixture()

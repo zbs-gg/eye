@@ -10,9 +10,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from annotation.combine_canonical_v4 import combine
 from common.evaluator_receipt import issue_receipt
+from common.private_io import snapshot_private_tree as real_snapshot_private_tree
 from common.provenance import (
     HASH_ALGORITHM,
     file_evidence,
@@ -240,6 +242,7 @@ class CombineCanonicalV4Tests(unittest.TestCase):
             session_id="fixture-temporal-final-session",
             provider="openai",
             model_family="frontier-vision-fixture",
+            legacy=True,
         )
         self._json(self.temporal / "commit.json", {
             "schema": "screen-understanding-temporal-commit-v4",
@@ -332,6 +335,55 @@ class CombineCanonicalV4Tests(unittest.TestCase):
             )
 
         self.assertFalse(output.exists())
+
+    def test_combiner_commits_the_snapshot_when_source_path_is_replaced(self) -> None:
+        temporal_labels = self.temporal / "labels.json"
+        labels_a_hash = file_evidence(temporal_labels)["sha256"]
+        replaced = False
+
+        def snapshot_then_replace(source, destination, subject, **kwargs):
+            nonlocal replaced
+            result = real_snapshot_private_tree(
+                source, destination, subject, **kwargs
+            )
+            if source.resolve() == self.temporal.resolve() and not replaced:
+                replaced = True
+                payload = json.loads(temporal_labels.read_text())
+                payload["labels"][0]["requiredFacts"][0]["text"] = \
+                    "Replacement B must never enter the published snapshot."
+                self._json(temporal_labels, payload)
+            return result
+
+        output = self.root / "snapshot-combined"
+        with patch(
+            "annotation.combine_canonical_v4.snapshot_private_tree",
+            side_effect=snapshot_then_replace,
+        ):
+            result = combine(
+                self.corpus,
+                self.single,
+                self.temporal,
+                self.temporal_audit,
+                output,
+            )
+
+        evidence = json.loads(
+            (output / "aggregate-evidence" / "manifest.json").read_text()
+        )
+        combined = json.loads(
+            (output / "canonical" / "labels.json").read_text()
+        )
+        temporal_label = next(
+            label for label in combined["labels"]
+            if label["case"] == self.pair_ids[0]
+        )
+        self.assertTrue(result["qualified"])
+        self.assertEqual(evidence["temporal"]["labels"]["sha256"], labels_a_hash)
+        self.assertNotEqual(file_evidence(temporal_labels)["sha256"], labels_a_hash)
+        self.assertEqual(
+            temporal_label["requiredFacts"][0]["text"],
+            "A visible computer surface",
+        )
 
     def test_documented_combiner_cli_is_discoverable_from_the_repository(self) -> None:
         script = Path(__file__).with_name("combine_canonical_v4.py")

@@ -60,6 +60,25 @@ class PublicResultsTests(unittest.TestCase):
         with self.assertRaises(PublicResultError):
             validate_public_decision(value)
 
+    def test_rejects_free_form_status_evidence_and_quality_reason(self) -> None:
+        status = json.loads(STATUS.read_text(encoding="utf-8"))
+        status["methods"][0]["evidence"] = "A reviewer wrote a custom explanation."
+        with self.assertRaisesRegex(PublicResultError, "evidence"):
+            validate_public_status(status, self.value)
+
+        status = json.loads(STATUS.read_text(encoding="utf-8"))
+        status["qualityReason"] = "A custom public conclusion."
+        with self.assertRaisesRegex(PublicResultError, "reason"):
+            validate_public_status(status, self.value)
+
+    def test_rejects_embedded_case_identifier_in_status_text(self) -> None:
+        status = json.loads(STATUS.read_text(encoding="utf-8"))
+        status["methods"][0]["evidence"] = (
+            "Aggregate result includes case 0123456789abcdef01234567."
+        )
+        with self.assertRaises(PublicResultError):
+            validate_public_status(status, self.value)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -130,17 +130,6 @@ def _duplicate_agreement(
     for hidden_arm, owner in mapping["hidden"].items():
         method_stats = by_method[owner["methodID"]]
         method_stats["duplicateArmCount"] += 1
-        for deterministic in owner["deterministicClaims"]:
-            capability = CLAIM_SOURCE_CAPABILITIES[deterministic["source"]]
-            capability_stats = method_stats["capabilities"].setdefault(
-                capability, {"claimEqual": 0, "claimTotal": 0}
-            )
-            overall["claimTotal"] += 1
-            overall["claimEqual"] += 1
-            method_stats["claimTotal"] += 1
-            method_stats["claimEqual"] += 1
-            capability_stats["claimTotal"] += 1
-            capability_stats["claimEqual"] += 1
         primary_arm = owner["primaryArmID"]
         left = primary[primary_arm]
         right = hidden[hidden_arm]
@@ -505,9 +494,6 @@ def _score(
             }
             decisions = [
                 claim["judgment"] for claim in judgment["claimJudgments"]
-            ] + [
-                claim["judgment"]
-                for claim in mapping["primary"][arm_id]["deterministicClaims"]
             ]
             for decision in decisions:
                 claim_count += 1

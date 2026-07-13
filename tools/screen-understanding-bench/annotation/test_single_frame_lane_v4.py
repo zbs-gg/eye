@@ -543,6 +543,7 @@ class SingleFrameLaneV4Tests(unittest.TestCase):
             session_id=session,
             provider="openai",
             model_family="gpt-5",
+            legacy=True,
         )
         return receipt
 
