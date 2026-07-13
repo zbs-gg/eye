@@ -1,0 +1,95 @@
+{
+  "schema": "screen-understanding-public-decision-v1",
+  "protocol": "screen-understanding-v1",
+  "status": "inconclusive",
+  "corpus": {
+    "singleImageCount": 200,
+    "temporalPairCount": 100,
+    "qualityTestSingleImageCount": 60,
+    "corpusHash": "e7d52f49c2070af400ad7c4c32d00dce40970cae7e7c1651508fe3d578ffbb29"
+  },
+  "referenceReliability": {
+    "singleImageRawJoint": 0.9111111111111111,
+    "temporalRawJoint": 0.9866666666666667,
+    "combinedRawJoint": 0.9333333333333333,
+    "finalAuditCaseCount": 45,
+    "finalAuditSlotCount": 255,
+    "finalAuditErrorCount": 0
+  },
+  "methods": [
+    {
+      "methodID": "metadata-ax-ocr",
+      "status": "mapping-inconclusive",
+      "duplicateArmCount": 15,
+      "claimJudgmentAgreement": 0.5111111111111111,
+      "decisionAgreement": 1.0,
+      "capabilityAgreement": {
+        "summary": 0.8,
+        "atomicFacts": 0.36666666666666664
+      },
+      "limitationCodes": [
+        "claim-mapping-agreement-below-0.90",
+        "quality-score-withheld"
+      ]
+    },
+    {
+      "methodID": "apple-vision",
+      "status": "mapping-inconclusive",
+      "duplicateArmCount": 15,
+      "claimJudgmentAgreement": 0.8783783783783784,
+      "decisionAgreement": 1.0,
+      "capabilityAgreement": {
+        "labels": 0.8783783783783784
+      },
+      "limitationCodes": [
+        "claim-mapping-agreement-below-0.90",
+        "quality-score-withheld"
+      ]
+    },
+    {
+      "methodID": "deterministic-hybrid",
+      "status": "mapping-inconclusive",
+      "duplicateArmCount": 15,
+      "claimJudgmentAgreement": 0.8448275862068966,
+      "decisionAgreement": 1.0,
+      "capabilityAgreement": {
+        "summary": 0.9333333333333333,
+        "atomicFacts": 0.5333333333333333,
+        "labels": 0.9577464788732394
+      },
+      "limitationCodes": [
+        "claim-mapping-agreement-below-0.90",
+        "quality-score-withheld"
+      ]
+    },
+    {
+      "methodID": "florence-2-base",
+      "status": "security-unsupported"
+    },
+    {
+      "methodID": "smolvlm-256m-instruct",
+      "status": "security-unsupported"
+    },
+    {
+      "methodID": "lfm2-vl-450m",
+      "status": "security-unsupported"
+    },
+    {
+      "methodID": "fastvlm-0.5b",
+      "status": "security-unsupported"
+    },
+    {
+      "methodID": "smolvlm2-256m-video-instruct",
+      "status": "security-unsupported"
+    },
+    {
+      "methodID": "omniparser-v2",
+      "status": "security-unsupported"
+    }
+  ],
+  "securityUnsupportedReason": "strict-sandbox-boundary-unavailable-on-qualification-mac",
+  "privateCorpusOpenedByThirdPartyAdapter": false,
+  "protocolHash": "2be74ec91866978ffeb63dc8a73cdfa5115b8156b182e53e9c8e4a377ac1569c",
+  "qualityScorePublished": false,
+  "nextGate": "redesign claim mapping so structured metadata and unsupported-claim severity are interpreted deterministically, then repeat independent concealed mapping; establish a proven local sandbox before any downloaded model receives private inputs"
+}

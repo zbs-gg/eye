@@ -106,7 +106,7 @@ The choice cannot be made from parameter count or generic benchmarks. ZBS Eye ne
 - Every matrix entry produces either a complete auditable report or an explicit unsupported/failed result; silent skips are failures.
 - All runs prove offline execution, pinned artifact identity, deterministic decoding where supported, zero retries, and atomic report writes.
 - Quality reports expose per-stratum failures rather than only macro averages.
-- A concealed 15% duplicate-label subset reaches at least 90% fact-level agreement and 0.80 decision-level agreement before candidate output is scored; otherwise affected comparisons remain inconclusive.
+- A concealed 15% reference-label subset reaches at least 90% fact-level agreement and 0.80 decision-level agreement before candidate output is scored. Claim mapping separately repeats 15 test arms per method (25% of the 60-case test split), keeping one-summary-per-case reliability cells at or above 15 decisions. Affected comparisons remain inconclusive below either floor.
 - A finalist returns close to the AI-off physical-footprint baseline after unload and meets thresholds defined before the qualification run.
 - The staging gate records zero DB mismatches, capture failures, audio drops, and native screenshot failures; steady-state capture/ingest p95 regresses by at most 10% and no active gap exceeds 6 seconds.
 - The product-footprint lane meets R19 on the exact qualified machine, or the method is excluded from the product-qualified set.
@@ -241,7 +241,7 @@ build/screen-understanding-results/    # private, gitignored
 ### Assumptions
 
 - The first qualification targets the current Apple Silicon Mac only; its exact model, memory, OS, SDK, Xcode, source revision, runtime revisions, and thermal/power state are recorded in every physical report.
-- The operator will label approximately 200 single frames and 100 temporal pairs in two passes; at least 60 frames and 30 pairs stay blind until all prompts and policies are frozen. A concealed 15% duplicate subset measures intra-rater stability. A separate contiguous active-day trace remains unlabeled except where it intersects the labeled corpus.
+- Independent frontier-model sessions label approximately 200 single frames and 100 temporal pairs in two passes; the operator does not manually annotate screens. At least 60 frames and 30 pairs stay blind until all prompts and policies are frozen. A concealed 15% reference duplicate subset measures cross-session stability, while claim mapping uses 15 concealed test arms per method. A separate contiguous active-day trace remains unlabeled except where it intersects the labeled corpus.
 - English is the common generation language because several candidates are English-only; Russian and mixed-script text preservation are scored separately from caption fluency.
 - Energy is reported when a stable facility is available but does not gate the first decision. CPU, process-tree footprint, unload, and coexistence remain hard gates.
 - The benchmark can add observation hooks to staging-only code paths if external DB/log/process evidence cannot prove a metric. Such hooks must remain inert in normal builds.
@@ -420,7 +420,7 @@ Physical model gates use pre-downloaded sealed model roots, `HF_HUB_OFFLINE=1`, 
 - The 200-frame/100-pair private corpus is versioned, stratified, blind-labeled, reconciled, and absent from git.
 - A separate locked active-day trace supports natural invocation-rate, resource/hour, and storage projections without borrowing prevalence from the quality corpus.
 - All required methods are evaluated or carry an explicit evidence-backed unsupported result.
-- Quality and footprint lanes remain independent, with per-stratum results and no model judge or large/cloud VLM.
+- Quality and footprint lanes remain independent, with per-stratum results and no live unsealed model judge or large/cloud VLM in any candidate or product runtime.
 - The exact product runtime/quantization is scored independently, clears R20, and does not inherit quality from an official checkpoint.
 - Decision-critical cells meet pre-registered sample-size and canonical-oracle reliability floors or are explicitly inconclusive.
 - At least one strategy reaches the final decision table; `no additional model` is accepted if none clears the gates.
