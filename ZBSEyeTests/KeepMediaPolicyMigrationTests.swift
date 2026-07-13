@@ -56,18 +56,25 @@ final class KeepMediaPolicyMigrationTests: XCTestCase {
         XCTAssertEqual(resolveFinite(100, bytes: 1 * gb).policy, .forever)
     }
 
-    func testExistingMediaDoesNotAuthorizeOrTriggerMigrationTimePruning() {
+    func testExistingMediaPromotesToTheSmallestNonDestructiveTierWithoutPruning() {
         let five = resolveFinite(5, bytes: 7 * gb)
         let ten = resolveFinite(10, bytes: 21 * gb)
         let fifty = resolveFinite(50, bytes: 51 * gb)
 
-        XCTAssertEqual(five.policy, .fiveGB)
-        XCTAssertEqual(ten.policy, .tenGB)
-        XCTAssertEqual(fifty.policy, .fiftyGB)
+        XCTAssertEqual(five.policy, .tenGB)
+        XCTAssertEqual(ten.policy, .fiftyGB)
+        XCTAssertEqual(fifty.policy, .forever)
         XCTAssertFalse(five.automaticDeletionAdmitted)
         XCTAssertFalse(ten.automaticDeletionAdmitted)
         XCTAssertFalse(fifty.automaticDeletionAdmitted)
         XCTAssertFalse(five.shouldRunRetention)
+    }
+
+    func testExistingMediaAtAnExactTierBoundaryDoesNotPromote() {
+        XCTAssertEqual(resolveFinite(5, bytes: 5 * gb).policy, .fiveGB)
+        XCTAssertEqual(resolveFinite(10, bytes: 10 * gb).policy, .tenGB)
+        XCTAssertEqual(resolveFinite(20, bytes: 20 * gb).policy, .twentyGB)
+        XCTAssertEqual(resolveFinite(50, bytes: 50 * gb).policy, .fiftyGB)
     }
 
     func testMissingOrCorruptPopulatedProfileFailsClosed() {
@@ -146,7 +153,7 @@ final class KeepMediaPolicyMigrationTests: XCTestCase {
     }
 
     @MainActor
-    func testStoreExistingFiveGBIsStableAndPreservesLegacyKeys() {
+    func testStoreExistingFiveGBIsStableAndReopensOnlyAfterRestartReconciliation() {
         let defaults = isolatedDefaults()
         defer { clear(defaults) }
         defaults.set(0, forKey: StorageSettingsStore.daysKey)
@@ -165,7 +172,7 @@ final class KeepMediaPolicyMigrationTests: XCTestCase {
         XCTAssertEqual(first.keepMediaPolicy, .fiveGB)
         XCTAssertEqual(second.keepMediaPolicy, .fiveGB)
         XCTAssertFalse(first.automaticDeletionAdmitted)
-        XCTAssertFalse(second.automaticDeletionAdmitted)
+        XCTAssertTrue(second.automaticDeletionAdmitted)
         XCTAssertEqual(defaults.integer(forKey: StorageSettingsStore.daysKey), 0)
         XCTAssertEqual(defaults.integer(forKey: StorageSettingsStore.gbKey), 5)
     }
@@ -203,6 +210,64 @@ final class KeepMediaPolicyMigrationTests: XCTestCase {
             defaults.string(forKey: StorageSettingsStore.keepMediaPolicyKey),
             KeepMediaPolicy.fiveGB.rawValue
         )
+    }
+
+    @MainActor
+    func testFreshFiniteAdmissionSurvivesRestartAfterMediaAppears() {
+        let defaults = isolatedDefaults()
+        defer { clear(defaults) }
+        let first = StorageSettingsStore(defaults: defaults)
+        _ = first.initializeKeepMediaPolicy(inventory: .positivelyEmpty)
+
+        let restarted = StorageSettingsStore(defaults: defaults)
+        XCTAssertEqual(restarted.keepMediaPolicy, .fiveGB)
+        XCTAssertFalse(restarted.automaticDeletionAdmitted)
+        XCTAssertEqual(restarted.automaticRetentionRecord.phase, .pendingFinite)
+
+        _ = restarted.initializeKeepMediaPolicy(
+            inventory: .reconciled(capturedMediaBytes: gb)
+        )
+
+        XCTAssertEqual(restarted.keepMediaPolicy, .fiveGB)
+        XCTAssertTrue(restarted.automaticDeletionAdmitted)
+        XCTAssertEqual(restarted.automaticRetentionRecord.phase, .finiteAdmitted)
+    }
+
+    @MainActor
+    func testRestartReconciliationPromotesPersistedFiniteAdmissionBeforeReopening() {
+        let defaults = isolatedDefaults()
+        defer { clear(defaults) }
+        let first = StorageSettingsStore(defaults: defaults)
+        _ = first.initializeKeepMediaPolicy(inventory: .positivelyEmpty)
+
+        let restarted = StorageSettingsStore(defaults: defaults)
+        let resolution = restarted.initializeKeepMediaPolicy(
+            inventory: .reconciled(capturedMediaBytes: 7 * gb)
+        )
+
+        XCTAssertEqual(resolution.policy, .tenGB)
+        XCTAssertEqual(restarted.keepMediaPolicy, .tenGB)
+        XCTAssertTrue(restarted.automaticDeletionAdmitted)
+        XCTAssertEqual(restarted.automaticRetentionRecord.phase, .finiteAdmitted)
+    }
+
+    @MainActor
+    func testRestartWithUncertainInventoryFailsPersistedFiniteAdmissionClosed() {
+        let defaults = isolatedDefaults()
+        defer { clear(defaults) }
+        let first = StorageSettingsStore(defaults: defaults)
+        _ = first.initializeKeepMediaPolicy(inventory: .positivelyEmpty)
+
+        let restarted = StorageSettingsStore(defaults: defaults)
+        let resolution = restarted.initializeKeepMediaPolicy(
+            inventory: .uncertain(.configuredRootUnavailable)
+        )
+
+        XCTAssertEqual(resolution.policy, .forever)
+        XCTAssertFalse(resolution.automaticDeletionAdmitted)
+        XCTAssertEqual(restarted.keepMediaPolicy, .forever)
+        XCTAssertFalse(restarted.automaticDeletionAdmitted)
+        XCTAssertEqual(restarted.automaticRetentionRecord.phase, .closed)
     }
 
     private func resolveFinite(_ cap: Int, bytes: Int64) -> KeepMediaMigrationResolution {

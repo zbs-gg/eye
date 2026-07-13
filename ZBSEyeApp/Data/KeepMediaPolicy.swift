@@ -159,13 +159,32 @@ enum KeepMediaMigration {
                 reason: legacyGB > 50 ? .promotedToAvoidImmediateDeletion : .legacyUnlimited
             )
         }
+        let promoted = promotedPolicy(normalized, for: inventory)
         return KeepMediaMigrationResolution(
-            policy: normalized,
+            policy: promoted,
             automaticDeletionAdmitted: false,
-            shouldWritePolicy: normalized.gigabytes != legacyGB,
+            shouldWritePolicy: promoted.gigabytes != legacyGB,
             shouldRunRetention: false,
-            reason: .recognizedFiniteLegacyCap
+            reason: promoted == normalized
+                ? .recognizedFiniteLegacyCap
+                : .promotedToAvoidImmediateDeletion
         )
+    }
+
+    /// Migration may only retain at least as much history as the legacy
+    /// promise. Exact current usage can therefore move a finite legacy cap only
+    /// upward; use beyond 50 GB becomes Forever instead of an immediate prune.
+    static func promotedPolicy(
+        _ policy: KeepMediaPolicy,
+        for inventory: KeepMediaInventoryEvidence
+    ) -> KeepMediaPolicy {
+        guard let currentBytes = inventory.capturedMediaBytes,
+              let legacyBytes = policy.maxCapturedMediaBytes else { return policy }
+        let requiredBytes = max(currentBytes, legacyBytes)
+        return KeepMediaPolicy.allCases.first { candidate in
+            guard let maxBytes = candidate.maxCapturedMediaBytes else { return true }
+            return maxBytes >= requiredBytes
+        } ?? .forever
     }
 
     private static func failClosed(

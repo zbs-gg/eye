@@ -41,6 +41,7 @@ final class StorageSettingsStore {
     /// A finite policy is inert until DB metadata and the captured-media tree
     /// reconcile. Persisted policy alone never authorizes automatic deletion.
     private(set) var automaticDeletionAdmitted = false
+    private(set) var automaticRetentionRecord: AutomaticRetentionRecord
 
     private(set) var mediaBytes: Int64 = 0
     private(set) var databaseBytes: Int64 = 0
@@ -62,7 +63,9 @@ final class StorageSettingsStore {
     @ObservationIgnored static let onboardingKey = "zbseye.onboarding.done"
     @ObservationIgnored static let keepMediaPolicyKey = "zbseye.keepMedia.policy.v1"
     @ObservationIgnored static let keepMediaReceiptKey = "zbseye.keepMedia.migrationReceipt.v1"
+    @ObservationIgnored static let admissionRecordKey = "zbseye.keepMedia.automaticRetention.v1"
     @ObservationIgnored private static let explicitPolicyKey = "zbseye.keepMedia.explicitSelection.v1"
+    @ObservationIgnored private let admissionRecordWasPresentAtInitialization: Bool
 
     static let dayOptions = [0, 7, 14, 30, 90]   // 0 = "Forever" first: the default and the essence of the product
     static let gbOptions = [0, 10, 20, 50, 100]   // 0 = "No limit" first
@@ -75,11 +78,35 @@ final class StorageSettingsStore {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        let persistedAdmissionData = defaults.data(forKey: Self.admissionRecordKey)
+        admissionRecordWasPresentAtInitialization = persistedAdmissionData != nil
+        let decodedAdmission = persistedAdmissionData.flatMap {
+            try? JSONDecoder().decode(AutomaticRetentionRecord.self, from: $0)
+        }
+        let recoveredAdmission: AutomaticRetentionRecord
+        if let decodedAdmission, decodedAdmission.isValid {
+            recoveredAdmission = decodedAdmission.recoveredForStartup
+        } else if persistedAdmissionData != nil {
+            recoveredAdmission = .closedForever
+        } else {
+            recoveredAdmission = .closedForever
+        }
+        automaticRetentionRecord = recoveredAdmission
         retentionDays = (defaults.object(forKey: Self.daysKey) == nil) ? 0
                                                                        : defaults.integer(forKey: Self.daysKey)
         maxGB = (defaults.object(forKey: Self.gbKey) == nil) ? 0 : defaults.integer(forKey: Self.gbKey)
-        keepMediaPolicy = defaults.string(forKey: Self.keepMediaPolicyKey)
-            .flatMap(KeepMediaPolicy.init(rawValue:)) ?? .forever
+        if persistedAdmissionData != nil {
+            keepMediaPolicy = recoveredAdmission.policy
+            // Persisted finite admission is deliberately demoted to pending at
+            // every process start. Current media reconciliation is required
+            // before automatic deletion can reopen.
+            automaticDeletionAdmitted = false
+            _ = persistAdmissionRecord(recoveredAdmission)
+            defaults.set(recoveredAdmission.policy.rawValue, forKey: Self.keepMediaPolicyKey)
+        } else {
+            keepMediaPolicy = defaults.string(forKey: Self.keepMediaPolicyKey)
+                .flatMap(KeepMediaPolicy.init(rawValue:)) ?? .forever
+        }
     }
 
     /// Resolve and persist the one-time legacy migration. The receipt is
@@ -90,6 +117,9 @@ final class StorageSettingsStore {
     func initializeKeepMediaPolicy(
         inventory: KeepMediaInventoryEvidence
     ) -> KeepMediaMigrationResolution {
+        if admissionRecordWasPresentAtInitialization {
+            return resolveAutomaticRecord(inventory: inventory)
+        }
         if let existingReceipt = decodedReceipt() {
             let rawPersistedPolicy = defaults.string(forKey: Self.keepMediaPolicyKey)
             let persistedPolicy = rawPersistedPolicy
@@ -106,8 +136,12 @@ final class StorageSettingsStore {
             if persistedPolicy == nil {
                 defaults.set(policy.rawValue, forKey: Self.keepMediaPolicyKey)
             }
+            let promotedPolicy = KeepMediaMigration.promotedPolicy(policy, for: inventory)
+            if promotedPolicy != policy {
+                defaults.set(promotedPolicy.rawValue, forKey: Self.keepMediaPolicyKey)
+            }
             return publishRecoveredPolicy(
-                policy,
+                promotedPolicy,
                 inventory: inventory,
                 originalAdmission: existingReceipt.resolution.automaticDeletionAdmitted
             )
@@ -154,10 +188,14 @@ final class StorageSettingsStore {
                 inventory: .uncertain(.migrationReceiptUnreadable)
             )
         }
-        publish(
-            policy: resolution.policy,
-            admitted: resolution.automaticDeletionAdmitted
-        )
+        guard persistMigrationAdmission(resolution) else {
+            publish(policy: .forever, admitted: false)
+            return KeepMediaMigration.resolve(
+                snapshot: snapshot,
+                inventory: .uncertain(.migrationReceiptUnreadable)
+            )
+        }
+        publish(policy: resolution.policy, admitted: resolution.automaticDeletionAdmitted)
         return resolution
     }
 
@@ -167,15 +205,63 @@ final class StorageSettingsStore {
         _ policy: KeepMediaPolicy,
         inventory: KeepMediaInventoryEvidence
     ) {
+        if policy == .forever {
+            _ = beginForeverRevocation()
+            finishForeverRevocation()
+            return
+        }
         defaults.set(policy.rawValue, forKey: Self.keepMediaPolicyKey)
         guard defaults.string(forKey: Self.keepMediaPolicyKey) == policy.rawValue else { return }
         defaults.set(true, forKey: Self.explicitPolicyKey)
         defaults.removeObject(forKey: Self.daysKey)
         defaults.removeObject(forKey: Self.gbKey)
-        publish(
+        let admitted = policy != .forever && inventory.isAuthoritative
+        let record = AutomaticRetentionRecord(
+            revision: automaticRetentionRecord.revision &+ 1,
             policy: policy,
-            admitted: policy != .forever && inventory.isAuthoritative
+            phase: admitted ? .finiteAdmitted : (policy == .forever ? .closed : .pendingFinite),
+            source: .explicitSelection
         )
+        guard persistAdmissionRecord(record) else {
+            publish(policy: .forever, admitted: false)
+            return
+        }
+        publish(policy: policy, admitted: admitted)
+    }
+
+    /// First half of the crash-safe Forever transition. The durable pending
+    /// intent closes deletion before an async retention drain begins; the
+    /// visible policy remains unchanged until the caller acknowledges the drain.
+    @discardableResult
+    func beginForeverRevocation() -> AutomaticRetentionRecord {
+        let pending = AutomaticRetentionRecord(
+            revision: automaticRetentionRecord.revision &+ 1,
+            policy: .forever,
+            phase: .pendingForever,
+            source: .explicitSelection
+        )
+        automaticDeletionAdmitted = false
+        return persistAdmissionRecord(pending) ? pending : automaticRetentionRecord
+    }
+
+    /// Completes a pending Forever transition after automatic work has drained.
+    func finishForeverRevocation() {
+        guard automaticRetentionRecord.phase == .pendingForever else { return }
+        let closed = AutomaticRetentionRecord(
+            revision: automaticRetentionRecord.revision,
+            policy: .forever,
+            phase: .closed,
+            source: automaticRetentionRecord.source
+        )
+        guard persistAdmissionRecord(closed) else {
+            publish(policy: .forever, admitted: false)
+            return
+        }
+        defaults.set(KeepMediaPolicy.forever.rawValue, forKey: Self.keepMediaPolicyKey)
+        defaults.set(true, forKey: Self.explicitPolicyKey)
+        defaults.removeObject(forKey: Self.daysKey)
+        defaults.removeObject(forKey: Self.gbKey)
+        publish(policy: .forever, admitted: false)
     }
 
     private func publishRecoveredPolicy(
@@ -185,7 +271,20 @@ final class StorageSettingsStore {
     ) -> KeepMediaMigrationResolution {
         let admitted = policy != .forever
             && originalAdmission
-            && inventory == .positivelyEmpty
+            && inventory.isAuthoritative
+        let record = AutomaticRetentionRecord(
+            revision: automaticRetentionRecord.revision &+ 1,
+            policy: policy,
+            phase: admitted ? .finiteAdmitted : (policy == .forever ? .closed : .pendingFinite),
+            source: .migration
+        )
+        guard persistAdmissionRecord(record) else {
+            publish(policy: .forever, admitted: false)
+            return KeepMediaMigration.resolve(
+                snapshot: legacySnapshot(),
+                inventory: .uncertain(.migrationReceiptUnreadable)
+            )
+        }
         publish(policy: policy, admitted: admitted)
         return KeepMediaMigrationResolution(
             policy: policy,
@@ -199,6 +298,92 @@ final class StorageSettingsStore {
     private func publish(policy: KeepMediaPolicy, admitted: Bool) {
         keepMediaPolicy = policy
         automaticDeletionAdmitted = admitted
+    }
+
+    @discardableResult
+    private func persistMigrationAdmission(_ resolution: KeepMediaMigrationResolution) -> Bool {
+        persistAdmissionRecord(AutomaticRetentionRecord(
+            revision: automaticRetentionRecord.revision &+ 1,
+            policy: resolution.policy,
+            phase: resolution.automaticDeletionAdmitted
+                ? .finiteAdmitted
+                : (resolution.policy == .forever ? .closed : .pendingFinite),
+            source: .migration
+        ))
+    }
+
+    @discardableResult
+    private func persistAdmissionRecord(_ record: AutomaticRetentionRecord) -> Bool {
+        guard let data = try? JSONEncoder().encode(record) else {
+            failClosedInMemory()
+            return false
+        }
+        defaults.set(data, forKey: Self.admissionRecordKey)
+        guard let roundTrip = defaults.data(forKey: Self.admissionRecordKey),
+              let decoded = try? JSONDecoder().decode(AutomaticRetentionRecord.self, from: roundTrip),
+              decoded == record else {
+            failClosedInMemory()
+            return false
+        }
+        automaticRetentionRecord = record
+        return true
+    }
+
+    private func failClosedInMemory() {
+        automaticRetentionRecord = .closedForever
+        keepMediaPolicy = .forever
+        automaticDeletionAdmitted = false
+    }
+
+    private func resolveAutomaticRecord(
+        inventory: KeepMediaInventoryEvidence
+    ) -> KeepMediaMigrationResolution {
+        let current = automaticRetentionRecord
+        guard current.phase == .pendingFinite else {
+            publish(policy: current.policy, admitted: false)
+            return resolutionFromAutomaticRecord(admitted: false)
+        }
+
+        guard inventory.isAuthoritative else {
+            let closed = AutomaticRetentionRecord(
+                revision: current.revision &+ 1,
+                policy: .forever,
+                phase: .closed,
+                source: current.source
+            )
+            _ = persistAdmissionRecord(closed)
+            defaults.set(KeepMediaPolicy.forever.rawValue, forKey: Self.keepMediaPolicyKey)
+            publish(policy: .forever, admitted: false)
+            return resolutionFromAutomaticRecord(admitted: false)
+        }
+
+        let policy = KeepMediaMigration.promotedPolicy(current.policy, for: inventory)
+        let admitted = policy != .forever
+        let resolved = AutomaticRetentionRecord(
+            revision: current.revision,
+            policy: policy,
+            phase: admitted ? .finiteAdmitted : .closed,
+            source: current.source
+        )
+        guard persistAdmissionRecord(resolved) else {
+            publish(policy: .forever, admitted: false)
+            return resolutionFromAutomaticRecord(admitted: false)
+        }
+        defaults.set(policy.rawValue, forKey: Self.keepMediaPolicyKey)
+        publish(policy: policy, admitted: admitted)
+        return resolutionFromAutomaticRecord(admitted: admitted)
+    }
+
+    private func resolutionFromAutomaticRecord(admitted: Bool) -> KeepMediaMigrationResolution {
+        return KeepMediaMigrationResolution(
+            policy: automaticRetentionRecord.policy,
+            automaticDeletionAdmitted: admitted,
+            shouldWritePolicy: false,
+            shouldRunRetention: false,
+            reason: automaticRetentionRecord.policy == .forever
+                ? .legacyUnlimited
+                : .recognizedFiniteLegacyCap
+        )
     }
 
     private func decodedReceipt() -> KeepMediaMigrationReceipt? {
