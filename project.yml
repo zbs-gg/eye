@@ -207,6 +207,10 @@ targets:
       - path: ZBSEyeApp/State/AskStore.swift
       - path: ZBSEyeApp/State/WorkspaceStore.swift
       - path: ZBSEyeApp/State/StorageSettingsStore.swift
+      - path: ZBSEyeApp/State/AudioSettingsStore.swift
+      - path: ZBSEyeApp/State/ResourceUsageStore.swift
+      - path: ZBSEyeApp/System/ResourceUsageSampler.swift
+      - path: ZBSEyeApp/Views/Settings/SettingsRoute.swift
     dependencies:
       - package: MLXSwiftLM
         product: MLXLLM

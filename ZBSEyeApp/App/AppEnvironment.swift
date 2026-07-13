@@ -8,6 +8,17 @@ import UserNotifications
 @MainActor
 @Observable
 final class AppEnvironment {
+    struct KeepMediaConfirmation: Sendable, Equatable {
+        let policy: KeepMediaPolicy
+        let currentBytes: Int64
+        let bytesToRemove: Int64
+    }
+
+    enum KeepMediaChangeResult: Sendable, Equatable {
+        case applied
+        case confirmationRequired(KeepMediaConfirmation)
+        case unavailable(String)
+    }
     let permissions = PermissionsStore()
     let recording = RecordingStore()
     let server = ServerStore()
@@ -15,12 +26,25 @@ final class AppEnvironment {
     let ai = AIProviderStore()            // "AI Models": the active processing model (local-first, BYO-AI)
     let aiSetup = AISetupPresentation()
     let audioSettings = AudioSettingsStore()
-    let storageSettings = StorageSettingsStore()
+    let storageSettings: StorageSettingsStore
+    let storageOperations = StorageOperationsStore()
+    let resourceUsage: ResourceUsageStore
     let backupSettings = BackupSettingsStore()
     let builtInModels = BuiltInModelStore()
     let privacy = PrivacyStore()
     let rewards = RewardsStore()   // cosmetic rewards (theme/icon/menu-bar) — independent of the DB
     let workspace = WorkspaceStore()
+
+    init() {
+        let storageSettings = StorageSettingsStore()
+        self.storageSettings = storageSettings
+        resourceUsage = ResourceUsageStore(dataBytes: { [weak storageSettings] in
+            storageSettings?.totalBytes ?? 0
+        })
+        audioSettings.onCaptureConfigurationChanged = { [weak self] in
+            self?.recording.syncAudio()
+        }
+    }
 
     var selectedSection: SidebarSection = .timeline
 
@@ -964,6 +988,60 @@ final class AppEnvironment {
         AchievementCounters.set(.deletedPeriod)   // "Cleaner" achievement
         await achievements?.refresh()
         return report
+    }
+
+    /// One safe Settings facade for Keep Media. Finite admission is based on a
+    /// fresh, quiet DB/filesystem reconciliation; shrinking below current use
+    /// requires an exact confirmation and is rechecked before commit.
+    func changeKeepMediaPolicy(
+        _ policy: KeepMediaPolicy,
+        confirmedRemovalBytes: Int64? = nil
+    ) async -> KeepMediaChangeResult {
+        guard !storageSettings.relocationInProgress,
+              let storage, let db, let admission = automaticRetentionAdmission else {
+            return .unavailable(String(localized: "Storage is not ready yet."))
+        }
+
+        if policy == .forever {
+            let pending = storageSettings.beginForeverRevocation()
+            await Task.detached(priority: .utility) {
+                admission.revoke(to: pending.revision)
+            }.value
+            storageSettings.finishForeverRevocation()
+            return .applied
+        }
+
+        _ = await recording.pauseForMaintenanceAndDrain(waitForTranscription: false)
+        let inventory = await CapturedMediaReconciler.reconcile(db: db, storage: storage)
+        recording.resumeAfterMaintenance()
+        guard let currentBytes = inventory.capturedMediaBytes,
+              let maximumBytes = policy.maxCapturedMediaBytes else {
+            return .unavailable(
+                String(localized: "Eye could not verify every media file. Nothing was deleted; try again when recording is idle.")
+            )
+        }
+
+        let bytesToRemove = max(0, currentBytes - maximumBytes)
+        if bytesToRemove > 0,
+           confirmedRemovalBytes.map({ $0 < bytesToRemove }) ?? true {
+            return .confirmationRequired(KeepMediaConfirmation(
+                policy: policy,
+                currentBytes: currentBytes,
+                bytesToRemove: bytesToRemove
+            ))
+        }
+
+        storageSettings.selectKeepMediaPolicy(policy, inventory: inventory)
+        let record = storageSettings.automaticRetentionRecord
+        guard record.phase == .finiteAdmitted, admission.activate(record) else {
+            storageSettings.failClosedAutomaticDeletionPreservingPolicy()
+            admission.revoke(to: storageSettings.automaticRetentionRecord.revision)
+            return .unavailable(
+                String(localized: "The media limit was saved, but automatic cleanup stayed off. Restart Eye to verify it safely.")
+            )
+        }
+        await storageSettings.refresh(storage: storage, db: db)
+        return .applied
     }
 
     /// Move all of memory to a chosen folder (T1): pause and drain every DB writer → online DB backup + copy media →

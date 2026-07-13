@@ -264,6 +264,22 @@ final class StorageSettingsStore {
         publish(policy: .forever, admitted: false)
     }
 
+    /// If the process-local permit cannot mirror a persisted finite decision,
+    /// retain the user's visible cap but return deletion to a startup-
+    /// reconcilable pending state. A UI error must never leave a phantom
+    /// admitted policy behind.
+    func failClosedAutomaticDeletionPreservingPolicy() {
+        guard let _ = keepMediaPolicy.maxCapturedMediaBytes else { return }
+        let pending = AutomaticRetentionRecord(
+            revision: automaticRetentionRecord.revision &+ 1,
+            policy: keepMediaPolicy,
+            phase: .pendingFinite,
+            source: .explicitSelection
+        )
+        guard persistAdmissionRecord(pending) else { return }
+        publish(policy: keepMediaPolicy, admitted: false)
+    }
+
     private func publishRecoveredPolicy(
         _ policy: KeepMediaPolicy,
         inventory: KeepMediaInventoryEvidence,

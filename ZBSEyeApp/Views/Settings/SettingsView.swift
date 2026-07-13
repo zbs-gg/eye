@@ -1,646 +1,161 @@
-import SwiftUI
-import AppKit
 import ServiceManagement
+import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppEnvironment.self) private var env
+    @State private var pendingLanguage: AppLanguage?
     @State private var loginItemEnabled = SMAppService.mainApp.status == .enabled
-    @State private var confirmDelete: TimeInterval?   // seconds; -1 = everything
-    @State private var deleting = false
-    @State private var deleteOutcome: String?          // delete report/error — via alert
-    @State private var exporting = false
-    @State private var exportResult: String?
-    @State private var importing = false
-    @State private var importStatus: String?
-    @State private var pendingLang: AppLanguage?
-    @AppStorage("zbseye.browserHistory.enabled") private var browserHistoryEnabled = true
-    @State private var browserImportStatus: String?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Settings").font(.largeTitle.bold())
-                permissionsCard
-                aiCard
-                languageCard
-                launchCard
-                storageCard
-                backupCard
-                privacyCard
-                browserHistoryCard
-                if HistoryImporter.sourceExists { importCard }
-                transcriptionCard
-                serverCard
-                supportCard
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(SettingsRoute.allCases) { route in
+                        NavigationLink(value: route) {
+                            SettingsRouteRow(
+                                route: route,
+                                summary: summary(for: route),
+                                attention: route == .permissions && permissionIssueCount > 0
+                            )
+                        }
+                    }
+                }
+
+                Section {
+                    resourceLine
+                }
             }
-            .padding(28)
-            .frame(maxWidth: 680, alignment: .leading)
+            .listStyle(.inset)
+            .navigationTitle("Settings")
+            .navigationDestination(for: SettingsRoute.self) { route in
+                switch route {
+                case .permissions: PermissionsSettingsView()
+                case .ai: AISettingsView()
+                case .dataStorage: DataStorageSettingsView()
+                case .mcpTools: MCPToolsSettingsView()
+                }
+            }
+            .toolbar { moreMenu }
         }
-        .frame(maxWidth: .infinity)
         .task {
             await env.permissions.refreshAll()
-            await env.audioSettings.refreshHealth(env.audio)
+            await env.storageSettings.refresh(storage: env.storage, db: env.db)
+            env.resourceUsage.start()
         }
-        .confirmationDialog("Restart ZBS Eye to change the language?",
-                            isPresented: Binding(get: { pendingLang != nil },
-                                                 set: { if !$0 { pendingLang = nil } }),
-                            titleVisibility: .visible) {
-            Button("Restart now") { if let l = pendingLang { LanguageManager.set(l) } }
-            Button("Cancel", role: .cancel) { pendingLang = nil }
+        .onDisappear { env.resourceUsage.stop() }
+        .confirmationDialog(
+            "Restart ZBS Eye to change the language?",
+            isPresented: Binding(
+                get: { pendingLanguage != nil },
+                set: { if !$0 { pendingLanguage = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Restart now") {
+                if let pendingLanguage { LanguageManager.set(pendingLanguage) }
+            }
+            Button("Cancel", role: .cancel) { pendingLanguage = nil }
         } message: {
             Text("The interface language is applied after a restart.")
         }
     }
 
-    private var aiCard: some View {
-        GlassCard {
-            HStack(spacing: 12) {
-                Image(systemName: "sparkles")
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("AI").font(.headline)
-                    Text(aiSummary).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Set Up…") { env.aiSetup.present(origin: .settings) }
+    private var resourceLine: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "leaf")
+                .foregroundStyle(.green)
+            Text(resourceSummary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .accessibilityLabel("Current resource use: \(resourceSummary)")
+    }
+
+    private var resourceSummary: String {
+        let cpu = env.resourceUsage.cpuPercent.map { String(format: "%.1f%%", $0) } ?? "—"
+        let memory = env.resourceUsage.physicalFootprintBytes
+            .map(StorageSettingsStore.format) ?? "—"
+        let data = StorageSettingsStore.format(env.resourceUsage.dataBytes)
+        return "CPU \(cpu) · Memory \(memory) · Data \(data)"
+    }
+
+    private var permissionIssueCount: Int {
+        let snapshot = env.permissions.snapshot
+        return [snapshot.screenRecording, snapshot.accessibility,
+                snapshot.microphone, snapshot.speech].filter { $0 != .granted }.count
+    }
+
+    private func summary(for route: SettingsRoute) -> String {
+        switch route {
+        case .permissions:
+            return permissionIssueCount == 0
+                ? String(localized: "Ready · screen, microphone, sound")
+                : String(localized: "\(permissionIssueCount) need attention")
+        case .ai:
+            if let provider = env.ai.activeProvider, let model = env.ai.activeModelID {
+                return "\(provider.displayName) · \(model)"
             }
+            return String(localized: "Off · optional")
+        case .dataStorage:
+            return "\(StorageSettingsStore.format(env.storageSettings.totalBytes)) · Keep \(env.storageSettings.keepMediaPolicy.settingsLabel)"
+        case .mcpTools:
+            return String(localized: "Give Codex or Claude read-only Timeline access")
         }
     }
 
-    private var aiSummary: String {
-        guard let provider = env.ai.activeProvider, let model = env.ai.activeModelID else {
-            return String(localized: "Off — Timeline and local search still work")
-        }
-        return "\(provider.displayName) · \(model)"
-    }
-
-    private var languageCard: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Language").font(.headline)
-                Picker("Interface language", selection: Binding(
-                    get: { LanguageManager.current },
-                    set: { if $0 != LanguageManager.current { pendingLang = $0 } })) {
-                    Text("System").tag(AppLanguage.system)
-                    Text(verbatim: "English").tag(AppLanguage.en)
-                    Text(verbatim: "Русский").tag(AppLanguage.ru)
+    @ToolbarContentBuilder
+    private var moreMenu: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                Menu("Language") {
+                    Button("System") { chooseLanguage(.system) }
+                    Button { chooseLanguage(.en) } label: { Text(verbatim: "English") }
+                    Button { chooseLanguage(.ru) } label: { Text(verbatim: "Русский") }
                 }
-                Text("Changing the language restarts ZBS Eye.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var permissionsCard: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Permissions and diagnostics").font(.headline)
-                Text("ZBS Eye reads the screen via Accessibility (precise and easy on the battery), OCR — only where AX is unavailable.")
-                    .font(.caption).foregroundStyle(.secondary)
-
-                PermissionRow(title: "Screen Recording",
-                              status: env.permissions.snapshot.screenRecording,
-                              request: { PermissionChecker.requestScreenRecording() },
-                              openSettings: { PermissionChecker.openSettings("Privacy_ScreenCapture") })
-                PermissionRow(title: "Accessibility",
-                              status: env.permissions.snapshot.accessibility,
-                              request: { PermissionChecker.requestAccessibility() },
-                              openSettings: { PermissionChecker.openSettings("Privacy_Accessibility") })
-                PermissionRow(title: "Microphone",
-                              status: env.permissions.snapshot.microphone,
-                              request: { Task { await env.permissions.requestMicrophone() } },
-                              openSettings: { PermissionChecker.openSettings("Privacy_Microphone") })
-                PermissionRow(title: "Speech Recognition (for audio search)",
-                              status: env.permissions.snapshot.speech,
-                              request: { Task { await env.permissions.requestSpeech() } },
-                              openSettings: { PermissionChecker.openSettings("Privacy_SpeechRecognition") })
-
-                Button("Re-check") {
-                    Task { await env.permissions.refreshAll() }
-                }
-                .buttonStyle(.bordered)
-            }
-        }
-    }
-
-    private var launchCard: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Launch").font(.headline)
-                Toggle("Launch ZBS Eye at login", isOn: $loginItemEnabled)
-                    .onChange(of: loginItemEnabled) { _, on in
+                Toggle("Open at login", isOn: $loginItemEnabled)
+                    .onChange(of: loginItemEnabled) { _, enabled in
                         do {
-                            if on { try SMAppService.mainApp.register() }
+                            if enabled { try SMAppService.mainApp.register() }
                             else { try SMAppService.mainApp.unregister() }
                         } catch {
-                            // registration failed (for example, disabled in System Settings) — roll back the UI
                             loginItemEnabled = SMAppService.mainApp.status == .enabled
                         }
                     }
-                Text("Eternal memory lives as long as ZBS Eye is running: together with recording autostart this covers "
-                     + "reboots and crashes. Also managed in System Settings → General → Login Items.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var storageCard: some View {
-        @Bindable var st = env.storageSettings
-        return GlassCard {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Storage").font(.headline)
-                HStack {
-                    Text("Used")
-                    Spacer()
-                    Text("\(StorageSettingsStore.format(st.mediaBytes)) media + \(StorageSettingsStore.format(st.databaseBytes)) index")
-                        .foregroundStyle(.secondary).font(.callout)
-                    if let dir = env.storage?.mediaDirectory {
-                        Button { NSWorkspace.shared.activateFileViewerSelecting([dir]) } label: {
-                            Image(systemName: "folder")
-                        }.buttonStyle(.borderless).help("Show in Finder")
-                    }
-                }
                 Divider()
-                HStack {
-                    Text("Data folder")
-                    Spacer()
-                    Text(st.dataRootDisplay)
-                        .foregroundStyle(.secondary).font(.callout)
-                        .lineLimit(1).truncationMode(.middle)
-                }
-                if st.relocationInProgress {
-                    HStack(spacing: 10) {
-                        ProgressView(value: st.relocationProgress).frame(maxWidth: 180)
-                        Text(st.relocationStatus).font(.caption).foregroundStyle(.secondary)
-                    }
-                } else {
-                    HStack {
-                        Button("Move…") { chooseRelocateFolder() }
-                        if st.isRelocated {
-                            Button("Return to the default folder") { relocateToLegacy() }
-                                .buttonStyle(.link)
-                        }
-                        Spacer()
-                    }
-                    Text("Moves all of memory (database + media) to the chosen folder, for example an external SSD. "
-                         + "The old location isn't deleted until you confirm. The app will restart.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if let err = st.relocationError {
-                    Text(err).font(.caption).foregroundStyle(.red)
-                }
-                if let bd = st.breakdown {
-                    Divider()
-                    Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
-                        GridRow {
-                            Text("Moments").foregroundStyle(.secondary)
-                            Text("\(bd.framesTotal)  ·  live \(bd.framesLive), imported \(bd.framesImport)")
-                        }
-                        GridRow {
-                            Text("Audio").foregroundStyle(.secondary)
-                            Text("\(bd.audioTotal)")
-                        }
-                        if let o = bd.oldestTs, let n = bd.newestTs {
-                            GridRow {
-                                Text("Period").foregroundStyle(.secondary)
-                                Text("\(Date(timeIntervalSince1970: Double(o)/1000).formatted(date: .abbreviated, time: .omitted)) — \(Date(timeIntervalSince1970: Double(n)/1000).formatted(date: .abbreviated, time: .omitted))")
-                            }
-                        }
-                        GridRow {
-                            Text("Free on disk").foregroundStyle(.secondary)
-                            Text(StorageSettingsStore.format(st.freeBytes))
-                        }
-                    }
-                    .font(.callout)
-                    if !bd.topApps.isEmpty {
-                        Text("Most of all: " + bd.topApps.prefix(4).map { "\($0.name) (\($0.frames))" }.joined(separator: ", "))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                Picker("Keep history", selection: $st.retentionDays) {
-                    ForEach(StorageSettingsStore.dayOptions, id: \.self) { d in
-                        Text(d == 0 ? "Forever" : "\(d) d.").tag(d)
-                    }
-                }
-                Picker("Media limit", selection: $st.maxGB) {
-                    ForEach(StorageSettingsStore.gbOptions, id: \.self) { g in
-                        Text(g == 0 ? "No limit" : "\(g) GB").tag(g)
-                    }
-                }
-                Text("Old data is deleted automatically when the limit is exceeded (every 30 minutes). The limit covers moments and audio; "
-                     + "the search index grows separately and is cleaned along with history. \"Forever\" — at your own risk: the disk is finite.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Divider()
-                HStack {
-                    Text("Delete from memory").font(.callout)
-                    Spacer()
-                    Menu("Delete…") {
-                        Button("Last 15 minutes") { confirmDelete = 15 * 60 }
-                        Button("Last hour") { confirmDelete = 3600 }
-                        Button("Last 24 hours") { confirmDelete = 86_400 }
-                        Divider()
-                        Button("All history", role: .destructive) { confirmDelete = -1 }
-                    }
-                    .fixedSize()
-                }
-                Text("An accidentally recorded password or a sensitive conversation can be wiped forever (files, text, indexes).")
-                    .font(.caption).foregroundStyle(.secondary)
-                Divider()
-                HStack {
-                    Text("Export").font(.callout)
-                    Spacer()
-                    if exporting { ProgressView().controlSize(.small) }
-                    Menu("Export…") {
-                        Button("Today (markdown)") { runExport(days: 1, media: false) }
-                        Button("Today (markdown + media)") { runExport(days: 1, media: true) }
-                        Divider()
-                        Button("All history (markdown)") { runExport(days: nil, media: false) }
-                        Button("All history (markdown + media)") { runExport(days: nil, media: true) }
-                    }
-                    .fixedSize()
-                    .disabled(exporting)
-                }
-                Text("Take your memory with you: markdown by day (activity + conversations), optionally moments and audio.")
-                    .font(.caption).foregroundStyle(.secondary)
-                if let r = exportResult {
-                    Label(r, systemImage: "checkmark.circle").font(.caption).foregroundStyle(.green)
-                }
-            }
-        }
-        .confirmationDialog(deleteTitle, isPresented: deleteBinding, titleVisibility: .visible) {
-            Button("Delete permanently", role: .destructive) {
-                let seconds = confirmDelete
-                confirmDelete = nil
-                Task {
-                    deleting = true
-                    let r = await env.deleteHistory(lastSeconds: (seconds ?? 0) > 0 ? seconds : nil)
-                    deleting = false
-                    // a failed "wipe forever" must not be indistinguishable from success. Build LOCALIZED
-                    // outcome strings (String(localized:)) so the catalog's RU translations render — the
-                    // plain Text(String?) overload below does no lookup on its own.
-                    deleteOutcome = r.map { String(localized: "Deleted: moments \($0.framesDeleted), audio segments \($0.audioDeleted).") }
-                        ?? String(localized: "Couldn't delete — history is untouched or only partially touched. Try again.")
-                }
-            }
-            Button("Cancel", role: .cancel) { confirmDelete = nil }
-        }
-        .alert("History deletion", isPresented: Binding(get: { deleteOutcome != nil },
-                                                        set: { if !$0 { deleteOutcome = nil } })) {
-            Button("OK") { deleteOutcome = nil }
-        } message: {
-            Text(deleteOutcome ?? "")
-        }
-        .overlay(alignment: .topTrailing) {
-            if deleting { ProgressView().controlSize(.small).padding() }
-        }
-        .task {
-            env.backupSettings.refresh()
-            await env.storageSettings.refresh(storage: env.storage, db: env.db)
-        }
-    }
-
-    /// Export: choose a folder → ExportService. days=nil → all history.
-    private func runExport(days: Int?, media: Bool) {
-        guard let export = env.export else { return }
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.prompt = "Export here"
-        guard panel.runModal() == .OK, let dest = panel.url else { return }
-        exporting = true
-        exportResult = nil
-        let from: Date
-        if let days {
-            from = Calendar.current.startOfDay(for: Date().addingTimeInterval(-Double(days - 1) * 86_400))
-        } else {
-            from = Date(timeIntervalSince1970: 0)
-        }
-        Task {
-            let report = try? await export.export(from: from, to: Date(), into: dest, includeMedia: media)
-            exporting = false
-            exportResult = report.map {
-                var s = "Done: \($0.days) d." + (media ? ", \($0.mediaFiles) media files" : "")
-                if $0.mediaErrors > 0 { s += ", copy errors: \($0.mediaErrors)" }
-                return s + " → \($0.path)"
-            } ?? "Export failed"
-        }
-    }
-
-    private var deleteTitle: String {
-        guard let s = confirmDelete else { return "" }
-        if s < 0 { return "Delete ALL history? This is permanent." }
-        let label = s >= 86_400 ? "the last 24 hours" : (s >= 3600 ? "the last hour" : "the last 15 minutes")
-        return "Delete \(label) of history? This is permanent."
-    }
-    private var deleteBinding: Binding<Bool> {
-        Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })
-    }
-
-    private func chooseRelocateFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Move here"
-        panel.message = "Choose a folder for your \"eternal memory\" (a ZBS Eye subfolder will be created). The app will restart."
-        if panel.runModal() == .OK, let url = panel.url {
-            Task { await env.relocate(to: url) }
-        }
-    }
-
-    private func relocateToLegacy() {
-        Task { await env.relocate(to: StorageLocation.legacyRoot().deletingLastPathComponent()) }
-    }
-
-    private var backupCard: some View {
-        @Bindable var bk = env.backupSettings
-        return GlassCard {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("iCloud backup").font(.headline)
-                    Spacer()
-                    if bk.busy { ProgressView().controlSize(.small) }
-                }
-                if bk.iCloudAvailable {
-                    Toggle("Auto-backup to iCloud Drive", isOn: $bk.enabled)
-                    Text("A compressed snapshot of memory (database, text, search index — without the HEIC media) goes to "
-                         + "iCloud Drive every 6 hours and on exit. The live database stays local — it must not be placed in "
-                         + "iCloud Drive (corruption).")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Picker("Keep copies", selection: $bk.keepN) {
-                        ForEach(BackupSettingsStore.keepOptions, id: \.self) { Text("\($0)").tag($0) }
-                    }
-                    HStack {
-                        Button("Back up now") { Task { await bk.backupNow() } }
-                            .disabled(bk.busy || !bk.enabled)
-                        Spacer()
-                        Button {
-                            NSWorkspace.shared.activateFileViewerSelecting([BackupManager.backupsDirectory()])
-                        } label: { Image(systemName: "folder") }
-                            .buttonStyle(.borderless).help("Backups folder in Finder")
-                    }
-                    if let last = bk.lastBackupAt {
-                        Text("Last: \(last.formatted(date: .abbreviated, time: .shortened))"
-                             + (bk.lastResult.map { " · \($0)" } ?? "") + " · copies: \(bk.backupCount)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    if let err = bk.error {
-                        Text(err).font(.caption).foregroundStyle(.red)
-                    }
-                } else {
-                    Text("iCloud Drive is off or not signed in. Turn on iCloud Drive in System Settings — "
-                         + "and memory will start backing up to the cloud automatically (compressed, without uploading the live database).")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+                Button("Repair & Diagnostics…") { env.showSelfRepair = true }
+            } label: {
+                Label("More", systemImage: "ellipsis.circle")
             }
         }
     }
 
-    private var importCard: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Import prior history").font(.headline)
-                Text("Prior history found (~/.screenpipe). It will move text and metadata (moments, "
-                     + "windows, URLs, transcripts with speakers) into ZBS Eye's memory — search will work across all "
-                     + "your old history. Media files stay where they are. You can interrupt and continue later.")
-                    .font(.caption).foregroundStyle(.secondary)
-                HStack(spacing: 12) {
-                    Button {
-                        runImport()
-                    } label: {
-                        Label(importing ? "Importing…" : "Import", systemImage: "square.and.arrow.down.on.square")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(importing)
-                    if importing { ProgressView().controlSize(.small) }
-                    if let s = importStatus { Text(s).font(.caption).foregroundStyle(.secondary) }
-                }
-            }
-        }
-    }
-
-    private func runImport() {
-        guard let importer = env.historyImporter else { return }
-        importing = true
-        importStatus = nil
-        Task {
-            do {
-                let report = try await importer.run { f, a in
-                    Task { @MainActor in
-                        importStatus = "moments \(f), audio \(a)…"
-                    }
-                }
-                importStatus = "Done: +\(report.frames) moments, +\(report.audio) audio. Semantics are indexing in the background."
-                await env.storageSettings.refresh(storage: env.storage, db: env.db)
-                await env.timelineStore?.load()
-            } catch {
-                importStatus = "Import interrupted: \(error.localizedDescription)"
-            }
-            importing = false
-        }
-    }
-
-    private var privacyCard: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Privacy").font(.headline)
-                Text("By default ZBS Eye records everything. Exclude apps that shouldn't end up "
-                     + "in memory (password manager, bank) — their windows are cut out of frames and text. "
-                     + "AUDIO is not silenced by an exclusion (it isn't tied to windows): for a sensitive conversation "
-                     + "use \"Don't record for 15 minutes\" in the menu bar.")
-                    .font(.caption).foregroundStyle(.secondary)
-                if env.privacy.ignoredBundleIds.isEmpty {
-                    Text("No exclusions.").font(.callout).foregroundStyle(.secondary)
-                } else {
-                    ForEach(env.privacy.ignoredBundleIds, id: \.self) { id in
-                        HStack {
-                            Image(systemName: "eye.slash").foregroundStyle(.secondary)
-                            Text(env.privacy.displayNames[id] ?? id)
-                            Text(id).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                            Spacer()
-                            Button { env.privacy.remove(id) } label: { Image(systemName: "minus.circle") }
-                                .buttonStyle(.borderless)
-                        }
-                    }
-                }
-                Button {
-                    env.privacy.addAppViaPanel()
-                } label: {
-                    Label("Exclude an app…", systemImage: "plus")
-                }
-                .buttonStyle(.bordered)
-            }
-        }
-    }
-
-    private var browserHistoryCard: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Browser history").font(.headline)
-                Toggle("Import browser history", isOn: $browserHistoryEnabled)
-                Text("Pulls the real URLs and visit times from your browsers' own history "
-                     + "(Dia, Arc, Chrome, Edge, Brave, Safari). Dia and Arc don't expose the URL on screen, so "
-                     + "this is the only way to attribute and search them. On-device only — nothing leaves your "
-                     + "Mac. Safari needs Full Disk Access.")
-                    .font(.caption).foregroundStyle(.secondary)
-                HStack(spacing: 10) {
-                    Button("Import now") {
-                        browserImportStatus = String(localized: "Importing…")
-                        Task {
-                            guard let r = try? await env.browserHistoryImporter?.run() else {
-                                browserImportStatus = String(localized: "Import failed"); return
-                            }
-                            // LOCALIZED so the catalog RU renders (Text(String?) does no lookup).
-                            var msg = String(localized: "Imported \(r.imported) new visits from \(r.sources) browser(s)")
-                            if let first = r.errors.first { msg += " · " + first }
-                            browserImportStatus = msg
-                        }
-                    }
-                    .font(.callout)
-                    .disabled(!browserHistoryEnabled || env.recording.pausedUntil != nil)
-                    if let s = browserImportStatus {
-                        Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                    }
-                }
-            }
-        }
-    }
-
-    private var supportCard: some View {
-        GlassCard { SelfRepairView() }
-    }
-
-    private var transcriptionCard: some View {
-        @Bindable var settings = env.audioSettings
-        let audioCaption: String = switch settings.audioMode {
-        case .off:
-            "Audio is never recorded (the screen still is). Transcription and audio search are off."
-        case .meetingsOnly:
-            "Records audio only during detected calls/meetings — the engine is fully off otherwise, "
-            + "so no files and no disk are used. On-device (Apple Speech, ru+en); VAD cuts silence; nothing goes to the cloud."
-        case .always:
-            "Records audio continuously while recording is on. On-device (Apple Speech, ru+en); "
-            + "VAD cuts silence; nothing goes to the cloud."
-        }
-        return GlassCard {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Audio and transcription").font(.headline)
-                Picker("Audio capture", selection: $settings.audioMode) {
-                    ForEach(AudioMode.allCases, id: \.self) { m in Text(m.label).tag(m) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .onChange(of: settings.audioMode) { _, _ in
-                    settings.migrationNudgeSeen = true
-                    env.recording.syncAudio()
-                }
-                Text(audioCaption)
-                    .font(.caption).foregroundStyle(.secondary)
-                if !settings.migrationNudgeSeen {
-                    Label("New: audio now records only during calls by default — to save disk. Choose “Always” for continuous, or “Off” for none.",
-                          systemImage: "sparkles").font(.caption).foregroundStyle(.secondary)
-                }
-                if settings.audioMode != .off {
-                    Toggle("Record system audio (calls, video, meetings)", isOn: $settings.recordSystemAudio)
-                        .onChange(of: settings.recordSystemAudio) { _, _ in env.recording.syncAudio() }
-                        .font(.callout)
-                    Text("System audio — the other people's voices and anything playing (only needs Screen "
-                         + "Recording access). The microphone — your voice. You can record one without the other.")
-                        .font(.caption2).foregroundStyle(.secondary)
-                    if settings.recordSystemAudio {
-                        Label("System audio is NOT highlighted by the orange macOS indicator (it goes through Screen "
-                              + "Recording, not the microphone). Recording other people is your responsibility.",
-                              systemImage: "exclamationmark.shield").font(.caption2).foregroundStyle(.secondary)
-                    }
-
-                    if env.permissions.snapshot.speech != .granted {
-                        Label("No speech recognition — audio is recorded, but without text for search (you'll find it by time and play it back).",
-                              systemImage: "exclamationmark.bubble").font(.caption).foregroundStyle(.orange)
-                    }
-                    if env.permissions.snapshot.microphone != .granted {
-                        Label("No microphone access — only system audio is recorded.",
-                              systemImage: "mic.slash").font(.caption).foregroundStyle(.orange)
-                    }
-                    if settings.micEngineFailed {
-                        Label("The microphone didn't start (the device was unavailable at the last launch).",
-                              systemImage: "mic.slash.fill").font(.caption).foregroundStyle(.orange)
-                    }
-                    if settings.systemEngineFailed {
-                        Label("System audio didn't start — check Screen Recording access.",
-                              systemImage: "speaker.slash.fill").font(.caption).foregroundStyle(.orange)
-                    }
-                }
-                if let h = settings.health, h.failed > 0, h.transcribed == 0,
-                   h.lastErrorKind == "onDeviceUnavailable" {
-                    Label("Recognition isn't working: no on-device ru-RU model. Turn on Dictation in "
-                          + "System Settings → Keyboard → Dictation. Audio is recorded, but without text.",
-                          systemImage: "waveform.badge.exclamationmark")
-                        .font(.caption).foregroundStyle(.red)
-                }
-            }
-        }
-    }
-
-    private var serverCard: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Local API").font(.headline)
-                HStack {
-                    Text("Address")
-                    Spacer()
-                    Text(env.server.baseURL).foregroundStyle(.secondary).monospaced().textSelection(.enabled)
-                }
-                if let token = env.server.token {
-                    HStack {
-                        Text("Token")
-                        Spacer()
-                        Text(token.prefix(14) + "…").monospaced().foregroundStyle(.secondary)
-                        Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(token, forType: .string)
-                        } label: { Image(systemName: "doc.on.doc") }
-                        .buttonStyle(.borderless)
-                        .help("Copy token")
-                    }
-                    Text("curl -H 'Authorization: Bearer <token>' '\(env.server.baseURL)/v1/search?q=test'")
-                        .font(.caption2).monospaced().foregroundStyle(.secondary)
-                        .textSelection(.enabled).lineLimit(2)
-                } else {
-                    Text("Server is starting…").font(.caption).foregroundStyle(.secondary)
-                }
-                Text("Auth on everything except /health (token in Keychain), bind 127.0.0.1. MCP — the next step.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
+    private func chooseLanguage(_ language: AppLanguage) {
+        guard language != LanguageManager.current else { return }
+        pendingLanguage = language
     }
 }
 
-private struct PermissionRow: View {
-    let title: String
-    let status: PermissionStatus
-    let request: () -> Void
-    let openSettings: () -> Void
+private struct SettingsRouteRow: View {
+    let route: SettingsRoute
+    let summary: String
+    let attention: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: status == .granted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(status == .granted ? Color.green : Color.orange)
-            Text(title)
-            Spacer()
-            switch status {
-            case .granted:
-                StatusPill(text: "Granted", color: .green)
-            case .needsRestart:
-                // permission granted, but TCC will apply it only to a new process (-3801)
-                StatusPill(text: "Restart needed", color: .orange)
-                Button("Restart ZBS Eye") { try? AppRelauncher.relaunch() }
-                    .buttonStyle(.borderedProminent).controlSize(.small)
-            case .denied:
-                StatusPill(text: "No access", color: .red)
-                Button("Settings", action: openSettings).buttonStyle(.borderless)
-            case .notDetermined:
-                Button("Request", action: request)
-                    .buttonStyle(.borderedProminent).controlSize(.small)
+        HStack(spacing: 13) {
+            Image(systemName: route.systemImage)
+                .font(.title3)
+                .frame(width: 28)
+                .foregroundStyle(attention ? Color.orange : Color.accentColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(route.title).font(.headline)
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
+            Spacer(minLength: 8)
         }
+        .padding(.vertical, 5)
     }
 }

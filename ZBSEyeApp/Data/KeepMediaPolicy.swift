@@ -25,6 +25,10 @@ enum KeepMediaPolicy: String, Codable, CaseIterable, Sendable, Equatable {
         gigabytes.map { Int64($0) * Self.bytesPerGB }
     }
 
+    var settingsLabel: String {
+        gigabytes.map { "\($0) GB" } ?? String(localized: "Forever")
+    }
+
     static func normalizedLegacyCap(_ gigabytes: Int) -> KeepMediaPolicy {
         switch gigabytes {
         case ...0: .forever
