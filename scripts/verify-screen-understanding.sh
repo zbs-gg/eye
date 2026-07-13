@@ -181,6 +181,7 @@ grep -q "\*\* TEST SUCCEEDED \*\*" "$LOG" || {
   exit 1
 }
 
+/usr/bin/python3 -m unittest discover -s tools/screen-understanding-bench/common -p 'test_*.py'
 /usr/bin/python3 -m unittest discover -s tools/screen-understanding-bench/annotation -p 'test_*.py'
 /usr/bin/python3 -m unittest discover -s tools/screen-understanding-bench/mapping -p 'test_*.py'
 /usr/bin/python3 -m unittest discover -s tools/screen-understanding-bench/runner -p 'test_*.py'

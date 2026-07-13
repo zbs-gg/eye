@@ -36,7 +36,7 @@ class VerifyEntrypointTests(unittest.TestCase):
         source = ENTRYPOINT.read_text(encoding="utf-8")
 
         self.assertIn("export PYTHONDONTWRITEBYTECODE=1", source)
-        for suite in ("annotation", "mapping", "runner"):
+        for suite in ("common", "annotation", "mapping", "runner"):
             self.assertIn(
                 "-m unittest discover "
                 f"-s tools/screen-understanding-bench/{suite} "
