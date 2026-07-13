@@ -22,6 +22,15 @@ class VerifyEntrypointTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--annotation-root PATH", result.stdout)
         self.assertIn("--methods IDS", result.stdout)
+        self.assertIn("--result-root PATH", result.stdout)
+
+    def test_quality_mode_delegates_to_the_private_builtin_runner(self) -> None:
+        source = ENTRYPOINT.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "tools/screen-understanding-bench/runner/run_quality.py", source
+        )
+        self.assertNotIn("runner execution not yet implemented", source)
 
 
 if __name__ == "__main__":

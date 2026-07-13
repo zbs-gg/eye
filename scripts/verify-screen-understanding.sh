@@ -80,18 +80,17 @@ if [ "$MODE" = "quality" ]; then
   [ -n "$ANNOTATION_ROOT" ] && [ -d "$ANNOTATION_ROOT" ] \
     || die "physical gate requires --annotation-root"
   [ -n "$METHODS" ] || die "physical gate requires --methods"
+  [ -n "$RESULT_ROOT" ] && [ -d "$RESULT_ROOT" ] \
+    || die "physical gate requires --result-root"
   DATASET_ROOT="$(cd "$DATASET_ROOT" && pwd -P)"
   ANNOTATION_ROOT="$(cd "$ANNOTATION_ROOT" && pwd -P)"
   if [ -n "$MODEL_ROOT" ]; then
     [ -d "$MODEL_ROOT" ] || die "--model-root is not a directory"
     MODEL_ROOT="$(cd "$MODEL_ROOT" && pwd -P)"
   fi
-  if [ -n "$RESULT_ROOT" ]; then
-    [ -d "$RESULT_ROOT" ] || die "--result-root is not a directory"
-    RESULT_ROOT="$(cd "$RESULT_ROOT" && pwd -P)"
-    [ "$(stat -f '%OLp' "$RESULT_ROOT")" = "700" ] \
-      || die "result root must have owner-only mode 700"
-  fi
+  RESULT_ROOT="$(cd "$RESULT_ROOT" && pwd -P)"
+  [ "$(stat -f '%OLp' "$RESULT_ROOT")" = "700" ] \
+    || die "result root must have owner-only mode 700"
   REPOSITORY_ROOT="$(pwd -P)"
   case "$DATASET_ROOT:$ANNOTATION_ROOT:$MODEL_ROOT:$RESULT_ROOT" in
     *"$REPOSITORY_ROOT"*) die "private/model/result roots must be outside the repository" ;;
@@ -99,13 +98,12 @@ if [ "$MODE" = "quality" ]; then
   git diff-index --quiet HEAD -- || die "physical gate requires a clean tracked source tree"
   [ -z "$(git ls-files --others --exclude-standard -- '*.swift' '*.py' '*.json' '*.sh')" ] \
     || die "physical gate requires no untracked executable or benchmark source files"
-  /usr/bin/python3 tools/screen-understanding-bench/runner/preflight.py \
+  /usr/bin/python3 tools/screen-understanding-bench/runner/run_quality.py \
     --dataset-root "$DATASET_ROOT" \
     --annotation-root "$ANNOTATION_ROOT" \
+    --result-root "$RESULT_ROOT" \
     --methods "$METHODS"
-  printf '%s\n' \
-    "runner execution not yet implemented: canonical seal and selected built-ins passed preflight" >&2
-  exit 4
+  exit 0
 fi
 
 if [ "$MODE" = "performance" ]; then

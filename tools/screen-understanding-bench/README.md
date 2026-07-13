@@ -14,6 +14,8 @@ Security rules:
 - Treat a missing runtime, sandbox denial, crash, malformed line, or timeout as an explicit failure.
 - Never copy case media, captions, labels, paths, identifiers, timestamps, prompts, or raw errors into
   the repository or a public report. Only the allowlisted aggregate schema may leave the private root.
+- The built-in quality runner commits `run-inventory.json` last. Method files without that inventory,
+  or with `complete` other than `true`, are an invalid partial run and must never be scored.
 
 `contract_adapter.py` is deliberately synthetic. It verifies the runner lifecycle and fail-closed
 behavior without opening the private corpus. On the current qualification Mac, the strict filesystem

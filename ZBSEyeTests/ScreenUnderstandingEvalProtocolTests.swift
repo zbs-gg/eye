@@ -49,7 +49,7 @@ final class ScreenUnderstandingEvalProtocolTests: XCTestCase {
         XCTAssertEqual(benchmark.publication.allowCaseMaterial, false)
 
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        XCTAssertEqual(digest, "b59f66ffa515af2260b2c27cc9da31be24a51f356690a303192ef6807244440f")
+        XCTAssertEqual(digest, "ab45f5249720b2e1b1812b0a0b81d85781332226bd77de89dfafd1b595e4430c")
     }
 
     func testValidationRejectsForbiddenExecutionAndUnpinnedMethods() throws {
