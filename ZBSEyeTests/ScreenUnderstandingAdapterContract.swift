@@ -8,6 +8,7 @@ enum ScreenUnderstandingAdapterError: Error, LocalizedError {
     case malformedOutput(String)
     case responseMismatch
     case retainedDescendants
+    case outputLimit
 
     var errorDescription: String? {
         switch self {
@@ -23,7 +24,44 @@ enum ScreenUnderstandingAdapterError: Error, LocalizedError {
             "adapter response count or identifiers did not match the request"
         case .retainedDescendants:
             "adapter retained descendant processes after exit"
+        case .outputLimit:
+            "adapter output exceeded the bounded capture limit"
         }
+    }
+}
+
+private final class ScreenUnderstandingPipeDrain: @unchecked Sendable {
+    private let maximumBytes: Int
+    private let lock = NSLock()
+    private let finished = DispatchSemaphore(value: 0)
+    private var data = Data()
+    private var overflowed = false
+
+    init(maximumBytes: Int = 4 * 1_024 * 1_024) {
+        self.maximumBytes = maximumBytes
+    }
+
+    func start(_ handle: FileHandle) {
+        handle.readabilityHandler = { [self] readable in
+            let chunk = readable.availableData
+            guard !chunk.isEmpty else {
+                readable.readabilityHandler = nil
+                finished.signal()
+                return
+            }
+            lock.lock()
+            defer { lock.unlock() }
+            let available = max(0, maximumBytes - data.count)
+            data.append(chunk.prefix(available))
+            if chunk.count > available { overflowed = true }
+        }
+    }
+
+    func result() -> (data: Data, overflowed: Bool, complete: Bool) {
+        let complete = finished.wait(timeout: .now() + 5) == .success
+        lock.lock()
+        defer { lock.unlock() }
+        return (data, overflowed, complete)
     }
 }
 
@@ -88,6 +126,10 @@ struct ScreenUnderstandingAdapterProcess: Sendable {
         } catch {
             throw ScreenUnderstandingAdapterError.launch(error.localizedDescription)
         }
+        let outputDrain = ScreenUnderstandingPipeDrain()
+        let errorDrain = ScreenUnderstandingPipeDrain()
+        outputDrain.start(output.fileHandleForReading)
+        errorDrain.start(errors.fileHandleForReading)
 
         let encoder = JSONEncoder()
         for message in messages {
@@ -108,16 +150,26 @@ struct ScreenUnderstandingAdapterProcess: Sendable {
                 terminateProcessGroup(process.processIdentifier, signal: SIGKILL)
             }
             if process.isRunning { process.waitUntilExit() }
+            _ = outputDrain.result()
+            _ = errorDrain.result()
             throw ScreenUnderstandingAdapterError.timeout
         }
 
         if processGroupExists(process.processIdentifier) {
             terminateProcessGroup(process.processIdentifier, signal: SIGKILL)
+            _ = outputDrain.result()
+            _ = errorDrain.result()
             throw ScreenUnderstandingAdapterError.retainedDescendants
         }
 
-        let outputData = try output.fileHandleForReading.readToEnd() ?? Data()
-        let errorData = try errors.fileHandleForReading.readToEnd() ?? Data()
+        let capturedOutput = outputDrain.result()
+        let capturedErrors = errorDrain.result()
+        if capturedOutput.overflowed || capturedErrors.overflowed
+                || !capturedOutput.complete || !capturedErrors.complete {
+            throw ScreenUnderstandingAdapterError.outputLimit
+        }
+        let outputData = capturedOutput.data
+        let errorData = capturedErrors.data
         guard process.terminationStatus == 0 else {
             throw ScreenUnderstandingAdapterError.nonzeroExit(
                 process.terminationStatus,

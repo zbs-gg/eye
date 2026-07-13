@@ -73,6 +73,15 @@ final class ScreenUnderstandingAdapterContractTests: XCTestCase {
         XCTAssertEqual(errno, ESRCH)
     }
 
+    func testLargeStdoutAndStderrAreDrainedAndRejectedWithoutDeadlock() throws {
+        XCTAssertThrowsError(try makeRunner(mode: "flood").run(
+            messages: [.hello(id: "1", protocolID: "screen-understanding-v1")],
+            timeoutSeconds: 5
+        )) { error in
+            XCTAssertTrue(error.localizedDescription.contains("bounded capture limit"))
+        }
+    }
+
     func testManifestLocksEveryMethodAndRejectsUnsafeEntries() throws {
         let manifest = try ScreenUnderstandingAdapterManifest.load(from: manifestURL())
         XCTAssertNoThrow(try manifest.validate())

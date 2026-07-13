@@ -19,6 +19,7 @@ def main() -> int:
         "--mode",
         choices=(
             "synthetic", "unsupported", "malformed", "crash", "hang", "hang-child",
+            "flood",
         ),
         default="synthetic",
     )
@@ -40,6 +41,12 @@ def main() -> int:
         ])
         args.child_pid_file.write_text(str(child.pid), encoding="utf-8")
         time.sleep(3600)
+        return 0
+    if args.mode == "flood":
+        sys.stdout.buffer.write(b"x" * (5 * 1024 * 1024))
+        sys.stdout.buffer.flush()
+        sys.stderr.buffer.write(b"y" * (5 * 1024 * 1024))
+        sys.stderr.buffer.flush()
         return 0
 
     for raw_line in sys.stdin:
