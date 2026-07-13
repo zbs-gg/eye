@@ -5,7 +5,7 @@ import AppKit
 /// State of the summaries destination folder (the card lives in "Automations" — it belongs to
 /// export/daily-summary, not to agent access). Persisted in UserDefaults (not secrets — path +
 /// bookmark). @MainActor: owns NSOpenPanel and the form bindings.
-/// The LLM half moved to AIProviderStore ("AI Models" section); the legacy "zbseye.connections.llm"
+/// The LLM half moved to AIProviderStore (the compact AI setup); the legacy "zbseye.connections.llm"
 /// value is left in defaults on purpose — AIProviderStore migrates from it once and never writes it.
 @MainActor
 @Observable

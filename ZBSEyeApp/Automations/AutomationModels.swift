@@ -17,9 +17,12 @@ struct LLMConfig: Sendable, Equatable {
     var cloudConsented: Bool = false
 
     var isConfigured: Bool {
-        // A subprocess provider (Claude Code) has no baseURL — it's configured once a model is chosen
-        // ("default" counts). Everything else needs both an endpoint and a model.
-        if provider.isSubprocess { return !model.trimmingCharacters(in: .whitespaces).isEmpty }
+        switch provider.wire {
+        case .builtInMLX, .codexAppServer, .claudeCodeCLI:
+            return !model.trimmingCharacters(in: .whitespaces).isEmpty
+        case .openAICompatible, .anthropicMessages:
+            break
+        }
         return !baseURL.trimmingCharacters(in: .whitespaces).isEmpty &&
         !model.trimmingCharacters(in: .whitespaces).isEmpty
     }
@@ -42,9 +45,29 @@ struct LLMConfig: Sendable, Equatable {
     /// Local provider → localhost only; cloud provider → exactly its pinned API host over https.
     /// A subprocess provider (Claude Code) has no HTTP endpoint to pin — the CLI owns its transport.
     var isEndpointAllowed: Bool {
-        if provider.isSubprocess { return true }
+        switch provider.wire {
+        case .builtInMLX, .codexAppServer, .claudeCodeCLI:
+            return true
+        case .openAICompatible, .anthropicMessages:
+            break
+        }
         guard let url = URL(string: normalizedBaseURL), let host = url.host?.lowercased() else { return false }
         if let pinned = provider.apiHost { return host == pinned && url.scheme == "https" }
+        if provider == .customAPI {
+            guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                return false
+            }
+            return components.scheme?.lowercased() == "https"
+                && !host.isEmpty
+                && components.user == nil
+                && components.password == nil
+                && components.query == nil
+                && components.fragment == nil
+                && !components.percentEncodedPath.lowercased().contains("%2e")
+        }
+        if provider == .custom {
+            return ["127.0.0.1", "::1"].contains(host)
+        }
         return isLocalOnly
     }
 
@@ -52,14 +75,18 @@ struct LLMConfig: Sendable, Equatable {
     /// requireModel=false for `/models` probes (no model chosen yet); requireConsent=false likewise —
     /// listing models sends no history, actual chat (history excerpts) always requires consent.
     func validate(requireModel: Bool = true, requireConsent: Bool = true) throws {
-        // Subprocess providers (Claude Code) have no endpoint to check — the CLI handles transport.
-        // The consent gate still applies (the CLI egresses to Anthropic via the user's login).
-        if provider.isSubprocess {
+        switch provider.wire {
+        case .builtInMLX:
             guard !requireModel || isConfigured else { throw AutomationError.noLLM }
-            if provider.isCloud, requireConsent, !cloudConsented {
+            return
+        case .codexAppServer, .claudeCodeCLI:
+            guard !requireModel || isConfigured else { throw AutomationError.noLLM }
+            if requireConsent, !cloudConsented {
                 throw AutomationError.cloudConsentRequired(provider.displayName)
             }
             return
+        case .openAICompatible, .anthropicMessages:
+            break
         }
         let base = baseURL.trimmingCharacters(in: .whitespaces)
         guard !base.isEmpty, !requireModel || isConfigured else { throw AutomationError.noLLM }
@@ -129,7 +156,10 @@ struct SummaryPreview: Sendable {
     let model: String
     let promptChars: Int
     let truncated: Bool         // input was trimmed by maxInputSlices (a long day)
+    let contextTruncated: Bool  // selected-model context ceiling compacted the chosen slices further
     let outputTruncated: Bool   // the model hit maxOutputTokens (finish_reason=length) → the summary is incomplete
+    let provenance: AIExecutionProvenance
+    let promptVersion: String
 }
 
 /// Result of the write stage.
@@ -156,6 +186,44 @@ struct AuditEntry: Codable, Sendable, Identifiable {
     let destPath: String?
     let ok: Bool
     let error: String?
+    let providerID: String?
+    let executedLocally: Bool?
+    let promptVersion: String?
+    let brokerUpstream: String?
+
+    init(
+        at: Date,
+        automation: String,
+        day: String,
+        action: String,
+        model: String,
+        sessions: Int,
+        captures: Int,
+        outputChars: Int,
+        destPath: String?,
+        ok: Bool,
+        error: String?,
+        providerID: String? = nil,
+        executedLocally: Bool? = nil,
+        promptVersion: String? = nil,
+        brokerUpstream: String? = nil
+    ) {
+        self.at = at
+        self.automation = automation
+        self.day = day
+        self.action = action
+        self.model = model
+        self.sessions = sessions
+        self.captures = captures
+        self.outputChars = outputChars
+        self.destPath = destPath
+        self.ok = ok
+        self.error = error
+        self.providerID = providerID
+        self.executedLocally = executedLocally
+        self.promptVersion = promptVersion
+        self.brokerUpstream = brokerUpstream
+    }
 }
 
 // MARK: errors
@@ -173,13 +241,13 @@ enum AutomationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noLLM:
-            return "No processing model. Open \"AI Models\" and pick one — local (LM Studio / Ollama) by default."
+            return "AI is off. Add AI in Settings to generate a summary."
         case .nonLocalLLM(let host):
             return "Endpoint \"\(host)\" is not allowed. Local providers must stay on 127.0.0.1/localhost; a cloud provider is reachable only via its official API host."
         case .cloudConsentRequired(let name):
-            return "\(name) is a cloud provider. Confirm in \"AI Models\" that excerpts of your screen history may be sent to it."
+            return "\(name) is a cloud provider. Confirm in AI settings that text excerpts may be sent to it."
         case .noAPIKey(let name):
-            return "\(name) needs an API key — add it in \"AI Models\" (stored in the Keychain)."
+            return "\(name) needs an API key — add it in AI settings (stored in the Keychain)."
         case .noDestination:
             return "No folder selected for writing. Open \"Automations\" → \"Destination\"."
         case .noData(let day):

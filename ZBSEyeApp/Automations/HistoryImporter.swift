@@ -8,6 +8,7 @@ import GRDB
 /// Idempotent: id cursors persist — a re-run continues without duplicating.
 actor HistoryImporter {
     private let db: ZBSEyeDatabase
+    private let maintenanceGate = DatabaseWriterMaintenanceGate()
     private var running = false
 
     struct Report: Sendable {
@@ -26,6 +27,10 @@ actor HistoryImporter {
     /// Progress — callback (frames, audio) every ~500 rows.
     func run(sourcePath: String = HistoryImporter.defaultSourcePath,
              progress: (@Sendable (Int, Int) -> Void)? = nil) async throws -> Report {
+        guard maintenanceGate.beginOperation() else {
+            throw DatabaseWriterMaintenanceError.suspendedForRelocation
+        }
+        defer { maintenanceGate.finishOperation() }
         guard !running else { return Report() }
         running = true
         defer { running = false }
@@ -45,6 +50,14 @@ actor HistoryImporter {
         return report
     }
 
+    func suspendAndDrainForRelocation() async -> DatabaseWriterDrainAcknowledgement {
+        await maintenanceGate.suspendAndDrain()
+    }
+
+    func resumeAfterRelocation() {
+        maintenanceGate.resume()
+    }
+
     // MARK: frames
 
     private struct SPFrame: Sendable {
@@ -59,7 +72,7 @@ actor HistoryImporter {
         var cursor = Int64(UserDefaults.standard.string(forKey: cursorKey) ?? "") ?? 0
         var total = 0
         var skipped = 0
-        while !Task.isCancelled {
+        while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
             let (page, rawCount): ([SPFrame], Int) = try await source.read { [cursor] dbc in
                 let rows = try Row.fetchAll(dbc, sql: """
                     SELECT f.id AS id, f.timestamp AS ts, f.app_name AS app, f.window_name AS win,
@@ -146,7 +159,7 @@ actor HistoryImporter {
         var cursor = Int64(UserDefaults.standard.string(forKey: cursorKey) ?? "") ?? 0
         var total = 0
         var skipped = 0
-        while !Task.isCancelled {
+        while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
             let (page, rawCount): ([SPAudio], Int) = try await source.read { [cursor] dbc in
                 let rows = try Row.fetchAll(dbc, sql: """
                     SELECT id, timestamp AS ts, transcription, is_input_device AS inp,

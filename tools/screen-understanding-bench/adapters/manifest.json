@@ -1,0 +1,101 @@
+{
+  "protocolID": "screen-understanding-v1",
+  "adapters": [
+    {
+      "id": "metadata-ax-ocr",
+      "artifactRevision": "runner-9c9b2addae6d",
+      "artifactIdentitySHA256": "9c9b2addae6dabf006dd70de363f695064dfb0e29fe16631e7c99bdf380857a7",
+      "license": "AGPL-3.0-or-later",
+      "remote": false,
+      "retryCount": 0,
+      "allowsRemoteCode": false,
+      "status": "built-in"
+    },
+    {
+      "id": "apple-vision",
+      "artifactRevision": "runner-8972234e2243",
+      "artifactIdentitySHA256": "8972234e224367e7dc0213822029cdfac3742e06537c8618dd092ee7dab55fa9",
+      "license": "Apple-SDK",
+      "remote": false,
+      "retryCount": 0,
+      "allowsRemoteCode": false,
+      "status": "built-in"
+    },
+    {
+      "id": "deterministic-hybrid",
+      "artifactRevision": "runner-10a16897aa1d",
+      "artifactIdentitySHA256": "10a16897aa1d91ae1e57d6ffe309f1fe738c0169192845105919301312038761",
+      "license": "AGPL-3.0-or-later",
+      "remote": false,
+      "retryCount": 0,
+      "allowsRemoteCode": false,
+      "status": "built-in"
+    },
+    {
+      "id": "florence-2-base",
+      "artifactRevision": "5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac",
+      "artifactIdentitySHA256": "3c8c462d91f4a266940a9991d3d2a6d524622ade3f4cfb6fb0252b4c50f2791c",
+      "license": "MIT",
+      "remote": false,
+      "retryCount": 0,
+      "allowsRemoteCode": false,
+      "status": "security-unsupported",
+      "reason": "inherited filesystem boundary unproven on the qualification Mac"
+    },
+    {
+      "id": "smolvlm-256m-instruct",
+      "artifactRevision": "7e3e67edbbed1bf9888184d9df282b700a323964",
+      "artifactIdentitySHA256": "db95e8e36943cc11c32fd6db09a47074455c6429fa875fd1a91ec1cbbba4dfe8",
+      "license": "Apache-2.0",
+      "remote": false,
+      "retryCount": 0,
+      "allowsRemoteCode": false,
+      "status": "security-unsupported",
+      "reason": "inherited filesystem boundary unproven on the qualification Mac"
+    },
+    {
+      "id": "lfm2-vl-450m",
+      "artifactRevision": "d355d88bf86e5c7054230232120e573ca2238286",
+      "artifactIdentitySHA256": "7b9582986bc1fc46a03c12babea03c88c399cb3d0b3a5f1216a84b9fbc359df7",
+      "license": "LFM-Open-License-v1.0",
+      "remote": false,
+      "retryCount": 0,
+      "allowsRemoteCode": false,
+      "status": "security-unsupported",
+      "reason": "inherited filesystem boundary unproven on the qualification Mac"
+    },
+    {
+      "id": "fastvlm-0.5b",
+      "artifactRevision": "16375720c2d673fa583e57e9876afde27549c7d0",
+      "artifactIdentitySHA256": "c2e7057ff4f746db7bbc23cc51dcba77b692b05bcddbb6dfb8977165e636ce49",
+      "license": "Apple-AMLR",
+      "remote": false,
+      "retryCount": 0,
+      "allowsRemoteCode": false,
+      "status": "security-unsupported",
+      "reason": "research-only method; inherited filesystem boundary unproven on the qualification Mac"
+    },
+    {
+      "id": "smolvlm2-256m-video-instruct",
+      "artifactRevision": "067788b187b95ebe7b2e040b3e4299e342e5b8fd",
+      "artifactIdentitySHA256": "088799a8e587ecaab436fc0a68078898902dfd64470261db7c9242b93c36edc7",
+      "license": "Apache-2.0",
+      "remote": false,
+      "retryCount": 0,
+      "allowsRemoteCode": false,
+      "status": "security-unsupported",
+      "reason": "inherited filesystem boundary unproven on the qualification Mac"
+    },
+    {
+      "id": "omniparser-v2",
+      "artifactRevision": "6600256cb0f1b07651e3bc86166196307bad7e2d",
+      "artifactIdentitySHA256": "a9bf34ae62c4860f6c9c96b4ed3f068bc00407c85e9407a5911ddac988dbe154",
+      "license": "mixed-AGPL-3.0-and-MIT",
+      "remote": false,
+      "retryCount": 0,
+      "allowsRemoteCode": false,
+      "status": "security-unsupported",
+      "reason": "parser-only method; inherited filesystem boundary unproven on the qualification Mac"
+    }
+  ]
+}

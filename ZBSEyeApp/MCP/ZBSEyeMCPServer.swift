@@ -3,9 +3,22 @@ import MCP
 import GRDB
 import CoreImage
 
-/// MCP stdio server (`ZBS Eye --mcp`). Tools on top of the existing services: search/timeline read the DB
-/// directly (WAL allows concurrent reads alongside the writing GUI instance); toggle/status are proxied
-/// to the running GUI instance over local REST (port from the port file, token from Keychain).
+private final class MCPLoopbackSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
+
+/// MCP stdio server (`ZBS Eye --mcp`). The default profile is read-only;
+/// screenshot bytes and recording control require the explicit `--mcp-full`
+/// profile. The data root is pinned for the process lifetime so relocation can
+/// never split one helper across old and new stores.
 enum ZBSEyeMCPServer {
 
     /// Short timeout for localhost calls to the GUI instance (otherwise URLSession.shared waits 7 days).
@@ -13,38 +26,77 @@ enum ZBSEyeMCPServer {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest = 3
         cfg.timeoutIntervalForResource = 5
-        return URLSession(configuration: cfg)
+        return URLSession(
+            configuration: cfg,
+            delegate: MCPLoopbackSessionDelegate(),
+            delegateQueue: nil
+        )
     }()
 
-    static func runStdio() async {
+    static func runStdio(profile: MCPAccessProfile, dataRoot: URL) async {
         // DB for READING, WITHOUT migrations (the GUI owns the schema; we don't take a write lock).
         let search: SearchService?
         let timeline: TimelineService?
         let db: ZBSEyeDatabase?
         do {
-            let d = try ZBSEyeDatabase(path: ZBSEyeDatabase.defaultURL().path, runMigrations: false)
-            db = d; search = SearchService(db: d, embedder: EmbeddingService()); timeline = TimelineService(db: d)
+            let d = try ZBSEyeDatabase(
+                path: StorageLocation.databaseURL(under: dataRoot).path,
+                runMigrations: false,
+                access: .readOnly
+            )
+            db = d
+            // This is a second process and cannot share the GUI's compute
+            // actor. Loading another e5 here could overlap GUI MLX, so helper
+            // search is explicitly FTS-only and discloses that in its result.
+            search = SearchService(
+                db: d,
+                embedder: EmbeddingService(),
+                semanticPolicy: .ftsOnly(.secondaryProcess)
+            )
+            timeline = TimelineService(db: d)
         } catch {
             FileHandle.standardError.write("[mcp] db open failed: \(error)\n".data(using: .utf8)!)
             db = nil; search = nil; timeline = nil
         }
 
+        let historySearch = MCPHistorySearchCoordinator(
+            guiSearch: { query, filters in
+                try await Self.proxyHistorySearch(
+                    query: query,
+                    filters: filters,
+                    dataRoot: dataRoot
+                )
+            },
+            fallbackSearch: { query, filters in
+                guard let search else {
+                    throw MCPHistorySearchRoutingError.fallbackUnavailable
+                }
+                return try await search.searchWithMetadata(query: query, filters: filters)
+            }
+        )
+
         let server = Server(
             name: "zbseye",
-            version: "0.2.1",
+            version: "0.4.0",
             capabilities: .init(tools: .init(listChanged: false)))
 
         await server.withMethodHandler(ListTools.self) { _ in
-            ListTools.Result(tools: Self.toolList())
+            ListTools.Result(tools: Self.toolList(profile: profile))
         }
 
         await server.withMethodHandler(CallTool.self) { params in
+            guard MCPToolPolicy.allows(params.name, profile: profile) else {
+                return .init(
+                    content: [.text("Tool unavailable in the current MCP access profile.")],
+                    isError: true
+                )
+            }
             let args = params.arguments ?? [:]
             switch params.name {
             case "search_history":
                 let q = args["query"]?.stringValue ?? ""
-                guard let search, !q.isEmpty else {
-                    return .init(content: [.text("No query or the DB is unavailable.")], isError: true)
+                guard !q.isEmpty else {
+                    return .init(content: [.text("query is required.")], isError: true)
                 }
                 var kind: SearchKind? = nil
                 if let k = args["kind"]?.stringValue {
@@ -76,8 +128,10 @@ enum ZBSEyeMCPServer {
                     kind: kind,
                     limit: limit ?? 25)
                 do {
-                    let results = try await search.search(query: q, filters: filters)
-                    return .init(content: [.text(Self.formatResults(q, results))])
+                    let resolution = try await historySearch.search(query: q, filters: filters)
+                    return .init(content: [
+                        .text(Self.formatResults(q, resolution.results, semanticMode: resolution.semanticMode))
+                    ])
                 } catch {
                     // honest error: the agent must distinguish "nothing found" from "DB broken"
                     return .init(content: [.text("Search failed: \(error)")], isError: true)
@@ -106,20 +160,33 @@ enum ZBSEyeMCPServer {
 
             case "get_context_at":
                 let timeStr = args["time"]?.stringValue ?? ""
-                guard let timeline, let date = Self.parseTime(timeStr) else {
+                guard let timeline else {
+                    return .init(content: [.text("The DB is unavailable.")], isError: true)
+                }
+                guard let date = Self.parseTime(timeStr) else {
                     return .init(content: [.text("time parameter required (ISO8601 or epoch-ms).")], isError: true)
                 }
-                let frame = try? await timeline.frameAt(date)
-                return .init(content: [.text(Self.formatFrame(frame))])
+                do {
+                    let frame = try await timeline.frameAt(date)
+                    return .init(content: [.text(Self.formatFrame(frame))])
+                } catch {
+                    return .init(content: [.text("DB read failed: \(error)")], isError: true)
+                }
 
             case "get_timeline":
-                guard let timeline,
-                      let from = Self.parseTime(args["from"]?.stringValue ?? ""),
+                guard let timeline else {
+                    return .init(content: [.text("The DB is unavailable.")], isError: true)
+                }
+                guard let from = Self.parseTime(args["from"]?.stringValue ?? ""),
                       let to = Self.parseTime(args["to"]?.stringValue ?? "") else {
                     return .init(content: [.text("from and to required (ISO8601 or epoch-ms).")], isError: true)
                 }
-                let buckets = (try? await timeline.density(from: from, to: to, bucketMs: 300_000)) ?? []
-                return .init(content: [.text(Self.formatTimeline(from, to, buckets))])
+                do {
+                    let buckets = try await timeline.density(from: from, to: to, bucketMs: 300_000)
+                    return .init(content: [.text(Self.formatTimeline(from, to, buckets))])
+                } catch {
+                    return .init(content: [.text("DB read failed: \(error)")], isError: true)
+                }
 
             case "get_frame_image":
                 guard let timeline else {
@@ -129,10 +196,15 @@ enum ZBSEyeMCPServer {
                         ?? args["frame_id"]?.stringValue.flatMap({ Int($0) }) else {
                     return .init(content: [.text("frame_id required (from the search results).")], isError: true)
                 }
-                guard let d = try? await timeline.frameDetail(id: Int64(id)), let rel = d.relativePath else {
+                let detail: FrameDetail?
+                do { detail = try await timeline.frameDetail(id: Int64(id)) }
+                catch {
+                    return .init(content: [.text("DB read failed: \(error)")], isError: true)
+                }
+                guard let d = detail, let rel = d.relativePath else {
                     return .init(content: [.text("Frame #\(id) not found or has no image (context-only).")], isError: true)
                 }
-                guard let jpeg = Self.loadFrameJPEG(relativePath: rel) else {
+                guard let jpeg = Self.loadFrameJPEG(relativePath: rel, dataRoot: dataRoot) else {
                     return .init(content: [.text("Frame file #\(id) is not readable (may have been removed by retention).")], isError: true)
                 }
                 return .init(content: [
@@ -141,17 +213,31 @@ enum ZBSEyeMCPServer {
                 ])
 
             case "get_status":
-                return .init(content: [.text(await Self.formatStatus(db: db))])
+                do {
+                    return .init(content: [
+                        .text(try await Self.formatStatus(db: db, dataRoot: dataRoot))
+                    ])
+                } catch {
+                    return .init(content: [.text("Status failed: \(error)")], isError: true)
+                }
 
             case "get_diagnostics":
-                return .init(content: [.text(await Self.formatDiagnostics(db: db))])
+                do {
+                    return .init(content: [
+                        .text(try await Self.formatDiagnostics(db: db, dataRoot: dataRoot))
+                    ])
+                } catch {
+                    return .init(content: [.text("Diagnostics failed: \(error)")], isError: true)
+                }
 
             case "toggle_recording":
                 let enable = args["enable"]?.boolValue
-                if let now = await Self.proxyToggle(enable: enable) {
+                do {
+                    let now = try await Self.proxyToggle(enable: enable, dataRoot: dataRoot)
                     return .init(content: [.text("Recording \(now ? "on" : "off").")])
+                } catch {
+                    return .init(content: [.text("Recording control failed: \(error)")], isError: true)
                 }
-                return .init(content: [.text("The ZBS Eye GUI instance isn't running — nothing to control recording.")], isError: true)
 
             default:
                 return .init(content: [.text("Unknown tool: \(params.name)")], isError: true)
@@ -171,13 +257,13 @@ enum ZBSEyeMCPServer {
 
     // MARK: tools
 
-    private static func toolList() -> [Tool] {
+    private static func toolList(profile: MCPAccessProfile) -> [Tool] {
         func strProp(_ desc: String) -> Value {
             .object(["type": .string("string"), "description": .string(desc)])
         }
-        return [
+        let tools = [
             Tool(name: "search_history",
-                 description: "Hybrid search (exact words + by meaning, ru/en) over the user's screen and audio history.",
+                 description: "Hybrid search over the user's screen and audio history, including cross-language matches. Uses the running GUI's semantic search, with an exact-word FTS fallback when the GUI is absent.",
                  inputSchema: .object(["type": .string("object"),
                                        "properties": .object([
                                            "query": strProp("search query"),
@@ -225,13 +311,29 @@ enum ZBSEyeMCPServer {
                  inputSchema: .object(["type": .string("object"),
                                        "properties": .object(["enable": .object(["type": .string("boolean")])])])),
         ]
+        let byName = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0) })
+        return MCPToolPolicy.toolNames(for: profile).compactMap { byName[$0] }
     }
 
     // MARK: formatting
 
-    private static func formatResults(_ q: String, _ results: [SearchResult]) -> String {
-        guard !results.isEmpty else { return "Nothing found for \"\(q)\"." }
-        var out = "Found \(results.count) for \"\(q)\":\n"
+    private static func formatResults(
+        _ q: String,
+        _ results: [SearchResult],
+        semanticMode: SearchSemanticMode
+    ) -> String {
+        let disclosure = switch semanticMode {
+        case .ftsOnly(.secondaryProcess):
+            "FTS-only helper search (semantic search stays in the GUI process).\n"
+        case .ftsOnly, .embeddingUnavailable:
+            "FTS-only search.\n"
+        case .hybrid:
+            ""
+        }
+        guard !results.isEmpty else {
+            return disclosure + "Nothing found for \"\(q)\"."
+        }
+        var out = disclosure + "Found \(results.count) for \"\(q)\":\n"
         for r in results {
             let app = r.appName ?? r.bundleId ?? "—"
             let when = r.ts.formatted(date: .abbreviated, time: .shortened)
@@ -249,7 +351,7 @@ enum ZBSEyeMCPServer {
     private static func formatFrame(_ f: FrameDetail?) -> String {
         guard let f else { return "There is no frame for this moment." }
         let app = f.appName ?? f.bundleId ?? "—"
-        var out = "At \(f.ts.formatted(date: .abbreviated, time: .standard)) — \(app)"
+        var out = "Frame #\(f.id) at \(f.ts.formatted(date: .abbreviated, time: .standard)) — \(app)"
         if let w = f.windowTitle { out += " · \(w)" }
         if let u = f.browserURL { out += "\nURL: \(u)" }
         out += "\n\n\(f.text.isEmpty ? "(text not extracted)" : f.text)"
@@ -265,83 +367,211 @@ enum ZBSEyeMCPServer {
         return out
     }
 
-    private static func formatStatus(db: ZBSEyeDatabase?) async -> String {
-        guard let db else { return "The DB is unavailable." }
-        let counts = try? await db.pool.read { db -> (Int, Int, Int, Int64?, Int64?) in
-            func c(_ t: String) -> Int { (try? Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(t)")) ?? 0 }
-            let oldest = try? Int64.fetchOne(db, sql: "SELECT MIN(ts) FROM screen_captures")
-            let newest = try? Int64.fetchOne(db, sql: "SELECT MAX(ts) FROM screen_captures")
-            return (c("screen_captures"), c("text_blocks"), c("audio_captures"), oldest ?? nil, newest ?? nil)
+    private static func formatStatus(db: ZBSEyeDatabase?, dataRoot: URL) async throws -> String {
+        guard let db else { throw MCPHistorySearchRoutingError.fallbackUnavailable }
+        let counts = try await db.pool.read { db -> (Int, Int, Int, Int64?, Int64?) in
+            func count(_ table: String) throws -> Int {
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(table)") ?? 0
+            }
+            let oldest = try Int64.fetchOne(db, sql: "SELECT MIN(ts) FROM screen_captures")
+            let newest = try Int64.fetchOne(db, sql: "SELECT MAX(ts) FROM screen_captures")
+            return (
+                try count("screen_captures"),
+                try count("text_blocks"),
+                try count("audio_captures"),
+                oldest,
+                newest
+            )
         }
-        let cap = await mainInstanceCapturing()
-        guard let (frames, texts, audio, oldest, newest) = counts else { return "DB read error." }
+        let recording = await mainInstanceCaptureStatus(dataRoot: dataRoot)
+        let (frames, texts, audio, oldest, newest) = counts
         var out = "ZBS Eye: \(frames) frames, \(texts) text blocks, \(audio) audio."
         if let o = oldest, let n = newest {
             out += "\nHistory: \(dateFromMs(o).formatted()) — \(dateFromMs(n).formatted())."
         }
-        out += "\nRecording: \(cap.map { $0 ? "on" : "paused" } ?? "GUI not running")."
+        out += "\nRecording: \(recording.description)."
         return out
     }
 
     // MARK: proxying to the GUI instance
 
-    private static func readPort() -> Int? {
-        guard let s = try? String(contentsOf: StorageLocation.portURL(), encoding: .utf8) else { return nil }
+    private static func readPort(dataRoot: URL) -> Int? {
+        guard let s = try? String(
+            contentsOf: StorageLocation.portURL(under: dataRoot),
+            encoding: .utf8
+        ) else { return nil }
         return Int(s.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// Verifies it's really ZBS Eye on the port (not someone else's reused port from a stale port file).
-    private static func healthOK(port: Int) async -> [String: Any]? {
-        guard let url = URL(string: "http://127.0.0.1:\(port)/health"),
-              let (data, _) = try? await localSession.data(from: url),
+    /// Proves the peer knows the Keychain token without sending that token to
+    /// a port that may have been recycled after a stale port file.
+    private static func authenticatedHealth(port: Int, token: String) async -> [String: Any]? {
+        let challenge = LocalPeerAuthenticator.makeChallenge()
+        var components = URLComponents(string: "http://127.0.0.1:\(port)/health")!
+        components.queryItems = [URLQueryItem(name: "challenge", value: challenge)]
+        guard let url = components.url,
+              let (data, response) = try? await localSession.data(from: url),
+              let http = response as? HTTPURLResponse,
+              http.statusCode == 200,
+              http.url == url,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              obj["status"] as? String == "ok" else { return nil }
+              obj["status"] as? String == "ok",
+              let proof = obj["proof"] as? String,
+              LocalPeerAuthenticator.verify(
+                proof: proof,
+                token: token,
+                challenge: challenge,
+                listeningPort: port
+              ) else { return nil }
         return obj
     }
 
-    private static func mainInstanceCapturing() async -> Bool? {
-        guard let port = readPort(), let obj = await healthOK(port: port) else { return nil }
-        return obj["capturing"] as? Bool
+    private enum MainInstanceCaptureStatus {
+        case capturing(Bool)
+        case guiUnavailable
+        case authenticationUnavailable
+
+        var description: String {
+            switch self {
+            case .capturing(true): "on"
+            case .capturing(false): "paused"
+            case .guiUnavailable: "GUI not running"
+            case .authenticationUnavailable:
+                "unknown (local authentication unavailable)"
+            }
+        }
+    }
+
+    private static func mainInstanceCaptureStatus(
+        dataRoot: URL
+    ) async -> MainInstanceCaptureStatus {
+        guard let token = KeychainStore.get("api-token"), !token.isEmpty else {
+            return .authenticationUnavailable
+        }
+        guard let port = readPort(dataRoot: dataRoot) else { return .guiUnavailable }
+        guard let object = await authenticatedHealth(port: port, token: token),
+              let capturing = object["capturing"] as? Bool else {
+            return .authenticationUnavailable
+        }
+        return .capturing(capturing)
+    }
+
+    private static func proxyHistorySearch(
+        query: String,
+        filters: SearchFilters,
+        dataRoot: URL
+    ) async throws -> SearchExecution? {
+        // Verify identity before sending the bearer token. Missing local auth,
+        // a missing GUI, or a stale port all keep stdio useful through the
+        // read-only direct-DB fallback.
+        guard let token = KeychainStore.get("api-token"),
+              let port = readPort(dataRoot: dataRoot),
+              await authenticatedHealth(port: port, token: token) != nil else { return nil }
+        let client = MCPGUIHistorySearchClient { request in
+            let (data, response) = try await localSession.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw MCPHistorySearchRoutingError.invalidHTTPResponse
+            }
+            return MCPGUIHistorySearchHTTPResponse(statusCode: http.statusCode, data: data)
+        }
+        do {
+            return try await client.search(
+                port: port,
+                token: token,
+                query: query,
+                filters: filters
+            )
+        } catch let error as URLError {
+            guard await authenticatedHealth(port: port, token: token) == nil else {
+                throw error
+            }
+            return nil
+        }
     }
 
     /// Diagnostics for the self-repair flow — an agent connected over MCP calls this to get live state,
     /// then reads the public source and fixes the app. Nothing egresses; it's the machine's own state.
-    private static func formatDiagnostics(db: ZBSEyeDatabase?) async -> String {
+    private static func formatDiagnostics(db: ZBSEyeDatabase?, dataRoot: URL) async throws -> String {
         let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         var out = "ZBS Eye \(v) · \(ProcessInfo.processInfo.operatingSystemVersionString)\n"
         out += "Source: https://github.com/zbs-gg/eye — read README.md / AGENTS.md / BUILD.md, reproduce, "
         out += "fix (local-first, Swift 6 strict concurrency), rebuild with scripts/build-notarized.sh.\n"
         if let db {
-            let info = try? await db.pool.read { d -> (String, Int, Int, Int, Int, Int) in
-                func c(_ t: String) -> Int { (try? Int.fetchOne(d, sql: "SELECT COUNT(*) FROM \(t)")) ?? 0 }
+            let info = try await db.pool.read { d -> (String, Int, Int, Int, Int, Int) in
+                func count(_ table: String) throws -> Int {
+                    try Int.fetchOne(d, sql: "SELECT COUNT(*) FROM \(table)") ?? 0
+                }
                 // ORDER BY rowid = application order (ORDER BY identifier sorts v10 before v2 once two-digit
                 // migrations exist, misreporting the schema sequence to an agent).
-                let migs = (try? String.fetchAll(d, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid")) ?? []
-                return (migs.joined(separator: ", "), c("screen_captures"), c("text_blocks"),
-                        c("audio_captures"), c("transcriptions"), c("browser_visits"))
+                let migrations = try String.fetchAll(
+                    d,
+                    sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid"
+                )
+                return (
+                    migrations.joined(separator: ", "),
+                    try count("screen_captures"),
+                    try count("text_blocks"),
+                    try count("audio_captures"),
+                    try count("transcriptions"),
+                    try count("browser_visits")
+                )
             }
-            if let (migs, frames, texts, audio, tr, bv) = info {
-                out += "DB migrations: \(migs)\n"
-                out += "Counts: frames=\(frames) text=\(texts) audio=\(audio) transcripts=\(tr) browser_visits=\(bv)\n"
-            } else { out += "DB read error.\n" }
-        } else { out += "DB unavailable (run the GUI to initialize it).\n" }
-        let cap = await mainInstanceCapturing()
-        out += "Recording: \(cap.map { $0 ? "on" : "paused" } ?? "GUI not running")."
+            let (migrations, frames, texts, audio, transcriptions, browserVisits) = info
+            out += "DB migrations: \(migrations)\n"
+            out += "Counts: frames=\(frames) text=\(texts) audio=\(audio) transcripts=\(transcriptions) browser_visits=\(browserVisits)\n"
+        } else {
+            throw MCPHistorySearchRoutingError.fallbackUnavailable
+        }
+        let recording = await mainInstanceCaptureStatus(dataRoot: dataRoot)
+        out += "Recording: \(recording.description)."
         return out
     }
 
-    private static func proxyToggle(enable: Bool?) async -> Bool? {
+    private enum RecordingControlError: LocalizedError {
+        case authenticationUnavailable
+        case guiUnavailable
+        case peerAuthenticationFailed
+        case requestFailed
+
+        var errorDescription: String? {
+            switch self {
+            case .authenticationUnavailable:
+                "local authentication is unavailable"
+            case .guiUnavailable:
+                "the ZBS Eye GUI is not running"
+            case .peerAuthenticationFailed:
+                "the local GUI could not be authenticated"
+            case .requestFailed:
+                "the local GUI rejected the request"
+            }
+        }
+    }
+
+    private static func proxyToggle(enable: Bool?, dataRoot: URL) async throws -> Bool {
         // Verify identity (this is ZBS Eye) BEFORE sending the token — protection from a stale/reused port.
-        guard let port = readPort(), await healthOK(port: port) != nil else { return nil }
+        guard let token = KeychainStore.get("api-token"), !token.isEmpty else {
+            throw RecordingControlError.authenticationUnavailable
+        }
+        guard let port = readPort(dataRoot: dataRoot) else {
+            throw RecordingControlError.guiUnavailable
+        }
+        guard await authenticatedHealth(port: port, token: token) != nil else {
+            throw RecordingControlError.peerAuthenticationFailed
+        }
         var comps = URLComponents(string: "http://127.0.0.1:\(port)/v1/capture/toggle")!
         if let enable { comps.queryItems = [URLQueryItem(name: "enable", value: enable ? "true" : "false")] }
-        guard let url = comps.url else { return nil }
+        guard let url = comps.url else { throw RecordingControlError.requestFailed }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.setValue("Bearer \(KeychainStore.apiToken())", forHTTPHeaderField: "Authorization")
-        guard let (data, _) = try? await localSession.data(for: req),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return obj["capturing"] as? Bool
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await localSession.data(for: req),
+              let http = response as? HTTPURLResponse,
+              http.statusCode == 200,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let capturing = object["capturing"] as? Bool else {
+            throw RecordingControlError.requestFailed
+        }
+        return capturing
     }
 
     private static func parseTime(_ s: String) -> Date? {
@@ -350,9 +580,13 @@ enum ZBSEyeMCPServer {
 
     /// Frame HEIC → downscale ≤1280px → JPEG (vision LLMs don't decode HEIC; full Retina is a token hog).
     /// Traversal-safe: path from DB + explicit checks, media-directory boundary.
-    private static func loadFrameJPEG(relativePath rel: String, maxDim: CGFloat = 1280) -> Data? {
+    private static func loadFrameJPEG(
+        relativePath rel: String,
+        dataRoot: URL,
+        maxDim: CGFloat = 1280
+    ) -> Data? {
         guard !rel.contains(".."), !rel.hasPrefix("/") else { return nil }
-        let base = StorageLocation.mediaDirectory()       // accounts for relocate
+        let base = StorageLocation.mediaDirectory(under: dataRoot)
             .standardizedFileURL.resolvingSymlinksInPath()
         let target = base.appendingPathComponent(rel).standardizedFileURL.resolvingSymlinksInPath()
         guard Array(target.pathComponents.prefix(base.pathComponents.count)) == base.pathComponents,

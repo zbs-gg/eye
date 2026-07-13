@@ -2,6 +2,12 @@ import Foundation
 import AppKit
 import CoreGraphics
 
+struct CaptureDrainAcknowledgement: Sendable, Equatable {
+    let hadActiveCapture: Bool
+    let hadInFlightCycle: Bool
+    let activeCycles: Int
+}
+
 /// Capture orchestrator (@MainActor — owns the observers/timer, does only debounce+dispatch).
 /// Event-driven on the active-app change + an active-tick fallback. Smart-pause (lock/sleep/idle),
 /// per-app capability cache (GPU/canvas → OCR-only, we don't poke AX in vain). Heavy work — on actors.
@@ -168,6 +174,32 @@ final class CaptureCoordinator {
     }
 
     func stop() {
+        let cycle = stopAdmission()
+        Task { [axReader] in
+            await cycle?.value
+            await axReader.reset()
+        }
+    }
+
+    /// Maintenance barrier: returns only after the single-flight capture cycle
+    /// has finished its final IngestService write. Cancellation closes future
+    /// admission; awaiting the Task handles actor calls that were already past
+    /// their cancellation point.
+    func stopAndDrain() async -> CaptureDrainAcknowledgement {
+        let wasRunning = isRunning
+        let cycle = stopAdmission()
+        let hadInFlightCycle = cycle != nil
+        await cycle?.value
+        await axReader.reset()
+        await pipeline.invalidateContent()
+        return CaptureDrainAcknowledgement(
+            hadActiveCapture: wasRunning,
+            hadInFlightCycle: hadInFlightCycle,
+            activeCycles: 0
+        )
+    }
+
+    private func stopAdmission() -> Task<Void, Never>? {
         isRunning = false
         let wsc = NSWorkspace.shared.notificationCenter
         observers.forEach { wsc.removeObserver($0) }
@@ -176,11 +208,12 @@ final class CaptureCoordinator {
         distributedObservers.forEach { dnc.removeObserver($0) }
         distributedObservers.removeAll()
         tickTimer?.invalidate(); tickTimer = nil
-        cycleTask?.cancel(); cycleTask = nil
+        let cycle = cycleTask
+        cycle?.cancel(); cycleTask = nil
         burstTask?.cancel(); burstTask = nil
         pendingCycle = false
         emptyStreak.removeAll(); lastContentText.removeAll()
-        Task { await axReader.reset() }
+        return cycle
     }
 
     // MARK: triggers

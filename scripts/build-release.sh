@@ -25,6 +25,7 @@ set +e
 # With Manual they get signed by our self-signed "ZBS Eye Dev" without a team.
 xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Release \
   -derivedDataPath "$DERIVED" \
+  -onlyUsePackageVersionsFromResolvedFile \
   CODE_SIGN_IDENTITY="$IDENTITY" CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \
   build 2>&1 | grep -E "error:|warning:|BUILD"
 XC_STATUS=${PIPESTATUS[0]}
@@ -42,7 +43,7 @@ if [ -d "$MODEL_CACHE" ]; then
   ditto "$MODEL_CACHE" "$APP/Contents/Resources/models/intfloat/multilingual-e5-small"
   # resources changed → re-sign. WITHOUT a silent ad-hoc fallback: ad-hoc breaks TCC
   # stability, and "✅" would print anyway. On re-sign failure — abort explicitly.
-  if ! codesign --force --sign "$IDENTITY" "$APP"; then
+  if ! codesign --force --preserve-metadata=entitlements,requirements --sign "$IDENTITY" "$APP"; then
     echo "❌ Re-signing '$IDENTITY' after bundling the model failed (keychain locked?)."
     echo "   NOT signing ad-hoc silently — that would break TCC. Unlock the keychain and re-run."
     exit 1
@@ -53,6 +54,16 @@ else
 fi
 
 codesign --verify --strict "$APP" && echo "✅ Signature valid ($IDENTITY)"
+
+SIGNED_ENTITLEMENTS=$(mktemp)
+trap 'rm -f "$SIGNED_ENTITLEMENTS"' EXIT
+codesign -d --entitlements :- "$APP" > "$SIGNED_ENTITLEMENTS" 2>/dev/null
+AUDIO_INPUT=$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.device.audio-input' "$SIGNED_ENTITLEMENTS" 2>/dev/null || true)
+ACCESS_GROUP=$(/usr/libexec/PlistBuddy -c 'Print :keychain-access-groups:0' "$SIGNED_ENTITLEMENTS" 2>/dev/null || true)
+[ "$AUDIO_INPUT" = "true" ] && [ -n "$ACCESS_GROUP" ] || {
+  echo "❌ Re-signed app lost its microphone or Keychain entitlements."
+  exit 1
+}
 
 mkdir -p dist
 ZIP="dist/ZBSEye-$(date +%Y%m%d).zip"

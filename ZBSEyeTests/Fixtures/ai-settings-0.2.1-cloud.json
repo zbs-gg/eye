@@ -1,0 +1,7 @@
+{
+  "active": "openrouter",
+  "models": { "openrouter": "anthropic/claude-3.5-haiku" },
+  "endpoints": {},
+  "cloudConsent": { "openrouter": true },
+  "processingDisabledByUser": false
+}

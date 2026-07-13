@@ -7,5 +7,11 @@
 	<!-- Microphone under Hardened Runtime (step 10): audio capture for on-device transcription. -->
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
+	<!-- Data-protection Keychain items require a provisioned access group even
+	     for a Developer ID app distributed outside the Mac App Store. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	</array>
 </dict>
 </plist>

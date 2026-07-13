@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Automation v1: "Day summary". collect → the processing model from "AI Models" → write to a
+/// Automation v1: "Day summary". collect → the active optional AI → write to a
 /// file/Obsidian. A preview-then-write flow. The destination-folder card lives here too (it belongs
 /// to export, not to agent access).
 struct AutomationsView: View {
@@ -50,12 +50,12 @@ private struct AutomationBody: View {
         VStack(alignment: .leading, spacing: 4) {
             Label("Day summary", systemImage: "text.append")
                 .font(.title2).bold()
-            Text("Collects the day's activity from your history, runs it through your processing model (AI Models — local by default), and writes a Markdown digest to a folder of your choice.")
+            Text("Collects the day's activity from your history, runs it through the AI you chose, and writes a Markdown digest to a folder of your choice.")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }
 
-    /// Where summaries land (moved here from Connections — it belongs to export, not to agent access).
+    /// Where summaries land. This belongs to the automation, not agent access.
     private var destinationCard: some View {
         GroupBox {
             @Bindable var conn = env.connections
@@ -94,9 +94,9 @@ private struct AutomationBody: View {
             VStack(alignment: .leading, spacing: 12) {
                 Label("A processing model is required", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange).font(.headline)
-                Text("Pick a model in AI Models — local (LM Studio / Ollama) by default; the automation won't run without one.")
+                Text("Add AI to generate a digest. Recording, Timeline, and local search keep working without it.")
                     .foregroundStyle(.secondary)
-                Button("Open AI Models") { env.selectedSection = .aiModels }
+                Button("Add AI") { env.aiSetup.present(origin: .settings) }
                     .buttonStyle(.borderedProminent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -164,11 +164,18 @@ private struct AutomationBody: View {
                 HStack(spacing: 12) {
                     Text("Preview").font(.headline)
                     Spacer()
-                    Text("\(p.sessions) sessions · \(p.totalCaptures) moments · \(p.model)")
+                    let executionScope = p.provenance.executedLocally
+                        ? String(localized: "On this Mac")
+                        : String(localized: "Cloud")
+                    Text("\(p.sessions) sessions · \(p.totalCaptures) moments · \(executionScope) · \(p.provenance.providerID) · \(p.model)")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if p.truncated {
+                if p.truncated && !p.contextTruncated {
                     Label("Long day — only the longest sessions made it into the summary.",
+                          systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
+                }
+                if p.contextTruncated {
+                    Label("The selected model's context limit reduced the sessions used in this preview.",
                           systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
                 }
                 if p.outputTruncated {
@@ -206,10 +213,10 @@ private struct AutomationBody: View {
 
     private var writeButtonTitle: String {
         let sub = store.connections.destination.subfolder
-        let folder = sub.isEmpty ? "folder" : sub
+        let folder = sub.isEmpty ? String(localized: "selected folder") : sub
         // Name from preview.day, not selectedDay — the button must promise exactly what gets written.
         let day = store.preview?.day ?? store.selectedDay
-        return "Write to \(folder)/\(DailySummaryService.ymd(day)).md"
+        return String(localized: "Write to \(folder)/\(DailySummaryService.ymd(day)).md")
     }
 
     private func writeSuccess(_ w: WriteResult) -> some View {
@@ -217,7 +224,10 @@ private struct AutomationBody: View {
             HStack(spacing: 12) {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(w.overwritten ? "Overwritten" : "Written").font(.headline)
+                    Text(w.overwritten
+                         ? String(localized: "Overwritten")
+                         : String(localized: "Written"))
+                        .font(.headline)
                     Text(w.path).font(.caption).foregroundStyle(.secondary)
                         .textSelection(.enabled).lineLimit(2)
                 }

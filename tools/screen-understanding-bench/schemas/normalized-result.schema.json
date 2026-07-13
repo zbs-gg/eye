@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zbs.gg/schemas/screen-understanding/normalized-result-v1.json",
+  "title": "Private capability-aware screen-understanding result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["methodID", "capabilities", "runtimeMetadata"],
+  "properties": {
+    "methodID": {"type": "string", "minLength": 1},
+    "capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "summary": {"type": ["string", "null"]},
+    "atomicFacts": {"type": "array", "items": {"type": "string"}},
+    "visibleText": {"type": "array", "items": {"type": "string"}},
+    "labels": {"type": "array", "items": {"type": "string"}},
+    "regions": {"type": "array", "items": {"type": "object"}},
+    "changeFacts": {"type": "array", "items": {"type": "string"}},
+    "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "abstention": {"type": "boolean"},
+    "errors": {"type": "array", "items": {"type": "string"}},
+    "runtimeMetadata": {"type": "object", "additionalProperties": true}
+  }
+}

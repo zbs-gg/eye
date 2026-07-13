@@ -111,9 +111,27 @@ actor ZBSEyeHTTPServer {
     // MARK: routes
 
     private func registerRoutes(_ srv: HTTPServer) async {
-        await srv.appendRoute("GET /health") { [self] _ in
+        await srv.appendRoute("GET /health") { [self] req in
             let cap = await deps.isCapturing()
-            return Self.json(APIDTO.Health(status: "ok", version: deps.version, capturing: cap))
+            let challenge = Self.query(req)["challenge"]
+            let listeningPort = await self.activePort
+            let proof = challenge.flatMap { challenge in
+                listeningPort.flatMap {
+                    LocalPeerAuthenticator.proof(
+                        token: deps.token,
+                        challenge: challenge,
+                        listeningPort: $0
+                    )
+                }
+            }
+            return Self.json(
+                APIDTO.Health(
+                    status: "ok",
+                    version: deps.version,
+                    capturing: cap,
+                    proof: proof
+                )
+            )
         }
         await srv.appendRoute("GET /v1/search") { [self] req in
             guard await authorized(req) else { return Self.unauthorized() }
@@ -206,8 +224,8 @@ actor ZBSEyeHTTPServer {
             offset: p["offset"].flatMap { Int($0) } ?? 0)
         do {
             // an honest error instead of an empty 200: the LAM must distinguish "not found" from "DB is broken"
-            let results = try await deps.search.search(query: q, filters: filters)
-            let hits = results.map { r in
+            let execution = try await deps.search.searchWithMetadata(query: q, filters: filters)
+            let hits = execution.results.map { r in
                 APIDTO.SearchHit(
                     id: r.id, kind: r.kind.rawValue, ts: msFromDate(r.ts), tsISO: isoFromMs(msFromDate(r.ts)),
                     app: .init(bundleId: r.bundleId, name: r.appName),
@@ -217,8 +235,23 @@ actor ZBSEyeHTTPServer {
                         audioUrl: r.kind == .audio ? "/v1/audio/file?id=\(r.id)" : nil,
                         transcriptUrl: r.kind == .audio ? "/v1/transcript?audio_id=\(r.id)" : nil))
             }
+            let mode: String
+            let fallbackReason: String?
+            switch execution.semanticMode {
+            case .hybrid:
+                mode = "hybrid"
+                fallbackReason = nil
+            case .embeddingUnavailable:
+                mode = "embeddingUnavailable"
+                fallbackReason = nil
+            case .ftsOnly(let reason):
+                mode = "ftsOnly"
+                fallbackReason = reason.rawValue
+            }
             return Self.json(APIDTO.SearchResponse(query: q, total: hits.count,
                                                    limit: filters.limit, offset: filters.offset,
+                                                   semanticMode: mode,
+                                                   semanticFallbackReason: fallbackReason,
                                                    results: hits))
         } catch {
             Self.log("search error: \(error)")
@@ -370,7 +403,7 @@ actor ZBSEyeHTTPServer {
     }
     /// Compact OpenAPI spec (a machine contract for the LAM; the contract used to live only in code).
     static let openAPISpec = #"""
-    {"openapi":"3.0.3","info":{"title":"ZBS Eye Local API","version":"0.2.0",
+    {"openapi":"3.0.3","info":{"title":"ZBS Eye Local API","version":"0.4.0",
      "description":"Local screen/audio memory. Auth: Bearer token on everything except /health. Time: epoch-ms or ISO8601."},
      "paths":{
       "/health":{"get":{"summary":"Status without auth","responses":{"200":{"description":"ok"}}}},

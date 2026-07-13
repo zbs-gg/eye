@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zbs.gg/schemas/screen-understanding/private-report-v1.json",
+  "title": "Private deterministic screen-understanding score report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolHash", "corpusHash", "methodID", "aggregate", "caseScoresPrivate"],
+  "properties": {
+    "protocolHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "corpusHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "methodID": {"type": "string", "minLength": 1},
+    "aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["factRecall", "criticalTextRecall", "severityWeightedHallucination", "usefulness"],
+      "properties": {
+        "factRecall": {"type": "number", "minimum": 0, "maximum": 1},
+        "criticalTextRecall": {"type": "number", "minimum": 0, "maximum": 1},
+        "severityWeightedHallucination": {"type": "number", "minimum": 0},
+        "usefulness": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "reliability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["factAgreement", "decisionAgreement", "qualified"],
+      "properties": {
+        "factAgreement": {"type": "number", "minimum": 0, "maximum": 1},
+        "decisionAgreement": {"type": "number", "minimum": 0, "maximum": 1},
+        "qualified": {"type": "boolean"}
+      }
+    },
+    "caseScoresPrivate": {
+      "const": true,
+      "description": "Case-level scores remain in the private result root and are forbidden in public exports."
+    }
+  }
+}

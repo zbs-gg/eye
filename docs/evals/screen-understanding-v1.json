@@ -1,0 +1,153 @@
+{
+  "identity": {
+    "id": "screen-understanding-v1",
+    "revision": 1
+  },
+  "execution": {
+    "offline": true,
+    "retryCount": 0,
+    "serial": true
+  },
+  "lanes": [
+    "official-checkpoint-quality",
+    "product-footprint"
+  ],
+  "methods": [
+    {
+      "id": "metadata-ax-ocr",
+      "disposition": "baseline",
+      "remote": false,
+      "sizeClass": "builtin",
+      "artifactRevision": "runner-9c9b2addae6d",
+      "artifactSHA256": "9c9b2addae6dabf006dd70de363f695064dfb0e29fe16631e7c99bdf380857a7",
+      "license": "AGPL-3.0-or-later",
+      "inputCapabilities": ["single-image"],
+      "outputCapabilities": ["summary", "atomic-facts", "visible-text", "confidence", "abstention", "errors", "runtime-metadata"]
+    },
+    {
+      "id": "apple-vision",
+      "disposition": "baseline",
+      "remote": false,
+      "sizeClass": "builtin",
+      "artifactRevision": "runner-8972234e2243",
+      "artifactSHA256": "8972234e224367e7dc0213822029cdfac3742e06537c8618dd092ee7dab55fa9",
+      "license": "Apple-SDK",
+      "inputCapabilities": ["single-image"],
+      "outputCapabilities": ["labels", "confidence", "abstention", "errors", "runtime-metadata"]
+    },
+    {
+      "id": "deterministic-hybrid",
+      "disposition": "baseline",
+      "remote": false,
+      "sizeClass": "builtin",
+      "artifactRevision": "runner-10a16897aa1d",
+      "artifactSHA256": "10a16897aa1d91ae1e57d6ffe309f1fe738c0169192845105919301312038761",
+      "license": "AGPL-3.0-or-later",
+      "inputCapabilities": ["single-image"],
+      "outputCapabilities": ["summary", "atomic-facts", "visible-text", "labels", "confidence", "abstention", "errors", "runtime-metadata"]
+    },
+    {
+      "id": "florence-2-base",
+      "disposition": "candidate",
+      "remote": false,
+      "sizeClass": "micro",
+      "artifactRevision": "5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac",
+      "artifactSHA256": "3c8c462d91f4a266940a9991d3d2a6d524622ade3f4cfb6fb0252b4c50f2791c",
+      "license": "MIT",
+      "inputCapabilities": ["single-image"],
+      "outputCapabilities": ["summary", "atomic-facts", "visible-text", "labels", "regions", "confidence", "abstention", "errors", "runtime-metadata"]
+    },
+    {
+      "id": "smolvlm-256m-instruct",
+      "disposition": "candidate",
+      "remote": false,
+      "sizeClass": "micro",
+      "artifactRevision": "7e3e67edbbed1bf9888184d9df282b700a323964",
+      "artifactSHA256": "db95e8e36943cc11c32fd6db09a47074455c6429fa875fd1a91ec1cbbba4dfe8",
+      "license": "Apache-2.0",
+      "inputCapabilities": ["single-image"],
+      "outputCapabilities": ["summary", "atomic-facts", "visible-text", "confidence", "abstention", "errors", "runtime-metadata"]
+    },
+    {
+      "id": "lfm2-vl-450m",
+      "disposition": "candidate",
+      "remote": false,
+      "sizeClass": "micro",
+      "artifactRevision": "d355d88bf86e5c7054230232120e573ca2238286",
+      "artifactSHA256": "7b9582986bc1fc46a03c12babea03c88c399cb3d0b3a5f1216a84b9fbc359df7",
+      "license": "LFM-Open-License-v1.0",
+      "inputCapabilities": ["single-image"],
+      "outputCapabilities": ["summary", "atomic-facts", "visible-text", "confidence", "abstention", "errors", "runtime-metadata"]
+    },
+    {
+      "id": "fastvlm-0.5b",
+      "disposition": "research-only",
+      "remote": false,
+      "sizeClass": "micro",
+      "artifactRevision": "16375720c2d673fa583e57e9876afde27549c7d0",
+      "artifactSHA256": "c2e7057ff4f746db7bbc23cc51dcba77b692b05bcddbb6dfb8977165e636ce49",
+      "license": "Apple-AMLR",
+      "inputCapabilities": ["single-image"],
+      "outputCapabilities": ["summary", "atomic-facts", "visible-text", "confidence", "abstention", "errors", "runtime-metadata"]
+    },
+    {
+      "id": "smolvlm2-256m-video-instruct",
+      "disposition": "candidate",
+      "remote": false,
+      "sizeClass": "micro",
+      "artifactRevision": "067788b187b95ebe7b2e040b3e4299e342e5b8fd",
+      "artifactSHA256": "088799a8e587ecaab436fc0a68078898902dfd64470261db7c9242b93c36edc7",
+      "license": "Apache-2.0",
+      "inputCapabilities": ["single-image", "temporal-pair"],
+      "outputCapabilities": ["summary", "atomic-facts", "visible-text", "change-facts", "confidence", "abstention", "errors", "runtime-metadata"]
+    },
+    {
+      "id": "omniparser-v2",
+      "disposition": "candidate",
+      "remote": false,
+      "sizeClass": "parser",
+      "artifactRevision": "6600256cb0f1b07651e3bc86166196307bad7e2d",
+      "artifactSHA256": "a9bf34ae62c4860f6c9c96b4ed3f068bc00407c85e9407a5911ddac988dbe154",
+      "license": "mixed-AGPL-3.0-and-MIT",
+      "inputCapabilities": ["single-image"],
+      "outputCapabilities": ["labels", "regions", "visible-text", "confidence", "abstention", "errors", "runtime-metadata"]
+    }
+  ],
+  "corpus": {
+    "lockedSingleFrameCount": 200,
+    "lockedTemporalPairCount": 100,
+    "minimumHeldOutSingleFrames": 60,
+    "minimumHeldOutTemporalPairs": 30,
+    "minimumDecisionCellCount": 15,
+    "duplicateLabelFraction": 0.15,
+    "minimumFactAgreement": 0.9,
+    "minimumDecisionAgreement": 0.8,
+    "liveSourceAccess": "read-only",
+    "splitsLockedBeforeOutputs": true
+  },
+  "qualityThresholds": {
+    "minimumOverallUsefulnessGainPoints": 3,
+    "minimumWeakStratumUsefulnessGainPoints": 10,
+    "minimumCriticalTextRecallDeltaPoints": -2,
+    "maximumHallucinationDeltaPoints": 1
+  },
+  "footprintThresholds": {
+    "maximumColdP95Seconds": 10,
+    "maximumWarmP95Seconds": 3,
+    "maximumIncrementalPeakBytes": 2147483648,
+    "maximumRetainedGrowthBytes": 104857600,
+    "minimumUnloadReleaseFraction": 0.9,
+    "maximumUnloadSeconds": 10
+  },
+  "reporting": {
+    "combinedQualityFootprintScoreAllowed": false,
+    "rawResultsPrivate": true,
+    "atomicWrites": true
+  },
+  "publication": {
+    "allowCaseMaterial": false,
+    "schema": "public-decision.schema.json",
+    "qualifiedSchema": "public-aggregate.schema.json",
+    "allowedClasses": ["aggregate-metric", "method-enum", "stratum-enum", "license-fact", "protocol-hash", "corpus-hash", "report-hash"]
+  }
+}

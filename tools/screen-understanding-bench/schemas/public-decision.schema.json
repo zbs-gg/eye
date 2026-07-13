@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zbs.gg/schemas/screen-understanding/public-decision-v1.json",
+  "title": "Aggregate-only screen-understanding publication decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "protocol", "status", "corpus", "referenceReliability",
+    "methods", "securityUnsupportedReason",
+    "privateCorpusOpenedByThirdPartyAdapter", "protocolHash",
+    "qualityScorePublished", "nextGate"
+  ],
+  "properties": {
+    "schema": {"const": "screen-understanding-public-decision-v1"},
+    "protocol": {"const": "screen-understanding-v1"},
+    "status": {"const": "partial-qualified"},
+    "corpus": {"$ref": "#/$defs/corpus"},
+    "referenceReliability": {"$ref": "#/$defs/referenceReliability"},
+    "methods": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "prefixItems": [
+        {"$ref": "#/$defs/metadataMethod"},
+        {"$ref": "#/$defs/visionMethod"},
+        {"$ref": "#/$defs/hybridMethod"},
+        {"$ref": "#/$defs/florenceMethod"},
+        {"$ref": "#/$defs/smolVLMMethod"},
+        {"$ref": "#/$defs/lfmMethod"},
+        {"$ref": "#/$defs/fastVLMMethod"},
+        {"$ref": "#/$defs/smolVLM2Method"},
+        {"$ref": "#/$defs/omniParserMethod"}
+      ],
+      "items": false
+    },
+    "securityUnsupportedReason": {
+      "const": "strict-sandbox-boundary-unavailable-on-qualification-mac"
+    },
+    "privateCorpusOpenedByThirdPartyAdapter": {"const": false},
+    "protocolHash": {"$ref": "#/$defs/sha256"},
+    "qualityScorePublished": {"const": true},
+    "nextGate": {
+      "const": "retain Apple Vision only as a lightweight label baseline, redesign metadata and hybrid scene claims, and prove a local sandbox before any downloaded micro-model receives private inputs"
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "score": {"type": "number", "minimum": 0, "maximum": 1},
+    "corpus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "singleImageCount", "temporalPairCount", "qualityTestSingleImageCount",
+        "corpusHash"
+      ],
+      "properties": {
+        "singleImageCount": {"const": 200},
+        "temporalPairCount": {"const": 100},
+        "qualityTestSingleImageCount": {"const": 60},
+        "corpusHash": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "referenceReliability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "singleImageRawJoint", "temporalRawJoint", "combinedRawJoint",
+        "finalAuditCaseCount", "finalAuditSlotCount", "finalAuditErrorCount"
+      ],
+      "properties": {
+        "singleImageRawJoint": {"$ref": "#/$defs/score"},
+        "temporalRawJoint": {"$ref": "#/$defs/score"},
+        "combinedRawJoint": {"$ref": "#/$defs/score"},
+        "finalAuditCaseCount": {"const": 45},
+        "finalAuditSlotCount": {"const": 255},
+        "finalAuditErrorCount": {"const": 0}
+      }
+    },
+    "limitationCodes": {
+      "type": "array",
+      "prefixItems": [
+        {"const": "claim-mapping-agreement-below-0.90"},
+        {"const": "quality-score-withheld"}
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "mappingMethodBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "methodID", "status", "duplicateArmCount", "claimJudgmentAgreement",
+        "decisionAgreement", "capabilityAgreement", "limitationCodes"
+      ],
+      "properties": {
+        "methodID": {"type": "string"},
+        "status": {"const": "mapping-inconclusive"},
+        "duplicateArmCount": {"const": 15},
+        "claimJudgmentAgreement": {"$ref": "#/$defs/score"},
+        "decisionAgreement": {"const": 1},
+        "capabilityAgreement": {"type": "object"},
+        "limitationCodes": {"$ref": "#/$defs/limitationCodes"}
+      }
+    },
+    "metadataMethod": {
+      "allOf": [
+        {"$ref": "#/$defs/mappingMethodBase"},
+        {"properties": {
+          "methodID": {"const": "metadata-ax-ocr"},
+          "capabilityAgreement": {
+            "type": "object", "additionalProperties": false,
+            "required": ["summary", "atomicFacts"],
+            "properties": {
+              "summary": {"$ref": "#/$defs/score"},
+              "atomicFacts": {"$ref": "#/$defs/score"}
+            }
+          }
+        }}
+      ]
+    },
+    "visionMethod": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "methodID", "status", "duplicateArmCount", "claimJudgmentAgreement",
+        "decisionAgreement", "capabilityAgreement", "limitationCodes", "quality"
+      ],
+      "properties": {
+        "methodID": {"const": "apple-vision"},
+        "status": {"const": "qualified"},
+        "duplicateArmCount": {"const": 15},
+        "claimJudgmentAgreement": {"const": 1},
+        "decisionAgreement": {"const": 1},
+        "capabilityAgreement": {
+          "type": "object", "additionalProperties": false,
+          "required": ["labels"],
+          "properties": {"labels": {"const": 1}}
+        },
+        "limitationCodes": {
+          "type": "array",
+          "prefixItems": [
+            {"const": "built-in-baseline"},
+            {"const": "single-image-only"},
+            {"const": "apple-vision-signals"}
+          ],
+          "items": false,
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "quality": {"$ref": "#/$defs/visionQuality"}
+      }
+    },
+    "visionQuality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caseCount", "claimCount", "metrics"],
+      "properties": {
+        "caseCount": {"const": 60},
+        "claimCount": {"const": 289},
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "requiredFactRecall", "criticalTextRecall",
+            "severityWeightedHallucination", "abstentionAccuracy", "overall"
+          ],
+          "properties": {
+            "requiredFactRecall": {"$ref": "#/$defs/score"},
+            "criticalTextRecall": {"$ref": "#/$defs/score"},
+            "severityWeightedHallucination": {"$ref": "#/$defs/score"},
+            "abstentionAccuracy": {"$ref": "#/$defs/score"},
+            "overall": {"$ref": "#/$defs/score"}
+          }
+        }
+      }
+    },
+    "hybridMethod": {
+      "allOf": [
+        {"$ref": "#/$defs/mappingMethodBase"},
+        {"properties": {
+          "methodID": {"const": "deterministic-hybrid"},
+          "capabilityAgreement": {
+            "type": "object", "additionalProperties": false,
+            "required": ["summary", "atomicFacts", "labels"],
+            "properties": {
+              "summary": {"$ref": "#/$defs/score"},
+              "atomicFacts": {"$ref": "#/$defs/score"},
+              "labels": {"$ref": "#/$defs/score"}
+            }
+          }
+        }}
+      ]
+    },
+    "unsupportedMethodBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["methodID", "status"],
+      "properties": {
+        "methodID": {"type": "string"},
+        "status": {"const": "security-unsupported"}
+      }
+    },
+    "florenceMethod": {"allOf": [{"$ref": "#/$defs/unsupportedMethodBase"}, {"properties": {"methodID": {"const": "florence-2-base"}}}]},
+    "smolVLMMethod": {"allOf": [{"$ref": "#/$defs/unsupportedMethodBase"}, {"properties": {"methodID": {"const": "smolvlm-256m-instruct"}}}]},
+    "lfmMethod": {"allOf": [{"$ref": "#/$defs/unsupportedMethodBase"}, {"properties": {"methodID": {"const": "lfm2-vl-450m"}}}]},
+    "fastVLMMethod": {"allOf": [{"$ref": "#/$defs/unsupportedMethodBase"}, {"properties": {"methodID": {"const": "fastvlm-0.5b"}}}]},
+    "smolVLM2Method": {"allOf": [{"$ref": "#/$defs/unsupportedMethodBase"}, {"properties": {"methodID": {"const": "smolvlm2-256m-video-instruct"}}}]},
+    "omniParserMethod": {"allOf": [{"$ref": "#/$defs/unsupportedMethodBase"}, {"properties": {"methodID": {"const": "omniparser-v2"}}}]}
+  }
+}

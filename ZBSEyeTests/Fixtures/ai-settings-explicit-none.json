@@ -1,0 +1,7 @@
+{
+  "active": null,
+  "models": { "ollama": "qwen2.5:7b" },
+  "endpoints": { "ollama": "http://127.0.0.1:11434/v1" },
+  "cloudConsent": {},
+  "processingDisabledByUser": true
+}

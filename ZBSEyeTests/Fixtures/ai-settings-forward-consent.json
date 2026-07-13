@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 2,
+  "active": "openrouter",
+  "activeModelID": "anthropic/claude-haiku",
+  "models": {
+    "openrouter": "anthropic/claude-haiku"
+  },
+  "endpoints": {},
+  "cloudConsent": {
+    "openrouter": true,
+    "anthropic": true,
+    "future.legacy.allowed": true,
+    "future.legacy.revoked": false
+  },
+  "processingDisabledByUser": false,
+  "selectionRevision": 5,
+  "authorizationEpoch": 9,
+  "consentGrants": {
+    "openrouter": {
+      "providerID": "openrouter",
+      "recipientDisclosure": "OpenRouter and the selected upstream model operator",
+      "consumers": ["ask", "future.generatedDigest"],
+      "policyRevision": "provider-egress-v2"
+    },
+    "anthropic": {
+      "providerID": "anthropic",
+      "recipientDisclosure": "Anthropic",
+      "consumers": 42,
+      "policyRevision": "provider-egress-v2"
+    },
+    "future.provider": {
+      "providerID": "future.provider",
+      "recipientDisclosure": "Future Cloud",
+      "consumers": ["ask", "future.generatedDigest"],
+      "policyRevision": "provider-egress-v99"
+    }
+  }
+}

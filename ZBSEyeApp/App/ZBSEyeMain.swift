@@ -1,16 +1,63 @@
 import Foundation
 
-/// Entry point. By default — a SwiftUI app. With the `--mcp` flag — an MCP stdio server (to launch from
-/// Claude Desktop / Cursor: `ZBS Eye.app/Contents/MacOS/ZBS Eye --mcp`), with no GUI.
+/// Entry point. By default — a SwiftUI app. New setup uses
+/// `--mcp-read-only`; the historical `--mcp` contract remains full-access for
+/// existing harness configurations and is equivalent to `--mcp-full`.
 @main
 struct ZBSEyeMain {
     static func main() {
+        if CommandLine.arguments.contains(AppRelaunchPlan.helperFlag) {
+            guard let plan = AppRelaunchPlan(arguments: CommandLine.arguments) else {
+                FileHandle.standardError.write(Data("Invalid relaunch helper arguments.\n".utf8))
+                exit(2)
+            }
+            do {
+                try plan.execute(
+                    waitForExit: AppRelaunchPlan.waitForProcessExit,
+                    openBundle: AppRelaunchPlan.openReplacement
+                )
+                exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("Relaunch failed: \(error)\n".utf8))
+                exit(1)
+            }
+        }
         LanguageManager.applyAtLaunch()   // apply the in-app language override before any UI loads
-        if CommandLine.arguments.contains("--mcp") {
+        let mcpProfile: MCPAccessProfile? = if CommandLine.arguments.contains("--mcp-full")
+            || CommandLine.arguments.contains("--mcp") {
+            .advancedFull
+        } else if CommandLine.arguments.contains("--mcp-read-only") {
+            .memoryReadOnly
+        } else {
+            nil
+        }
+        if let mcpProfile {
+            let dataRoot: URL
+            do {
+                dataRoot = try StorageLocation.requireExistingDataRoot()
+                    .standardizedFileURL
+                    .resolvingSymlinksInPath()
+                if let expectedPath = ProcessInfo.processInfo.environment[
+                    SystemMCPSelfTester.expectedRootEnvironmentKey
+                ] {
+                    let expected = URL(fileURLWithPath: expectedPath, isDirectory: true)
+                        .standardizedFileURL
+                        .resolvingSymlinksInPath()
+                    guard expected == dataRoot else {
+                        throw StorageLocationError.configuredRootUnavailable(expected.path)
+                    }
+                }
+            } catch {
+                FileHandle.standardError.write("MCP failed: \(error)\n".data(using: .utf8)!)
+                exit(1)
+            }
             // MCP stdio: dispatchMain() keeps the process alive and lets the concurrency pool work
             // (DispatchSemaphore.wait would dead-block the main thread and Task would never run).
             Task.detached {
-                await ZBSEyeMCPServer.runStdio()
+                await ZBSEyeMCPServer.runStdio(
+                    profile: mcpProfile,
+                    dataRoot: dataRoot
+                )
                 exit(0)
             }
             dispatchMain()
@@ -19,6 +66,7 @@ struct ZBSEyeMain {
             // scripts/checks). Idempotent — can be interrupted and resumed.
             Task.detached {
                 do {
+                    _ = try StorageLocation.requireAvailableDataRoot()
                     let db = try ZBSEyeDatabase(path: ZBSEyeDatabase.defaultURL().path)
                     let importer = HistoryImporter(db: db)
                     print("Importing from \(HistoryImporter.defaultSourcePath)…")
@@ -36,10 +84,17 @@ struct ZBSEyeMain {
         } else if let i = CommandLine.arguments.firstIndex(of: "--relocate"),
                   i + 1 < CommandLine.arguments.count {
             // Headless relocation of storage to <path>/ZBS Eye (same migrator as in the UI; no relaunch).
-            // The GUI must be closed (otherwise COUNT parity wavers from concurrent writes).
+            // The data-root process lock enforces that the GUI is closed, so
+            // COUNT/media parity cannot race live writers.
             let chosen = URL(fileURLWithPath: CommandLine.arguments[i + 1], isDirectory: true)
             Task.detached {
                 do {
+                    let dataRoot = try StorageLocation.requireAvailableDataRoot()
+                        .resolvingSymlinksInPath()
+                        .standardizedFileURL
+                    let relocationProcessLock = try StorageRelocationProcessLock(
+                        dataRoot: dataRoot
+                    )
                     let storage = try StorageManager()
                     let db = try ZBSEyeDatabase(path: ZBSEyeDatabase.defaultURL().path, runMigrations: false)
                     let report = try await StorageRelocator().migrate(
@@ -51,6 +106,7 @@ struct ZBSEyeMain {
                     StorageLocation.setRoot(report.newDataRoot)
                     print("Relocated to: \(report.newDataRoot.path)")
                     print("  DB \(report.dbBytes) bytes, media \(report.mediaFilesCopied) files")
+                    withExtendedLifetime(relocationProcessLock) {}
                     exit(0)
                 } catch {
                     FileHandle.standardError.write("Relocation failed: \(error)\n".data(using: .utf8)!)
@@ -62,6 +118,7 @@ struct ZBSEyeMain {
             // Headless backup to iCloud (same as the button/schedule; handy for checks).
             Task.detached {
                 do {
+                    _ = try StorageLocation.requireAvailableDataRoot()
                     let storage = try StorageManager()
                     let db = try ZBSEyeDatabase(path: ZBSEyeDatabase.defaultURL().path, runMigrations: false)
                     let mgr = BackupManager(db: db, storage: storage)

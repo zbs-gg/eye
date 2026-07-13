@@ -5,11 +5,12 @@ import GRDB
 /// one transaction (upsert app, insert screen_capture, insert text_blocks → triggers fill FTS).
 /// Removes the Task.detached races of the old version.
 /// NB: writes to the DB are serialized by the GRDB DatabasePool across RetentionManager AND IngestService (not one writer
-/// object, but one serialized writer channel of the pool). Coordination with retention — via a grace window in
-/// sweepOrphans (see RetentionManager), so the orphan sweep doesn't delete an in-flight frame.
+/// object, but one serialized writer channel of the pool). Automatic retention
+/// never sweeps physical orphans; exact admission reconciliation detects them.
 actor IngestService {
     private let db: ZBSEyeDatabase
     private let storage: StorageManager
+    private let writeBarrier = IngestWriteBarrier()
 
     // NB: ingest deliberately does NOT embed. Frames/transcripts are written without a vector; the continuous
     // VectorBackfill indexer fills vectors in the background (off the hot path, model unloaded on idle). FTS is
@@ -20,8 +21,17 @@ actor IngestService {
         self.storage = storage
     }
 
+    /// Reentrancy-safe barrier. Capture/audio producers are stopped before this
+    /// call; the explicit counter still waits for writes already suspended in
+    /// GRDB rather than assuming actor FIFO implies completion.
+    func drain() async -> IngestDrainAcknowledgement {
+        await writeBarrier.drain()
+    }
+
     @discardableResult
     func ingest(_ rec: ScreenCaptureRecord) async throws -> Int64 {
+        writeBarrier.beginWrite()
+        defer { writeBarrier.finishWrite() }
         // 1) We write the frame file BEFORE the transaction (if capture handed over bytes), the path — into the record.
         //    let (not var) — otherwise Swift 6 won't allow capturing it in the concurrent write closure.
         let relativePath: String?
@@ -77,14 +87,19 @@ actor IngestService {
             }
         } catch {
             // The transaction failed — clean up the file written by THIS layer (.heicData). Files of .fileWritten
-            // belong to the capture layer — on failure sweepOrphans will pick them up (after the grace window).
-            if case .heicData = rec.image, let p = relativePath { storage.deleteFile(relativePath: p) }
+            // belong to the capture layer. Cleanup here is best-effort; exact
+            // admission reconciliation detects leftovers before deletion reopens.
+            if case .heicData = rec.image, let p = relativePath {
+                try? storage.deleteFile(relativePath: p)
+            }
             throw error
         }
     }
 
     @discardableResult
     func ingest(_ rec: AudioCaptureRecord) async throws -> Int64 {
+        writeBarrier.beginWrite()
+        defer { writeBarrier.finishWrite() }
         let tsMs = Int64(rec.timestamp.timeIntervalSince1970 * 1000)
         let bytes = rec.bytes ?? storage.fileSize(relativePath: rec.relativePath)
         return try await db.pool.write { dbc -> Int64 in
@@ -99,6 +114,8 @@ actor IngestService {
     /// + a semantic vector into vec_transcripts (cross-lingual "a ru query finds an en call").
     @discardableResult
     func ingest(_ rec: TranscriptionRecord) async throws -> Int64 {
+        writeBarrier.beginWrite()
+        defer { writeBarrier.finishWrite() }
         // No vector here — enqueue for the background indexer (off the hot path). FTS stays instant; the
         // cross-lingual vector ('a ru query finds an en call') is filled by the indexer shortly after.
         let tsMs = Int64(rec.ts.timeIntervalSince1970 * 1000)

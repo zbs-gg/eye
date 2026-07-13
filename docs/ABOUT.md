@@ -2,7 +2,8 @@
 
 > In one sentence: **ZBS Eye is the "eternal memory" of your Mac.** It continuously and quietly records
 > what happens on the computer (screen + sound), makes sense of it, and lets you find, review, and analyze
-> any moment of your digital life — **100% local, no cloud, no account, no subscription.**
+> any moment of your digital life. Capture, search, and storage are **100% local, with no account or subscription.**
+> Optional AI providers receive only approved text excerpts after explicit consent.
 
 The codename in the code is `ZBSEye` (types, target, the binary `ZBS Eye.app`). Externally it's "ZBS Eye" everywhere.
 
@@ -16,9 +17,9 @@ A "personal computer memory" category appeared, but it was orphaned and spoiled:
 a big corporation (features were cut), and the remaining alternatives are on a **$25–50/mo subscription** with
 a **mandatory cloud** — where the most personal thing you have, the history of what you do, goes.
 
-ZBS Eye takes this niche from the opposite stance: **everything stays with you.** A light, native alternative
-that never goes to the cloud — because your activity history is too personal to hand off anywhere. This isn't
-a temporary marketing position, it's an architectural principle (see §4).
+ZBS Eye takes this niche from the opposite stance: **your recorded history stays with you.** A light, native
+alternative where capture, media, index, and search remain on the Mac. Optional AI is off by default; if you
+enable an external provider, only the text excerpts needed for that action leave the machine after consent.
 
 **Two product goals:**
 1. **Memory after the fact** — record everything, search like a human, review, make sense of it. The core (here now).
@@ -39,9 +40,9 @@ a temporary marketing position, it's an architectural principle (see §4).
 - **Scenes / "Day in activities"** — frames are grouped into **activity scenes**: "VS Code, 14:00–14:25,
   editing AXReader" instead of a thousand separate frames. You see how the day breaks into blocks. Instead of
   a raw OCR dump on the right — a **clean scene summary** (app, window/URL, key topics; LLM enhancement optional).
-- **Daily Insights** (formerly "Cartographer") — a daily AI insight: the model you chose in "AI Models"
+- **Daily Insights** (formerly "Cartographer") — an optional daily AI insight: the model you chose in **Settings → AI**
   looks at the day's activity (top apps, context switches, topics) and gives **2–3 concrete
-  observations/tips** (self-improvement). Local model by default. In the future — a single loop with Pulse/Atlas.
+  observations/tips** (self-improvement). AI is off by default; local and external choices are explicit.
 - **Usage stats** — an on-device breakdown of the last 7 days, front-and-center on the Daily Insights screen:
   where the time went (browsers split by **real site**, recovered from your own imported history, not lumped
   as one app), active minutes/day, context switches/day, busiest hour.
@@ -62,20 +63,22 @@ a temporary marketing position, it's an architectural principle (see §4).
   as images. Smooth: frame crossfade, a soft scrubber, micro-animations (respecting Reduce Motion).
 - **"Ask"** — ask your memory a question → hybrid search finds fragments → your **processing model**
   answers with citation links (click → jump on the timeline). A local equivalent of "Ask Rewind".
-  The model is picked in **"AI Models"**: local (**LM Studio / Ollama**, the list comes from
-  `/v1/models`) by default, **your installed Claude Code** (run as a local subprocess, no API key), or
-  **one-click OpenRouter** (OAuth); a cloud provider only with an explicit opt-in, keys optional.
+  The model is picked in **Settings → AI**. One action can download ZBS Eye's verified built-in MLX model;
+  external providers and OpenAI-compatible endpoints remain optional. Background summaries and activity
+  labels each require their own explicit consent when the active provider is external.
 
 ### Rewards and progress
 - **Gamification** — day streaks, milestones (1k/5k/10k/… frames), "memory age", progress to the next
   milestone; on reaching a milestone — a subtle visual reward (an aurora shimmer). The longer you use it, the richer the memory.
 
 ### Access for AI agents
-- **Local REST** (127.0.0.1, a Bearer token on everything except `/health`) + **MCP** (stdio) — so LLMs/agents
-  (Claude Desktop, Cursor) can work with your memory as a tool. Zero egress.
+- **Local REST** (127.0.0.1, a Bearer token on everything except `/health`) + **MCP** (stdio) — so Codex,
+  Claude Code, and Claude Desktop can work with your memory as a local tool. Generated setup is read-only
+  by default and uses no bearer token.
 
 ### Storage and data
-- **Retention is FOREVER by default** (an explicit choice — otherwise days/size).
+- **Keep Media is 5 GB on a fresh install.** 10/20/50 GB and **Forever** are explicit choices. Low disk
+  pauses capture instead of silently deleting history.
 - **Move to an external SSD** in one click (relocatable; the live DB is moved via an online backup, with no frame loss).
 - **iCloud auto-backup** — a compressed snapshot (you must not put a live SQLite into iCloud — corruption).
 - **Import previous history** (e.g. from ~/.screenpipe) — bring what you've accumulated over.
@@ -88,14 +91,12 @@ a temporary marketing position, it's an architectural principle (see §4).
 
 - **Zero egress for capture, index and storage.** The server listens only on `127.0.0.1`; everything except `/health` is behind a Bearer token (in the Keychain). Recordings never leave the Mac.
 - **Zero accounts, zero subscription, zero telemetry.** That IS the product.
-- **AI is local-first, bring-your-own — keys optional.** Local providers (LM Studio / Ollama / any
-  OpenAI-compatible localhost server) are the default and need no key. You can also **use the Claude
-  Code you're already signed into** (run as a local subprocess — no API key) or connect **OpenRouter in
-  one click** (OAuth); pasting an OpenAI / Anthropic key is an Advanced fallback. Cloud providers —
-  including Claude Code, whose CLI egresses to Anthropic via your login — exist only behind an explicit
-  per-provider opt-in with a clear warning: they receive prompt **excerpts** of history for
-  Ask/Insights/summaries — never recordings, never the index. Keys live in the Keychain; a consented
-  key-based cloud provider may reach exactly one host (its official API).
+- **AI off first; provider freedom stays real.** On qualified Macs one click installs a verified local model
+  that works offline after download and needs no account, key, or server.
+  External providers remain first-class choices. A recommendation is shown inside its provider and never
+  activates itself. Cloud, broker, and signed-in CLI providers are behind explicit recipient- and
+  scope-specific consent: they receive only the prompt excerpts needed for the chosen feature, never
+  recordings or the index. Credentials live in the data-protection Keychain.
 - **The default is to record everything**, but the human is in charge: pause, app exclusions, delete a range.
 - **Native and lightweight.** Swift/SwiftUI, Apple Silicon hardware acceleration, minimal dependencies —
   as opposed to heavy web wrappers (Electron/Tauri).
@@ -104,7 +105,7 @@ a temporary marketing position, it's an architectural principle (see §4).
 
 ## 4. How it works (architecture and stack)
 
-- **Platform:** Swift 6 (strict concurrency = `complete`), SwiftUI, target macOS 15+, Apple Silicon. ~10k lines of Swift.
+- **Platform:** Swift 6 (strict concurrency = `complete`), SwiftUI, target macOS 15+, Apple Silicon.
 - **Concurrency:** `@MainActor @Observable` stores for the UI; actors for data/capture; one logical writer
   (`IngestService`); non-Sendable (`CVPixelBuffer`/`AXUIElement`/…) live and die inside a single actor.
 - **Storage:** GRDB (`DatabasePool` + WAL) + **FTS5** (external-content) + **sqlite-vec** (statically linked —
@@ -119,7 +120,8 @@ a temporary marketing position, it's an architectural principle (see §4).
 - **Package security:** **Hardened Runtime WITHOUT App Sandbox** (the sandbox is incompatible with cross-app
   AX + a local server). Minimal entitlements.
 
-One binary — several modes: GUI, `--mcp`, `--import-history`, `--relocate`, `--backup-now`, `--backup-verify`.
+One binary — several modes: GUI, `--mcp-read-only`, legacy/full `--mcp` and `--mcp-full`,
+`--import-history`, `--relocate`, `--backup-now`, `--backup-verify`.
 
 ---
 
@@ -145,12 +147,12 @@ staying faithful to the "everything on-device" principle.
 ## 7. Status
 
 **Working and verified live:** capture (screen + audio), hybrid search (cross-lingual), timeline (smooth),
-scenes/"Day in activities", "Ask" (RAG over the model picked in "AI Models" — LM Studio/Ollama by default,
-cloud as an explicit opt-in), Cartographer (daily insights), progress/milestones, REST + MCP, history
-import, retention (forever), relocatable storage, iCloud backup, daily summary, export. A notarized
+scenes/"Day in activities", "Ask" (RAG over the global provider/model pair), Daily Insights,
+progress/milestones, REST + MCP, history
+import, size-based or Forever retention, relocatable storage, iCloud backup, daily summary, export. A notarized
 Developer ID release exists.
 
-**Deferred:** a test target (XCTest), Sparkle auto-updates, deep integration of Cartographer with Pulse/Atlas,
+**Deferred:** Sparkle auto-updates, deep integration of Cartographer with Pulse/Atlas,
 the v1.5 "live prompter" (a real-time overlay).
 
 Strategy and priorities — in [`ROADMAP.md`](../ROADMAP.md). Architecture and the contributor guide — in [`AGENTS.md`](../AGENTS.md).

@@ -1,0 +1,64 @@
+{
+  "protocolID": "screen-understanding-v1",
+  "date": "2026-07-13",
+  "methods": [
+    {
+      "id": "metadata-ax-ocr",
+      "status": "mapping-inconclusive",
+      "evidence": "Locked 60-case run completed; summary and atomic-fact mapping did not both clear the reliability floor.",
+      "privateCorpusAccess": true
+    },
+    {
+      "id": "apple-vision",
+      "status": "qualified",
+      "evidence": "Locked 60-case run completed; independent label mapping cleared the reliability floor.",
+      "privateCorpusAccess": true
+    },
+    {
+      "id": "deterministic-hybrid",
+      "status": "mapping-inconclusive",
+      "evidence": "Locked 60-case run completed; summary mapping did not clear the reliability floor.",
+      "privateCorpusAccess": true
+    },
+    {
+      "id": "florence-2-base",
+      "status": "security-unsupported",
+      "evidence": "Inherited OS filesystem boundary could not be proven on the qualification host.",
+      "privateCorpusAccess": false
+    },
+    {
+      "id": "smolvlm-256m-instruct",
+      "status": "security-unsupported",
+      "evidence": "Inherited OS filesystem boundary could not be proven on the qualification host.",
+      "privateCorpusAccess": false
+    },
+    {
+      "id": "lfm2-vl-450m",
+      "status": "security-unsupported",
+      "evidence": "Inherited OS filesystem boundary could not be proven on the qualification host.",
+      "privateCorpusAccess": false
+    },
+    {
+      "id": "fastvlm-0.5b",
+      "status": "security-unsupported",
+      "evidence": "Research-only method; inherited OS filesystem boundary could not be proven.",
+      "privateCorpusAccess": false
+    },
+    {
+      "id": "smolvlm2-256m-video-instruct",
+      "status": "security-unsupported",
+      "evidence": "Inherited OS filesystem boundary could not be proven on the qualification host.",
+      "privateCorpusAccess": false
+    },
+    {
+      "id": "omniparser-v2",
+      "status": "security-unsupported",
+      "evidence": "Parser-only method; inherited OS filesystem boundary could not be proven.",
+      "privateCorpusAccess": false
+    }
+  ],
+  "qualityConclusion": "partial-qualified",
+  "qualityReason": "Apple Vision label mapping cleared the reliability floor; metadata and hybrid quality scores remain withheld, and downloaded micro-models were not run.",
+  "containsPersonalCorpus": false,
+  "containsCaseMaterial": false
+}

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// "Cartographer" — AI insights for the day: what actually took up time and concrete advice.
-/// Processed by the model chosen in "AI Models" (local by default). Writes no files — insights live only in the UI.
+/// Processed by the active optional AI. Writes no files — insights live only in the UI.
 struct CartographerView: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -51,7 +51,7 @@ private struct CartographerBody: View {
             .frame(maxWidth: 720, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        // Auto-generate insights on appear (with consent + a model); otherwise load the heuristic summary.
+        // Opening the screen never generates; without a model, load the local heuristic summary.
         // Re-runs when the selected day changes.
         .task(id: store.selectedDay) { store.autoRefresh() }
     }
@@ -76,7 +76,7 @@ private struct CartographerBody: View {
         VStack(alignment: .leading, spacing: 4) {
             Label("Daily Insights", systemImage: "map")
                 .font(.title2).bold()
-            Text("Looks at your activity for the day and gives 2–3 concrete observations: where your time goes, where you could focus better. Daily fragments go only to the processing model you chose in AI Models — local by default.")
+            Text("Looks at your activity for the day and gives 2–3 concrete observations. If AI is enabled, only compact text fragments go to the provider you chose.")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }
@@ -86,9 +86,9 @@ private struct CartographerBody: View {
             VStack(alignment: .leading, spacing: 12) {
                 Label("A processing model is required", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange).font(.headline)
-                Text("Pick a model in AI Models — local (LM Studio / Ollama) by default; a cloud provider only with your explicit opt-in. Your recordings and index stay local.")
+                Text("Add AI only when you want generated insights. Local activity and Timeline keep working without it.")
                     .foregroundStyle(.secondary)
-                Button("Open AI Models") { env.selectedSection = .aiModels }
+                Button("Add AI") { env.aiSetup.present(origin: .settings) }
                     .buttonStyle(.borderedProminent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -102,7 +102,7 @@ private struct CartographerBody: View {
             VStack(alignment: .leading, spacing: 12) {
                 Label("One-time consent", systemImage: "hand.raised.fill")
                     .foregroundStyle(.tint).font(.headline)
-                Text("To produce insights, Daily Insights will send compact fragments of activity for the chosen day (app names, window titles, short snippets of on-screen text) to the processing model you chose in AI Models. Nothing is written to disk — only a request to that model.")
+                Text("To produce insights, Eye will send compact text fragments for the chosen day to your active AI provider. Raw screenshots, audio, and file paths are not sent.")
                     .foregroundStyle(.secondary)
                 Button {
                     store.grantConsentAndGenerate()
@@ -155,7 +155,7 @@ private struct CartographerBody: View {
                     Label("Insights of the day", systemImage: "lightbulb.fill")
                         .font(.headline)
                     Spacer()
-                    Text(ins.model)
+                    Text(verbatim: insightsProvenance(ins))
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
@@ -176,6 +176,11 @@ private struct CartographerBody: View {
                           systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.orange)
                 }
+                if ins.contextTruncated {
+                    Label("The selected model's context limit reduced the day facts used.",
+                          systemImage: "info.circle")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
 
                 Divider()
 
@@ -185,6 +190,17 @@ private struct CartographerBody: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(6)
         }
+    }
+
+    private func insightsProvenance(_ insights: CartographerService.Insights) -> String {
+        let provenance = insights.provenance
+        if provenance.executedLocally {
+            return String(localized: "On this Mac · \(provenance.providerID) · \(insights.model)")
+        }
+        if let upstream = provenance.brokerUpstream {
+            return String(localized: "Cloud · \(provenance.providerID) → \(upstream) · \(insights.model)")
+        }
+        return String(localized: "Cloud · \(provenance.providerID) · \(insights.model)")
     }
 
     private func errorCard(_ msg: String) -> some View {

@@ -5,14 +5,34 @@ import CSqliteVec
 /// Owner of the DatabasePool + migrations. Sendable (only `let pool`). Writes/reads go through the pool
 /// (it's thread-safe). FTS5 external-content + triggers — WITHOUT the old version's Cartesian bug.
 final class ZBSEyeDatabase: Sendable {
+    enum Access: Sendable, Equatable {
+        case readWrite
+        case readOnly
+    }
+
+    enum OpenError: Error, Equatable {
+        case readOnlyMigrationsForbidden
+        case readOnlyDatabaseMissing(String)
+    }
+
     let pool: DatabasePool
 
     /// Embedding dimensionality (multilingual-e5-small = 384). Fixed in the vec0 DDL.
     static let embeddingDim = 384
 
-    /// `runMigrations: false` — for read-only consumers (the MCP process), to avoid taking an exclusive
-    /// write-lock on grdb_migrations and contending with the writing GUI instance. The GUI owns the schema.
-    init(path: String, runMigrations: Bool = true) throws {
+    /// A helper must opt into both `.readOnly` and `runMigrations: false`.
+    /// Skipping migrations alone does not make SQLite read-only.
+    init(
+        path: String,
+        runMigrations: Bool = true,
+        access: Access = .readWrite
+    ) throws {
+        if access == .readOnly {
+            guard !runMigrations else { throw OpenError.readOnlyMigrationsForbidden }
+            guard FileManager.default.fileExists(atPath: path) else {
+                throw OpenError.readOnlyDatabaseMissing(path)
+            }
+        }
         // mmap+WAL are especially prone to DB corruption on EXTERNAL/network volumes (our relocate to SSD!) — SQLite
         // docs warn about this directly, screenpipe disabled mmap as its top corruption fix. "Forever memory" =
         // integrity > speed. On internal APFS we keep a moderate mmap; on external/unknown — 0.
@@ -23,10 +43,17 @@ final class ZBSEyeDatabase: Sendable {
             .resourceValues(forKeys: [.volumeIsInternalKey]).volumeIsInternal) ?? false
         let mmapBytes = isInternal ? 134_217_728 : 0   // 128 MB internal, 0 on external/unknown
         var config = Configuration()
+        config.readonly = access == .readOnly
         config.prepareDatabase { db in
-            try db.execute(sql: "PRAGMA foreign_keys = ON")
-            try db.execute(sql: "PRAGMA recursive_triggers = ON")  // FK cascade → DELETE on text_blocks → FTS trigger
-            try db.execute(sql: "PRAGMA synchronous = NORMAL")    // WAL + NORMAL = safe+fast
+            if access == .readOnly {
+                // Defense in depth on top of SQLITE_OPEN_READONLY. These are
+                // connection-local controls and never mutate the database.
+                try db.execute(sql: "PRAGMA query_only = ON")
+            } else {
+                try db.execute(sql: "PRAGMA foreign_keys = ON")
+                try db.execute(sql: "PRAGMA recursive_triggers = ON")  // FK cascade → DELETE on text_blocks → FTS trigger
+                try db.execute(sql: "PRAGMA synchronous = NORMAL")    // WAL + NORMAL = safe+fast
+            }
             try db.execute(sql: "PRAGMA busy_timeout = 5000")
             try db.execute(sql: "PRAGMA mmap_size = \(mmapBytes)")   // 0 on an external volume — anti-corruption
             // Register sqlite-vec (static, no loadable extension) on every pool connection.

@@ -27,9 +27,10 @@ ZBS Eye quietly keeps an "eternal memory" of your work at the computer:
 - **Search** → hybrid full-text + semantic (cross-lingual: search in one language, find another),
   a scrubbable timeline, frames served as images.
 - **Access for AI agents** → a local REST + MCP surface so LLMs/agents can work with your memory.
-- **Bring your own AI** → you pick the model that processes history excerpts (Ask, Daily Insights,
-  day summary): local (LM Studio / Ollama) by default, **your already-installed Claude Code** (no API
-  key), **one-click OpenRouter** (OAuth), or an API key as a fallback — cloud only as an explicit opt-in.
+- **Built-in local AI, with provider choice** → one click downloads a verified on-device model for Ask,
+  Daily Insights, summaries, and activity labels. Or choose Codex, OpenRouter, Anthropic, Kimi, GLM,
+  MiMo, OpenAI, Claude Code, Ollama, or LM Studio. Providers own their model lists; cloud and signed-in
+  CLI providers receive history excerpts only after an explicit, recipient-specific opt-in.
 
 Capture, index and storage stay on the device — zero egress, no subscription, no account. AI is
 local-first: cloud providers exist only behind an explicit per-provider opt-in and receive prompt
@@ -58,11 +59,10 @@ native alternative that **never goes to the cloud** — your activity history is
 - 🔍 **Hybrid search** — FTS5 + multilingual-e5 (384-dim) via RRF; cross-lingual.
 - 🕰️ **Timeline** — scrub through time, frame + text + app/URL, a player.
 - 🔌 **REST + MCP** — a local API (127.0.0.1, Bearer token) for agents; MCP over stdio.
-- 🧠 **Bring your own AI** — the "AI Models" section, ordered by least friction: local LM Studio / Ollama
-  (or any local OpenAI-compatible server) as the default; **your installed Claude Code**, run as a local
-  subprocess with no API key to paste; **one-click OpenRouter** (real OAuth). Pasting an API key
-  (OpenAI / Anthropic) is demoted to an "Advanced" fallback. Cloud providers are an explicit opt-in with
-  a clear warning (excerpts of screen history leave the Mac — capture/index/storage never do).
+- 🧠 **Built-in local AI** — the headline path in "AI Models" downloads a pinned, verified MLX model and
+  then runs fully offline on supported Macs. The same provider-first screen keeps real choice: Codex,
+  OpenRouter, Anthropic, Kimi, GLM, MiMo, OpenAI, Claude Code, and separate Ollama / LM Studio connections.
+  A recommendation lives inside its provider and never silently changes the active provider/model pair.
 - ♾️ **Storage** — forever by default; **move to an external SSD** in one click;
   **iCloud auto-backup** (a compressed snapshot, without uploading the live database); size tracking.
 - 📥 **Import previous history** — bring your accumulated history (text + metadata) over.
@@ -124,10 +124,10 @@ Architecture and contributor/agent guide — [`AGENTS.md`](AGENTS.md). Distribut
 
 - Everything on the device. The server listens only on `127.0.0.1`; everything except `/health` requires
   a Bearer token (in the Keychain). No outbound traffic by default.
-- AI is local-first, bring-your-own. If you explicitly connect a cloud provider (OpenRouter / Anthropic /
-  OpenAI) in "AI Models" — after a per-provider consent warning — only prompt excerpts for Ask / Daily
-  Insights / summaries go to that one provider's API host. Recordings, the index, and storage never
-  leave the Mac; API keys live in the Keychain.
+- Built-in AI is local-first and offline after its one-time model download. If you deliberately activate
+  a cloud, broker, or signed-in CLI provider in "AI Models", ZBS Eye names the real recipient and asks for
+  scoped consent before sending generation excerpts. Recordings, the index, and storage never leave the
+  Mac; API credentials live in the data-protection Keychain.
 - The iCloud backup (optional, on by default if iCloud is present) goes out as a **compressed snapshot** —
   the live database stays local (you must not put a live SQLite file in iCloud Drive — corruption).
 - A password or sensitive conversation captured by accident can be wiped by time range or by app.
@@ -136,15 +136,15 @@ Architecture and contributor/agent guide — [`AGENTS.md`](AGENTS.md). Distribut
 
 Swift 6 (strict concurrency), SwiftUI, macOS 15+ · GRDB (DatabasePool + WAL) + FTS5 + sqlite-vec ·
 ScreenCaptureKit · Accessibility API · Vision OCR · SFSpeech · multilingual-e5 (swift-embeddings) ·
-FlyingFox (REST) · MCP swift-sdk · Hardened Runtime without App Sandbox.
+MLX Swift LM (built-in generation) · FlyingFox (REST) · MCP swift-sdk · Hardened Runtime without App Sandbox.
 
 ## Status
 
 Working: capture (screen + audio), hybrid search, timeline, REST + MCP, import of previous history,
 retention (forever by default), relocatable storage, iCloud backup, size tracking, daily summary,
-export, "Ask" (RAG over the model you pick in "AI Models" — LM Studio/Ollama by default, cloud
-providers as an explicit opt-in). Distribution — **notarized
-Developer ID** (`scripts/build-notarized.sh`). Deferred: a test target (XCTest).
+export, and one global provider/model pair for Ask, Daily Insights, summaries, and generated labels.
+The default path is a one-click built-in local model on qualified hardware; external local and cloud
+providers remain choices. Distribution — **notarized Developer ID** (`scripts/build-notarized.sh`).
 
 ## License
 

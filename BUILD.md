@@ -1,11 +1,14 @@
 # ZBSEye — build
 
 The project is generated from `project.yml` via [XcodeGen](https://github.com/yonaskolb/XcodeGen)
-(`ZBSEye.xcodeproj` is in `.gitignore` — not committed).
+(`ZBSEye.xcodeproj` is in `.gitignore`). The one intentional tracked exception is its SwiftPM
+`Package.resolved`: XcodeGen preserves it, and every scripted build requires those exact package revisions.
 
 ## Requirements
 - macOS 15+ (developed on 26 Tahoe), Xcode 26+, Swift 6.
 - `brew install xcodegen`
+- The built-in local model is not needed to compile or run ordinary tests. Real-model qualification is
+  opt-in and uses an already downloaded, manifest-verified directory; see [`docs/LOCAL_AI.md`](docs/LOCAL_AI.md).
 
 ## Build
 ```bash
@@ -15,7 +18,16 @@ open ZBSEye.xcodeproj             # → Xcode → Cmd+R
 xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Debug build
 ```
 
-A one-shot build + sign check is in `scripts/verify.sh` (xcodegen → xcodebuild Debug).
+A one-shot unsigned verification build is in `scripts/verify.sh` (xcodegen → strict-concurrency Debug build).
+It deliberately does not create or launch an ad-hoc signed app, so routine verification cannot churn the
+stable TCC identity of the installed release.
+
+The test target uses tiny fixtures and never downloads model weights:
+
+```bash
+xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEyeUnitTests -configuration Debug test
+bash scripts/verify-local-ai.sh --all-fixtures
+```
 
 ## Architecture
 ```
@@ -29,7 +41,7 @@ ZBSEyeApp/
   MCP/        ZBSEyeMCPServer (stdio)
   Automations/ HistoryImporter, DailySummaryService, ExportService, CartographerService
   State/      *Store.swift — @Observable @MainActor
-  Views/      Sidebar, Timeline, Activities, Ask, Cartographer, Achievements, Settings, MenuBar, Components
+  Views/      Timeline workspace, Ask, Achievements, focused Settings, MenuBar, Components
   ZBSEye.entitlements  — Hardened Runtime WITHOUT App Sandbox
 ```
 Swift 6 strict concurrency = `complete`. Deployment target macOS 15.0.

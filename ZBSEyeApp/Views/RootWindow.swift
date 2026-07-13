@@ -5,33 +5,16 @@ struct RootWindow: View {
 
     var body: some View {
         @Bindable var env = env
-        NavigationSplitView {
-            SidebarView(selection: $env.selectedSection)
-                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
-        } detail: {
-            Group {
-                switch env.selectedSection {
-                case .timeline:     TimelineView()
-                case .activities:   ActivitiesView()
-                case .ask:          AskView()
-                case .cartographer: CartographerView()
-                case .automations:  AutomationsView()
-                case .aiModels:     AIModelsView()
-                case .connections:  ConnectionsView()
-                case .progress:     MemoryProgressView()
-                case .achievements: AchievementsView()
-                case .appearance:   AppearanceView()
-                case .settings:     SettingsView()
-                }
-            }
+        MemoryWorkspaceView()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Self-repair sheet lives on the DETAIL — a different presenter than the onboarding sheet
-            // below. Two `.sheet(isPresented:)` on the SAME view collide and only one ever presents.
+            // Self-repair sheet lives below the workspace — a different presenter than onboarding.
+            // Two `.sheet(isPresented:)` on the same view collide and only one ever presents.
             .sheet(isPresented: $env.showSelfRepair) {
                 SelfRepairView(onClose: { env.showSelfRepair = false }).environment(env)
             }
-        }
-        .frame(minWidth: 900, minHeight: 600)
+            .frame(minWidth: 720, minHeight: 560)
+        /* Global overlays stay above the workspace so feature presentation
+           cannot hide a milestone or achievement unlock. */
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { env.showSelfRepair = true } label: {
@@ -41,6 +24,7 @@ struct RootWindow: View {
             }
         }
         .background(ThemeAuraView(theme: env.rewards.theme).ignoresSafeArea())   // theme aura background
+        .background { AISetupSheetHost().environment(env) }
         .tint(env.rewards.theme.accent)                                          // accent for the whole UI
         .animation(.easeInOut(duration: 0.5), value: env.rewards.theme)
         .overlay(alignment: .center) {

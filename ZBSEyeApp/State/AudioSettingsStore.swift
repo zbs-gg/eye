@@ -29,17 +29,22 @@ final class AudioSettingsStore {
     var audioMode: AudioMode {
         didSet {
             guard audioMode != oldValue else { return }
-            UserDefaults.standard.set(audioMode.rawValue, forKey: Self.modeKey)
+            defaults.set(audioMode.rawValue, forKey: Self.modeKey)
             // an explicit mode change wins over a stale session override — otherwise "force on" + switch
             // to Off would keep recording while the UI says Off (a privacy trap). Off = hard stop.
             manualAudioOverride = nil
+            onCaptureConfigurationChanged?()
         }
     }
 
     /// A separate toggle for system audio (calls/video = other people's voices) — so you can record
     /// your own microphone but not other people's audio. Default ON, but it's a conscious choice.
     var recordSystemAudio: Bool {
-        didSet { if recordSystemAudio != oldValue { UserDefaults.standard.set(recordSystemAudio, forKey: Self.sysKey) } }
+        didSet {
+            guard recordSystemAudio != oldValue else { return }
+            defaults.set(recordSystemAudio, forKey: Self.sysKey)
+            onCaptureConfigurationChanged?()
+        }
     }
 
     /// Runtime-only: a meeting/call is currently detected (fed by MeetingDetector). NOT persisted.
@@ -52,13 +57,23 @@ final class AudioSettingsStore {
 
     /// One-time nudge (post-migration): audio is now meetings-only by default. Persisted so we show it once.
     var migrationNudgeSeen: Bool {
-        didSet { if migrationNudgeSeen != oldValue { UserDefaults.standard.set(migrationNudgeSeen, forKey: Self.nudgeKey) } }
+        didSet {
+            if migrationNudgeSeen != oldValue {
+                defaults.set(migrationNudgeSeen, forKey: Self.nudgeKey)
+            }
+        }
     }
 
     /// Transcription health (refreshed when Settings opens) — to show "no on-device model".
     var health: TranscriptionHealth?
     var micEngineFailed = false
     var systemEngineFailed = false
+
+    /// Installed once by AppEnvironment. Views only edit intent; capture
+    /// synchronization has one owner and therefore fires exactly once.
+    @ObservationIgnored var onCaptureConfigurationChanged: (@MainActor () -> Void)?
+
+    @ObservationIgnored private let defaults: UserDefaults
 
     @ObservationIgnored private static let modeKey = "zbseye.audio.audioMode"
     @ObservationIgnored private static let legacyKey = "zbseye.audio.transcriptionEnabled"
@@ -87,14 +102,8 @@ final class AudioSettingsStore {
     /// Clear the session override (called at a real recording-session stop). Idempotent.
     func clearManualOverride() { manualAudioOverride = nil }
 
-    func refreshHealth(_ audio: AudioCoordinator?) async {
-        health = await audio?.health()
-        micEngineFailed = audio?.micStartFailed ?? false
-        systemEngineFailed = audio?.systemStartFailed ?? false
-    }
-
-    init() {
-        let d = UserDefaults.standard
+    init(defaults d: UserDefaults = .standard) {
+        defaults = d
         recordSystemAudio = (d.object(forKey: Self.sysKey) == nil) ? true : d.bool(forKey: Self.sysKey)
         migrationNudgeSeen = d.bool(forKey: Self.nudgeKey)
 

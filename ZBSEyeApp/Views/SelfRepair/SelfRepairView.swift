@@ -127,9 +127,9 @@ struct SelfRepairView: View {
         3. Toolchain check: `xcode-select -p` must point at a full Xcode (not bare Command Line Tools); \
         `xcodegen` must be installed — `brew install xcodegen` if missing.
         4. `xcodegen generate` — ZBSEye.xcodeproj is generated from project.yml, it is NOT in git.
-        5. Verify the build is green before changing anything (the CODE_SIGN/DEVELOPMENT_TEAM overrides \
-        let it build with no Apple team; -derivedDataPath keeps the product path deterministic):
-           `xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Release -destination 'platform=macOS' -derivedDataPath build/DerivedData CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" build`
+        5. Verify the build is green before changing anything (signing is disabled for this headless \
+        compile; the real Developer ID signature is created only by the release pipeline):
+           `xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Release -destination 'platform=macOS' -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO build`
            (the CoreSimulator version warning is noise; look for BUILD SUCCEEDED and no `error:` lines).
 
         ## Step 2 — learn the harness (it ships in the repo)

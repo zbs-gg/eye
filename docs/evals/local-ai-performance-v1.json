@@ -1,0 +1,75 @@
+{
+  "protocolID": "local-ai-performance-v1",
+  "artifactID": "zbs-eye-local-qwen3.5-4b-4bit-v1",
+  "artifactRevision": "0e7ffd5c629ef7719d4cbc04069232580bfa9d9c",
+  "qualityProtocolID": "local-ai-v9",
+  "buildConfiguration": "Release",
+  "execution": {
+    "offline": true,
+    "serial": true,
+    "retryCount": 0
+  },
+  "hardware": {
+    "machineIdentifier": "Mac16,5",
+    "physicalMemoryBytes": 68719476736,
+    "architecture": "arm64"
+  },
+  "generation": {
+    "temperature": 0.2,
+    "topP": 0.95,
+    "prefillStepSize": 256,
+    "thinkingMode": "disabled",
+    "maximumOutputTokens": 256,
+    "safetyTokens": 64,
+    "seed": 7445250368966578561
+  },
+  "contexts": [
+    {
+      "id": "prepared-2k",
+      "preparedInputTokens": 2048
+    },
+    {
+      "id": "prepared-full",
+      "preparedInputTokens": 7872
+    }
+  ],
+  "sampling": {
+    "coldPerContext": 20,
+    "warmPerContext": 30,
+    "retainedMemoryGenerations": 50,
+    "retainedMemoryContextID": "prepared-full",
+    "languages": ["en", "ru"],
+    "warmupPerContext": 1,
+    "noRetries": true
+  },
+  "promptMaterial": {
+    "system": "You are the ZBS Eye memory assistant. Use only the supplied local history. Return one concise grounded observation through the declared answer function.",
+    "englishPrefix": "Local history evidence follows. Summarize only the recurring work pattern supported by this history. ",
+    "englishFiller": "The user reviewed a local project note, compared the current implementation with the written plan, and recorded the next concrete action. ",
+    "russianPrefix": "Ниже локальная история. Кратко опиши только повторяющийся рабочий паттерн, подтвержденный этой историей. ",
+    "russianFiller": "Пользователь проверил заметку локального проекта, сравнил текущую реализацию с письменным планом и записал следующее конкретное действие. "
+  },
+  "coldDefinition": "Before every measured cold sample no ModelContainer from the preceding sample is live; the helper scope has returned, MLX cache is cleared, peak memory is reset, and the exact verified local directory is loaded again in the same serial XCTest process. This is a runtime-container cold start, not an OS disk-page-cache cold boot.",
+  "warmDefinition": "One unreported generation warms the retained verified ModelContainer for that context size; all measured warm samples then reuse that same container serially.",
+  "wiredTicketDefinition": "Each measured generation uses a real MLX WiredMemoryTicket sized from WiredMemoryUtils.tune for its prepared input; the ticket is passed to generateTokenTask and drained with the producer.",
+  "aggregation": {
+    "percentileMethod": "nearest-rank",
+    "reportPercentiles": [0.5, 0.95]
+  },
+  "thresholds": {
+    "twoKColdTTFTP95Seconds": 5,
+    "twoKWarmTTFTP95Seconds": 5,
+    "fullColdTTFTP95Seconds": 15,
+    "fullWarmTTFTP95Seconds": 10,
+    "minimumDecodeTokensPerSecond": 12,
+    "maximumCancellationSeconds": 1,
+    "maximumIncrementalPeakBytes": 5905580032,
+    "maximumRetainedGrowthBytes": 104857600,
+    "minimumUnloadReleaseFraction": 0.9,
+    "maximumUnloadSeconds": 10
+  },
+  "limitations": [
+    "Cold means a fresh model-container load after releasing the prior container and clearing MLX cache; it does not purge macOS file-system caches.",
+    "This isolated U1 gate measures MLX runtime behavior. Recorder coexistence, capture/ingest baselines, memory-pressure routing, and the production LocalInferenceService wiring remain separate U5/U9 release gates."
+  ]
+}

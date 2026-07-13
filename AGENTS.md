@@ -7,12 +7,15 @@ extend the code. It reads in 5 minutes and saves hours. Build details are in [`B
 > `ZBSEye`, types `ZBSEyeDatabase`/`ZBSEyeHTTPServer`/…, the binary `ZBS Eye.app`, the signature "ZBS Eye Dev".
 > That's normal (brand ≠ code name) — do NOT rename identifiers. Externally (bundle id `gg.zbs.eye`, display
 > name, data paths `~/…/ZBS Eye`, text) it's "ZBS Eye" everywhere.
+> Compact in-app sentences may use the established `Eye` shorthand after the product context is clear.
 
 ## What it is
 
 **ZBS Eye** (codename `ZBSEye`) is a native macOS "eternal memory" recorder: it continuously records what
 happens on the computer (screen + accessibility text/OCR + audio with transcription), indexes it, and serves
-it over a local REST + MCP surface. **100% local, no cloud, no account.** A light, native alternative to the
+it over a local REST + MCP surface. Capture and storage are **100% local, with no account required.** Optional
+generative providers may receive explicitly approved text excerpts after the user connects and consents; raw
+screenshots, audio, and file paths stay local. A light, native alternative to the
 proprietary equivalents (which moved to subscription + cloud).
 
 - Swift 6 (strict concurrency = `complete`), SwiftUI, target macOS 15+.
@@ -30,7 +33,8 @@ bash scripts/make-signing-cert.sh                 # ONCE: self-signed cert → s
 bash scripts/build-release.sh                     # Release + sign + bundle the e5 model + zip
 ```
 
-CLI modes (single binary): `--mcp` (MCP stdio), `--import-history`, `--relocate <path>`,
+CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), legacy `--mcp` / explicit
+`--mcp-full` (full MCP), `--import-history`, `--relocate <path>`,
 `--backup-now`, `--backup-verify <file>`.
 
 ## Architecture map (`ZBSEyeApp/`)
@@ -60,9 +64,13 @@ CLI modes (single binary): `--mcp` (MCP stdio), `--import-history`, `--relocate 
 3. **FTS5 external-content:** compute `snippet()`/`bm25()` in a subquery PURELY over the FTS table. Add a
    condition over a joined table (`c.ts BETWEEN …`) to the same SELECT and SQLite loses the FTS context
    ("unable to use function snippet"). Pattern: `WITH hits AS (… FROM text_fts WHERE MATCH … LIMIT N)`.
-4. **Localhost-only + auth on everything except `/health`.** A Bearer token in the Keychain. No egress.
-5. **Retention is FOREVER by default** (`RetentionPolicy.defaultDays = 0`). `prune(0)` = "forever", NOT
-   "delete everything older than 0 days" (a footgun guard in `RetentionManager.prune`).
+4. **Capture/storage remain local; egress is narrow and consent-gated.** REST is localhost-only with auth on
+   everything except `/health`; the bearer token stays in the data-protection Keychain. Only an explicitly
+   connected generative provider may receive the named consumer's approved text excerpts. Never send raw media,
+   file paths, credentials, or history for an unapproved/background consumer.
+5. **Keep Media is the only automatic retention contract.** Fresh empty profiles start at 5 GB; upgrades never
+   shorten retention without an explicit selection and authoritative reconciliation. `Forever` closes automatic
+   deletion. Critically low disk pauses capture for every policy and never overrides the selected retention promise.
 
 ## Gotchas (already stepped on — don't again)
 

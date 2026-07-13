@@ -2,6 +2,13 @@ import Foundation
 import Observation
 import GRDB
 
+struct AudioDrainAcknowledgement: Sendable, Equatable {
+    let hadActiveAudio: Bool
+    let activeLegs: Int
+    let transcriptionDrained: Bool
+    let systemCaptureOutcome: SystemAudioCaptureTeardownOutcome
+}
+
 /// Audio-recording orchestrator (@MainActor): two independent legs — microphone (AVAudioEngine) and system
 /// audio (ScreenCaptureKit). Different permissions (mic vs screen recording), a shared TranscriptionService.
 /// The gates (what to enable) live outside (RecordingStore/AppEnvironment). @Observable — per-source flags
@@ -15,7 +22,10 @@ final class AudioCoordinator {
     @ObservationIgnored private let systemPipeline: AudioPipeline
     @ObservationIgnored private let transcription: TranscriptionService
     @ObservationIgnored private var micTask: Task<Void, Never>?
-    @ObservationIgnored private var systemTask: Task<Void, Never>?
+    @ObservationIgnored private var systemTask: Task<
+        SystemAudioCaptureTeardownOutcome?,
+        Never
+    >?
 
     private(set) var isRunning = false
     private(set) var micStartFailed = false      // the engine did not start (no mic/device) — for health/UI
@@ -31,6 +41,9 @@ final class AudioCoordinator {
     /// Leg epochs: the tail of an OLD runLeg must not overwrite the micRunning/systemRunning of a NEW start.
     @ObservationIgnored private var micEpoch = 0
     @ObservationIgnored private var systemEpoch = 0
+    /// Relocation closes the background-backfill admission path too; otherwise
+    /// it could enqueue a transcript after the audio legs had acknowledged.
+    @ObservationIgnored private var maintenanceSuspended = false
 
     init(storage: StorageManager, ingest: IngestService, config: AudioConfig = AudioConfig()) {
         let backend = SFSpeechBackend()
@@ -81,6 +94,7 @@ final class AudioCoordinator {
 
     func start(mic: Bool, system: Bool) {
         guard !isRunning, mic || system else { return }
+        maintenanceSuspended = false
         isRunning = true
         legGeneration += 1
         if mic { _ = startMicLeg() }
@@ -89,16 +103,82 @@ final class AudioCoordinator {
 
     func stop() {
         guard isRunning else { return }
+        let tasks = stopAdmission()
+        let transcription = self.transcription
+        Task {
+            _ = await tasks.systemCapture?.value
+            await tasks.mic?.value
+            _ = await tasks.system?.value
+            await transcription.quiesce()
+        }
+    }
+
+    /// Stops both audio admission legs and the physical SCK session, then waits
+    /// for each VAD `flushFinal` and its audio-row write. Relocation also drains
+    /// transcription; normal termination leaves that resumable work to backfill.
+    func stopAndDrain(
+        waitForTranscription: Bool = true,
+        systemCaptureTimeout: Duration? = nil
+    ) async -> AudioDrainAcknowledgement {
+        maintenanceSuspended = true
+        let wasRunning = isRunning
+        let tasks = stopAdmission()
+        let hardwareDrain = Task { @MainActor in
+            let direct = await tasks.systemCapture?.value ?? .notNeeded
+            let lateStart = await tasks.system?.value ?? .notNeeded
+            return Self.combineCaptureOutcomes(direct, lateStart)
+        }
+        let systemCaptureOutcome: SystemAudioCaptureTeardownOutcome
+        if let systemCaptureTimeout {
+            systemCaptureOutcome = await SystemAudioTeardownDeadline.wait(
+                for: hardwareDrain,
+                timeout: systemCaptureTimeout
+            )
+        } else {
+            systemCaptureOutcome = await hardwareDrain.value
+        }
+        await tasks.mic?.value
+        if waitForTranscription {
+            await transcription.drainAndQuiesce()
+        } else {
+            // The saved audio row will be picked up by the next-launch
+            // backfill. A normal quit must wait for hardware and VAD flush,
+            // not potentially minutes of speech recognition backlog.
+            await transcription.quiesce()
+        }
+        return AudioDrainAcknowledgement(
+            hadActiveAudio: wasRunning,
+            activeLegs: systemCaptureOutcome.isConfirmedStopped ? 0 : 1,
+            transcriptionDrained: waitForTranscription,
+            systemCaptureOutcome: systemCaptureOutcome
+        )
+    }
+
+    private func stopAdmission() -> (
+        mic: Task<Void, Never>?,
+        system: Task<SystemAudioCaptureTeardownOutcome?, Never>?,
+        systemCapture: Task<SystemAudioCaptureTeardownOutcome, Never>?
+    ) {
         isRunning = false
         legGeneration += 1
         micRunning = false
         systemRunning = false
         micEngine.stop()
-        systemEngine.stop()   // finish() will close the stream → for-await completes → flushFinal inside the leg
-        // Wait for both legs (their flushFinal), then unload the model — in the background (we're @MainActor, not awaiting).
-        let mt = micTask, st = systemTask, transcription = self.transcription
-        Task { await mt?.value; await st?.value; await transcription.quiesce() }
+        // finish() closes the frame stream so runLeg can flushFinal; the
+        // returned task separately owns SCStream/CoreAudio teardown.
+        let systemCapture = systemEngine.stop()
         // We do NOT nil out micTask/systemTask: the next start waits for them via previous (serialization of cycles).
+        return (micTask, systemTask, systemCapture)
+    }
+
+    private nonisolated static func combineCaptureOutcomes(
+        _ first: SystemAudioCaptureTeardownOutcome,
+        _ second: SystemAudioCaptureTeardownOutcome
+    ) -> SystemAudioCaptureTeardownOutcome {
+        for outcome in [first, second] {
+            if !outcome.isConfirmedStopped { return outcome }
+        }
+        return first == .stopped || second == .stopped ? .stopped : .notNeeded
     }
 
     func health() async -> TranscriptionHealth { await transcription.snapshot() }
@@ -121,6 +201,7 @@ final class AudioCoordinator {
         guard !items.isEmpty else { return }
         var queued = 0
         for item in items {
+            guard !maintenanceSuspended else { break }
             let url = storage.url(forRelative: item.rel)
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
             await transcription.enqueue(AudioSegment(
@@ -164,29 +245,40 @@ final class AudioCoordinator {
         let previous = systemTask
         let engine = systemEngine
         let pipeline = systemPipeline
+        let generation = legGeneration
         systemEpoch += 1
         let epoch = systemEpoch
-        systemTask = Task { [weak self] in
-            await previous?.value
+        systemTask = Task { @MainActor [weak self] in
+            _ = await previous?.value
             let stream: AsyncStream<AudioFrame>
-            do { stream = try await engine.start() }
-            catch {
+            do {
+                stream = try await engine.start()
+            } catch let cancellation as SystemAudioCaptureStartCancelled {
+                return cancellation.teardownOutcome
+            } catch is CancellationError {
+                return nil
+            } catch {
                 Log.audio.error("system audio start failed: \(String(describing: error), privacy: .public)")
-                await MainActor.run {
-                    self?.systemStartFailed = true
-                    // a transient start failure (displays reconfiguring) must not be terminal
-                    Task { @MainActor in await self?.restartLeg(mic: false) }
-                }
-                return
+                guard let self, self.isRunning,
+                      self.legGeneration == generation else { return nil }
+                self.systemStartFailed = true
+                // a transient start failure (displays reconfiguring) must not be terminal
+                Task { @MainActor in await self.restartLeg(mic: false) }
+                return nil
             }
-            await MainActor.run { self?.systemRunning = true }
+            guard let self, self.isRunning,
+                  self.legGeneration == generation else {
+                return await engine.stopAndDrain()
+            }
+            self.systemRunning = true
             await pipeline.reset()
             for await frame in stream {
                 let closed = await pipeline.feed(frame)
-                if closed { Task { @MainActor in self?.onSegment?() } }
+                if closed { self.onSegment?() }
             }
             await pipeline.flushFinal()
-            await MainActor.run { if self?.systemEpoch == epoch { self?.systemRunning = false } }
+            if self.systemEpoch == epoch { self.systemRunning = false }
+            return nil
         }
     }
 
