@@ -103,7 +103,15 @@ final class CaptureCoordinator {
     func start() {
         guard !isRunning else { return }
         isRunning = true
-        suspended = false
+        // Lock notifications only describe transitions. When ZBS Eye launches
+        // while the Mac is already locked there is no did-lock event to catch,
+        // and ScreenCaptureKit reports an empty display list. Seed the gate from
+        // the current login session so we wait for the real unlock notification
+        // instead of probing the unavailable display every active tick.
+        let sessionInfo = CGSessionCopyCurrentDictionary() as? [String: Any]
+        let sessionWasAlreadyLocked = sessionInfo?["CGSSessionScreenIsLocked"] as? Bool ?? false
+        screenLocked = sessionWasAlreadyLocked
+        suspended = sessionWasAlreadyLocked
 
         let wsc = NSWorkspace.shared.notificationCenter
         observers.append(wsc.addObserver(forName: NSWorkspace.didActivateApplicationNotification,
@@ -170,7 +178,7 @@ final class CaptureCoordinator {
         tickTimer = Timer.scheduledTimer(withTimeInterval: config.activeTickSeconds, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tickFired() }
         }
-        trigger()
+        if !sessionWasAlreadyLocked { trigger() }
     }
 
     func stop() {
