@@ -199,9 +199,12 @@ targets:
       - path: ZBSEyeApp/Data/StorageRelocationPolicy.swift
       - path: ZBSEyeApp/Support/Log.swift
       - path: ZBSEyeApp/Search/SearchModels.swift
+      - path: ZBSEyeApp/Search/AskScope.swift
+      - path: ZBSEyeApp/Search/AskDatabaseRetrieval.swift
       - path: ZBSEyeApp/MCP/MCPHistorySearchRouting.swift
       - path: ZBSEyeApp/Search/AskService.swift
       - path: ZBSEyeApp/State/AskStore.swift
+      - path: ZBSEyeApp/State/WorkspaceStore.swift
       - path: ZBSEyeApp/State/StorageSettingsStore.swift
     dependencies:
       - package: MLXSwiftLM

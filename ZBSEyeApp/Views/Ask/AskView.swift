@@ -24,6 +24,8 @@ private struct AskBody: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            scopeBar
+            Divider()
             if store.messages.isEmpty {
                 emptyState
             } else {
@@ -32,6 +34,31 @@ private struct AskBody: View {
             Divider()
             inputBar
         }
+    }
+
+    private var scopeBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "calendar.badge.clock")
+                .foregroundStyle(.secondary)
+            Text("Asking about")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Menu {
+                Button("Today") {
+                    env.workspace.setAskScope(.day(Date()))
+                }
+                Button("All history") {
+                    env.workspace.setAskScope(.all)
+                }
+            } label: {
+                Text(store.currentScope.displayLabel)
+                    .font(.callout.weight(.medium))
+            }
+            .menuStyle(.borderlessButton)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
     private var conversation: some View {
@@ -109,8 +136,7 @@ private struct AskBody: View {
 
     private var inputBar: some View {
         HStack(spacing: 10) {
-            TextField(store.llmReady ? "Ask about your history…" : "First pick a processing model in AI Models",
-                      text: $store.input, axis: .vertical)
+            TextField("Ask about your history…", text: $store.input, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...4)
                 .onSubmit { store.send() }
@@ -149,12 +175,19 @@ private struct MessageRow: View {
     var body: some View {
         switch message.role {
         case .user:
-            HStack {
+            HStack(alignment: .bottom) {
                 Spacer(minLength: 40)
-                Text(message.text)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Color.accentColor.opacity(0.18),
-                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(message.text)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(Color.accentColor.opacity(0.18),
+                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    if let scope = message.scope {
+                        Text(scope.displayLabel)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
             }
         case .assistant:
             VStack(alignment: .leading, spacing: 8) {
@@ -208,8 +241,8 @@ private struct SourceChip: View {
         // Clicking a citation → the exact frame in the timeline ("don't take my word for it — here's the proof"). That's what sets
         // "memory you trust" apart from a RAG demo, and it hedges against a weak local LLM.
         Button {
+            env.workspace.returnToTimeline(source: result)
             env.selectedSection = .timeline
-            Task { await env.timelineStore?.select(result) }
         } label: {
             HStack(alignment: .top, spacing: 6) {
                 Text("[\(index)]").font(.caption.monospacedDigit()).foregroundStyle(.secondary)

@@ -56,6 +56,15 @@ final class TimelineStore {
         if let ws = windowStart, let w = zoom.seconds { return ws.addingTimeInterval(w) }
         return bounds.newest ?? Date()
     }
+    var selectedMomentAskScope: AskScope {
+        .moment(current?.ts ?? cursor)
+    }
+    var selectedDayAskScope: AskScope {
+        .day(current?.ts ?? cursor)
+    }
+    var visibleRangeAskScope: AskScope {
+        .range(from: rangeStart, to: rangeEnd)
+    }
     var hasData: Bool { bounds.oldest != nil }
 
     /// ~300 bars for the CURRENT window at any zoom (on a 10-min window — second-level detail).

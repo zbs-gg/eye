@@ -149,6 +149,62 @@ final class AskServiceTests: XCTestCase {
         }
     }
 
+    func testBoundedScopeReachesRetrievalAsOneFrozenSnapshot() async throws {
+        let scope = AskScope.range(
+            from: Date(timeIntervalSince1970: 1_000),
+            to: Date(timeIntervalSince1970: 2_000)
+        ).snapshot(revision: 14, calendar: .current)
+        let retrieval = ScopedRecordingAskRetrieval(evidence: [
+            evidence(id: 7, text: "Bounded evidence"),
+        ])
+        let execution = context(provider: .ollama, model: "local", local: true)
+        let router = StubAskRouter(result: .success(response(
+            content: "Bounded answer [1]",
+            execution: execution
+        )))
+        let service = AskService(retrieval: retrieval, router: router)
+
+        _ = try await service.answer(
+            question: "What happened here?",
+            scope: scope,
+            execution: execution,
+            requestID: UUID()
+        )
+
+        let scopes = await retrieval.recordedScopes()
+        XCTAssertEqual(scopes, [scope])
+    }
+
+    func testBoundedScopeFailsClosedForLegacyOnlyRetrieval() async throws {
+        let retrieval = LegacyOnlyAskRetrieval(evidence: [
+            evidence(id: 99, text: "all-history evidence that must not leak"),
+        ])
+        let router = StubAskRouter(result: .failure(.adapterUnavailable))
+        let service = AskService(retrieval: retrieval, router: router)
+        let scope = AskScope.moment(Date()).snapshot(
+            revision: 1,
+            calendar: .current
+        )
+
+        await assertAskError(.contextUnavailable) {
+            _ = try await service.answer(
+                question: "Question",
+                scope: scope,
+                execution: self.context(
+                    provider: .ollama,
+                    model: "local",
+                    local: true
+                ),
+                requestID: UUID()
+            )
+        }
+
+        let legacyCalls = await retrieval.callCount()
+        let dispatches = await router.callCount()
+        XCTAssertEqual(legacyCalls, 0)
+        XCTAssertEqual(dispatches, 0)
+    }
+
     func testEnglishAndRussianPromptsPreserveQuestionLanguage() async throws {
         let cases: [(String, String, String)] = [
             ("Where was the release discussed?", "Answer in English", "Question:"),
@@ -477,6 +533,46 @@ final class AskServiceTests: XCTestCase {
 }
 
 private actor StubAskRetrieval: AskRetrievalProviding {
+    private let evidence: [AskRetrievedEvidence]
+    private var count = 0
+
+    init(evidence: [AskRetrievedEvidence]) {
+        self.evidence = evidence
+    }
+
+    func retrieve(question: String, limit: Int) async throws -> [AskRetrievedEvidence] {
+        count += 1
+        return Array(evidence.prefix(limit))
+    }
+
+    func callCount() -> Int { count }
+}
+
+private actor ScopedRecordingAskRetrieval: AskRetrievalProviding {
+    private let evidence: [AskRetrievedEvidence]
+    private var scopes: [AskScopeSnapshot] = []
+
+    init(evidence: [AskRetrievedEvidence]) {
+        self.evidence = evidence
+    }
+
+    func retrieve(question: String, limit: Int) async throws -> [AskRetrievedEvidence] {
+        Array(evidence.prefix(limit))
+    }
+
+    func retrieve(
+        question: String,
+        scope: AskScopeSnapshot,
+        limit: Int
+    ) async throws -> [AskRetrievedEvidence] {
+        scopes.append(scope)
+        return Array(evidence.prefix(limit))
+    }
+
+    func recordedScopes() -> [AskScopeSnapshot] { scopes }
+}
+
+private actor LegacyOnlyAskRetrieval: AskRetrievalProviding {
     private let evidence: [AskRetrievedEvidence]
     private var count = 0
 

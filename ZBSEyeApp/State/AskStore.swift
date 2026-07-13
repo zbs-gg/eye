@@ -17,6 +17,7 @@ final class AskStore {
         var truncated = false
         var contextTruncated = false
         var provenance: AIExecutionProvenance?
+        var scope: AskScopeSnapshot?
     }
 
     private(set) var messages: [Message] = []
@@ -25,6 +26,7 @@ final class AskStore {
 
     @ObservationIgnored private let service: any AskAnswering
     @ObservationIgnored private let readiness: any AskReadinessProviding
+    @ObservationIgnored private let workspace: WorkspaceStore?
     @ObservationIgnored private let onQuestionSent: @MainActor @Sendable () -> Void
     @ObservationIgnored private var activeRequestID: UUID?
     @ObservationIgnored private var activeTask: Task<Void, Never>?
@@ -32,10 +34,12 @@ final class AskStore {
     init(
         service: any AskAnswering,
         readiness: any AskReadinessProviding,
+        workspace: WorkspaceStore? = nil,
         onQuestionSent: @escaping @MainActor @Sendable () -> Void = {}
     ) {
         self.service = service
         self.readiness = readiness
+        self.workspace = workspace
         self.onQuestionSent = onQuestionSent
     }
 
@@ -45,6 +49,12 @@ final class AskStore {
 
     var canSend: Bool {
         !busy && !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Compatibility-only stores without a workspace retain legacy all-history.
+    /// The application always injects its single WorkspaceStore.
+    var currentScope: AskScopeSnapshot {
+        workspace?.captureAskScope() ?? .allHistory
     }
 
     /// Truthful copy for the currently authorized Ask selection. Cloud is
@@ -63,22 +73,24 @@ final class AskStore {
     func send() {
         let question = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !busy, !question.isEmpty else { return }
-        input = ""
-        messages.append(Message(role: .user, text: question))
-        onQuestionSent()
+        let scope = currentScope
 
         if let egg = Self.easterEgg(question) {
-            messages.append(Message(role: .assistant, text: egg))
+            input = ""
+            messages.append(Message(role: .user, text: question, scope: scope))
+            messages.append(Message(role: .assistant, text: egg, scope: scope))
+            onQuestionSent()
             return
         }
         guard let execution = readiness.currentAskExecutionContext() else {
-            messages.append(Message(
-                role: .assistant,
-                text: String(localized: "To answer from your history I need a processing model — pick one in AI Models. Local models keep excerpts on this Mac; cloud providers receive excerpts only with your explicit consent. 👁")
-            ))
+            // U4 presents Add AI from this state. Keep both the draft and the
+            // workspace scope untouched while setup opens or is dismissed.
             return
         }
 
+        input = ""
+        messages.append(Message(role: .user, text: question, scope: scope))
+        onQuestionSent()
         let requestID = UUID()
         activeRequestID = requestID
         busy = true
@@ -96,6 +108,7 @@ final class AskStore {
             do {
                 let answer = try await service.answer(
                     question: question,
+                    scope: scope,
                     execution: execution,
                     requestID: requestID,
                     limits: .default
@@ -113,7 +126,8 @@ final class AskStore {
                     sources: answer.sources,
                     truncated: answer.truncated,
                     contextTruncated: answer.contextTruncated,
-                    provenance: answer.provenance
+                    provenance: answer.provenance,
+                    scope: scope
                 ))
             } catch is CancellationError {
                 return
@@ -125,7 +139,8 @@ final class AskStore {
                     ?? String(localized: "The selected model could not answer.")
                 self.messages.append(Message(
                     role: .assistant,
-                    text: String(localized: "⚠️ \(message)")
+                    text: String(localized: "⚠️ \(message)"),
+                    scope: scope
                 ))
             }
         }
@@ -137,6 +152,16 @@ final class AskStore {
         activeTask = nil
         busy = false
         messages.removeAll()
+    }
+
+    /// Retrying is a new explicit send, so it intentionally captures the scope
+    /// currently visible in the workspace rather than the previous snapshot.
+    func retryLastQuestion() {
+        guard !busy,
+              let question = messages.last(where: { $0.role == .user })?.text
+        else { return }
+        input = question
+        send()
     }
 
     private func mayPaint(

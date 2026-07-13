@@ -32,6 +32,16 @@ struct RootWindow: View {
             }
         }
         .frame(minWidth: 900, minHeight: 600)
+        .onChange(of: env.selectedSection) { _, section in
+            switch section {
+            case .timeline:
+                env.workspace.showTimeline()
+            case .ask:
+                env.workspace.openAsk()
+            default:
+                break
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { env.showSelfRepair = true } label: {

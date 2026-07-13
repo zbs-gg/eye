@@ -28,6 +28,26 @@ struct AskRetrievedEvidence: Sendable {
 
 protocol AskRetrievalProviding: Sendable {
     func retrieve(question: String, limit: Int) async throws -> [AskRetrievedEvidence]
+    func retrieve(
+        question: String,
+        scope: AskScopeSnapshot,
+        limit: Int
+    ) async throws -> [AskRetrievedEvidence]
+}
+
+extension AskRetrievalProviding {
+    /// Existing evaluation doubles remain source-compatible for all-history.
+    /// A bounded scope must never fall through to their unfiltered method.
+    func retrieve(
+        question: String,
+        scope: AskScopeSnapshot,
+        limit: Int
+    ) async throws -> [AskRetrievedEvidence] {
+        guard scope.isAllHistory else {
+            throw AskServiceError.contextUnavailable
+        }
+        return try await retrieve(question: question, limit: limit)
+    }
 }
 
 protocol AskLLMRouting: Sendable {
@@ -44,6 +64,35 @@ protocol AskAnswering: Sendable {
         requestID: UUID,
         limits: AskGenerationLimits
     ) async throws -> AskService.Answer
+    func answer(
+        question: String,
+        scope: AskScopeSnapshot,
+        execution: AskExecutionContext,
+        requestID: UUID,
+        limits: AskGenerationLimits
+    ) async throws -> AskService.Answer
+}
+
+extension AskAnswering {
+    /// Legacy answer doubles are valid for their original all-history callers,
+    /// but cannot claim they honored a bounded request.
+    func answer(
+        question: String,
+        scope: AskScopeSnapshot,
+        execution: AskExecutionContext,
+        requestID: UUID,
+        limits: AskGenerationLimits
+    ) async throws -> AskService.Answer {
+        guard scope.isAllHistory else {
+            throw AskServiceError.contextUnavailable
+        }
+        return try await answer(
+            question: question,
+            execution: execution,
+            requestID: requestID,
+            limits: limits
+        )
+    }
 }
 
 @MainActor
@@ -57,6 +106,7 @@ enum AskServiceError: Error, Sendable, Equatable, LocalizedError {
     case selectionChanged
     case provenanceMismatch
     case generationFailed
+    case contextUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -70,6 +120,8 @@ enum AskServiceError: Error, Sendable, Equatable, LocalizedError {
             return "The generated answer could not be attributed to the selected model."
         case .generationFailed:
             return "The selected model could not generate an answer."
+        case .contextUnavailable:
+            return "The selected time context is no longer available. Choose another moment or range."
         }
     }
 }
@@ -119,6 +171,22 @@ actor AskService: AskAnswering {
 
     func answer(
         question: String,
+        execution: AskExecutionContext,
+        requestID: UUID,
+        limits: AskGenerationLimits = .default
+    ) async throws -> Answer {
+        try await answer(
+            question: question,
+            scope: .allHistory,
+            execution: execution,
+            requestID: requestID,
+            limits: limits
+        )
+    }
+
+    func answer(
+        question: String,
+        scope: AskScopeSnapshot,
         execution: AskExecutionContext,
         requestID: UUID,
         limits: AskGenerationLimits = .default
@@ -173,6 +241,7 @@ actor AskService: AskAnswering {
 
         let evidence = try await retrieval.retrieve(
             question: question,
+            scope: scope,
             limit: limits.retrievalLimit
         )
         guard !evidence.isEmpty else {

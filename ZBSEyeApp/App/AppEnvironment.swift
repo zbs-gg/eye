@@ -19,6 +19,7 @@ final class AppEnvironment {
     let builtInModels = BuiltInModelStore()
     let privacy = PrivacyStore()
     let rewards = RewardsStore()   // cosmetic rewards (theme/icon/menu-bar) — independent of the DB
+    let workspace = WorkspaceStore()
 
     var selectedSection: SidebarSection = .timeline
 
@@ -722,6 +723,7 @@ final class AppEnvironment {
             self.ask = AskStore(
                 service: askService,
                 readiness: ai,
+                workspace: workspace,
                 onQuestionSent: { AchievementCounters.bump(.questions) }
             )
 

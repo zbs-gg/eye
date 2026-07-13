@@ -56,11 +56,21 @@ final class AskStoreTests: XCTestCase {
         }
     }
 
-    func testUnavailableSelectionShowsHintWithoutCallingService() async {
+    func testUnavailableSelectionRetainsDraftAndScopeWithoutCallingService() async {
         let readiness = MutableAskReadiness(nil)
         let execution = context(provider: .ollama, model: "local", local: true)
         let service = ImmediateAskAnswering(result: .success(answer(execution: execution)))
-        let store = AskStore(service: service, readiness: readiness)
+        let workspace = WorkspaceStore(
+            now: Date(timeIntervalSince1970: 1_000),
+            calendar: Calendar(identifier: .gregorian),
+            initialScope: .moment(Date(timeIntervalSince1970: 900))
+        )
+        let originalScope = workspace.captureAskScope()
+        let store = AskStore(
+            service: service,
+            readiness: readiness,
+            workspace: workspace
+        )
 
         XCTAssertFalse(store.llmReady)
         store.input = "Question"
@@ -68,9 +78,9 @@ final class AskStoreTests: XCTestCase {
 
         let calls = await service.callCount()
         XCTAssertEqual(calls, 0)
-        XCTAssertEqual(store.messages.count, 2)
-        XCTAssertEqual(store.messages.last?.role, .assistant)
-        XCTAssertTrue(store.messages.last?.text.contains("AI Models") == true)
+        XCTAssertTrue(store.messages.isEmpty)
+        XCTAssertEqual(store.input, "Question")
+        XCTAssertEqual(workspace.captureAskScope(), originalScope)
         XCTAssertFalse(store.busy)
     }
 
@@ -159,6 +169,48 @@ final class AskStoreTests: XCTestCase {
         XCTAssertEqual(store.messages.count, 1)
         XCTAssertEqual(store.messages.only?.role, .user)
         XCTAssertNil(store.messages.first(where: { $0.role == .assistant }))
+    }
+
+    func testScopeIsFrozenForSendAndRetryUsesCurrentVisibleScope() async throws {
+        let execution = context(provider: .ollama, model: "local", local: true)
+        let readiness = MutableAskReadiness(execution)
+        let service = DeferredAskAnswering()
+        let workspace = WorkspaceStore(
+            now: Date(timeIntervalSince1970: 1_000),
+            calendar: Calendar(identifier: .gregorian),
+            initialScope: .range(
+                from: Date(timeIntervalSince1970: 100),
+                to: Date(timeIntervalSince1970: 200)
+            )
+        )
+        let store = AskStore(
+            service: service,
+            readiness: readiness,
+            workspace: workspace
+        )
+        let originalScope = workspace.captureAskScope()
+        store.input = "Question"
+        store.send()
+
+        let firstID = try await waitForRequest(service, count: 1).lastUnwrapped
+        let firstScope = await service.scope(for: firstID)
+        XCTAssertEqual(firstScope, originalScope)
+
+        workspace.setAskScope(.moment(Date(timeIntervalSince1970: 900)))
+        let visibleScope = workspace.captureAskScope()
+        await service.complete(firstID, with: .success(answer(execution: execution)))
+        await waitUntilIdle(store)
+
+        XCTAssertEqual(store.messages.last?.scope, originalScope)
+        XCTAssertEqual(workspace.captureAskScope(), visibleScope)
+
+        store.retryLastQuestion()
+        let secondID = try await waitForRequest(service, count: 2).lastUnwrapped
+        let retryScope = await service.scope(for: secondID)
+        XCTAssertEqual(retryScope, visibleScope)
+        await service.complete(secondID, with: .success(answer(execution: execution)))
+        await waitUntilIdle(store)
+        XCTAssertEqual(store.messages.last?.scope, visibleScope)
     }
 
     func testNewRequestAfterClearWinsEvenWhenOldCompletionArrivesLast() async throws {
@@ -302,6 +354,17 @@ private actor ImmediateAskAnswering: AskAnswering {
         return try result.get()
     }
 
+    func answer(
+        question: String,
+        scope: AskScopeSnapshot,
+        execution: AskExecutionContext,
+        requestID: UUID,
+        limits: AskGenerationLimits
+    ) async throws -> AskService.Answer {
+        count += 1
+        return try result.get()
+    }
+
     func callCount() -> Int { count }
 }
 
@@ -310,6 +373,7 @@ private actor DeferredAskAnswering: AskAnswering {
         UUID: CheckedContinuation<AskService.Answer, any Error>
     ] = [:]
     private var order: [UUID] = []
+    private var scopes: [UUID: AskScopeSnapshot] = [:]
 
     func answer(
         question: String,
@@ -317,13 +381,32 @@ private actor DeferredAskAnswering: AskAnswering {
         requestID: UUID,
         limits: AskGenerationLimits
     ) async throws -> AskService.Answer {
+        try await waitForCompletion(requestID: requestID, scope: .allHistory)
+    }
+
+    func answer(
+        question: String,
+        scope: AskScopeSnapshot,
+        execution: AskExecutionContext,
+        requestID: UUID,
+        limits: AskGenerationLimits
+    ) async throws -> AskService.Answer {
+        try await waitForCompletion(requestID: requestID, scope: scope)
+    }
+
+    private func waitForCompletion(
+        requestID: UUID,
+        scope: AskScopeSnapshot
+    ) async throws -> AskService.Answer {
         order.append(requestID)
+        scopes[requestID] = scope
         return try await withCheckedThrowingContinuation { continuation in
             continuations[requestID] = continuation
         }
     }
 
     func requestIDs() -> [UUID] { order }
+    func scope(for requestID: UUID) -> AskScopeSnapshot? { scopes[requestID] }
 
     func complete(
         _ requestID: UUID,

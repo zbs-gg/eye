@@ -10,7 +10,13 @@ struct TimelineView: View {
             if let store = env.timelineStore {
                 TimelineBody(store: store)
                     .environment(env)
-                    .task { await store.load(); store.startLive() }
+                    .task {
+                        await store.load()
+                        store.startLive()
+                        if let target = env.workspace.consumeTimelineReturnTarget() {
+                            await store.select(target)
+                        }
+                    }
             } else if let err = env.dataError {
                 ContentUnavailableView("DB error", systemImage: "exclamationmark.triangle", description: Text(err))
             } else {
@@ -111,6 +117,21 @@ private struct TimelineBody: View {
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
             .animation(reduceMotion ? .none : .snappy(duration: 0.15), value: store.searchQuery.isEmpty)
 
+            Menu {
+                Button("This moment") {
+                    openAsk(scope: store.selectedMomentAskScope)
+                }
+                Button("This day") {
+                    openAsk(scope: store.selectedDayAskScope)
+                }
+                Button("Visible range") {
+                    openAsk(scope: store.visibleRangeAskScope)
+                }
+            } label: {
+                Label("Ask", systemImage: "questionmark.bubble")
+            }
+            .disabled(!store.hasData)
+
             Button {
                 env.recording.toggle()
             } label: {
@@ -134,6 +155,11 @@ private struct TimelineBody: View {
             .help("Moments captured this session")
         }
         .padding(16)
+    }
+
+    private func openAsk(scope: AskScope) {
+        env.workspace.openAsk(scope: scope)
+        env.selectedSection = .ask
     }
 
     // MARK: search results (Spotlight overlay)

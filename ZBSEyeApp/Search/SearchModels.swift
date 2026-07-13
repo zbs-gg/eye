@@ -1,9 +1,9 @@
 import Foundation
 
-enum SearchKind: String, Sendable { case screen, audio }
+enum SearchKind: String, Sendable, Equatable { case screen, audio }
 
 /// Search filters (UI, REST, MCP — one contract): "what did I see about X last week in Safari".
-struct SearchFilters: Sendable {
+struct SearchFilters: Sendable, Equatable {
     var from: Date?
     var to: Date?
     var app: String?          // substring of bundleId or app name (case-insensitive), screen only
@@ -15,6 +15,14 @@ struct SearchFilters: Sendable {
          limit: Int = 60, offset: Int = 0) {
         self.from = from; self.to = to; self.app = app; self.kind = kind
         self.limit = max(1, min(limit, 200)); self.offset = max(0, offset)
+    }
+
+    /// Inclusive bounds shared by FTS SQL, semantic post-filtering, and Ask's
+    /// second database read after ranked search.
+    func includes(timestamp: Date) -> Bool {
+        if let from, timestamp < from { return false }
+        if let to, timestamp > to { return false }
+        return true
     }
 }
 

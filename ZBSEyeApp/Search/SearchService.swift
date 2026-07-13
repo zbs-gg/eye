@@ -123,8 +123,7 @@ actor SearchService {
     /// Exact check of a result against the filters (the semantic legs are only filtered coarsely in SQL).
     private func matches(_ r: SearchResult, _ f: SearchFilters) -> Bool {
         if let k = f.kind, r.kind != k { return false }
-        if let from = f.from, r.ts < from { return false }
-        if let to = f.to, r.ts > to { return false }
+        if !f.includes(timestamp: r.ts) { return false }
         if let app = f.app, !app.isEmpty {
             guard r.kind == .screen else { return false }   // the app filter only makes sense for screen
             let needle = app.lowercased()
@@ -343,3 +342,5 @@ actor SearchService {
         return tokens.map { "\"\($0.replacingOccurrences(of: "\"", with: ""))\"*" }.joined(separator: " ")
     }
 }
+
+extension SearchService: AskSearchProviding {}
