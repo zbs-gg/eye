@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 
+import hashlib
 import json
 import os
 import tempfile
@@ -87,6 +88,40 @@ class EvaluatorReceiptTests(unittest.TestCase):
                 self.output,
                 "claim-mapper-primary",
                 authority_root=self.authority,
+            )
+
+    def test_receipt_must_bind_the_exact_bytes_already_parsed_for_scoring(self) -> None:
+        parsed_output_sha256 = hashlib.sha256(self.output.read_bytes()).hexdigest()
+        challenge = preissue_challenge(
+            packet_path=self.packet,
+            role="claim-mapper-primary",
+            authority_root=self.authority,
+        )
+        self.output.write_text('{"output":"replacement-b"}', encoding="utf-8")
+        receipt = self.artifacts / "replacement-receipt.json"
+        issue_receipt(
+            packet_path=self.packet,
+            output_path=self.output,
+            receipt_path=receipt,
+            role="claim-mapper-primary",
+            session_id="task:/root/replacement/turn:1",
+            provider="openai",
+            model_family="gpt-5",
+            challenge_id=challenge["challengeID"],
+            authority_root=self.authority,
+        )
+
+        with self.assertRaisesRegex(EvaluatorReceiptError, "does not bind"):
+            validate_receipt(
+                receipt,
+                self.packet,
+                self.output,
+                "claim-mapper-primary",
+                authority_root=self.authority,
+                expected_packet_sha256=hashlib.sha256(
+                    self.packet.read_bytes()
+                ).hexdigest(),
+                expected_output_sha256=parsed_output_sha256,
             )
 
     def test_claim_mapper_requires_preissued_challenge(self) -> None:

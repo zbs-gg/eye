@@ -135,19 +135,19 @@ def validate_decision(
     raise MappingError("claim judgment decision is invalid")
 
 
-def validate_mapper_output(
+def validate_mapper_output_with_evidence(
     packet_path: Path,
     output_path: Path,
     forbidden_identity: Optional[str] = None,
     *,
     load_private_json: PrivateJSONLoader,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str, str]:
     packet_path = Path(packet_path)
     packet_root = _validate_existing_output_root(packet_path.parent)
-    packet, _ = _load_packet(
+    packet, packet_bytes = _load_packet(
         packet_root / packet_path.name, load_private_json
     )
-    output, _ = load_private_json(Path(output_path), "mapper judgments")
+    output, output_bytes = load_private_json(Path(output_path), "mapper judgments")
     _exact_keys(output, {
         "schema", "protocol", "packetID", "mapperIdentity", "items",
     }, "mapper judgments")
@@ -219,6 +219,22 @@ def validate_mapper_output(
         judgments[arm_id] = item
     if set(judgments) != set(packet_items):
         raise MappingError("mapper judgments do not cover the packet")
+    return output, _sha256(packet_bytes), _sha256(output_bytes)
+
+
+def validate_mapper_output(
+    packet_path: Path,
+    output_path: Path,
+    forbidden_identity: Optional[str] = None,
+    *,
+    load_private_json: PrivateJSONLoader,
+) -> dict[str, Any]:
+    output, _, _ = validate_mapper_output_with_evidence(
+        packet_path,
+        output_path,
+        forbidden_identity,
+        load_private_json=load_private_json,
+    )
     return output
 
 

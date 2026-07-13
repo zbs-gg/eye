@@ -442,6 +442,8 @@ def validate_receipt(
     *,
     authority_root: Path | None = None,
     allow_legacy: bool = False,
+    expected_packet_sha256: str | None = None,
+    expected_output_sha256: str | None = None,
 ) -> dict[str, Any]:
     receipt = validate_private_input_file(receipt_path)
     packet = validate_private_input_file(packet_path)
@@ -483,8 +485,21 @@ def validate_receipt(
     if payload["authorityKeyID"] != _key_id(key) \
             or not hmac.compare_digest(signature, _signature(key, unsigned)):
         raise EvaluatorReceiptError("evaluator receipt signature is invalid")
-    if payload["packetSHA256"] != file_evidence(packet)["sha256"] \
-            or payload["outputSHA256"] != file_evidence(output)["sha256"]:
+    packet_sha256 = (
+        expected_packet_sha256
+        if expected_packet_sha256 is not None
+        else file_evidence(packet)["sha256"]
+    )
+    output_sha256 = (
+        expected_output_sha256
+        if expected_output_sha256 is not None
+        else file_evidence(output)["sha256"]
+    )
+    if not re.fullmatch(r"[a-f0-9]{64}", packet_sha256) \
+            or not re.fullmatch(r"[a-f0-9]{64}", output_sha256):
+        raise EvaluatorReceiptError("expected evaluator artifact digest is invalid")
+    if payload["packetSHA256"] != packet_sha256 \
+            or payload["outputSHA256"] != output_sha256:
         raise EvaluatorReceiptError("evaluator receipt does not bind these artifacts")
 
     challenge = _load_signed_record(

@@ -47,7 +47,7 @@ from .private_io import (
 from .validate import (
     load_mapping,
     validate_decision,
-    validate_mapper_output,
+    validate_mapper_output_with_evidence,
     validate_public_output,
 )
 
@@ -342,12 +342,12 @@ def _apply_adjudication(
     primary_output: dict[str, Any],
     prior_identities: set[str],
     load_private_json: PrivateJSONLoader,
-) -> None:
+) -> tuple[str, str]:
     packet, packet_bytes = load_private_json(
         packet_path, "adjudication packet"
     )
     owner, _ = load_private_json(owner_path, "adjudication owner mapping")
-    output, _ = load_private_json(output_path, "adjudication output")
+    output, output_bytes = load_private_json(output_path, "adjudication output")
     if owner.get("schema") != ADJUDICATION_OWNER_SCHEMA \
             or owner.get("protocol") != PROTOCOL \
             or not hmac.compare_digest(
@@ -450,6 +450,7 @@ def _apply_adjudication(
         raise MappingError(
             "adjudication does not cover every disagreement"
         )
+    return _sha256(packet_bytes), _sha256(output_bytes)
 
 
 def _score(
@@ -625,16 +626,20 @@ def aggregate_mappings(
     mapping, primary_packet, hidden_packet = load_mapping(
         mapping_root, load_private_json
     )
-    primary_output = validate_mapper_output(
+    primary_output, primary_packet_sha256, primary_output_sha256 = (
+        validate_mapper_output_with_evidence(
         mapping_root / "primary-packet.json",
         Path(primary_output_path),
         load_private_json=load_private_json,
+        )
     )
-    hidden_output = validate_mapper_output(
+    hidden_output, hidden_packet_sha256, hidden_output_sha256 = (
+        validate_mapper_output_with_evidence(
         mapping_root / "hidden-packet.json",
         Path(hidden_output_path),
         primary_output["mapperIdentity"],
         load_private_json=load_private_json,
+        )
     )
     primary_receipt_path = primary_receipt_path or Path(
         primary_output_path
@@ -648,12 +653,16 @@ def aggregate_mappings(
             mapping_root / "primary-packet.json",
             Path(primary_output_path),
             "claim-mapper-primary",
+            expected_packet_sha256=primary_packet_sha256,
+            expected_output_sha256=primary_output_sha256,
         ),
         validate_receipt(
             hidden_receipt_path,
             mapping_root / "hidden-packet.json",
             Path(hidden_output_path),
             "claim-mapper-hidden",
+            expected_packet_sha256=hidden_packet_sha256,
+            expected_output_sha256=hidden_output_sha256,
         ),
     ]
     validate_independent_sessions(
@@ -724,7 +733,7 @@ def aggregate_mappings(
         else:
             if differences:
                 assert packet_path is not None and owner_path is not None
-                _apply_adjudication(
+                adjudication_packet_sha256, adjudication_output_sha256 = _apply_adjudication(
                     packet_path,
                     owner_path,
                     Path(adjudication_output_path),
@@ -743,6 +752,8 @@ def aggregate_mappings(
                     packet_path,
                     Path(adjudication_output_path),
                     "claim-adjudicator",
+                    expected_packet_sha256=adjudication_packet_sha256,
+                    expected_output_sha256=adjudication_output_sha256,
                 )
                 validate_independent_sessions(
                     [*mapper_receipts, adjudicator_receipt],
