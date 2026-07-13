@@ -310,6 +310,20 @@ final class AppEnvironment {
             self.storage = storage
             let db = try ZBSEyeDatabase(path: ZBSEyeDatabase.defaultURL().path)
             self.db = db
+            // Keep Media migration is resolved only after the canonical root,
+            // database, and captured-media tree are available. This one-time
+            // reconciliation never calls RetentionManager; an uncertain result
+            // keeps automatic deletion closed.
+            let keepMediaInventory = await Self.classifyFreshKeepMediaProfile(
+                db: db,
+                storage: storage
+            )
+            let keepMediaResolution = storageSettings.initializeKeepMediaPolicy(
+                inventory: keepMediaInventory
+            )
+            Log.retention.info(
+                "Keep Media initialized: \(keepMediaResolution.policy.rawValue, privacy: .public), deletion admitted=\(keepMediaResolution.automaticDeletionAdmitted)"
+            )
             // Gamification: progress and milestones
             self.progress = ProgressStore(db: db)
             let backupManager = BackupManager(db: db, storage: storage)
@@ -754,14 +768,20 @@ final class AppEnvironment {
             // must not let the disk drift past the limit between restarts.
             retentionTask = Task.detached(priority: .utility) { [weak self] in
                 while !Task.isCancelled {
-                    // the user's policy from Settings (0 = no limit → nil)
-                    let policy = await MainActor.run { () -> (Int?, Int64?) in
+                    // A migrated finite policy is deletion-inert until U2's
+                    // authoritative boundary reconciliation opens admission.
+                    let policy = await MainActor.run { () -> (Bool, Int64?) in
                         guard let s = self?.storageSettings else {
-                            return (RetentionPolicy.defaultDays, RetentionPolicy.defaultMaxBytes)
+                            return (false, nil)
                         }
-                        return (s.effectiveDays, s.effectiveMaxBytes)
+                        return (s.automaticDeletionAdmitted, s.effectiveMaxBytes)
                     }
-                    let report = try? await retention.prune(retentionDays: policy.0, maxBytes: policy.1)
+                    let report: PruneReport?
+                    if policy.0 {
+                        report = try? await retention.prune(retentionDays: nil, maxBytes: policy.1)
+                    } else {
+                        report = nil
+                    }
                     if let r = report, r.framesDeleted + r.audioDeleted + r.orphansDeleted > 0 {
                         Log.retention.info("prune: frames \(r.framesDeleted) audio \(r.audioDeleted) orphans \(r.orphansDeleted)")
                     }
@@ -845,6 +865,33 @@ final class AppEnvironment {
                 }
             }
         }
+    }
+
+    /// The migration only needs to distinguish a positively empty install from
+    /// every kind of existing profile. Authoritative byte reconciliation stays
+    /// at U2's finite-deletion boundary, so launch never walks the full history.
+    nonisolated private static func classifyFreshKeepMediaProfile(
+        db: ZBSEyeDatabase,
+        storage: StorageManager
+    ) async -> KeepMediaInventoryEvidence {
+        let databaseIsEmpty = (try? await db.pool.read { database in
+            let frames = try ScreenCaptureRow.fetchCount(database)
+            let audio = try AudioCaptureRow.fetchCount(database)
+            return frames == 0 && audio == 0
+        })
+        guard databaseIsEmpty == true else {
+            return .uncertain(databaseIsEmpty == nil ? .databaseReadFailed : .existingProfileNeedsReconciliation)
+        }
+        let mediaIsEmpty = await Task.detached(priority: .utility) {
+            try? FileManager.default.contentsOfDirectory(
+                at: storage.mediaDirectory,
+                includingPropertiesForKeys: nil
+            ).isEmpty
+        }.value
+        guard mediaIsEmpty == true else {
+            return .uncertain(mediaIsEmpty == nil ? .filesystemReadFailed : .existingProfileNeedsReconciliation)
+        }
+        return .positivelyEmpty
     }
 
     /// History deletion (privacy): lastSeconds=nil → everything. Returns a report for the UI.

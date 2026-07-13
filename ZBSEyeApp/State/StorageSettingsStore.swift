@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import GRDB
+import CoreFoundation
 
 /// Breakdown of used space (Sendable — returned from a Task.detached into @MainActor). Attribution
 /// import/live by monitorId='sp' (live capture writes monitorId=String(displayID): '0'/'1'…).
@@ -21,20 +22,25 @@ struct StorageBreakdown: Sendable, Equatable {
     }
 }
 
-/// Storage settings: retention (days/size, 0 = no limit) + how much is actually used.
-/// Before, the user had no idea their history only lived 7 days (hardcoded, no UI) — for a
-/// "memory forever" product that's a silent erasure of three weeks of life.
+/// Storage settings: one Keep Media policy plus how much is actually used.
+/// The legacy day/size properties remain only until the compact Settings view
+/// lands; automatic deletion is governed exclusively by Keep Media admission.
 @MainActor
 @Observable
 final class StorageSettingsStore {
     /// 0 = keep forever. Default 0 ("memory forever" — we do NOT delete by default).
     var retentionDays: Int {
-        didSet { if retentionDays != oldValue { UserDefaults.standard.set(retentionDays, forKey: Self.daysKey) } }
+        didSet { if retentionDays != oldValue { defaults.set(retentionDays, forKey: Self.daysKey) } }
     }
     /// Limit in GB; 0 = no limit. Default 0.
     var maxGB: Int {
-        didSet { if maxGB != oldValue { UserDefaults.standard.set(maxGB, forKey: Self.gbKey) } }
+        didSet { if maxGB != oldValue { defaults.set(maxGB, forKey: Self.gbKey) } }
     }
+
+    private(set) var keepMediaPolicy: KeepMediaPolicy
+    /// A finite policy is inert until DB metadata and the captured-media tree
+    /// reconcile. Persisted policy alone never authorizes automatic deletion.
+    private(set) var automaticDeletionAdmitted = false
 
     private(set) var mediaBytes: Int64 = 0
     private(set) var databaseBytes: Int64 = 0
@@ -50,20 +56,189 @@ final class StorageSettingsStore {
     var dataRootDisplay: String { StorageLocation.displayPath() }
     var isRelocated: Bool { StorageLocation.isRelocated() }
 
-    @ObservationIgnored private static let daysKey = "zbseye.retention.days"
-    @ObservationIgnored private static let gbKey = "zbseye.retention.maxGB"
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored static let daysKey = "zbseye.retention.days"
+    @ObservationIgnored static let gbKey = "zbseye.retention.maxGB"
+    @ObservationIgnored static let onboardingKey = "zbseye.onboarding.done"
+    @ObservationIgnored static let keepMediaPolicyKey = "zbseye.keepMedia.policy.v1"
+    @ObservationIgnored static let keepMediaReceiptKey = "zbseye.keepMedia.migrationReceipt.v1"
+    @ObservationIgnored private static let explicitPolicyKey = "zbseye.keepMedia.explicitSelection.v1"
 
     static let dayOptions = [0, 7, 14, 30, 90]   // 0 = "Forever" first: the default and the essence of the product
     static let gbOptions = [0, 10, 20, 50, 100]   // 0 = "No limit" first
 
-    var effectiveDays: Int? { retentionDays <= 0 ? nil : retentionDays }
-    var effectiveMaxBytes: Int64? { maxGB <= 0 ? nil : Int64(maxGB) * 1024 * 1024 * 1024 }
+    /// Time-based automatic retention is retired by the Keep Media contract.
+    var effectiveDays: Int? { nil }
+    var effectiveMaxBytes: Int64? {
+        automaticDeletionAdmitted ? keepMediaPolicy.maxCapturedMediaBytes : nil
+    }
 
-    init() {
-        let d = UserDefaults.standard
-        retentionDays = (d.object(forKey: Self.daysKey) == nil) ? RetentionPolicy.defaultDays
-                                                                : d.integer(forKey: Self.daysKey)
-        maxGB = (d.object(forKey: Self.gbKey) == nil) ? 0 : d.integer(forKey: Self.gbKey)
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        retentionDays = (defaults.object(forKey: Self.daysKey) == nil) ? 0
+                                                                       : defaults.integer(forKey: Self.daysKey)
+        maxGB = (defaults.object(forKey: Self.gbKey) == nil) ? 0 : defaults.integer(forKey: Self.gbKey)
+        keepMediaPolicy = defaults.string(forKey: Self.keepMediaPolicyKey)
+            .flatMap(KeepMediaPolicy.init(rawValue:)) ?? .forever
+    }
+
+    /// Resolve and persist the one-time legacy migration. The receipt is
+    /// durably readable before the policy key is published, so an interruption
+    /// can only retain longer. Legacy keys stay untouched until an explicit
+    /// user selection.
+    @discardableResult
+    func initializeKeepMediaPolicy(
+        inventory: KeepMediaInventoryEvidence
+    ) -> KeepMediaMigrationResolution {
+        if let existingReceipt = decodedReceipt() {
+            let rawPersistedPolicy = defaults.string(forKey: Self.keepMediaPolicyKey)
+            let persistedPolicy = rawPersistedPolicy
+                .flatMap(KeepMediaPolicy.init(rawValue:))
+            if defaults.object(forKey: Self.keepMediaPolicyKey) != nil,
+               persistedPolicy == nil {
+                publish(policy: .forever, admitted: false)
+                return KeepMediaMigration.resolve(
+                    snapshot: legacySnapshot(),
+                    inventory: .uncertain(.policyPreferenceUnreadable)
+                )
+            }
+            let policy = persistedPolicy ?? existingReceipt.resolution.policy
+            if persistedPolicy == nil {
+                defaults.set(policy.rawValue, forKey: Self.keepMediaPolicyKey)
+            }
+            return publishRecoveredPolicy(
+                policy,
+                inventory: inventory,
+                originalAdmission: existingReceipt.resolution.automaticDeletionAdmitted
+            )
+        }
+
+        if defaults.object(forKey: Self.keepMediaReceiptKey) != nil {
+            let resolution = KeepMediaMigration.resolve(
+                snapshot: legacySnapshot(),
+                inventory: .uncertain(.migrationReceiptUnreadable)
+            )
+            publish(policy: .forever, admitted: false)
+            return resolution
+        }
+
+        let snapshot = legacySnapshot()
+        let resolution = KeepMediaMigration.resolve(snapshot: snapshot, inventory: inventory)
+        let receipt = KeepMediaMigrationReceipt(
+            legacySnapshot: snapshot,
+            inventory: inventory,
+            resolution: resolution
+        )
+
+        guard let receiptData = try? JSONEncoder().encode(receipt) else {
+            publish(policy: .forever, admitted: false)
+            return KeepMediaMigration.resolve(
+                snapshot: snapshot,
+                inventory: .uncertain(.migrationReceiptUnreadable)
+            )
+        }
+        defaults.set(receiptData, forKey: Self.keepMediaReceiptKey)
+        guard decodedReceipt() == receipt else {
+            publish(policy: .forever, admitted: false)
+            return KeepMediaMigration.resolve(
+                snapshot: snapshot,
+                inventory: .uncertain(.migrationReceiptUnreadable)
+            )
+        }
+
+        defaults.set(resolution.policy.rawValue, forKey: Self.keepMediaPolicyKey)
+        guard defaults.string(forKey: Self.keepMediaPolicyKey) == resolution.policy.rawValue else {
+            publish(policy: .forever, admitted: false)
+            return KeepMediaMigration.resolve(
+                snapshot: snapshot,
+                inventory: .uncertain(.migrationReceiptUnreadable)
+            )
+        }
+        publish(
+            policy: resolution.policy,
+            admitted: resolution.automaticDeletionAdmitted
+        )
+        return resolution
+    }
+
+    /// The only path that retires legacy keys. A finite choice may be saved
+    /// while reconciliation is uncertain, but remains deletion-inert.
+    func selectKeepMediaPolicy(
+        _ policy: KeepMediaPolicy,
+        inventory: KeepMediaInventoryEvidence
+    ) {
+        defaults.set(policy.rawValue, forKey: Self.keepMediaPolicyKey)
+        guard defaults.string(forKey: Self.keepMediaPolicyKey) == policy.rawValue else { return }
+        defaults.set(true, forKey: Self.explicitPolicyKey)
+        defaults.removeObject(forKey: Self.daysKey)
+        defaults.removeObject(forKey: Self.gbKey)
+        publish(
+            policy: policy,
+            admitted: policy != .forever && inventory.isAuthoritative
+        )
+    }
+
+    private func publishRecoveredPolicy(
+        _ policy: KeepMediaPolicy,
+        inventory: KeepMediaInventoryEvidence,
+        originalAdmission: Bool
+    ) -> KeepMediaMigrationResolution {
+        let admitted = policy != .forever
+            && originalAdmission
+            && inventory == .positivelyEmpty
+        publish(policy: policy, admitted: admitted)
+        return KeepMediaMigrationResolution(
+            policy: policy,
+            automaticDeletionAdmitted: admitted,
+            shouldWritePolicy: false,
+            shouldRunRetention: false,
+            reason: policy == .forever ? .legacyUnlimited : .recognizedFiniteLegacyCap
+        )
+    }
+
+    private func publish(policy: KeepMediaPolicy, admitted: Bool) {
+        keepMediaPolicy = policy
+        automaticDeletionAdmitted = admitted
+    }
+
+    private func decodedReceipt() -> KeepMediaMigrationReceipt? {
+        guard let data = defaults.data(forKey: Self.keepMediaReceiptKey),
+              let receipt = try? JSONDecoder().decode(KeepMediaMigrationReceipt.self, from: data),
+              receipt.version == KeepMediaMigrationReceipt.currentVersion else { return nil }
+        return receipt
+    }
+
+    private func legacySnapshot() -> LegacyKeepMediaSnapshot {
+        LegacyKeepMediaSnapshot(
+            days: Self.legacyInteger(defaults.object(forKey: Self.daysKey)),
+            maxGB: Self.legacyInteger(defaults.object(forKey: Self.gbKey)),
+            onboardingCompleted: Self.legacyBool(defaults.object(forKey: Self.onboardingKey))
+        )
+    }
+
+    nonisolated private static func legacyInteger(_ object: Any?) -> LegacyKeepMediaValue {
+        guard let object else { return .missing }
+        guard let number = object as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID() else {
+            return .invalid(String(describing: object))
+        }
+        let value = number.doubleValue
+        guard value.isFinite,
+              value.rounded(.towardZero) == value,
+              value >= Double(Int.min), value <= Double(Int.max) else {
+            return .invalid(String(describing: object))
+        }
+        return .integer(Int(value))
+    }
+
+    nonisolated private static func legacyBool(_ object: Any?) -> Bool? {
+        guard let object else { return nil }
+        guard let number = object as? NSNumber,
+              CFGetTypeID(number) == CFBooleanGetTypeID() else {
+            // An invalid but present marker must never make a profile appear fresh.
+            return false
+        }
+        return number.boolValue
     }
 
     /// Recompute used space (media — folder walk, DB — size of sqlite+wal, free on the volume) +

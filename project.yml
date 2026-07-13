@@ -183,6 +183,7 @@ targets:
       - path: ZBSEyeApp/Automations/AutomationAuditWriter.swift
       - path: ZBSEyeApp/Automations/AutomationMarkdownSafety.swift
       - path: ZBSEyeApp/Data/StorageLocation.swift
+      - path: ZBSEyeApp/Data/KeepMediaPolicy.swift
       - path: ZBSEyeApp/Data/CaptureRecord.swift
       - path: ZBSEyeApp/Data/Models.swift
       - path: ZBSEyeApp/Data/ZBSEyeDatabase.swift
@@ -195,6 +196,7 @@ targets:
       - path: ZBSEyeApp/MCP/MCPHistorySearchRouting.swift
       - path: ZBSEyeApp/Search/AskService.swift
       - path: ZBSEyeApp/State/AskStore.swift
+      - path: ZBSEyeApp/State/StorageSettingsStore.swift
     dependencies:
       - package: MLXSwiftLM
         product: MLXLLM
