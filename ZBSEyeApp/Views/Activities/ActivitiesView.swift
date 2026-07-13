@@ -6,11 +6,16 @@ import AppKit
 /// behind a debug toggle. Tapping a session → jump to the timeline at startTs.
 struct ActivitiesView: View {
     @Environment(AppEnvironment.self) private var env
+    let onOpenMoment: (Date) -> Void
+
+    init(onOpenMoment: @escaping (Date) -> Void) {
+        self.onOpenMoment = onOpenMoment
+    }
 
     var body: some View {
         Group {
-            if let store = env.sceneStore, let timelineStore = env.timelineStore {
-                ActivitiesBody(store: store, timelineStore: timelineStore)
+            if let store = env.sceneStore {
+                ActivitiesBody(store: store, onOpenMoment: onOpenMoment)
                     .environment(env)
                     .task {
                         AchievementCounters.bump(.activitiesOpened)   // "Day Chronicler" achievement
@@ -49,8 +54,7 @@ private enum ActivityRow: Identifiable {
 
 private struct ActivitiesBody: View {
     @Bindable var store: SceneStore
-    @Bindable var timelineStore: TimelineStore
-    @Environment(AppEnvironment.self) private var env
+    let onOpenMoment: (Date) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -148,8 +152,7 @@ private struct ActivitiesBody: View {
 
     /// Tap on a session → jump to the timeline at the scene's startTs.
     private func jump(to scene: ActivityScene) {
-        env.selectedSection = .timeline
-        Task { await timelineStore.seek(to: scene.startTs) }
+        onOpenMoment(scene.startTs)
     }
 
     private func totalDurationLabel(_ blocks: [ActivityBlock]) -> String {

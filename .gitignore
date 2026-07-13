@@ -37,6 +37,8 @@ dist/
 
 # Internal (not part of the product): planning/research, benchmarks, ops automation
 workspace/
+!ZBSEyeApp/Views/Workspace/
+!ZBSEyeApp/Views/Workspace/*.swift
 harness/
 scripts/launchd/
 scripts/groom-roadmap.sh

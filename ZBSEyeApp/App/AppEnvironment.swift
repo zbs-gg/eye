@@ -46,9 +46,6 @@ final class AppEnvironment {
             self?.recording.syncAudio()
         }
     }
-
-    var selectedSection: SidebarSection = .timeline
-
     /// First launch → onboarding (consent "everything gets recorded" + permissions). Persist: shown until completed.
     var showOnboarding = !UserDefaults.standard.bool(forKey: "zbseye.onboarding.done")
     /// Self-repair sheet trigger — shared by the main-window toolbar button and the menu-bar item.
@@ -1200,37 +1197,5 @@ final class AppEnvironment {
         drain.capture.activeCycles == 0
             && drain.audio.activeLegs == 0
             && drain.audio.systemCaptureOutcome.isConfirmedStopped
-    }
-}
-
-enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
-    case timeline = "Timeline"
-    case activities = "Activities"
-    case ask = "Ask"
-    case cartographer = "Daily Insights"
-    case automations = "Automations"
-    case aiModels = "AI Models"
-    case connections = "Connections"
-    case progress = "Progress"
-    case achievements = "Achievements"
-    case appearance = "Appearance"
-    case settings = "Settings"
-
-    var id: String { rawValue }
-
-    var systemImage: String {
-        switch self {
-        case .timeline:     return "clock.arrow.circlepath"
-        case .activities:   return "calendar.day.timeline.left"
-        case .ask:          return "questionmark.bubble"
-        case .cartographer: return "map"
-        case .automations:  return "powerplug"
-        case .aiModels:     return "brain.head.profile"
-        case .connections:  return "app.connected.to.app.below.fill"
-        case .progress:     return "chart.bar.fill"
-        case .achievements: return "rosette"
-        case .appearance:   return "paintpalette"
-        case .settings:     return "gearshape"
-        }
     }
 }

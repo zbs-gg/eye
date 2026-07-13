@@ -18,6 +18,9 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 ### Changed
 - Primary Codex/Claude MCP setup is now tokenless and read-only by default, with bounded installed-app
   readiness checks and explicit opt-in for screenshot access or recording control.
+- **Timeline-first workspace.** Timeline and Ask now share one compact workspace header with always-visible
+  recording state. Activities is a Timeline representation, while Insights, Automations, Progress,
+  Achievements, Appearance, and Settings open as focused secondary views and return without losing context.
 - Every generative consumer now goes through one cancellable router with selection revision, authorization,
   deterministic context budgets, and provider/model/locality provenance. Interactive Ask takes priority over
   background work; stale or revoked output is discarded.

@@ -242,7 +242,6 @@ private struct SourceChip: View {
         // "memory you trust" apart from a RAG demo, and it hedges against a weak local LLM.
         Button {
             env.workspace.returnToTimeline(source: result)
-            env.selectedSection = .timeline
         } label: {
             HStack(alignment: .top, spacing: 6) {
                 Text("[\(index)]").font(.caption.monospacedDigit()).foregroundStyle(.secondary)

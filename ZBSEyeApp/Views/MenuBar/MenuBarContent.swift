@@ -29,7 +29,7 @@ struct MenuBarContent: View {
             if env.recording.lowDiskPaused {
                 // Low disk isn't a dead end: give a way straight to storage settings.
                 Button {
-                    env.selectedSection = .settings
+                    env.workspace.present(.settings)
                     openWindow(id: "main")
                     NSApp.activate(ignoringOtherApps: true)
                 } label: {
@@ -42,7 +42,7 @@ struct MenuBarContent: View {
             if !env.permissions.allCriticalGranted {
                 // Clickable pill: from the menubar straight to permission setup, not a dead end.
                 Button {
-                    env.selectedSection = .settings
+                    env.workspace.present(.settings)
                     openWindow(id: "main")
                     NSApp.activate(ignoringOtherApps: true)
                 } label: {

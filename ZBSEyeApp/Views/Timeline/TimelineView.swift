@@ -11,10 +11,18 @@ struct TimelineView: View {
                 TimelineBody(store: store)
                     .environment(env)
                     .task {
-                        await store.load()
+                        // The store outlives mode switches. Reloading would move a returning
+                        // user to the newest frame and destroy cursor/zoom/search context.
+                        if store.bounds.oldest == nil, store.bounds.newest == nil {
+                            await store.load()
+                        } else {
+                            await store.refresh()
+                        }
                         store.startLive()
                         if let target = env.workspace.consumeTimelineReturnTarget() {
                             await store.select(target)
+                        } else if let moment = env.workspace.consumeTimelineMomentTarget() {
+                            await store.seek(to: moment)
                         }
                     }
             } else if let err = env.dataError {
@@ -159,7 +167,6 @@ private struct TimelineBody: View {
 
     private func openAsk(scope: AskScope) {
         env.workspace.openAsk(scope: scope)
-        env.selectedSection = .ask
     }
 
     // MARK: search results (Spotlight overlay)
