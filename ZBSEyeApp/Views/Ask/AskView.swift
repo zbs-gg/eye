@@ -93,11 +93,11 @@ private struct AskBody: View {
                 if !store.llmReady {
                     GlassCard {
                         VStack(alignment: .leading, spacing: 8) {
-                            Label("A processing model is required", systemImage: "exclamationmark.triangle")
+                            Label("AI is off", systemImage: "pause.circle")
                                 .font(.headline)
-                            Text("Answers use the model you choose in AI Models. ZBS Eye Local works on this Mac; cloud providers receive excerpts only after your explicit consent.")
+                            Text("Timeline and local search keep working. Add AI only when you want a generated answer.")
                                 .font(.callout).foregroundStyle(.secondary)
-                            Button("Open AI Models") { env.selectedSection = .aiModels }
+                            Button("Add AI") { env.aiSetup.present(origin: .ask) }
                         }
                     }
                 }

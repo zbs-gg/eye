@@ -21,6 +21,7 @@ enum AIProvider: String, Codable, Sendable, CaseIterable, Identifiable {
     case ollama
     case lmstudio
     case custom
+    case customAPI
 
     var id: String { rawValue }
 
@@ -37,7 +38,8 @@ enum AIProvider: String, Codable, Sendable, CaseIterable, Identifiable {
         case .claudeCode:  return "Claude Code"
         case .ollama:      return "Ollama"
         case .lmstudio:    return "LM Studio"
-        case .custom:      return "Custom (localhost)"
+        case .custom:      return "Local Compatible"
+        case .customAPI:   return "Custom API"
         }
     }
 
@@ -46,7 +48,7 @@ enum AIProvider: String, Codable, Sendable, CaseIterable, Identifiable {
         case .zbsEyeLocal, .ollama, .lmstudio, .custom:
             return false
         case .codex, .openrouter, .anthropic, .moonshot, .zai, .xiaomi,
-                .openai, .claudeCode:
+                .openai, .claudeCode, .customAPI:
             return true
         }
     }
@@ -73,7 +75,32 @@ enum AIProvider: String, Codable, Sendable, CaseIterable, Identifiable {
             return "OpenAI"
         case .claudeCode:
             return "Anthropic, via your Claude Code login"
+        case .customAPI:
+            return "the custom API endpoint you configured"
         }
+    }
+
+    /// Custom API consent names the concrete configured origin. Fixed
+    /// providers retain their stable recipient disclosure.
+    func egressDestination(for baseURL: String?) -> String? {
+        guard self == .customAPI else { return egressDestination }
+        guard let raw = baseURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let url = URL(string: raw),
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.scheme?.lowercased() == "https",
+              let host = components.host,
+              !host.isEmpty else { return nil }
+        let port = components.port.map { ":\($0)" } ?? ""
+        return "Custom API at https://\(host.lowercased())\(port)"
+    }
+
+    func acceptsEgressDestination(_ disclosure: String?) -> Bool {
+        if self != .customAPI { return disclosure == egressDestination }
+        guard let disclosure else { return false }
+        return disclosure.hasPrefix("Custom API at https://")
+            && disclosure.utf8.count <= 1_024
+            && !disclosure.contains("\n")
+            && !disclosure.contains("\r")
     }
 
     var isSubprocess: Bool { self == .codex || self == .claudeCode }
@@ -116,7 +143,7 @@ enum AIProvider: String, Codable, Sendable, CaseIterable, Identifiable {
             return Descriptor(transport: .builtInMLX, catalog: .bundledManifest)
         case .codex:
             return Descriptor(transport: .codexAppServer, catalog: .codexAppServer)
-        case .openrouter, .moonshot, .openai, .ollama, .lmstudio, .custom:
+        case .openrouter, .moonshot, .openai, .ollama, .lmstudio, .custom, .customAPI:
             return Descriptor(transport: .openAICompatible, catalog: .openAIModels)
         case .zai, .xiaomi:
             return Descriptor(
@@ -157,12 +184,14 @@ enum AIProvider: String, Codable, Sendable, CaseIterable, Identifiable {
             return "http://127.0.0.1:1234/v1"
         case .custom:
             return ""
+        case .customAPI:
+            return ""
         }
     }
 
     var apiHost: String? {
         switch self {
-        case .zbsEyeLocal, .codex, .claudeCode, .ollama, .lmstudio, .custom:
+        case .zbsEyeLocal, .codex, .claudeCode, .ollama, .lmstudio, .custom, .customAPI:
             return nil
         case .openrouter: return "openrouter.ai"
         case .anthropic:  return "api.anthropic.com"
@@ -183,12 +212,13 @@ enum AIProvider: String, Codable, Sendable, CaseIterable, Identifiable {
         case .zai:        return "llm.zai"
         case .xiaomi:     return "llm.xiaomi"
         case .openai:     return "llm.openai"
+        case .customAPI:  return "llm.custom-api"
         }
     }
 
     var keyConsoleURL: URL? {
         switch self {
-        case .zbsEyeLocal, .codex, .claudeCode, .ollama, .lmstudio, .custom:
+        case .zbsEyeLocal, .codex, .claudeCode, .ollama, .lmstudio, .custom, .customAPI:
             return nil
         case .openrouter:
             return URL(string: "https://openrouter.ai/keys")
@@ -206,7 +236,7 @@ enum AIProvider: String, Codable, Sendable, CaseIterable, Identifiable {
     }
 
     var allowsEndpointOverride: Bool {
-        self == .ollama || self == .lmstudio || self == .custom
+        self == .ollama || self == .lmstudio || self == .custom || self == .customAPI
     }
 
     static let claudeCodeDefaultModel = "default"
@@ -256,7 +286,7 @@ enum AIProvider: String, Codable, Sendable, CaseIterable, Identifiable {
         case .xiaomi:
             return documentedSuggestedModels.first(where: choices.contains)
                 ?? first(containing: ["mimo"])
-        case .codex, .openai, .claudeCode, .ollama, .lmstudio, .custom:
+        case .codex, .openai, .claudeCode, .ollama, .lmstudio, .custom, .customAPI:
             return nil
         }
     }
@@ -411,7 +441,9 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
     func isAuthorized(providerID: String, consumer: AIConsumer) -> Bool {
         guard let provider = AIProvider(rawValue: providerID) else { return false }
         if !provider.isCloud { return true }
-        guard let recipient = provider.egressDestination,
+        guard let recipient = provider.egressDestination(
+                  for: endpoints[providerID] ?? provider.defaultBaseURL
+              ),
               let grant = consentGrants[providerID],
               grant.providerID == providerID,
               grant.recipientDisclosure == recipient,
@@ -431,20 +463,23 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
     @discardableResult
     mutating func commitActivation(
         _ intent: ActivationIntent,
-        consentDraft: ScopedAIConsentGrant? = nil
+        consentDraft: ScopedAIConsentGrant? = nil,
+        requiredConsumers: Set<AIConsumer> = Set(AIConsumer.allCases)
     ) -> Bool {
         guard intent.expectedSelectionRevision == selectionRevision else { return false }
         return commitCurrentActivation(
             providerID: intent.providerID,
             modelID: intent.modelID,
-            consent: consentDraft
+            consent: consentDraft,
+            requiredConsumers: requiredConsumers
         )
     }
 
     private mutating func commitCurrentActivation(
         providerID: String,
         modelID: String,
-        consent: ScopedAIConsentGrant? = nil
+        consent: ScopedAIConsentGrant? = nil,
+        requiredConsumers: Set<AIConsumer>
     ) -> Bool {
         let cleanModel = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanModel.isEmpty,
@@ -452,11 +487,15 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
 
         if provider.isCloud {
             let effectiveGrant = consent ?? consentGrants[providerID]
-            guard let effectiveGrant,
+            let expectedRecipient = provider.egressDestination(
+                for: endpoints[providerID] ?? provider.defaultBaseURL
+            )
+            guard !requiredConsumers.isEmpty,
+                  let effectiveGrant,
                   effectiveGrant.providerID == providerID,
-                  effectiveGrant.recipientDisclosure == provider.egressDestination,
+                  effectiveGrant.recipientDisclosure == expectedRecipient,
                   effectiveGrant.policyRevision == ScopedAIConsentGrant.currentPolicyRevision,
-                  Set(AIConsumer.allCases).isSubset(of: effectiveGrant.consumers)
+                  requiredConsumers.isSubset(of: effectiveGrant.consumers)
             else { return false }
         } else if consent != nil {
             return false
@@ -466,7 +505,9 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
         if let consent,
            consent.providerID == providerID,
            provider.isCloud,
-           consent.recipientDisclosure == provider.egressDestination,
+           consent.recipientDisclosure == provider.egressDestination(
+               for: endpoints[providerID] ?? provider.defaultBaseURL
+           ),
            consentGrants[providerID] != consent {
             consentGrants[providerID] = consent
             cloudConsent[providerID] = true
@@ -507,7 +548,9 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
         guard let grant,
               let provider = AIProvider(rawValue: grant.providerID),
               provider.isCloud,
-              grant.recipientDisclosure == provider.egressDestination else { return }
+              grant.recipientDisclosure == provider.egressDestination(
+                  for: endpoints[grant.providerID] ?? provider.defaultBaseURL
+              ) else { return }
         if consentGrants[grant.providerID] != grant {
             consentGrants[grant.providerID] = grant
             cloudConsent[grant.providerID] = true

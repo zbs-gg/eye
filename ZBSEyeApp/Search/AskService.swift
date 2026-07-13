@@ -26,6 +26,18 @@ struct AskRetrievedEvidence: Sendable {
     let text: String
 }
 
+/// The only payload shape Ask may pass into prompt construction. Media bytes,
+/// file paths, URLs, and source metadata have no field here by design.
+struct AskProviderTextPayload: Sendable, Equatable {
+    let question: String
+    let evidenceTexts: [String]
+
+    init(question: String, evidence: [AskRetrievedEvidence]) {
+        self.question = question
+        self.evidenceTexts = evidence.map(\.text)
+    }
+}
+
 protocol AskRetrievalProviding: Sendable {
     func retrieve(question: String, limit: Int) async throws -> [AskRetrievedEvidence]
     func retrieve(
@@ -215,7 +227,7 @@ actor AskService: AskAnswering {
         }
         guard let provider = AIProvider(rawValue: execution.selection.providerID),
               execution.executedLocally == !provider.isCloud,
-              execution.recipientDisclosure == provider.egressDestination else {
+              provider.acceptsEgressDestination(execution.recipientDisclosure) else {
             throw AskServiceError.provenanceMismatch
         }
         let outputChannel = provider.outputChannel
@@ -253,9 +265,10 @@ actor AskService: AskAnswering {
             )
         }
 
-        let evidenceTexts = evidence.map(\.text)
+        let payload = AskProviderTextPayload(question: question, evidence: evidence)
+        let evidenceTexts = payload.evidenceTexts
         let statusHint = LocalAIContextPolicy.askStatusHint(
-            question: question,
+            question: payload.question,
             evidenceTexts: evidenceTexts
         )
         let system = Self.systemPrompt(

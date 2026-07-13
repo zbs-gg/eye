@@ -115,7 +115,7 @@ final class ProviderHTTPAdapterTests: XCTestCase {
         let cases: [(AIProvider, String)] = [
             (.ollama, "http://127.0.0.1:11434/v1"),
             (.lmstudio, "http://127.0.0.1:1234/v1"),
-            (.custom, "http://localhost:9800/v1"),
+            (.custom, "http://127.0.0.1:9800/v1"),
         ]
 
         for (provider, endpoint) in cases {
@@ -150,6 +150,58 @@ final class ProviderHTTPAdapterTests: XCTestCase {
         let remoteRequests = await remote.transport.requests()
         XCTAssertEqual(remoteCredentialReads, 0)
         XCTAssertEqual(remoteRequests.count, 0)
+
+        let namedLoopback = makeFixture(
+            provider: .custom,
+            model: "local-model",
+            baseURL: URL(string: "http://localhost:9800/v1")!
+        )
+        await assertThrows(.invalidEndpoint) {
+            _ = try await namedLoopback.adapter.generate(
+                request: self.request(),
+                selection: namedLoopback.selection
+            )
+        }
+        let namedLoopbackReads = await namedLoopback.credentials.readCount()
+        let namedLoopbackRequests = await namedLoopback.transport.requests()
+        XCTAssertEqual(namedLoopbackReads, 0)
+        XCTAssertEqual(namedLoopbackRequests.count, 0)
+    }
+
+    func testCustomAPIRequiresHTTPSAndAttachesItsOwnCredentialWithoutRedirectFallback() async throws {
+        let httpsURL = URL(string: "https://inference.example/v1")!
+        let secure = makeFixture(
+            provider: .customAPI,
+            model: "custom-model",
+            baseURL: httpsURL
+        )
+
+        let response = try await secure.adapter.generate(
+            request: request(),
+            selection: secure.selection
+        )
+
+        let sentRequests = await secure.transport.requests()
+        let sent = try XCTUnwrap(sentRequests.only)
+        XCTAssertEqual(sent.url.absoluteString, "https://inference.example/v1/chat/completions")
+        XCTAssertEqual(sent.headers["Authorization"], "Bearer \(secretCanary)")
+        XCTAssertFalse(response.provenance.executedLocally)
+
+        let insecure = makeFixture(
+            provider: .customAPI,
+            model: "custom-model",
+            baseURL: URL(string: "http://inference.example/v1")!
+        )
+        await assertThrows(.invalidEndpoint) {
+            _ = try await insecure.adapter.generate(
+                request: self.request(),
+                selection: insecure.selection
+            )
+        }
+        let insecureReads = await insecure.credentials.readCount()
+        let insecureRequests = await insecure.transport.requests()
+        XCTAssertEqual(insecureReads, 0)
+        XCTAssertEqual(insecureRequests.count, 0)
     }
 
     func testStaleSelectionRevokedConsentAndUnpinnedURLRejectBeforeSecretOrDispatch() async throws {
@@ -562,17 +614,24 @@ final class ProviderHTTPAdapterTests: XCTestCase {
         let transport = StubProviderHTTPTransport()
         let credentials = StubProviderHTTPCredentials(secret: secretCanary)
         let consumers = Set(AIConsumer.allCases)
+        let resolvedBaseURL = baseURL ?? URL(string: provider.defaultBaseURL)!
         let authorization = StubProviderHTTPAuthorization(
             state: .init(
                 selection: selection,
-                consentGrant: provider.isCloud ? grant(for: provider, consumers: consumers) : nil
+                consentGrant: provider.isCloud
+                    ? grant(
+                        for: provider,
+                        consumers: consumers,
+                        baseURL: resolvedBaseURL
+                    )
+                    : nil
             )
         )
         let date = fixedDate
         return Fixture(
             adapter: ProviderHTTPAdapter(
                 provider: provider,
-                baseURL: baseURL ?? URL(string: provider.defaultBaseURL)!,
+                baseURL: resolvedBaseURL,
                 transport: transport,
                 credentials: credentials,
                 authorization: authorization,
@@ -597,11 +656,14 @@ final class ProviderHTTPAdapterTests: XCTestCase {
 
     private func grant(
         for provider: AIProvider,
-        consumers: Set<AIConsumer>
+        consumers: Set<AIConsumer>,
+        baseURL: URL? = nil
     ) -> ScopedAIConsentGrant {
         ScopedAIConsentGrant(
             providerID: provider.rawValue,
-            recipientDisclosure: provider.egressDestination,
+            recipientDisclosure: provider.egressDestination(
+                for: baseURL?.absoluteString ?? provider.defaultBaseURL
+            ),
             consumers: consumers,
             policyRevision: ScopedAIConsentGrant.currentPolicyRevision
         )

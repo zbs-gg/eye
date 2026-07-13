@@ -178,6 +178,7 @@ targets:
       - path: ZBSEyeApp/Connections/CodexAppServerClient.swift
       - path: ZBSEyeApp/Connections/ProcessProviderConnections.swift
       - path: ZBSEyeApp/Views/AIModels/AIModelsPresentation.swift
+      - path: ZBSEyeApp/Views/AISetup/AISetupPresentation.swift
       - path: ZBSEyeApp/Connections/OpenRouterOAuth.swift
       - path: ZBSEyeApp/Server/KeychainStore.swift
       - path: ZBSEyeApp/Server/LocalPeerAuthenticator.swift

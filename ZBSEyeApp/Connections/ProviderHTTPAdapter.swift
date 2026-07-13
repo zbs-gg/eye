@@ -314,7 +314,9 @@ struct ProviderHTTPAdapter: LLMAdapter, Sendable {
         guard provider.isCloud else { return }
         guard let grant = current.consentGrant,
               grant.providerID == provider.rawValue,
-              grant.recipientDisclosure == provider.egressDestination,
+              grant.recipientDisclosure == provider.egressDestination(
+                  for: baseURL.absoluteString
+              ),
               [ScopedAIConsentGrant.legacyPolicyRevision,
                ScopedAIConsentGrant.currentPolicyRevision].contains(grant.policyRevision),
               grant.consumers.contains(consumer) else {
@@ -400,7 +402,7 @@ struct ProviderHTTPAdapter: LLMAdapter, Sendable {
     private static func supportsHTTP(_ provider: AIProvider) -> Bool {
         switch provider {
         case .openrouter, .anthropic, .moonshot, .zai, .xiaomi, .openai,
-                .ollama, .lmstudio, .custom:
+                .ollama, .lmstudio, .custom, .customAPI:
             return true
         case .zbsEyeLocal, .codex, .claudeCode:
             return false
@@ -557,7 +559,7 @@ private enum ProviderHTTPRoute {
         case .anthropic:
             return validated.appending(path: "messages", directoryHint: .notDirectory)
         case .openrouter, .moonshot, .zai, .xiaomi, .openai,
-                .ollama, .lmstudio, .custom:
+                .ollama, .lmstudio, .custom, .customAPI:
             return validated.appending(path: "chat/completions", directoryHint: .notDirectory)
         case .zbsEyeLocal, .codex, .claudeCode:
             throw ProviderHTTPAdapterError.unsupportedProvider
@@ -613,7 +615,7 @@ private enum ProviderHTTPRoute {
             }
             return baseURL
 
-        case .ollama, .lmstudio, .custom:
+        case .ollama, .lmstudio:
             var components = try requiredComponents(baseURL)
             guard let scheme = components.scheme?.lowercased(),
                   scheme == "http" || scheme == "https",
@@ -635,6 +637,35 @@ private enum ProviderHTTPRoute {
                 throw ProviderHTTPAdapterError.invalidEndpoint
             }
             return normalized
+
+        case .custom:
+            let components = try requiredComponents(baseURL)
+            guard let scheme = components.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https",
+                  let rawHost = components.host?.lowercased(),
+                  ["127.0.0.1", "::1", "[::1]"].contains(rawHost),
+                  components.user == nil,
+                  components.password == nil,
+                  components.query == nil,
+                  components.fragment == nil,
+                  !components.percentEncodedPath.lowercased().contains("%2e") else {
+                throw ProviderHTTPAdapterError.invalidEndpoint
+            }
+            return baseURL
+
+        case .customAPI:
+            let components = try requiredComponents(baseURL)
+            guard components.scheme?.lowercased() == "https",
+                  let host = components.host,
+                  !host.isEmpty,
+                  components.user == nil,
+                  components.password == nil,
+                  components.query == nil,
+                  components.fragment == nil,
+                  !components.percentEncodedPath.lowercased().contains("%2e") else {
+                throw ProviderHTTPAdapterError.invalidEndpoint
+            }
+            return baseURL
 
         case .zbsEyeLocal, .codex, .claudeCode:
             throw ProviderHTTPAdapterError.unsupportedProvider
@@ -696,7 +727,7 @@ enum ProviderHTTPCatalog {
                 documentedSuggestions: provider.documentedSuggestedModels
             )
 
-        case .openrouter, .moonshot, .openai, .ollama, .lmstudio, .custom:
+        case .openrouter, .moonshot, .openai, .ollama, .lmstudio, .custom, .customAPI:
             let url = try ProviderHTTPRoute.catalogURL(
                 provider: provider,
                 baseURL: baseURL,
@@ -765,7 +796,7 @@ enum ProviderHTTPCatalog {
                     nextCursor: nil
                 )
 
-            case .moonshot, .openai, .ollama, .lmstudio, .custom:
+            case .moonshot, .openai, .ollama, .lmstudio, .custom, .customAPI:
                 let envelope = try JSONDecoder().decode(OpenAICatalogEnvelope.self, from: data)
                 return ProviderHTTPCatalogPage(
                     models: try validatedModels(envelope.data.map {

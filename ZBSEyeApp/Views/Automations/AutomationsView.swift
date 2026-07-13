@@ -94,9 +94,9 @@ private struct AutomationBody: View {
             VStack(alignment: .leading, spacing: 12) {
                 Label("A processing model is required", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange).font(.headline)
-                Text("Choose a model in AI Models. ZBS Eye Local works without another app or account; the automation won't run until a model is active.")
+                Text("Add AI to generate a digest. Recording, Timeline, and local search keep working without it.")
                     .foregroundStyle(.secondary)
-                Button("Open AI Models") { env.selectedSection = .aiModels }
+                Button("Add AI") { env.aiSetup.present(origin: .settings) }
                     .buttonStyle(.borderedProminent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

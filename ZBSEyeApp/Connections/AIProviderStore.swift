@@ -259,8 +259,10 @@ final class AIProviderStore {
 
     /// Cloud endpoints are pinned; local ones take the user override (custom has no default at all).
     func endpoint(for p: AIProvider) -> String {
+        if p.allowsEndpointOverride,
+           let o = settings.endpoints[p.rawValue],
+           !o.trimmingCharacters(in: .whitespaces).isEmpty { return o }
         if p.isCloud { return p.defaultBaseURL }
-        if let o = settings.endpoints[p.rawValue], !o.trimmingCharacters(in: .whitespaces).isEmpty { return o }
         return p.defaultBaseURL
     }
     func setEndpoint(_ s: String, for p: AIProvider) {
@@ -334,6 +336,10 @@ final class AIProviderStore {
     }
 
     func hasKey(_ p: AIProvider) -> Bool { keyPresent[p.rawValue] ?? false }
+
+    func recipientDisclosure(for p: AIProvider) -> String? {
+        p.egressDestination(for: endpoint(for: p))
+    }
 
     func consentGrant(_ p: AIProvider) -> ScopedAIConsentGrant? {
         settings.consentGrant(forProviderID: p.rawValue)
@@ -424,25 +430,30 @@ final class AIProviderStore {
     @discardableResult
     func commitActivation(
         _ intent: ActivationIntent,
-        grantCloudConsent: Bool = false
+        grantCloudConsent: Bool = false,
+        consumers: Set<AIConsumer> = Set(AIConsumer.allCases)
     ) -> Bool {
         guard let p = AIProvider(rawValue: intent.providerID),
               canActivate(p, modelID: intent.modelID) else { return false }
 
         let consentDraft: ScopedAIConsentGrant?
         if grantCloudConsent {
-            guard p.isCloud, let recipient = p.egressDestination else { return false }
+            guard p.isCloud, let recipient = recipientDisclosure(for: p) else { return false }
             consentDraft = ScopedAIConsentGrant(
                 providerID: p.rawValue,
                 recipientDisclosure: recipient,
-                consumers: Set(AIConsumer.allCases),
+                consumers: consumers,
                 policyRevision: ScopedAIConsentGrant.currentPolicyRevision
             )
         } else {
             consentDraft = nil
         }
 
-        return settings.commitActivation(intent, consentDraft: consentDraft)
+        return settings.commitActivation(
+            intent,
+            consentDraft: consentDraft,
+            requiredConsumers: consumers
+        )
     }
 
     /// Captures ownership for an asynchronous remove/disconnect flow. The
@@ -848,8 +859,9 @@ final class AIProviderStore {
         return CodexLoginChallenge(loginID: loginID, authorizationURL: authorizationURL)
     }
 
-    func cancelCodexLogin() async {
+    func cancelCodexLogin(expectedLoginID: String? = nil) async {
         guard case .loginPending(let loginID, _) = codexConnection,
+              expectedLoginID == nil || expectedLoginID == loginID,
               let codexProvider, let processOverlay else { return }
         codexProbeBaseline = nil
         codexAttempt &+= 1

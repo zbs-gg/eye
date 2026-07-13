@@ -24,6 +24,7 @@ final class AIProviderContractTests: XCTestCase {
             .init(provider: .ollama, transport: .openAICompatible, catalog: .openAIModels),
             .init(provider: .lmstudio, transport: .openAICompatible, catalog: .openAIModels),
             .init(provider: .custom, transport: .openAICompatible, catalog: .openAIModels),
+            .init(provider: .customAPI, transport: .openAICompatible, catalog: .openAIModels),
         ]
 
         XCTAssertEqual(expected.map(\.provider), AIProvider.allCases)
@@ -93,10 +94,46 @@ final class AIProviderContractTests: XCTestCase {
         for provider in AIProvider.allCases where provider.isCloud {
             XCTAssertNotNil(provider.egressDestination, "\(provider.displayName) must name its egress destination")
             XCTAssertTrue(
-                provider.isSubprocess || provider.apiHost != nil,
+                provider.isSubprocess || provider.apiHost != nil || provider == .customAPI,
                 "\(provider.displayName) must use a constrained subprocess or a pinned API host"
             )
         }
+    }
+
+    func testCustomAPIIsCloudCredentialedAndHTTPSOnlyWhileLocalCompatibleStaysLoopbackOnly() {
+        XCTAssertTrue(AIProvider.customAPI.isCloud)
+        XCTAssertTrue(AIProvider.customAPI.usesAPIKey)
+        XCTAssertTrue(AIProvider.customAPI.allowsEndpointOverride)
+        XCTAssertFalse(AIProvider.custom.isCloud)
+        XCTAssertFalse(AIProvider.custom.usesAPIKey)
+
+        XCTAssertTrue(LLMConfig(
+            provider: .customAPI,
+            baseURL: "https://inference.example/v1",
+            model: "model",
+            cloudConsented: true
+        ).isEndpointAllowed)
+        XCTAssertFalse(LLMConfig(
+            provider: .customAPI,
+            baseURL: "http://inference.example/v1",
+            model: "model",
+            cloudConsented: true
+        ).isEndpointAllowed)
+        XCTAssertFalse(LLMConfig(
+            provider: .custom,
+            baseURL: "https://inference.example/v1",
+            model: "model"
+        ).isEndpointAllowed)
+        XCTAssertFalse(LLMConfig(
+            provider: .custom,
+            baseURL: "http://localhost:8000/v1",
+            model: "model"
+        ).isEndpointAllowed)
+        XCTAssertTrue(LLMConfig(
+            provider: .custom,
+            baseURL: "http://127.0.0.1:8000/v1",
+            model: "model"
+        ).isEndpointAllowed)
     }
 
     func testProviderSettingsRoundTripPreservesSelectionAndConsent() throws {

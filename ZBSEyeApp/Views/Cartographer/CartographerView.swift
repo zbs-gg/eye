@@ -86,9 +86,9 @@ private struct CartographerBody: View {
             VStack(alignment: .leading, spacing: 12) {
                 Label("A processing model is required", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange).font(.headline)
-                Text("Choose a model in AI Models. ZBS Eye Local works on this Mac; cloud providers receive excerpts only after your explicit consent. Recordings and the index stay local.")
+                Text("Add AI only when you want generated insights. Local activity and Timeline keep working without it.")
                     .foregroundStyle(.secondary)
-                Button("Open AI Models") { env.selectedSection = .aiModels }
+                Button("Add AI") { env.aiSetup.present(origin: .settings) }
                     .buttonStyle(.borderedProminent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

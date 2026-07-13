@@ -284,6 +284,69 @@ final class AIProviderPersistenceTests: XCTestCase {
         ))
     }
 
+    func testAskOriginCloudConfirmationAuthorizesOnlyAsk() {
+        var settings = AIProviderSettings()
+        let grant = ScopedAIConsentGrant(
+            providerID: AIProvider.openrouter.rawValue,
+            recipientDisclosure: AIProvider.openrouter.egressDestination,
+            consumers: [.ask],
+            policyRevision: ScopedAIConsentGrant.currentPolicyRevision
+        )
+        let intent = ActivationIntent(
+            providerID: AIProvider.openrouter.rawValue,
+            modelID: "anthropic/claude-haiku",
+            expectedSelectionRevision: .zero
+        )
+
+        XCTAssertTrue(settings.commitActivation(
+            intent,
+            consentDraft: grant,
+            requiredConsumers: [.ask]
+        ))
+        XCTAssertTrue(settings.isAuthorized(
+            providerID: AIProvider.openrouter.rawValue,
+            consumer: .ask
+        ))
+        XCTAssertFalse(settings.isAuthorized(
+            providerID: AIProvider.openrouter.rawValue,
+            consumer: .dailyInsights
+        ))
+        XCTAssertFalse(settings.isAuthorized(
+            providerID: AIProvider.openrouter.rawValue,
+            consumer: .generatedLabels
+        ))
+    }
+
+    func testCustomAPIConsentIsBoundToTheConfiguredHTTPSOrigin() throws {
+        let provider = AIProvider.customAPI
+        let endpoint = "https://inference.example/v1"
+        var settings = AIProviderSettings(
+            endpoints: [provider.rawValue: endpoint]
+        )
+        let recipient = try XCTUnwrap(provider.egressDestination(for: endpoint))
+        let grant = ScopedAIConsentGrant(
+            providerID: provider.rawValue,
+            recipientDisclosure: recipient,
+            consumers: [.ask],
+            policyRevision: ScopedAIConsentGrant.currentPolicyRevision
+        )
+        let intent = ActivationIntent(
+            providerID: provider.rawValue,
+            modelID: "model",
+            expectedSelectionRevision: .zero
+        )
+
+        XCTAssertTrue(settings.commitActivation(
+            intent,
+            consentDraft: grant,
+            requiredConsumers: [.ask]
+        ))
+        XCTAssertTrue(settings.isAuthorized(providerID: provider.rawValue, consumer: .ask))
+
+        settings.endpoints[provider.rawValue] = "https://other.example/v1"
+        XCTAssertFalse(settings.isAuthorized(providerID: provider.rawValue, consumer: .ask))
+    }
+
     func testCloudConfirmationWithInvalidConsentMutatesNothing() {
         var settings = AIProviderSettings(
             active: AIProvider.lmstudio.rawValue,
@@ -449,7 +512,7 @@ final class AIProviderPersistenceTests: XCTestCase {
     func testProviderCatalogContainsProviderEntitiesWithoutPromotingModelsToProviders() {
         let required: Set<AIProvider> = [
             .zbsEyeLocal, .codex, .openrouter, .anthropic, .moonshot, .zai, .xiaomi,
-            .openai, .claudeCode, .ollama, .lmstudio, .custom,
+            .openai, .claudeCode, .ollama, .lmstudio, .custom, .customAPI,
         ]
 
         XCTAssertEqual(Set(AIProvider.allCases), required)

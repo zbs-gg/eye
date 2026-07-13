@@ -13,6 +13,7 @@ final class AppEnvironment {
     let server = ServerStore()
     let connections = ConnectionStore()   // destination-folder config persists itself, no db needed
     let ai = AIProviderStore()            // "AI Models": the active processing model (local-first, BYO-AI)
+    let aiSetup = AISetupPresentation()
     let audioSettings = AudioSettingsStore()
     let storageSettings = StorageSettingsStore()
     let backupSettings = BackupSettingsStore()

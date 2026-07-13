@@ -2,6 +2,33 @@ import Foundation
 import XCTest
 
 final class AskServiceTests: XCTestCase {
+    func testProviderPayloadAllowlistContainsOnlyQuestionAndEvidenceText() {
+        let pathCanary = "/synthetic/private/raw-frame.heic"
+        let mediaCanary = "RAW_IMAGE_BYTES_CANARY"
+        let source = SearchResult(
+            id: 1,
+            kind: .screen,
+            ts: Date(timeIntervalSince1970: 10),
+            bundleId: "gg.test",
+            appName: "Test",
+            windowTitle: "Window",
+            browserURL: "https://example.test/private",
+            snippet: "Visible text",
+            relativePath: pathCanary
+        )
+        let payload = AskProviderTextPayload(
+            question: "What happened?",
+            evidence: [AskRetrievedEvidence(source: source, text: "Allowed excerpt")]
+        )
+        let serialized = ([payload.question] + payload.evidenceTexts).joined(separator: "\n")
+
+        XCTAssertEqual(payload.question, "What happened?")
+        XCTAssertEqual(payload.evidenceTexts, ["Allowed excerpt"])
+        XCTAssertFalse(serialized.contains(pathCanary))
+        XCTAssertFalse(serialized.contains(mediaCanary))
+        XCTAssertFalse(serialized.contains("example.test/private"))
+    }
+
     func testLocalAnswerUsesAskMetadataCitationsSourcesAndProvenance() async throws {
         let evidence = [
             evidence(id: 11, text: "The build passed after enabling strict concurrency."),

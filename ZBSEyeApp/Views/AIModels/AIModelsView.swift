@@ -1,9 +1,18 @@
 import SwiftUI
 
-/// Navigation entry point. The provider-first implementation lives in a
-/// focused screen file so setup state and card hierarchy stay reviewable.
+/// Temporary compatibility route until the Timeline-first shell removes the
+/// old sidebar destination in U5. It opens the same compact app-wide setup.
 struct AIModelsView: View {
+    @Environment(AppEnvironment.self) private var env
+
     var body: some View {
-        ProviderFirstAIModelsScreen()
+        ContentUnavailableView {
+            Label("AI is optional", systemImage: "sparkles")
+        } description: {
+            Text("Eye works without AI. Setup now uses one compact flow.")
+        } actions: {
+            Button("Open AI Setup") { env.aiSetup.present(origin: .settings) }
+                .buttonStyle(.borderedProminent)
+        }
     }
 }

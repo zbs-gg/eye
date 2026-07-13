@@ -183,7 +183,7 @@ struct RoutedAIConsumerGenerator: AIConsumerGenerating {
               execution.contextTokenCeiling > 0,
               let provider = AIProvider(rawValue: execution.selection.providerID),
               execution.executedLocally == !provider.isCloud,
-              execution.recipientDisclosure == provider.egressDestination else {
+              provider.acceptsEgressDestination(execution.recipientDisclosure) else {
             throw AIConsumerGenerationError.invalidPlan
         }
 

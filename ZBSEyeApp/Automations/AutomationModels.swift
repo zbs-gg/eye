@@ -53,6 +53,21 @@ struct LLMConfig: Sendable, Equatable {
         }
         guard let url = URL(string: normalizedBaseURL), let host = url.host?.lowercased() else { return false }
         if let pinned = provider.apiHost { return host == pinned && url.scheme == "https" }
+        if provider == .customAPI {
+            guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                return false
+            }
+            return components.scheme?.lowercased() == "https"
+                && !host.isEmpty
+                && components.user == nil
+                && components.password == nil
+                && components.query == nil
+                && components.fragment == nil
+                && !components.percentEncodedPath.lowercased().contains("%2e")
+        }
+        if provider == .custom {
+            return ["127.0.0.1", "::1"].contains(host)
+        }
         return isLocalOnly
     }
 

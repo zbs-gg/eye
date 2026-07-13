@@ -58,7 +58,7 @@ extension AIProviderStore: AIConsumerReadinessProviding {
             selection: selection,
             contextTokenCeiling: ceiling,
             executedLocally: !provider.isCloud,
-            recipientDisclosure: provider.egressDestination
+            recipientDisclosure: recipientDisclosure(for: provider)
         )
     }
 }
@@ -101,7 +101,7 @@ final class ApplicationLLMAdapterRegistry: LLMAdapterRegistering {
         guard let provider = AIProvider(rawValue: providerID) else { return nil }
         switch provider {
         case .openrouter, .anthropic, .moonshot, .zai, .xiaomi, .openai,
-                .ollama, .lmstudio, .custom:
+                .ollama, .lmstudio, .custom, .customAPI:
             let rawEndpoint = providers.endpoint(for: provider)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let normalizedEndpoint = provider.isCloud || rawEndpoint.contains("://")

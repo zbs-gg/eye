@@ -21,6 +21,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Settings").font(.largeTitle.bold())
                 permissionsCard
+                aiCard
                 languageCard
                 launchCard
                 storageCard
@@ -49,6 +50,27 @@ struct SettingsView: View {
         } message: {
             Text("The interface language is applied after a restart.")
         }
+    }
+
+    private var aiCard: some View {
+        GlassCard {
+            HStack(spacing: 12) {
+                Image(systemName: "sparkles")
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("AI").font(.headline)
+                    Text(aiSummary).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Set Up…") { env.aiSetup.present(origin: .settings) }
+            }
+        }
+    }
+
+    private var aiSummary: String {
+        guard let provider = env.ai.activeProvider, let model = env.ai.activeModelID else {
+            return String(localized: "Off — Timeline and local search still work")
+        }
+        return "\(provider.displayName) · \(model)"
     }
 
     private var languageCard: some View {

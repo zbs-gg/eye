@@ -51,6 +51,7 @@ struct RootWindow: View {
             }
         }
         .background(ThemeAuraView(theme: env.rewards.theme).ignoresSafeArea())   // theme aura background
+        .background { AISetupSheetHost().environment(env) }
         .tint(env.rewards.theme.accent)                                          // accent for the whole UI
         .animation(.easeInOut(duration: 0.5), value: env.rewards.theme)
         .overlay(alignment: .center) {
