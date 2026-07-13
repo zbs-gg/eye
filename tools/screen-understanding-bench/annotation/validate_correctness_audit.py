@@ -254,14 +254,23 @@ def validate_tiebreak(packet_path: Path, judgments_path: Path) -> dict:
     return actual
 
 
+def summarize_tiebreak(result: dict) -> dict:
+    return {
+        "count": len(result),
+        "decisionCount": sum(len(decisions) for decisions in result.values()),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--packet", required=True, type=Path)
     parser.add_argument("--judgments", required=True, type=Path)
     parser.add_argument("--tiebreak", action="store_true")
     args = parser.parse_args()
-    result = validate_tiebreak(args.packet, args.judgments) if args.tiebreak \
-        else validate(args.packet, args.judgments)
+    if args.tiebreak:
+        result = summarize_tiebreak(validate_tiebreak(args.packet, args.judgments))
+    else:
+        result = validate(args.packet, args.judgments)
     print(json.dumps(result, sort_keys=True))
     return 0
 

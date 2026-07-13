@@ -50,6 +50,20 @@ class ValidateCorrectnessAuditTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "slots"):
                 module.validate(packet, output)
 
+    def test_tiebreak_result_has_a_json_safe_cli_summary(self):
+        module = load_module()
+        resolved = {
+            "tie-a": {
+                ("surface", "correct"): True,
+                ("state", "materialFalse"): False,
+            }
+        }
+
+        summary = module.summarize_tiebreak(resolved)
+
+        self.assertEqual(summary, {"count": 1, "decisionCount": 2})
+        self.assertEqual(json.loads(json.dumps(summary)), summary)
+
     def write_inputs(self, root: Path, suffix: str = "") -> tuple[Path, Path]:
         packet = root / f"packet{suffix}.json"
         output = root / f"judgments{suffix}.json"
