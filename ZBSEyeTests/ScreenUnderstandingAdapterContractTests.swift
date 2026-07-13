@@ -11,6 +11,9 @@ final class ScreenUnderstandingAdapterContractTests: XCTestCase {
             {"methodID":"test","capabilities":["summary"],"runtimeMetadata":{},"atomicFacts":null}
             """,
             """
+            {"methodID":"test","capabilities":["abstention"],"runtimeMetadata":{},"abstention":null}
+            """,
+            """
             {"methodID":"test","capabilities":["regions"],"runtimeMetadata":{},"regions":["not-an-object"]}
             """,
             """
@@ -76,6 +79,17 @@ final class ScreenUnderstandingAdapterContractTests: XCTestCase {
                 {"id":"1","status":"unsupported","error":"not provisioned","normalized":{"methodID":"test","capabilities":["summary"],"runtimeMetadata":{}}}
                 """
             )]
+        ))
+        let unsupported = try decodeResponse(
+            #"{"id":"1","status":"unsupported","error":"not provisioned"}"#
+        )
+        XCTAssertThrowsError(try runner.validate(
+            messages: [.caseRequest(id: "1", caseID: "case", imagePath: "/tmp/a")],
+            responses: [unsupported]
+        ))
+        XCTAssertThrowsError(try runner.validate(
+            messages: [.shutdown(id: "1")],
+            responses: [unsupported]
         ))
     }
 

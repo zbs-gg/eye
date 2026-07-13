@@ -201,7 +201,7 @@ extension ScreenUnderstandingNormalizedAdapterResult {
             )
         }
 
-        summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        summary = try container.decodePresent(String.self, forKey: .summary)
         atomicFacts = try container.decodePresent([String].self, forKey: .atomicFacts)
         visibleText = try container.decodePresent([String].self, forKey: .visibleText)
         labels = try container.decodePresent([String].self, forKey: .labels)
@@ -210,8 +210,8 @@ extension ScreenUnderstandingNormalizedAdapterResult {
             forKey: .regions
         )
         changeFacts = try container.decodePresent([String].self, forKey: .changeFacts)
-        confidence = try container.decodeIfPresent(Double.self, forKey: .confidence)
-        abstention = try container.decodeIfPresent(Bool.self, forKey: .abstention)
+        confidence = try container.decodePresent(Double.self, forKey: .confidence)
+        abstention = try container.decodePresent(Bool.self, forKey: .abstention)
         errors = try container.decodePresent([String].self, forKey: .errors)
         guard confidence.map({ 0.0 ... 1.0 ~= $0 }) ?? true else {
             throw DecodingError.dataCorrupted(
@@ -368,6 +368,7 @@ struct ScreenUnderstandingAdapterProcess: Sendable {
         }
         if responses.last?.status == .unsupported {
             guard responses.count == 1,
+                  messages.first?.type == "hello",
                   responses[0].normalized == nil,
                   !(responses[0].error ?? "")
                     .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
