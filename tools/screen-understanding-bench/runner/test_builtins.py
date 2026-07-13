@@ -311,6 +311,13 @@ class BuiltInRunnerTests(unittest.TestCase):
         self.assertNotIn("monitorID", encoded)
         self.assertNotIn("browserURL", encoded)
         self.assertNotIn("private.example", encoded)
+        baseline = self._records(result_root, "metadata-ax-ocr")[0]["result"]
+        self.assertFalse(any(
+            fact.startswith("textSource=") for fact in baseline["atomicFacts"]
+        ))
+        self.assertEqual(
+            baseline["runtimeMetadata"]["textSources"], ["ax", "ocr"]
+        )
 
     def _make_fixture(self, *, replace: bool = False) -> None:
         if replace:

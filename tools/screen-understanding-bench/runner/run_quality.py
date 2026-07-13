@@ -239,7 +239,6 @@ def _baseline_result(context: dict[str, Any]) -> dict[str, Any]:
         atomic_facts.append(f"appName={app_name}")
     if window_title:
         atomic_facts.append(f"windowTitle={window_title}")
-    atomic_facts.extend(f"textSource={source}" for source in sources)
     has_evidence = bool(summary_parts or text or sources)
     return {
         "methodID": "metadata-ax-ocr",
