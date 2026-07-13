@@ -641,6 +641,12 @@ def aggregate_mappings(
         load_private_json=load_private_json,
         )
     )
+    if not hmac.compare_digest(
+        primary_packet_sha256, mapping["primaryPacketSHA256"]
+    ) or not hmac.compare_digest(
+        hidden_packet_sha256, mapping["hiddenPacketSHA256"]
+    ):
+        raise MappingError("mapping packet changed after owner validation")
     primary_receipt_path = primary_receipt_path or Path(
         primary_output_path
     ).with_suffix(".receipt.json")

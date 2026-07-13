@@ -301,6 +301,35 @@ class ClaimMappingTests(unittest.TestCase):
                 self.base / "aggregate-reused-session",
             )
 
+    def test_packet_replacement_between_owner_validation_and_scoring_fails(self) -> None:
+        prepared = self._prepare("packet-race")
+        primary = self._load(prepared["primaryPacket"])
+        hidden = self._load(prepared["hiddenPacket"])
+        first = self._write_judgments(
+            primary, "frontier-mapper-01", "primary-packet-race.json"
+        )
+        second = self._write_judgments(
+            hidden, "frontier-mapper-02", "hidden-packet-race.json"
+        )
+        original = mapping_module._aggregate.validate_mapper_output_with_evidence
+
+        def replaced_packet_digest(*args, **kwargs):
+            output, packet_sha256, output_sha256 = original(*args, **kwargs)
+            if Path(args[0]).name == "primary-packet.json":
+                packet_sha256 = "0" * 64
+            return output, packet_sha256, output_sha256
+
+        aggregate = self.base / "aggregate-packet-race"
+        with mock.patch.object(
+            mapping_module._aggregate,
+            "validate_mapper_output_with_evidence",
+            side_effect=replaced_packet_digest,
+        ), self.assertRaisesRegex(MappingError, "packet changed"):
+            aggregate_mappings(
+                Path(prepared["mappingRoot"]), first, second, aggregate
+            )
+        self.assertFalse(aggregate.exists())
+
     def test_mapper_json_is_opened_descriptor_bound_with_no_follow(self) -> None:
         prepared = self._prepare("descriptor-bound")
         primary = self._load(prepared["primaryPacket"])
