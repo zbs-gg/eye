@@ -9,7 +9,8 @@ def main() -> int:
     if len(sys.argv) < 2:
         print("usage: process_group_launcher.py EXECUTABLE [ARG ...]", file=sys.stderr)
         return 2
-    os.setsid()
+    if os.getpgrp() != os.getpid():
+        os.setsid()
     executable = sys.argv[1]
     os.execve(executable, [executable, *sys.argv[2:]], os.environ.copy())
     return 127
