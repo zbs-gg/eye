@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Automation v1: "Day summary". collect → the processing model from "AI Models" → write to a
+/// Automation v1: "Day summary". collect → the active optional AI → write to a
 /// file/Obsidian. A preview-then-write flow. The destination-folder card lives here too (it belongs
 /// to export, not to agent access).
 struct AutomationsView: View {
@@ -50,12 +50,12 @@ private struct AutomationBody: View {
         VStack(alignment: .leading, spacing: 4) {
             Label("Day summary", systemImage: "text.append")
                 .font(.title2).bold()
-            Text("Collects the day's activity from your history, runs it through your processing model (AI Models — local by default), and writes a Markdown digest to a folder of your choice.")
+            Text("Collects the day's activity from your history, runs it through the AI you chose, and writes a Markdown digest to a folder of your choice.")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }
 
-    /// Where summaries land (moved here from Connections — it belongs to export, not to agent access).
+    /// Where summaries land. This belongs to the automation, not agent access.
     private var destinationCard: some View {
         GroupBox {
             @Bindable var conn = env.connections

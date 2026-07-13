@@ -34,7 +34,7 @@ final class CartographerStore {
 
     var isBusy: Bool { phase == .loading }
 
-    /// A processing model is active in "AI Models" — show the generate button, otherwise a hint.
+    /// Optional AI is active — show the generate button, otherwise a hint.
     var llmReady: Bool { readiness.currentExecutionContext(for: .dailyInsights) != nil }
 
     /// First-run consent (Pro #13): until explicit consent, daily screen fragments do NOT go to the local

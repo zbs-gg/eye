@@ -93,8 +93,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: "ZBS Eye"
         INFOPLIST_KEY_CFBundleName: "ZBS Eye"
         GENERATE_INFOPLIST_FILE: YES
-        MARKETING_VERSION: "0.3.0"          # CFBundleShortVersionString
-        CURRENT_PROJECT_VERSION: "4"        # CFBundleVersion
+        MARKETING_VERSION: "0.4.0"          # CFBundleShortVersionString
+        CURRENT_PROJECT_VERSION: "5"        # CFBundleVersion
         CODE_SIGN_ENTITLEMENTS: ZBSEyeApp/ZBSEye.entitlements
         # Default — ad-hoc for development. scripts/build-release.sh can use the legacy self-signed
         # "ZBS Eye Dev" identity; distributable releases must use scripts/build-notarized.sh with the
@@ -177,7 +177,6 @@ targets:
       - path: ZBSEyeApp/Connections/ClaudeCodeAdapter.swift
       - path: ZBSEyeApp/Connections/CodexAppServerClient.swift
       - path: ZBSEyeApp/Connections/ProcessProviderConnections.swift
-      - path: ZBSEyeApp/Views/AIModels/AIModelsPresentation.swift
       - path: ZBSEyeApp/Views/AISetup/AISetupPresentation.swift
       - path: ZBSEyeApp/Connections/OpenRouterOAuth.swift
       - path: ZBSEyeApp/Server/KeychainStore.swift
@@ -210,6 +209,7 @@ targets:
       - path: ZBSEyeApp/State/AskStore.swift
       - path: ZBSEyeApp/State/WorkspaceStore.swift
       - path: ZBSEyeApp/State/StorageSettingsStore.swift
+      - path: ZBSEyeApp/State/KeepMediaPolicyCoordinator.swift
       - path: ZBSEyeApp/State/AudioSettingsStore.swift
       - path: ZBSEyeApp/State/ResourceUsageStore.swift
       - path: ZBSEyeApp/System/ResourceUsageSampler.swift
@@ -230,8 +230,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye.tests
-        MARKETING_VERSION: "0.3.0"
-        CURRENT_PROJECT_VERSION: "4"
+        MARKETING_VERSION: "0.4.0"
+        CURRENT_PROJECT_VERSION: "5"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: ZBSEyeTests/Info.plist
         ZBS_EYE_MODEL_DIR: ""

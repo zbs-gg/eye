@@ -77,7 +77,7 @@ enum ZBSEyeMCPServer {
 
         let server = Server(
             name: "zbseye",
-            version: "0.3.0",
+            version: "0.4.0",
             capabilities: .init(tools: .init(listChanged: false)))
 
         await server.withMethodHandler(ListTools.self) { _ in
@@ -351,7 +351,7 @@ enum ZBSEyeMCPServer {
     private static func formatFrame(_ f: FrameDetail?) -> String {
         guard let f else { return "There is no frame for this moment." }
         let app = f.appName ?? f.bundleId ?? "—"
-        var out = "At \(f.ts.formatted(date: .abbreviated, time: .standard)) — \(app)"
+        var out = "Frame #\(f.id) at \(f.ts.formatted(date: .abbreviated, time: .standard)) — \(app)"
         if let w = f.windowTitle { out += " · \(w)" }
         if let u = f.browserURL { out += "\nURL: \(u)" }
         out += "\n\n\(f.text.isEmpty ? "(text not extracted)" : f.text)"

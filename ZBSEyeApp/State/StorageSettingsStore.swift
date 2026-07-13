@@ -1,42 +1,13 @@
 import Foundation
 import Observation
-import GRDB
 import CoreFoundation
 
-/// Breakdown of used space (Sendable — returned from a Task.detached into @MainActor). Attribution
-/// import/live by monitorId='sp' (live capture writes monitorId=String(displayID): '0'/'1'…).
-struct StorageBreakdown: Sendable, Equatable {
-    var framesTotal = 0
-    var framesImport = 0
-    var framesLive = 0
-    var audioTotal = 0
-    var oldestTs: Int64?
-    var newestTs: Int64?
-    var liveFrameBytes: Int64 = 0       // import has bytes=NULL → this is the size of live frames in the DB only
-    var topApps: [AppUsage] = []
-
-    struct AppUsage: Sendable, Equatable, Identifiable {
-        let name: String
-        let frames: Int
-        var id: String { name }
-    }
-}
-
 /// Storage settings: one Keep Media policy plus how much is actually used.
-/// The legacy day/size properties remain only until the compact Settings view
-/// lands; automatic deletion is governed exclusively by Keep Media admission.
+/// Legacy day/size keys are read only by the one-time migration; automatic
+/// deletion is governed exclusively by Keep Media admission.
 @MainActor
 @Observable
 final class StorageSettingsStore {
-    /// 0 = keep forever. Default 0 ("memory forever" — we do NOT delete by default).
-    var retentionDays: Int {
-        didSet { if retentionDays != oldValue { defaults.set(retentionDays, forKey: Self.daysKey) } }
-    }
-    /// Limit in GB; 0 = no limit. Default 0.
-    var maxGB: Int {
-        didSet { if maxGB != oldValue { defaults.set(maxGB, forKey: Self.gbKey) } }
-    }
-
     private(set) var keepMediaPolicy: KeepMediaPolicy
     /// A finite policy is inert until DB metadata and the captured-media tree
     /// reconcile. Persisted policy alone never authorizes automatic deletion.
@@ -46,7 +17,6 @@ final class StorageSettingsStore {
     private(set) var mediaBytes: Int64 = 0
     private(set) var databaseBytes: Int64 = 0
     private(set) var freeBytes: Int64 = 0
-    private(set) var breakdown: StorageBreakdown?
     var totalBytes: Int64 { mediaBytes + databaseBytes }
 
     // relocate (T1): storage relocation state
@@ -66,18 +36,14 @@ final class StorageSettingsStore {
     @ObservationIgnored static let admissionRecordKey = "zbseye.keepMedia.automaticRetention.v1"
     @ObservationIgnored private static let explicitPolicyKey = "zbseye.keepMedia.explicitSelection.v1"
     @ObservationIgnored private let admissionRecordWasPresentAtInitialization: Bool
+    @ObservationIgnored private let admissionPersistenceGate: (AutomaticRetentionRecord) -> Bool
 
-    static let dayOptions = [0, 7, 14, 30, 90]   // 0 = "Forever" first: the default and the essence of the product
-    static let gbOptions = [0, 10, 20, 50, 100]   // 0 = "No limit" first
-
-    /// Time-based automatic retention is retired by the Keep Media contract.
-    var effectiveDays: Int? { nil }
-    var effectiveMaxBytes: Int64? {
-        automaticDeletionAdmitted ? keepMediaPolicy.maxCapturedMediaBytes : nil
-    }
-
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        admissionPersistenceGate: @escaping (AutomaticRetentionRecord) -> Bool = { _ in true }
+    ) {
         self.defaults = defaults
+        self.admissionPersistenceGate = admissionPersistenceGate
         let persistedAdmissionData = defaults.data(forKey: Self.admissionRecordKey)
         admissionRecordWasPresentAtInitialization = persistedAdmissionData != nil
         let decodedAdmission = persistedAdmissionData.flatMap {
@@ -92,9 +58,6 @@ final class StorageSettingsStore {
             recoveredAdmission = .closedForever
         }
         automaticRetentionRecord = recoveredAdmission
-        retentionDays = (defaults.object(forKey: Self.daysKey) == nil) ? 0
-                                                                       : defaults.integer(forKey: Self.daysKey)
-        maxGB = (defaults.object(forKey: Self.gbKey) == nil) ? 0 : defaults.integer(forKey: Self.gbKey)
         if persistedAdmissionData != nil {
             keepMediaPolicy = recoveredAdmission.policy
             // Persisted finite admission is deliberately demoted to pending at
@@ -199,41 +162,54 @@ final class StorageSettingsStore {
         return resolution
     }
 
-    /// The only path that retires legacy keys. A finite choice may be saved
-    /// while reconciliation is uncertain, but remains deletion-inert.
-    func selectKeepMediaPolicy(
-        _ policy: KeepMediaPolicy,
+    /// First half of a finite-policy transition. The new policy is persisted
+    /// as deletion-inert before the caller revokes and drains the old permit.
+    /// A crash can therefore retain longer, but can never resurrect the old
+    /// smaller cap after the user selected a larger one successfully.
+    @discardableResult
+    func beginFiniteTransition(_ policy: KeepMediaPolicy) -> AutomaticRetentionRecord? {
+        guard policy.maxCapturedMediaBytes != nil else { return nil }
+        let pending = AutomaticRetentionRecord(
+            revision: automaticRetentionRecord.revision &+ 1,
+            policy: policy,
+            phase: .pendingFinite,
+            source: .explicitSelection
+        )
+        automaticDeletionAdmitted = false
+        guard persistAdmissionRecord(pending) else { return nil }
+        return pending
+    }
+
+    /// Completes a finite transition only after the old permit is revoked and
+    /// the current media inventory is authoritative.
+    @discardableResult
+    func finishFiniteTransition(
+        _ pending: AutomaticRetentionRecord,
         inventory: KeepMediaInventoryEvidence
-    ) {
-        if policy == .forever {
-            _ = beginForeverRevocation()
-            finishForeverRevocation()
-            return
-        }
-        defaults.set(policy.rawValue, forKey: Self.keepMediaPolicyKey)
-        guard defaults.string(forKey: Self.keepMediaPolicyKey) == policy.rawValue else { return }
+    ) -> AutomaticRetentionRecord? {
+        guard pending == automaticRetentionRecord,
+              pending.phase == .pendingFinite,
+              inventory.isAuthoritative else { return nil }
+        let admitted = AutomaticRetentionRecord(
+            revision: pending.revision,
+            policy: pending.policy,
+            phase: .finiteAdmitted,
+            source: pending.source
+        )
+        guard persistAdmissionRecord(admitted) else { return nil }
+        defaults.set(admitted.policy.rawValue, forKey: Self.keepMediaPolicyKey)
         defaults.set(true, forKey: Self.explicitPolicyKey)
         defaults.removeObject(forKey: Self.daysKey)
         defaults.removeObject(forKey: Self.gbKey)
-        let admitted = policy != .forever && inventory.isAuthoritative
-        let record = AutomaticRetentionRecord(
-            revision: automaticRetentionRecord.revision &+ 1,
-            policy: policy,
-            phase: admitted ? .finiteAdmitted : (policy == .forever ? .closed : .pendingFinite),
-            source: .explicitSelection
-        )
-        guard persistAdmissionRecord(record) else {
-            publish(policy: .forever, admitted: false)
-            return
-        }
-        publish(policy: policy, admitted: admitted)
+        publish(policy: admitted.policy, admitted: true)
+        return admitted
     }
 
     /// First half of the crash-safe Forever transition. The durable pending
     /// intent closes deletion before an async retention drain begins; the
     /// visible policy remains unchanged until the caller acknowledges the drain.
     @discardableResult
-    func beginForeverRevocation() -> AutomaticRetentionRecord {
+    func beginForeverRevocation() -> AutomaticRetentionRecord? {
         let pending = AutomaticRetentionRecord(
             revision: automaticRetentionRecord.revision &+ 1,
             policy: .forever,
@@ -241,12 +217,14 @@ final class StorageSettingsStore {
             source: .explicitSelection
         )
         automaticDeletionAdmitted = false
-        return persistAdmissionRecord(pending) ? pending : automaticRetentionRecord
+        guard persistAdmissionRecord(pending) else { return nil }
+        return pending
     }
 
     /// Completes a pending Forever transition after automatic work has drained.
-    func finishForeverRevocation() {
-        guard automaticRetentionRecord.phase == .pendingForever else { return }
+    @discardableResult
+    func finishForeverRevocation() -> Bool {
+        guard automaticRetentionRecord.phase == .pendingForever else { return false }
         let closed = AutomaticRetentionRecord(
             revision: automaticRetentionRecord.revision,
             policy: .forever,
@@ -255,13 +233,14 @@ final class StorageSettingsStore {
         )
         guard persistAdmissionRecord(closed) else {
             publish(policy: .forever, admitted: false)
-            return
+            return false
         }
         defaults.set(KeepMediaPolicy.forever.rawValue, forKey: Self.keepMediaPolicyKey)
         defaults.set(true, forKey: Self.explicitPolicyKey)
         defaults.removeObject(forKey: Self.daysKey)
         defaults.removeObject(forKey: Self.gbKey)
         publish(policy: .forever, admitted: false)
+        return true
     }
 
     /// If the process-local permit cannot mirror a persisted finite decision,
@@ -330,6 +309,10 @@ final class StorageSettingsStore {
 
     @discardableResult
     private func persistAdmissionRecord(_ record: AutomaticRetentionRecord) -> Bool {
+        guard admissionPersistenceGate(record) else {
+            failClosedInMemory()
+            return false
+        }
         guard let data = try? JSONEncoder().encode(record) else {
             failClosedInMemory()
             return false
@@ -346,7 +329,12 @@ final class StorageSettingsStore {
     }
 
     private func failClosedInMemory() {
-        automaticRetentionRecord = .closedForever
+        automaticRetentionRecord = AutomaticRetentionRecord(
+            revision: automaticRetentionRecord.revision,
+            policy: .forever,
+            phase: .closed,
+            source: automaticRetentionRecord.source
+        )
         keepMediaPolicy = .forever
         automaticDeletionAdmitted = false
     }
@@ -442,12 +430,10 @@ final class StorageSettingsStore {
         return number.boolValue
     }
 
-    /// Recompute used space (media — folder walk, DB — size of sqlite+wal, free on the volume) +
-    /// the breakdown from the DB (import/live frames, audio, date range, top apps). Called when
-    /// Settings opens; all on a utility-priority background with a single read transaction.
-    func refresh(storage: StorageManager?, db: ZBSEyeDatabase?) async {
+    /// Recompute used space (media folder, sqlite+WAL, and free space) away from MainActor.
+    func refresh(storage: StorageManager?) async {
         guard let storage else { return }
-        let computed = await Task.detached(priority: .utility) { () async -> (Int64, Int64, Int64, StorageBreakdown?) in
+        let computed = await Task.detached(priority: .utility) { () -> (Int64, Int64, Int64) in
             let media = storage.totalBytes()
             let free = storage.freeBytes()
             var dbBytes: Int64 = 0
@@ -457,46 +443,11 @@ final class StorageSettingsStore {
                     dbBytes += (attrs?[.size] as? Int64) ?? 0
                 }
             }
-            let bd: StorageBreakdown? = await Self.computeBreakdown(db: db)
-            return (media, dbBytes, free, bd)
+            return (media, dbBytes, free)
         }.value
         mediaBytes = computed.0
         databaseBytes = computed.1
         freeBytes = computed.2
-        breakdown = computed.3
-    }
-
-    /// One aggregate read transaction: counters/attribution/range + top apps. nil when there's no DB.
-    /// nonisolated: called from the Task.detached in refresh, must not hop onto MainActor.
-    nonisolated private static func computeBreakdown(db: ZBSEyeDatabase?) async -> StorageBreakdown? {
-        guard let db else { return nil }
-        return try? await db.pool.read { dbc -> StorageBreakdown in
-            var bd = StorageBreakdown()
-            if let row = try Row.fetchOne(dbc, sql: """
-                SELECT
-                  (SELECT COUNT(*) FROM screen_captures) AS framesTotal,
-                  (SELECT COUNT(*) FROM screen_captures WHERE monitorId = 'sp') AS framesImport,
-                  (SELECT COUNT(*) FROM screen_captures WHERE monitorId <> 'sp') AS framesLive,
-                  (SELECT COUNT(*) FROM audio_captures) AS audioTotal,
-                  (SELECT MIN(ts) FROM screen_captures) AS oldestTs,
-                  (SELECT MAX(ts) FROM screen_captures) AS newestTs,
-                  (SELECT COALESCE(SUM(bytes), 0) FROM screen_captures WHERE bytes IS NOT NULL) AS liveFrameBytes
-                """) {
-                bd.framesTotal = row["framesTotal"] ?? 0
-                bd.framesImport = row["framesImport"] ?? 0
-                bd.framesLive = row["framesLive"] ?? 0
-                bd.audioTotal = row["audioTotal"] ?? 0
-                bd.oldestTs = row["oldestTs"]
-                bd.newestTs = row["newestTs"]
-                bd.liveFrameBytes = row["liveFrameBytes"] ?? 0
-            }
-            bd.topApps = try Row.fetchAll(dbc, sql: """
-                SELECT COALESCE(a.name, '(?)') AS name, COUNT(*) AS frames
-                FROM screen_captures c LEFT JOIN apps a ON a.id = c.appId
-                GROUP BY c.appId ORDER BY frames DESC LIMIT 6
-                """).map { StorageBreakdown.AppUsage(name: $0["name"], frames: $0["frames"]) }
-            return bd
-        }
     }
 
     nonisolated static func format(_ bytes: Int64) -> String {

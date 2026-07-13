@@ -290,6 +290,50 @@ final class RetentionManagerTests: XCTestCase {
         XCTAssertTrue(harness.fileExists("keep.heic"))
     }
 
+    func testForeverRevocationStopsARealPruneBeforeItsNextBatch() async throws {
+        let gate = RetentionDeletionGate()
+        let harness = try Harness(deleteFile: { url in
+            gate.markDeletionStarted()
+            gate.waitUntilReleased()
+            try FileManager.default.removeItem(at: url)
+        })
+        defer { harness.remove() }
+        let first = try await harness.insertScreenFile(ts: 1, name: "f1.heic", bytes: gb)
+        let second = try await harness.insertScreenFile(ts: 2, name: "f2.heic", bytes: gb)
+        let third = try await harness.insertScreenFile(ts: 3, name: "f3.heic", bytes: 5 * gb)
+        let admission = admittedFiveGB()
+        let permit = try XCTUnwrap(admission.currentPermit())
+        let retention = RetentionManager(
+            db: harness.db,
+            storage: harness.storage,
+            automaticBatchSize: 1
+        )
+
+        let pruneTask = Task {
+            do {
+                _ = try await retention.pruneAutomatically(
+                    permit: permit,
+                    admission: admission
+                )
+                return nil as Error?
+            } catch {
+                return error
+            }
+        }
+        await gate.waitForDeletionToStart()
+        await Task.detached { admission.revoke(to: permit.revision &+ 1) }.value
+        gate.releaseDeletion()
+
+        let error = await pruneTask.value
+        XCTAssertEqual(error as? AutomaticRetentionAdmissionError, .stalePermit)
+        let remaining = try await harness.screenIDs()
+        XCTAssertEqual(remaining, [second, third])
+        XCTAssertFalse(harness.fileExists("f1.heic"))
+        XCTAssertTrue(harness.fileExists("f2.heic"))
+        XCTAssertTrue(harness.fileExists("f3.heic"))
+        XCTAssertEqual(first, 1)
+    }
+
     func testPostCommitFileFailureStopsBeforeAnotherBatchAndReturnsLedger() async throws {
         let harness = try Harness(failingDeletePath: "f1.heic")
         defer { harness.remove() }
@@ -347,14 +391,19 @@ private final class Harness: @unchecked Sendable {
     let db: ZBSEyeDatabase
     let storage: StorageManager
 
-    init(failingDeletePath: String? = nil) throws {
+    init(
+        failingDeletePath: String? = nil,
+        deleteFile: (@Sendable (URL) throws -> Void)? = nil
+    ) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "ZBSEyeRetentionTests-\(UUID().uuidString)",
             isDirectory: true
         )
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let media = root.appendingPathComponent("media", isDirectory: true)
-        if let failingDeletePath {
+        if let deleteFile {
+            storage = try StorageManager(mediaDirectory: media, deleteFile: deleteFile)
+        } else if let failingDeletePath {
             storage = try StorageManager(mediaDirectory: media) { url in
                 if url.lastPathComponent == failingDeletePath {
                     throw CocoaError(.fileWriteUnknown)
@@ -465,6 +514,32 @@ private final class Harness: @unchecked Sendable {
                 try Int.fetchOne(database, sql: "SELECT COUNT(*) FROM \(table)") ?? -1
             } + [try Int.fetchOne(database, sql: "SELECT COUNT(*) FROM embed_queue") ?? -1]
         }
+    }
+}
+
+private final class RetentionDeletionGate: @unchecked Sendable {
+    private let started = DispatchSemaphore(value: 0)
+    private let released = DispatchSemaphore(value: 0)
+
+    func markDeletionStarted() {
+        started.signal()
+    }
+
+    func waitUntilReleased() {
+        released.wait()
+    }
+
+    func waitForDeletionToStart() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                self.started.wait()
+                continuation.resume()
+            }
+        }
+    }
+
+    func releaseDeletion() {
+        released.signal()
     }
 }
 

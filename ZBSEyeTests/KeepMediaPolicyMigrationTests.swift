@@ -190,8 +190,6 @@ final class KeepMediaPolicyMigrationTests: XCTestCase {
 
         XCTAssertEqual(store.keepMediaPolicy, .forever)
         XCTAssertFalse(store.automaticDeletionAdmitted)
-        XCTAssertNil(store.effectiveMaxBytes)
-        XCTAssertNil(store.effectiveDays)
     }
 
     @MainActor

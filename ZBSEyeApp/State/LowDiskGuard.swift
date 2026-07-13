@@ -48,3 +48,13 @@ struct LowDiskGuard: Sendable, Equatable {
         state = .paused
     }
 }
+
+enum LowDiskDrainGate {
+    nonisolated static func isConfirmedStopped(
+        _ drain: RecordingMaintenanceDrain
+    ) -> Bool {
+        drain.capture.activeCycles == 0
+            && drain.audio.activeLegs == 0
+            && drain.audio.systemCaptureOutcome.isConfirmedStopped
+    }
+}

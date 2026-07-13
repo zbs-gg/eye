@@ -37,10 +37,10 @@ struct SettingsView: View {
             }
             .toolbar { moreMenu }
         }
+        .onAppear { env.resourceUsage.start() }
         .task {
             await env.permissions.refreshAll()
-            await env.storageSettings.refresh(storage: env.storage, db: env.db)
-            env.resourceUsage.start()
+            await env.storageSettings.refresh(storage: env.storage)
         }
         .onDisappear { env.resourceUsage.stop() }
         .confirmationDialog(
@@ -94,7 +94,7 @@ struct SettingsView: View {
                 : String(localized: "\(permissionIssueCount) need attention")
         case .ai:
             if let provider = env.ai.activeProvider, let model = env.ai.activeModelID {
-                return "\(provider.displayName) · \(model)"
+                return AISetupPresentation.activeLabel(provider: provider, modelID: model)
             }
             return String(localized: "Off · optional")
         case .dataStorage:

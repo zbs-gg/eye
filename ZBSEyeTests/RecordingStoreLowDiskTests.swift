@@ -89,6 +89,21 @@ final class RecordingStoreLowDiskTests: XCTestCase {
         XCTAssertEqual(capture.startCount, 2)
     }
 
+    func testAudioStartKeepsMicrophoneAndSystemAudioIndependent() {
+        defaults.set(true, forKey: "zbseye.recording.enabled")
+        let store = makeStore()
+        store.coordinator = CaptureCoordinator()
+        let audio = AudioCoordinator()
+        store.audio = audio
+        store.micEnabled = { true }
+        store.systemEnabled = { false }
+
+        store.startIfWanted()
+
+        XCTAssertEqual(audio.lastMicEnabled, true)
+        XCTAssertEqual(audio.lastSystemEnabled, false)
+    }
+
     private func makeStore() -> RecordingStore {
         let store = RecordingStore(defaults: defaults)
         store.canCapture = { true }
@@ -126,8 +141,13 @@ struct CaptureDrainAcknowledgement: Sendable, Equatable {
 @MainActor
 final class AudioCoordinator {
     private(set) var drainCount = 0
+    private(set) var lastMicEnabled: Bool?
+    private(set) var lastSystemEnabled: Bool?
 
-    func start(mic: Bool, system: Bool) {}
+    func start(mic: Bool, system: Bool) {
+        lastMicEnabled = mic
+        lastSystemEnabled = system
+    }
     func stop() {}
     func stopAndDrain(
         waitForTranscription: Bool = true,

@@ -50,4 +50,30 @@ final class LowDiskGuardTests: XCTestCase {
         XCTAssertFalse(policy.canDownload(remainingBytes: 50, availableBytes: 174))
         XCTAssertTrue(policy.canDownload(remainingBytes: 50, availableBytes: 175))
     }
+
+    func testRecoveryStaysPausedWhenSystemAudioStopIsUnconfirmed() {
+        var guardState = LowDiskGuard(
+            policy: DiskReservePolicy(pauseBytes: 100, recoveryBytes: 200)
+        )
+        XCTAssertEqual(guardState.evaluate(availableBytes: 99), .pauseCapture)
+        XCTAssertEqual(guardState.evaluate(availableBytes: 200), .resumeCapture)
+        let timedOutDrain = RecordingMaintenanceDrain(
+            capture: CaptureDrainAcknowledgement(
+                hadActiveCapture: true,
+                hadInFlightCycle: false,
+                activeCycles: 0
+            ),
+            audio: AudioDrainAcknowledgement(
+                hadActiveAudio: true,
+                activeLegs: 0,
+                transcriptionDrained: true,
+                systemCaptureOutcome: .timedOut
+            )
+        )
+
+        XCTAssertFalse(LowDiskDrainGate.isConfirmedStopped(timedOutDrain))
+        guardState.holdPaused()
+        XCTAssertEqual(guardState.state, .paused)
+        XCTAssertEqual(guardState.evaluate(availableBytes: 200), .resumeCapture)
+    }
 }

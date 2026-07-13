@@ -7,7 +7,9 @@ enum MCPSetupPresentationError: Error, Equatable {
 struct MCPSetupPresentation: Sendable, Equatable {
     let installedPath: String
     let codexCommand: String
+    let claudeCodeCommand: String
     let claudeJSON: String
+    let claudeDesktopConfigurationPath: String
     let accessSummary: String
     let statusLabel: String
     let restartInstruction: String
@@ -26,10 +28,16 @@ struct MCPSetupPresentation: Sendable, Equatable {
             Self.shellQuote(executableURL.path),
             profile.cliArgument,
         ].joined(separator: " ")
+        claudeCodeCommand = [
+            "claude mcp add zbs-eye --",
+            Self.shellQuote(executableURL.path),
+            profile.cliArgument,
+        ].joined(separator: " ")
         claudeJSON = try Self.makeClaudeJSON(
             executablePath: executableURL.path,
             argument: profile.cliArgument
         )
+        claudeDesktopConfigurationPath = "~/Library/Application Support/Claude/claude_desktop_config.json"
         switch profile {
         case .memoryReadOnly:
             accessSummary = "Reads local Timeline text, transcripts, and status. It cannot receive screenshot images or control recording."

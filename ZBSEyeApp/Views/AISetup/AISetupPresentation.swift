@@ -24,7 +24,7 @@ enum AISetupOrigin: Sendable, Equatable {
     var consentConsumers: Set<AIConsumer> {
         switch self {
         case .ask: return [.ask]
-        case .settings: return Set(AIConsumer.allCases)
+        case .settings: return Set(AIConsumer.allCases.filter { !$0.isAutomatic })
         }
     }
 }
@@ -134,5 +134,20 @@ final class AISetupPresentation {
 
     func setActivationError(_ message: String?) {
         activationError = message
+    }
+}
+
+extension AISetupPresentation {
+    static func modelShortName(_ modelID: String, provider: AIProvider) -> String {
+        if provider == .zbsEyeLocal,
+           modelID == BuiltInModelManifest.regular.id {
+            return BuiltInModelManifest.regular.displayName
+        }
+        if provider == .claudeCode,
+           modelID == AIProvider.claudeCodeDefaultModel {
+            return String(localized: "Provider default")
+        }
+        let component = modelID.split(separator: "/").last.map(String.init) ?? modelID
+        return component.isEmpty ? modelID : component
     }
 }

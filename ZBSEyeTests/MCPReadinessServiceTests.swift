@@ -50,6 +50,7 @@ final class MCPReadinessServiceTests: XCTestCase {
             (.outputLimitExceeded, .outputLimitExceeded),
             (.initializationFailed, .initializationFailed),
             (.retrievalFailed, .retrievalFailed),
+            (.noHistory, .noHistory),
         ]
         for (error, expected) in cases {
             let service = Self.service(
@@ -104,7 +105,8 @@ final class MCPReadinessServiceTests: XCTestCase {
             inode: Self.rootIdentity.inode,
             databaseIdentity: .init(
                 device: 5, inode: 99, size: 4_096, modifiedSeconds: 10
-            )
+            ),
+            frameWitness: Self.rootIdentity.frameWitness
         )
         let service = MCPReadinessService(
             applicationURL: Self.applicationURL,
@@ -157,6 +159,120 @@ final class MCPReadinessServiceTests: XCTestCase {
         )
     }
 
+    func testRetrievalValidationRequiresTheExactWitnessFrame() throws {
+        let toolResult: [String: Any] = [
+            "result": [
+                "tools": MCPToolPolicy.toolNames(for: .memoryReadOnly).map { ["name": $0] },
+            ],
+        ]
+        let emptyTimelineResult: [String: Any] = [
+            "result": [
+                "content": [["type": "text", "text": "There is no frame for this moment."]],
+                "isError": false,
+            ],
+        ]
+        XCTAssertThrowsError(try SystemMCPSelfTester.validatePostInitialize(
+            [2: toolResult, 3: emptyTimelineResult],
+            expectedFrameID: 42
+        )) { error in
+            XCTAssertEqual(error as? MCPSelfTestError, .retrievalFailed)
+        }
+
+        let witnessedResult: [String: Any] = [
+            "result": [
+                "content": [["type": "text", "text": "Frame #42 at Jul 14, 4:00 AM — Codex"]],
+                "isError": false,
+            ],
+        ]
+        let validated = try SystemMCPSelfTester.validatePostInitialize(
+            [2: toolResult, 3: witnessedResult],
+            expectedFrameID: 42
+        )
+        XCTAssertTrue(validated.retrievalSucceeded)
+    }
+
+    func testSystemSelfTesterCompletesARealPOSIXProcessLifecycle() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ZBSEyeMCPProcessTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let executable = root.appendingPathComponent("fixture-mcp")
+        let tools = MCPToolPolicy.toolNames(for: .memoryReadOnly)
+            .map { "{\"name\":\"\($0)\"}" }
+            .joined(separator: ",")
+        let script = """
+        #!/bin/sh
+        IFS= read -r initialize || exit 1
+        printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"zbseye"}}}'
+        IFS= read -r initialized || exit 1
+        IFS= read -r list || exit 1
+        printf '%s\\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[\(tools)]}}'
+        IFS= read -r call || exit 1
+        printf '%s\\n' '{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Frame #42 at fixture moment"}],"isError":false}}'
+        """
+        try Data(script.utf8).write(to: executable, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executable.path
+        )
+
+        let fileIdentity = try MCPExecutableFileIdentity.capture(at: executable)
+        let identity = MCPInstalledApplicationIdentity(
+            applicationURL: root,
+            executableURL: executable,
+            bundleIdentifier: "gg.zbs.eye",
+            teamIdentifier: "44N4NZ86S5",
+            codeHash: "fixture",
+            fileIdentity: fileIdentity
+        )
+        let dataRoot = MCPDataRootIdentity(
+            url: root,
+            device: fileIdentity.device,
+            inode: fileIdentity.inode,
+            databaseIdentity: fileIdentity,
+            frameWitness: MCPFrameWitness(frameID: 42, timestampMs: 123)
+        )
+
+        let result = try await SystemMCPSelfTester().run(MCPSelfTestRequest(
+            identity: identity,
+            dataRoot: dataRoot,
+            profile: .memoryReadOnly,
+            timeout: .seconds(2),
+            maximumOutputBytes: 64 * 1_024
+        ))
+
+        XCTAssertEqual(result.toolNames, MCPToolPolicy.toolNames(for: .memoryReadOnly))
+        XCTAssertTrue(result.retrievalSucceeded)
+    }
+
+    func testReadinessCacheAndToolContractAreProfileSpecific() async {
+        let readOnly = MCPSelfTestResult(
+            toolNames: MCPToolPolicy.toolNames(for: .memoryReadOnly),
+            retrievalSucceeded: true
+        )
+        let selfTest = MCPProfileAwareSelfTester(results: [
+            .memoryReadOnly: readOnly,
+            .advancedFull: MCPSelfTestResult(
+                toolNames: MCPToolPolicy.toolNames(for: .advancedFull),
+                retrievalSucceeded: true
+            ),
+        ])
+        let service = MCPReadinessService(
+            applicationURL: Self.applicationURL,
+            identityInspector: MCPFakeIdentityInspector(result: .success(Self.identity)),
+            dataRootResolver: MCPFakeDataRootResolver(result: .success(Self.rootIdentity)),
+            selfTester: selfTest
+        )
+
+        let readOnlyState = await service.check(profile: .memoryReadOnly)
+        let advancedState = await service.check(profile: .advancedFull)
+        let profiles = await selfTest.profiles()
+        XCTAssertEqual(readOnlyState, .readyToConnect(Self.identity.executableURL.path))
+        XCTAssertEqual(advancedState, .readyToConnect(Self.identity.executableURL.path))
+        XCTAssertEqual(profiles, [.memoryReadOnly, .advancedFull])
+    }
+
     func testToolPolicyGuardsListingAndDirectCalls() {
         XCTAssertEqual(
             MCPToolPolicy.toolNames(for: .memoryReadOnly),
@@ -200,7 +316,8 @@ final class MCPReadinessServiceTests: XCTestCase {
         inode: 6,
         databaseIdentity: .init(
             device: 5, inode: 7, size: 4_096, modifiedSeconds: 8
-        )
+        ),
+        frameWitness: MCPFrameWitness(frameID: 42, timestampMs: 1_720_922_400_000)
     )
     private static let successfulSelfTest = MCPSelfTestResult(
         toolNames: MCPToolPolicy.toolNames(for: .memoryReadOnly),
@@ -212,6 +329,25 @@ final class MCPReadinessServiceTests: XCTestCase {
             try JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
     }
+}
+
+private actor MCPProfileAwareSelfTester: MCPSelfTesting {
+    let results: [MCPAccessProfile: MCPSelfTestResult]
+    private var observedProfiles: [MCPAccessProfile] = []
+
+    init(results: [MCPAccessProfile: MCPSelfTestResult]) {
+        self.results = results
+    }
+
+    func run(_ request: MCPSelfTestRequest) async throws -> MCPSelfTestResult {
+        observedProfiles.append(request.profile)
+        guard let result = results[request.profile] else {
+            throw MCPSelfTestError.initializationFailed
+        }
+        return result
+    }
+
+    func profiles() -> [MCPAccessProfile] { observedProfiles }
 }
 
 private struct MCPFakeIdentityInspector: MCPInstalledApplicationInspecting {

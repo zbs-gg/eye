@@ -241,13 +241,13 @@ enum AutomationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noLLM:
-            return "No processing model. Open \"AI Models\" and choose ZBS Eye Local or another provider."
+            return "AI is off. Add AI in Settings to generate a summary."
         case .nonLocalLLM(let host):
             return "Endpoint \"\(host)\" is not allowed. Local providers must stay on 127.0.0.1/localhost; a cloud provider is reachable only via its official API host."
         case .cloudConsentRequired(let name):
-            return "\(name) is a cloud provider. Confirm in \"AI Models\" that excerpts of your screen history may be sent to it."
+            return "\(name) is a cloud provider. Confirm in AI settings that text excerpts may be sent to it."
         case .noAPIKey(let name):
-            return "\(name) needs an API key — add it in \"AI Models\" (stored in the Keychain)."
+            return "\(name) needs an API key — add it in AI settings (stored in the Keychain)."
         case .noDestination:
             return "No folder selected for writing. Open \"Automations\" → \"Destination\"."
         case .noData(let day):

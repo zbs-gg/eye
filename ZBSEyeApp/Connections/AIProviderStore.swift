@@ -25,7 +25,7 @@ struct KeychainAIProviderCredentialStore: AIProviderCredentialStoring {
     func delete(_ account: String) -> Bool { KeychainStore.delete(account) }
 }
 
-/// State of the "AI Models" section: one card per provider, exactly ONE active processing model across
+/// State behind compact AI setup: one card per provider, exactly ONE active processing model across
 /// all of them. @MainActor @Observable — the UI binds straight to it; the network probes go through the
 /// process-wide LLMRouter. Persistence: UserDefaults "zbseye.ai.provider" (JSON, no secrets) with a one-time
 /// migration from the legacy "zbseye.connections.llm" {baseURL, model} — an existing local setup keeps
@@ -359,6 +359,31 @@ final class AIProviderStore {
         settings.revokeConsent(providerID: p.rawValue)
     }
 
+    /// Background consumers are never bundled into provider activation. Each
+    /// one is an independent, reversible grant made from the focused AI detail.
+    @discardableResult
+    func setAutomaticConsumerConsent(
+        _ consumer: AIConsumer,
+        enabled: Bool,
+        for provider: AIProvider
+    ) -> Bool {
+        guard consumer.isAutomatic,
+              provider.isCloud,
+              activeProvider == provider,
+              var grant = settings.consentGrant(forProviderID: provider.rawValue),
+              grant.recipientDisclosure == recipientDisclosure(for: provider) else {
+            return false
+        }
+        if enabled {
+            grant.consumers.insert(consumer)
+        } else {
+            grant.consumers.remove(consumer)
+        }
+        grant.policyRevision = ScopedAIConsentGrant.currentPolicyRevision
+        settings.setConsent(grant)
+        return hasConsent(provider, for: consumer) == enabled
+    }
+
     func isActive(_ p: AIProvider) -> Bool { activeProvider == p }
 
     /// Captures an immutable user choice against the current selection revision.
@@ -527,7 +552,7 @@ final class AIProviderStore {
 
     /// Turn Ask & Insights off — no model processes history until one is picked again. The per-provider
     /// selections, keys and consent are untouched, so re-activating later is a single tap. Records the
-    /// deliberate "off" so a connected local server can't silently re-activate on the next AI Models visit.
+    /// deliberate "off" so a connected local server can't silently re-activate on the next AI setup visit.
     func deactivate() {
         settings.deactivate()
     }
@@ -1218,7 +1243,7 @@ final class AIProviderStore {
         settingsAlreadyPersisted = false
     }
 
-    /// Legacy {baseURL, model} (pre-"AI Models") — always local. Default ports map to their named cards
+    /// Legacy {baseURL, model} (from the pre-provider setup) — always local. Default ports map to named cards
     /// (1234 → LM Studio, 11434 → Ollama); anything else becomes the "custom localhost" card as-is.
     /// The legacy defaults value stays untouched (harmless, and downgrade-safe).
     private static func migrateLegacy(from defaults: UserDefaults) -> AIProviderSettings? {

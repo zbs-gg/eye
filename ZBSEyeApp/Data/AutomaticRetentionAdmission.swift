@@ -140,6 +140,24 @@ final class AutomaticRetentionAdmission: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Revoke the old permit and publish the new finite decision as inert.
+    /// `activate` may then complete this exact revision after authoritative
+    /// reconciliation, while any older or concurrent completion stays stale.
+    @discardableResult
+    func revokeAndStage(_ pending: AutomaticRetentionRecord) -> Bool {
+        precondition(pending.isValid && pending.phase == .pendingFinite)
+        lock.lock()
+        defer { lock.unlock() }
+        guard pending.revision > record.revision
+                || (pending.revision == record.revision
+                    && record.phase == .pendingFinite
+                    && record.policy == pending.policy) else {
+            return false
+        }
+        record = pending
+        return true
+    }
+
     func withLease<T>(
         _ permit: AutomaticRetentionPermit,
         _ body: () throws -> T

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// "Ask your memory": a natural-language question → the active processing model ("AI Models") answers
+/// "Ask your memory": a natural-language question → the active optional AI answers
 /// from the retrieved fragments of your screen and conversation history (RAG, cross-lingual).
 /// Local-first: on-device by default, a cloud provider only with the explicit opt-in.
 struct AskView: View {

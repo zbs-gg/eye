@@ -23,17 +23,17 @@ keep re-learning the hard way, plus a map of the bundled harness.
   Never commit `ZBSEye.xcodeproj`.
 - Enable the `swift-lsp` plugin in this repo (it is off globally) so you get LSP diagnostics and
   jump-to-def while editing Swift here.
-- Build command (the `CODE_SIGN_*` / `DEVELOPMENT_TEAM=""` overrides let it build on a machine with no
-  Apple team — SPM deps like GRDB otherwise demand one; `-derivedDataPath` keeps the product path
-  deterministic under `build/`):
+- Headless compile command (`CODE_SIGNING_ALLOWED=NO` is required because the Keychain access group needs
+  a managed provisioning profile; `-derivedDataPath` keeps the product path deterministic under `build/`):
   ```bash
   xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Release \
     -destination 'platform=macOS' -derivedDataPath build/DerivedData \
-    CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" build
+    CODE_SIGNING_ALLOWED=NO build
   ```
 - The CoreSimulator version-mismatch warning is noise. Judge the build by grepping the output for
   `error:` and `BUILD SUCCEEDED`.
-- One-shot build gate: `bash scripts/verify.sh` (xcodegen → Debug build with ad-hoc Manual signing).
+- One-shot compile gate: `bash scripts/verify.sh` (xcodegen → unsigned Debug bundle). Developer ID signing,
+  entitlements, and notarization are verified only by `scripts/build-notarized.sh`.
 
 ## TCC HARD RULE — never break the user's recording permissions
 

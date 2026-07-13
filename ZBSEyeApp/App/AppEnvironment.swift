@@ -8,22 +8,13 @@ import UserNotifications
 @MainActor
 @Observable
 final class AppEnvironment {
-    struct KeepMediaConfirmation: Sendable, Equatable {
-        let policy: KeepMediaPolicy
-        let currentBytes: Int64
-        let bytesToRemove: Int64
-    }
-
-    enum KeepMediaChangeResult: Sendable, Equatable {
-        case applied
-        case confirmationRequired(KeepMediaConfirmation)
-        case unavailable(String)
-    }
+    typealias KeepMediaConfirmation = KeepMediaPolicyConfirmation
+    typealias KeepMediaChangeResult = KeepMediaPolicyChangeResult
     let permissions = PermissionsStore()
     let recording = RecordingStore()
     let server = ServerStore()
     let connections = ConnectionStore()   // destination-folder config persists itself, no db needed
-    let ai = AIProviderStore()            // "AI Models": the active processing model (local-first, BYO-AI)
+    let ai = AIProviderStore()            // Optional AI: one active provider/model pair or Off.
     let aiSetup = AISetupPresentation()
     let mcpReadiness = MCPReadinessService()
     let audioSettings = AudioSettingsStore()
@@ -35,6 +26,7 @@ final class AppEnvironment {
     let privacy = PrivacyStore()
     let rewards = RewardsStore()   // cosmetic rewards (theme/icon/menu-bar) — independent of the DB
     let workspace = WorkspaceStore()
+    @ObservationIgnored private let keepMediaPolicyCoordinator = KeepMediaPolicyCoordinator()
 
     init() {
         let storageSettings = StorageSettingsStore()
@@ -784,7 +776,7 @@ final class AppEnvironment {
             let rec = recording
             let deps = ZBSEyeHTTPServer.Deps(
                 search: searchSvc, timeline: timelineSvc, db: db, mediaDir: storage.mediaDirectory,
-                token: token, version: "0.3.0",
+                token: token, version: "0.4.0",
                 isCapturing: { await MainActor.run { rec.isCapturing } },
                 toggleCapture: { enable in
                     await MainActor.run {
@@ -972,7 +964,7 @@ final class AppEnvironment {
         if let r = report {
             Log.retention.info("manual delete: frames \(r.framesDeleted) audio \(r.audioDeleted)")
         }
-        await storageSettings.refresh(storage: storage, db: db)
+        await storageSettings.refresh(storage: storage)
         // the timeline cursor may have pointed into what was wiped — refresh it
         await timelineStore?.load()
         // PRIVACY (Pro NO-GO): derived private states are built on the deleted history —
@@ -995,51 +987,15 @@ final class AppEnvironment {
         _ policy: KeepMediaPolicy,
         confirmedRemovalBytes: Int64? = nil
     ) async -> KeepMediaChangeResult {
-        guard !storageSettings.relocationInProgress,
-              let storage, let db, let admission = automaticRetentionAdmission else {
-            return .unavailable(String(localized: "Storage is not ready yet."))
-        }
-
-        if policy == .forever {
-            let pending = storageSettings.beginForeverRevocation()
-            await Task.detached(priority: .utility) {
-                admission.revoke(to: pending.revision)
-            }.value
-            storageSettings.finishForeverRevocation()
-            return .applied
-        }
-
-        _ = await recording.pauseForMaintenanceAndDrain(waitForTranscription: false)
-        let inventory = await CapturedMediaReconciler.reconcile(db: db, storage: storage)
-        recording.resumeAfterMaintenance()
-        guard let currentBytes = inventory.capturedMediaBytes,
-              let maximumBytes = policy.maxCapturedMediaBytes else {
-            return .unavailable(
-                String(localized: "Eye could not verify every media file. Nothing was deleted; try again when recording is idle.")
-            )
-        }
-
-        let bytesToRemove = max(0, currentBytes - maximumBytes)
-        if bytesToRemove > 0,
-           confirmedRemovalBytes.map({ $0 < bytesToRemove }) ?? true {
-            return .confirmationRequired(KeepMediaConfirmation(
-                policy: policy,
-                currentBytes: currentBytes,
-                bytesToRemove: bytesToRemove
-            ))
-        }
-
-        storageSettings.selectKeepMediaPolicy(policy, inventory: inventory)
-        let record = storageSettings.automaticRetentionRecord
-        guard record.phase == .finiteAdmitted, admission.activate(record) else {
-            storageSettings.failClosedAutomaticDeletionPreservingPolicy()
-            admission.revoke(to: storageSettings.automaticRetentionRecord.revision)
-            return .unavailable(
-                String(localized: "The media limit was saved, but automatic cleanup stayed off. Restart Eye to verify it safely.")
-            )
-        }
-        await storageSettings.refresh(storage: storage, db: db)
-        return .applied
+        await keepMediaPolicyCoordinator.change(
+            policy,
+            confirmedRemovalBytes: confirmedRemovalBytes,
+            storageSettings: storageSettings,
+            recording: recording,
+            storage: storage,
+            database: db,
+            admission: automaticRetentionAdmission
+        )
     }
 
     /// Move all of memory to a chosen folder (T1): pause and drain every DB writer → online DB backup + copy media →
@@ -1171,7 +1127,7 @@ final class AppEnvironment {
             let drain = await recording.pauseForLowDiskAndDrain(
                 systemCaptureTimeout: .seconds(5)
             )
-            lowDiskDrainConfirmed = Self.isConfirmedStopped(drain)
+            lowDiskDrainConfirmed = LowDiskDrainGate.isConfirmedStopped(drain)
             if !lowDiskDrainConfirmed {
                 Log.audio.error("low-disk pause remains closed: capture teardown was not confirmed")
             }
@@ -1180,7 +1136,7 @@ final class AppEnvironment {
                 let retry = await recording.pauseForLowDiskAndDrain(
                     systemCaptureTimeout: .seconds(5)
                 )
-                lowDiskDrainConfirmed = Self.isConfirmedStopped(retry)
+                lowDiskDrainConfirmed = LowDiskDrainGate.isConfirmedStopped(retry)
             }
             guard lowDiskDrainConfirmed else {
                 lowDiskGuard.holdPaused()
@@ -1189,13 +1145,5 @@ final class AppEnvironment {
             }
             recording.resumeAfterLowDisk()
         }
-    }
-
-    nonisolated private static func isConfirmedStopped(
-        _ drain: RecordingMaintenanceDrain
-    ) -> Bool {
-        drain.capture.activeCycles == 0
-            && drain.audio.activeLegs == 0
-            && drain.audio.systemCaptureOutcome.isConfirmedStopped
     }
 }

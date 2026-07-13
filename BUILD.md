@@ -18,12 +18,14 @@ open ZBSEye.xcodeproj             # → Xcode → Cmd+R
 xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Debug build
 ```
 
-A one-shot build + sign check is in `scripts/verify.sh` (xcodegen → xcodebuild Debug).
+A one-shot unsigned verification build is in `scripts/verify.sh` (xcodegen → strict-concurrency Debug build).
+It deliberately does not create or launch an ad-hoc signed app, so routine verification cannot churn the
+stable TCC identity of the installed release.
 
 The test target uses tiny fixtures and never downloads model weights:
 
 ```bash
-xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Debug test
+xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEyeUnitTests -configuration Debug test
 bash scripts/verify-local-ai.sh --all-fixtures
 ```
 
@@ -39,7 +41,7 @@ ZBSEyeApp/
   MCP/        ZBSEyeMCPServer (stdio)
   Automations/ HistoryImporter, DailySummaryService, ExportService, CartographerService
   State/      *Store.swift — @Observable @MainActor
-  Views/      Sidebar, Timeline, Activities, Ask, Cartographer, Achievements, Settings, MenuBar, Components
+  Views/      Timeline workspace, Ask, Achievements, focused Settings, MenuBar, Components
   ZBSEye.entitlements  — Hardened Runtime WITHOUT App Sandbox
 ```
 Swift 6 strict concurrency = `complete`. Deployment target macOS 15.0.

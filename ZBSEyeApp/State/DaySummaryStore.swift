@@ -71,7 +71,7 @@ final class DaySummaryStore {
     }
 
     var isBusy: Bool { phase == .summarizing || phase == .writing }
-    /// A processing model is active in "AI Models".
+    /// Optional AI is active.
     var llmReady: Bool { readiness.currentExecutionContext(for: .manualSummary) != nil }
     /// Ready to run the automation: a processing model AND a destination folder.
     var isReady: Bool { llmReady && connections.destination.isConfigured }

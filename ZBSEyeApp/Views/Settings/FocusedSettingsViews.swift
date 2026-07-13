@@ -125,6 +125,7 @@ struct PermissionsSettingsView: View {
 
 struct AISettingsView: View {
     @Environment(AppEnvironment.self) private var env
+    @State private var pendingAutomaticConsent: AIConsumer?
 
     var body: some View {
         ScrollView {
@@ -152,6 +153,21 @@ struct AISettingsView: View {
                         Button("Turn AI off", role: .destructive) { env.ai.deactivate() }
                     }
                 }
+                if let provider = env.ai.activeProvider, provider.isCloud {
+                    SettingsGroup("Background AI") {
+                        automaticConsumerToggle(
+                            .scheduledSummary,
+                            title: "Scheduled summaries",
+                            detail: "Create scheduled summaries from relevant text excerpts."
+                        )
+                        Divider()
+                        automaticConsumerToggle(
+                            .generatedLabels,
+                            title: "Activity labels",
+                            detail: "Generate short labels for captured activity from text excerpts."
+                        )
+                    }
+                }
                 Label(
                     "Cloud providers receive only approved text excerpts. Raw screenshots, audio, and file paths are not sent.",
                     systemImage: "hand.raised.fill"
@@ -163,13 +179,71 @@ struct AISettingsView: View {
             .frame(maxWidth: 720)
         }
         .navigationTitle("AI")
+        .alert(
+            "Allow background AI?",
+            isPresented: Binding(
+                get: { pendingAutomaticConsent != nil },
+                set: { if !$0 { pendingAutomaticConsent = nil } }
+            ),
+            presenting: pendingAutomaticConsent
+        ) { consumer in
+            Button("Allow") {
+                guard let provider = env.ai.activeProvider else { return }
+                _ = env.ai.setAutomaticConsumerConsent(consumer, enabled: true, for: provider)
+                pendingAutomaticConsent = nil
+            }
+            Button("Cancel", role: .cancel) { pendingAutomaticConsent = nil }
+        } message: { consumer in
+            Text(automaticConsentMessage(for: consumer))
+        }
     }
 
     private var activeLabel: String {
-        guard let provider = env.ai.activeProvider, let model = env.ai.activeModelID else {
-            return String(localized: "AI Off")
+        AISetupPresentation.activeLabel(
+            provider: env.ai.activeProvider,
+            modelID: env.ai.activeModelID
+        )
+    }
+
+    @ViewBuilder
+    private func automaticConsumerToggle(
+        _ consumer: AIConsumer,
+        title: LocalizedStringKey,
+        detail: LocalizedStringKey
+    ) -> some View {
+        Toggle(isOn: Binding(
+            get: {
+                guard let provider = env.ai.activeProvider else { return false }
+                return env.ai.hasConsent(provider, for: consumer)
+            },
+            set: { enabled in
+                guard let provider = env.ai.activeProvider else { return }
+                if enabled {
+                    pendingAutomaticConsent = consumer
+                } else {
+                    _ = env.ai.setAutomaticConsumerConsent(
+                        consumer,
+                        enabled: false,
+                        for: provider
+                    )
+                }
+            }
+        )) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
         }
-        return "\(provider.displayName) · \(model)"
+    }
+
+    private func automaticConsentMessage(for consumer: AIConsumer) -> String {
+        let recipient = env.ai.activeProvider
+            .flatMap { env.ai.recipientDisclosure(for: $0) }
+            ?? String(localized: "the active cloud provider")
+        let purpose = consumer == .scheduledSummary
+            ? String(localized: "scheduled summaries")
+            : String(localized: "activity labels")
+        return String(localized: "ZBS Eye will automatically send only the text excerpts needed for \(purpose) to \(recipient). Raw screenshots, audio, and file paths are not sent.")
     }
 }
 
@@ -201,7 +275,7 @@ struct DataStorageSettingsView: View {
         .task {
             syncSlider()
             env.backupSettings.refresh()
-            await env.storageSettings.refresh(storage: env.storage, db: env.db)
+            await env.storageSettings.refresh(storage: env.storage)
         }
         .confirmationDialog(
             keepMediaConfirmationTitle,
@@ -523,7 +597,7 @@ struct DataStorageSettingsView: View {
                 let report = try await importer.run { frames, audio in
                     Task { @MainActor in update("Moments \(frames) · audio \(audio)…") }
                 }
-                await env.storageSettings.refresh(storage: env.storage, db: env.db)
+                await env.storageSettings.refresh(storage: env.storage)
                 await env.timelineStore?.load()
                 return "Done · +\(report.frames) moments · +\(report.audio) audio"
             } catch {
@@ -545,9 +619,17 @@ struct DataStorageSettingsView: View {
 struct MCPToolsSettingsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var readiness: MCPReadinessState?
-    @State private var presentation: MCPSetupPresentation?
     @State private var profile = MCPAccessProfile.memoryReadOnly
     @State private var checking = false
+    @State private var readinessCheckRevision: UInt64 = 0
+
+    private var presentation: MCPSetupPresentation? {
+        guard case .readyToConnect(let path) = readiness else { return nil }
+        return try? MCPSetupPresentation(
+            executableURL: URL(fileURLWithPath: path),
+            profile: profile
+        )
+    }
 
     var body: some View {
         ScrollView {
@@ -576,8 +658,7 @@ struct MCPToolsSettingsView: View {
             .frame(maxWidth: 720)
         }
         .navigationTitle("MCP & AI Tools")
-        .task { await checkReadiness(force: false) }
-        .onChange(of: profile) { _, _ in rebuildPresentation() }
+        .task(id: profile) { await checkReadiness(force: false) }
     }
 
     @ViewBuilder
@@ -605,8 +686,13 @@ struct MCPToolsSettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Codex").font(.headline)
                 CopyableSetupValue(value: presentation.codexCommand)
-                Text("Claude").font(.headline)
+                Text("Claude Code").font(.headline)
+                CopyableSetupValue(value: presentation.claudeCodeCommand)
+                Text("Claude Desktop").font(.headline)
                 CopyableSetupValue(value: presentation.claudeJSON)
+                Text("Merge the zbs-eye entry into \(presentation.claudeDesktopConfigurationPath). Keep every MCP server already in that file.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Text(presentation.restartInstruction)
                 .font(.caption)
@@ -622,22 +708,13 @@ struct MCPToolsSettingsView: View {
     }
 
     private func checkReadiness(force: Bool) async {
-        guard !checking else { return }
+        readinessCheckRevision &+= 1
+        let revision = readinessCheckRevision
         checking = true
-        readiness = await env.mcpReadiness.check(force: force)
+        let result = await env.mcpReadiness.check(profile: profile, force: force)
+        guard !Task.isCancelled, readinessCheckRevision == revision else { return }
+        readiness = result
         checking = false
-        rebuildPresentation()
-    }
-
-    private func rebuildPresentation() {
-        guard case .readyToConnect(let path) = readiness else {
-            presentation = nil
-            return
-        }
-        presentation = try? MCPSetupPresentation(
-            executableURL: URL(fileURLWithPath: path),
-            profile: profile
-        )
     }
 }
 

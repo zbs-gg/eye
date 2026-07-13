@@ -45,6 +45,32 @@ final class AISetupPresentationTests: XCTestCase {
         )
     }
 
+    func testSettingsActivationDoesNotBundleBackgroundConsumers() {
+        XCTAssertEqual(
+            AISetupOrigin.settings.consentConsumers,
+            [.ask, .dailyInsights, .manualSummary]
+        )
+        XCTAssertFalse(AISetupOrigin.settings.consentConsumers.contains(.scheduledSummary))
+        XCTAssertFalse(AISetupOrigin.settings.consentConsumers.contains(.generatedLabels))
+    }
+
+    func testModelNamesStayInsideTheSelectedProvider() {
+        XCTAssertEqual(
+            AISetupPresentation.modelShortName(
+                "anthropic/claude-haiku-4.5",
+                provider: .openrouter
+            ),
+            "claude-haiku-4.5"
+        )
+        XCTAssertEqual(
+            AISetupPresentation.modelShortName(
+                AIProvider.claudeCodeDefaultModel,
+                provider: .claudeCode
+            ),
+            "Provider default"
+        )
+    }
+
     func testConcurrentEntryReusesOneAppWideSessionWithoutOverwritingOrigin() {
         let presentation = AISetupPresentation()
         let askSession = presentation.present(origin: .ask)

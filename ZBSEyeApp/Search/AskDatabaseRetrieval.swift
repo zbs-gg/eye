@@ -157,6 +157,14 @@ actor AskDatabaseRetrieval: AskRetrievalProviding {
         }
     }
 
+    private static func audioLabel(_ channel: String?) -> String {
+        switch channel {
+        case "mic": return "Microphone (me)"
+        case "system": return "System audio (other party)"
+        default: return "Audio"
+        }
+    }
+
     private static func evidenceText(
         timestamp: Date,
         label: String,
@@ -173,11 +181,4 @@ actor AskDatabaseRetrieval: AskRetrievalProviding {
         return String(normalized.prefix(240)) + "…"
     }
 
-    private static func audioLabel(_ channel: String?) -> String {
-        switch channel {
-        case "mic": return "Microphone (me)"
-        case "system": return "System audio (other party)"
-        default: return "Audio"
-        }
-    }
 }

@@ -3,30 +3,6 @@ import XCTest
 
 @MainActor
 final class AIProviderProcessStoreTests: XCTestCase {
-    func testModelsScreenStartupDoesNotProbeProcessProviders() async {
-        let codex = ScriptedStoreCodexProvider(updates: [])
-        let claude = ScriptedStoreClaudeProvider(updates: [])
-        let localCatalog = ScriptedStoreCatalogClient(results: [])
-        let (store, _, defaults) = makeStore(
-            codex: codex,
-            claude: claude,
-            catalogClient: localCatalog
-        )
-        defer { clear(defaults) }
-
-        await AIModelsPresentation.prepareScreen(
-            providers: store,
-            refreshBuiltIn: {}
-        )
-
-        let codexCalls = await codex.probeCallCount()
-        let claudeCalls = await claude.probeCallCount()
-        let localCalls = await localCatalog.loadCallCount()
-        XCTAssertEqual(codexCalls, 0)
-        XCTAssertEqual(claudeCalls, 0)
-        XCTAssertGreaterThan(localCalls, 0, "the local-only startup path must still run")
-    }
-
     func testConfigureProcessProvidersDoesNotProbeActiveCodexWithoutScopedConsent() async {
         let codex = ScriptedStoreCodexProvider(updates: [])
         let (store, overlay, defaults) = makeStore(codex: codex)
@@ -588,6 +564,41 @@ final class AIProviderProcessStoreTests: XCTestCase {
         }
         let generationCalls = await adapter.generateCallCount()
         XCTAssertEqual(generationCalls, 0)
+    }
+
+    func testBackgroundConsumersRequireSeparateNamedConsent() {
+        let provider = AIProvider.anthropic
+        let (store, _, defaults) = makeStore()
+        defer { clear(defaults) }
+        let interactiveConsumers = AISetupOrigin.settings.consentConsumers
+        let grant = ScopedAIConsentGrant(
+            providerID: provider.rawValue,
+            recipientDisclosure: provider.egressDestination,
+            consumers: interactiveConsumers,
+            policyRevision: ScopedAIConsentGrant.currentPolicyRevision
+        )
+        store.settings = AIProviderSettings(
+            active: provider.rawValue,
+            activeModelID: "claude-haiku-4-5-20251001",
+            models: [provider.rawValue: "claude-haiku-4-5-20251001"],
+            consentGrants: [provider.rawValue: grant]
+        )
+
+        XCTAssertFalse(store.hasConsent(provider, for: .scheduledSummary))
+        XCTAssertFalse(store.hasConsent(provider, for: .generatedLabels))
+        XCTAssertTrue(store.setAutomaticConsumerConsent(
+            .scheduledSummary,
+            enabled: true,
+            for: provider
+        ))
+        XCTAssertTrue(store.hasConsent(provider, for: .scheduledSummary))
+        XCTAssertFalse(store.hasConsent(provider, for: .generatedLabels))
+        XCTAssertTrue(store.setAutomaticConsumerConsent(
+            .scheduledSummary,
+            enabled: false,
+            for: provider
+        ))
+        XCTAssertFalse(store.hasConsent(provider, for: .scheduledSummary))
     }
 
     func testSelectionAndAuthorizationMutationsNotifyRouterOncePerSettingsCommit() async throws {

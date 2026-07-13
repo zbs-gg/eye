@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// "Cartographer" — AI insights for the day: what actually took up time and concrete advice.
-/// Processed by the model chosen in "AI Models" (local by default). Writes no files — insights live only in the UI.
+/// Processed by the active optional AI. Writes no files — insights live only in the UI.
 struct CartographerView: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -76,7 +76,7 @@ private struct CartographerBody: View {
         VStack(alignment: .leading, spacing: 4) {
             Label("Daily Insights", systemImage: "map")
                 .font(.title2).bold()
-            Text("Looks at your activity for the day and gives 2–3 concrete observations: where your time goes, where you could focus better. Daily fragments go only to the processing model you chose in AI Models — local by default.")
+            Text("Looks at your activity for the day and gives 2–3 concrete observations. If AI is enabled, only compact text fragments go to the provider you chose.")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }
@@ -102,7 +102,7 @@ private struct CartographerBody: View {
             VStack(alignment: .leading, spacing: 12) {
                 Label("One-time consent", systemImage: "hand.raised.fill")
                     .foregroundStyle(.tint).font(.headline)
-                Text("To produce insights, Daily Insights will send compact fragments of activity for the chosen day (app names, window titles, short snippets of on-screen text) to the processing model you chose in AI Models. Nothing is written to disk — only a request to that model.")
+                Text("To produce insights, Eye will send compact text fragments for the chosen day to your active AI provider. Raw screenshots, audio, and file paths are not sent.")
                     .foregroundStyle(.secondary)
                 Button {
                     store.grantConsentAndGenerate()

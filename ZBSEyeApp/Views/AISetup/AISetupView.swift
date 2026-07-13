@@ -121,19 +121,21 @@ private struct AISetupProviderView: View {
 
     private var setup: AISetupPresentation { env.aiSetup }
     private var ai: AIProviderStore { env.ai }
-    private var models: [String] { ai.availableModels(for: provider) }
 
     var body: some View {
+        let models = ai.availableModels(for: provider)
+        let recommendedModel = provider.recommendedModel(in: models)
+
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 providerHeader
                 if provider == .zbsEyeLocal {
-                    builtInControls
+                    builtInControls(models: models, recommendedModel: recommendedModel)
                 } else {
                     if provider.allowsEndpointOverride { endpointField }
                     if provider.usesAPIKey { credentialControls }
                     connectionControls
-                    modelControls
+                    modelControls(models: models, recommendedModel: recommendedModel)
                 }
                 if let actionMessage {
                     Text(actionMessage)
@@ -183,7 +185,7 @@ private struct AISetupProviderView: View {
     }
 
     @ViewBuilder
-    private var builtInControls: some View {
+    private func builtInControls(models: [String], recommendedModel: String?) -> some View {
         if env.builtInModels.isBusy {
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
@@ -206,7 +208,7 @@ private struct AISetupProviderView: View {
                 .foregroundStyle(.secondary)
         } else {
             ForEach(models, id: \.self) { model in
-                modelButton(model)
+                modelButton(model, recommendedModel: recommendedModel)
             }
         }
         if let error = env.builtInModels.operationError {
@@ -284,27 +286,27 @@ private struct AISetupProviderView: View {
     }
 
     @ViewBuilder
-    private var modelControls: some View {
+    private func modelControls(models: [String], recommendedModel: String?) -> some View {
         if !models.isEmpty {
             Divider()
-            VStack(alignment: .leading, spacing: 8) {
+            LazyVStack(alignment: .leading, spacing: 8) {
                 Text("Models from \(provider.displayName)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ForEach(models, id: \.self) { model in
-                    modelButton(model)
+                    modelButton(model, recommendedModel: recommendedModel)
                 }
             }
         }
     }
 
-    private func modelButton(_ model: String) -> some View {
-        let recommended = provider.recommendedModel(in: models) == model
+    private func modelButton(_ model: String, recommendedModel: String?) -> some View {
+        let recommended = recommendedModel == model
         return Button {
             select(model)
         } label: {
             HStack {
-                Text(AIModelsProviderCardPresentation.shortName(model, provider: provider))
+                Text(AISetupPresentation.modelShortName(model, provider: provider))
                 if recommended {
                     Text("Recommended").font(.caption2).foregroundStyle(.secondary)
                 }

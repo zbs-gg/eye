@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import GRDB
 import Security
 
 enum MCPReadinessDependencyError: Error, Equatable {
@@ -13,6 +14,7 @@ enum MCPSelfTestError: Error, Equatable {
     case outputLimitExceeded
     case initializationFailed
     case retrievalFailed
+    case noHistory
 }
 
 enum MCPReadinessFailure: Sendable, Equatable {
@@ -24,6 +26,7 @@ enum MCPReadinessFailure: Sendable, Equatable {
     case initializationFailed
     case toolContractMismatch
     case retrievalFailed
+    case noHistory
 
     var correctiveAction: String {
         switch self {
@@ -33,6 +36,8 @@ enum MCPReadinessFailure: Sendable, Equatable {
             "Replace the app with the signed ZBS Eye release."
         case .dataRootUnavailable:
             "Connect the data drive or open ZBS Eye to initialize storage."
+        case .noHistory:
+            "Record one Timeline moment, then check again."
         case .initializationTimedOut, .outputLimitExceeded, .initializationFailed,
              .toolContractMismatch, .retrievalFailed:
             "Quit and reopen ZBS Eye, then check again."
@@ -80,6 +85,12 @@ struct MCPDataRootIdentity: Sendable, Hashable {
     let device: UInt64
     let inode: UInt64
     let databaseIdentity: MCPExecutableFileIdentity
+    let frameWitness: MCPFrameWitness?
+}
+
+struct MCPFrameWitness: Sendable, Hashable {
+    let frameID: Int64
+    let timestampMs: Int64
 }
 
 struct MCPSelfTestRequest: Sendable {
@@ -111,6 +122,7 @@ actor MCPReadinessService {
     private struct Key: Sendable, Hashable {
         let identity: MCPInstalledApplicationIdentity
         let dataRoot: MCPDataRootIdentity
+        let profile: MCPAccessProfile
     }
 
     private let applicationURL: URL
@@ -131,7 +143,10 @@ actor MCPReadinessService {
         self.selfTester = selfTester
     }
 
-    func check(force: Bool = false) async -> MCPReadinessState {
+    func check(
+        profile: MCPAccessProfile = .memoryReadOnly,
+        force: Bool = false
+    ) async -> MCPReadinessState {
         let identity: MCPInstalledApplicationIdentity
         do {
             identity = try await identityInspector.inspect(applicationURL: applicationURL)
@@ -148,7 +163,7 @@ actor MCPReadinessService {
             return .notReady(.dataRootUnavailable)
         }
 
-        let key = Key(identity: identity, dataRoot: dataRoot)
+        let key = Key(identity: identity, dataRoot: dataRoot, profile: profile)
         if !force, let cached, cached.key == key { return cached.state }
 
         let state: MCPReadinessState
@@ -157,12 +172,12 @@ actor MCPReadinessService {
                 MCPSelfTestRequest(
                     identity: identity,
                     dataRoot: dataRoot,
-                    profile: .memoryReadOnly,
+                    profile: profile,
                     timeout: .seconds(5),
                     maximumOutputBytes: 256 * 1_024
                 )
             )
-            let expected = MCPToolPolicy.toolNames(for: .memoryReadOnly)
+            let expected = MCPToolPolicy.toolNames(for: profile)
             if result.toolNames == expected, result.retrievalSucceeded {
                 state = .readyToConnect(identity.executableURL.path)
             } else if result.toolNames != expected {
@@ -175,6 +190,7 @@ actor MCPReadinessService {
         } catch {
             state = .notReady(.initializationFailed)
         }
+        guard !Task.isCancelled else { return .notReady(.initializationFailed) }
         cached = (key, state)
         return state
     }
@@ -197,6 +213,7 @@ actor MCPReadinessService {
         case .outputLimitExceeded: .outputLimitExceeded
         case .initializationFailed: .initializationFailed
         case .retrievalFailed: .retrievalFailed
+        case .noHistory: .noHistory
         }
     }
 }
@@ -285,11 +302,24 @@ struct SystemMCPDataRootResolver: MCPDataRootResolving {
                   rootMetadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
                 throw MCPReadinessDependencyError.dataRootUnavailable
             }
+            let database = try ZBSEyeDatabase(
+                path: databaseURL.path,
+                runMigrations: false,
+                access: .readOnly
+            )
+            let witness = try database.pool.read { db -> MCPFrameWitness? in
+                guard let row = try Row.fetchOne(
+                    db,
+                    sql: "SELECT id, ts FROM screen_captures ORDER BY ts DESC, id DESC LIMIT 1"
+                ) else { return nil }
+                return MCPFrameWitness(frameID: row["id"], timestampMs: row["ts"])
+            }
             return MCPDataRootIdentity(
                 url: root,
                 device: UInt64(rootMetadata.st_dev),
                 inode: UInt64(rootMetadata.st_ino),
-                databaseIdentity: try MCPExecutableFileIdentity.capture(at: databaseURL)
+                databaseIdentity: try MCPExecutableFileIdentity.capture(at: databaseURL),
+                frameWitness: witness
             )
         }.value
     }
@@ -303,6 +333,9 @@ struct SystemMCPSelfTester: MCPSelfTesting {
               try MCPExecutableFileIdentity.capture(at: request.identity.executableURL)
                 == request.identity.fileIdentity else {
             throw MCPSelfTestError.initializationFailed
+        }
+        guard let witness = request.dataRoot.frameWitness else {
+            throw MCPSelfTestError.noHistory
         }
 
         let specification = CodexLaunchSpecification(
@@ -342,7 +375,7 @@ struct SystemMCPSelfTester: MCPSelfTesting {
 
         do {
             let deadline = ContinuousClock.now.advanced(by: request.timeout)
-            let handshake = try Self.handshakeMessages()
+            let handshake = try Self.handshakeMessages(nowMs: witness.timestampMs)
             try await connection.send(handshake.initialize, promptAdmission: nil)
             let initialize = try await Self.receiveResponse(
                 id: 1,
@@ -369,7 +402,10 @@ struct SystemMCPSelfTester: MCPSelfTesting {
                 }
                 responses[id] = object
             }
-            let result = try Self.validatePostInitialize(responses)
+            let result = try Self.validatePostInitialize(
+                responses,
+                expectedFrameID: witness.frameID
+            )
             await connection.terminateProcessGroup(gracePeriod: .milliseconds(100))
             return result
         } catch {
@@ -454,8 +490,9 @@ struct SystemMCPSelfTester: MCPSelfTesting {
         }
     }
 
-    private static func validatePostInitialize(
-        _ responses: [Int: [String: Any]]
+    static func validatePostInitialize(
+        _ responses: [Int: [String: Any]],
+        expectedFrameID: Int64
     ) throws -> MCPSelfTestResult {
         guard let list = responses[2], list["error"] == nil,
               let listResult = list["result"] as? [String: Any],
@@ -470,7 +507,10 @@ struct SystemMCPSelfTester: MCPSelfTesting {
               let retrievalResult = retrieval["result"] as? [String: Any],
               retrievalResult["isError"] as? Bool != true,
               let content = retrievalResult["content"] as? [[String: Any]],
-              !content.isEmpty else {
+              content.contains(where: {
+                  $0["type"] as? String == "text"
+                      && ($0["text"] as? String)?.contains("Frame #\(expectedFrameID) ") == true
+              }) else {
             throw MCPSelfTestError.retrievalFailed
         }
         return MCPSelfTestResult(toolNames: names, retrievalSucceeded: true)

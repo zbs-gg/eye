@@ -1,12 +1,12 @@
 import Foundation
 
-enum MCPAccessProfile: String, Sendable, Equatable {
+enum MCPAccessProfile: String, Sendable, Equatable, Hashable {
     case memoryReadOnly
     case advancedFull
 
     var cliArgument: String {
         switch self {
-        case .memoryReadOnly: "--mcp"
+        case .memoryReadOnly: "--mcp-read-only"
         case .advancedFull: "--mcp-full"
         }
     }

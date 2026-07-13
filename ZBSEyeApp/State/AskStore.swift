@@ -61,7 +61,7 @@ final class AskStore {
     /// described as cloud even if another provider happened to be local before.
     var executionDisclosure: String {
         guard let execution = readiness.currentAskExecutionContext() else {
-            return String(localized: "Pick a processing model in AI Models before asking your history.")
+            return String(localized: "Add AI before asking your history.")
         }
         if execution.executedLocally {
             return String(localized: "Answers with \(execution.selection.modelID) stay on this Mac.")

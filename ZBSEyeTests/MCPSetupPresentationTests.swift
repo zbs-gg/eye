@@ -12,7 +12,11 @@ final class MCPSetupPresentationTests: XCTestCase {
 
         XCTAssertEqual(
             presentation.codexCommand,
-            "codex mcp add zbs-eye -- '/Applications/ZBS Eye.app/Contents/MacOS/ZBS Eye' --mcp"
+            "codex mcp add zbs-eye -- '/Applications/ZBS Eye.app/Contents/MacOS/ZBS Eye' --mcp-read-only"
+        )
+        XCTAssertEqual(
+            presentation.claudeCodeCommand,
+            "claude mcp add zbs-eye -- '/Applications/ZBS Eye.app/Contents/MacOS/ZBS Eye' --mcp-read-only"
         )
         let claude = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: Data(presentation.claudeJSON.utf8))
@@ -21,9 +25,15 @@ final class MCPSetupPresentationTests: XCTestCase {
         let servers = try XCTUnwrap(claude["mcpServers"] as? [String: Any])
         let eye = try XCTUnwrap(servers["zbs-eye"] as? [String: Any])
         XCTAssertEqual(eye["command"] as? String, executable.path)
-        XCTAssertEqual(eye["args"] as? [String], ["--mcp"])
+        XCTAssertEqual(eye["args"] as? [String], ["--mcp-read-only"])
+        XCTAssertEqual(
+            presentation.claudeDesktopConfigurationPath,
+            "~/Library/Application Support/Claude/claude_desktop_config.json"
+        )
 
-        let primary = presentation.codexCommand + presentation.claudeJSON
+        let primary = presentation.codexCommand
+            + presentation.claudeCodeCommand
+            + presentation.claudeJSON
         for forbidden in ["Bearer", "api-token", "http://", "/v1", "secret-canary"] {
             XCTAssertFalse(primary.localizedCaseInsensitiveContains(forbidden))
         }
@@ -52,7 +62,7 @@ final class MCPSetupPresentationTests: XCTestCase {
 
         XCTAssertEqual(
             presentation.codexCommand,
-            "codex mcp add zbs-eye -- '/Applications/ZBS '\"'\"'Eye'\"'\"'; $(touch nope).app/Contents/MacOS/ZBS Eye' --mcp"
+            "codex mcp add zbs-eye -- '/Applications/ZBS '\"'\"'Eye'\"'\"'; $(touch nope).app/Contents/MacOS/ZBS Eye' --mcp-read-only"
         )
         let claude = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: Data(presentation.claudeJSON.utf8))

@@ -50,6 +50,33 @@ final class AutomaticRetentionAdmissionTests: XCTestCase {
         XCTAssertNil(admission.currentPermit())
     }
 
+    func testPendingFiniteRevisionCanActivateAfterOldPermitIsRevoked() throws {
+        let old = AutomaticRetentionRecord(
+            revision: 2,
+            policy: .fiveGB,
+            phase: .finiteAdmitted,
+            source: .explicitSelection
+        )
+        let pending = AutomaticRetentionRecord(
+            revision: 3,
+            policy: .tenGB,
+            phase: .pendingFinite,
+            source: .explicitSelection
+        )
+        let admitted = AutomaticRetentionRecord(
+            revision: 3,
+            policy: .tenGB,
+            phase: .finiteAdmitted,
+            source: .explicitSelection
+        )
+        let admission = AutomaticRetentionAdmission(record: old)
+
+        XCTAssertTrue(admission.revokeAndStage(pending))
+        XCTAssertNil(admission.currentPermit())
+        XCTAssertTrue(admission.activate(admitted))
+        XCTAssertEqual(try XCTUnwrap(admission.currentPermit()).policy, .tenGB)
+    }
+
     func testRevokeWaitsForHeldLeaseAndNoSecondLeaseCanEnter() async throws {
         let admitted = AutomaticRetentionRecord(
             revision: 8,
@@ -119,7 +146,7 @@ final class AutomaticRetentionAdmissionTests: XCTestCase {
         let store = StorageSettingsStore(defaults: defaults)
         _ = store.initializeKeepMediaPolicy(inventory: .positivelyEmpty)
 
-        let pending = store.beginForeverRevocation()
+        let pending = try! XCTUnwrap(store.beginForeverRevocation())
 
         XCTAssertEqual(pending.phase, .pendingForever)
         XCTAssertEqual(store.keepMediaPolicy, .fiveGB)
@@ -127,6 +154,77 @@ final class AutomaticRetentionAdmissionTests: XCTestCase {
         store.finishForeverRevocation()
         XCTAssertEqual(store.keepMediaPolicy, .forever)
         XCTAssertEqual(store.automaticRetentionRecord.phase, .closed)
+    }
+
+    @MainActor
+    func testFailedForeverPersistenceStaysClosedAndReportsFailure() {
+        let defaults = isolatedDefaults()
+        defer { clear(defaults) }
+        var rejectForever = false
+        let store = StorageSettingsStore(
+            defaults: defaults,
+            admissionPersistenceGate: { record in
+                !(rejectForever && record.phase == .pendingForever)
+            }
+        )
+        _ = store.initializeKeepMediaPolicy(inventory: .positivelyEmpty)
+        let admittedRevision = store.automaticRetentionRecord.revision
+        rejectForever = true
+
+        let pending = store.beginForeverRevocation()
+
+        XCTAssertNil(pending)
+        XCTAssertFalse(store.automaticDeletionAdmitted)
+        XCTAssertEqual(store.automaticRetentionRecord.revision, admittedRevision)
+        XCTAssertEqual(store.automaticRetentionRecord.phase, .closed)
+        XCTAssertEqual(store.keepMediaPolicy, .forever)
+    }
+
+    @MainActor
+    func testFiniteIncreaseIsDurablyPendingBeforeOldPolicyIsReplaced() throws {
+        let defaults = isolatedDefaults()
+        defer { clear(defaults) }
+        let store = StorageSettingsStore(defaults: defaults)
+        _ = store.initializeKeepMediaPolicy(inventory: .positivelyEmpty)
+        XCTAssertEqual(store.keepMediaPolicy, .fiveGB)
+
+        let pending = try XCTUnwrap(store.beginFiniteTransition(.fiftyGB))
+
+        XCTAssertEqual(pending.policy, .fiftyGB)
+        XCTAssertEqual(pending.phase, .pendingFinite)
+        XCTAssertFalse(store.automaticDeletionAdmitted)
+        XCTAssertEqual(store.keepMediaPolicy, .fiveGB)
+
+        let restarted = StorageSettingsStore(defaults: defaults)
+        XCTAssertEqual(restarted.keepMediaPolicy, .fiftyGB)
+        XCTAssertEqual(restarted.automaticRetentionRecord.phase, .pendingFinite)
+        XCTAssertFalse(restarted.automaticDeletionAdmitted)
+        _ = restarted.initializeKeepMediaPolicy(inventory: .positivelyEmpty)
+        XCTAssertEqual(restarted.keepMediaPolicy, .fiftyGB)
+        XCTAssertTrue(restarted.automaticDeletionAdmitted)
+    }
+
+    @MainActor
+    func testFailedFiniteTransitionDoesNotPublishRequestedPolicy() {
+        let defaults = isolatedDefaults()
+        defer { clear(defaults) }
+        var rejectPending = false
+        let store = StorageSettingsStore(
+            defaults: defaults,
+            admissionPersistenceGate: { record in
+                !(rejectPending && record.phase == .pendingFinite)
+            }
+        )
+        _ = store.initializeKeepMediaPolicy(inventory: .positivelyEmpty)
+        rejectPending = true
+
+        XCTAssertNil(store.beginFiniteTransition(.fiftyGB))
+        XCTAssertFalse(store.automaticDeletionAdmitted)
+        XCTAssertEqual(store.keepMediaPolicy, .forever)
+
+        let restarted = StorageSettingsStore(defaults: defaults)
+        XCTAssertEqual(restarted.keepMediaPolicy, .fiveGB)
+        XCTAssertFalse(restarted.automaticDeletionAdmitted)
     }
 
     @MainActor

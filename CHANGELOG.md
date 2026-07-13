@@ -10,17 +10,23 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   activity labels offline — no LM Studio, Ollama, account, API key, or separate server required. Setup is
   resumable and honest about hardware, disk space, progress, verification, failures, and installed bytes;
   a failed replacement cannot destroy the last verified model.
-- **Provider freedom without mixing providers and models.** The provider-first AI Models screen keeps Codex,
-  OpenRouter, Anthropic, direct Kimi/GLM/MiMo/OpenAI/Claude Code connections, plus separate Ollama and
-  LM Studio choices. Each provider owns its models and optional recommendation; one global active
-  `Provider · Model` pair powers the product, and discovery never silently changes it.
+- **Optional AI without a provider wall.** AI is Off by default and Eye remains useful without it. One compact
+  setup flow offers an explicit one-click local model, local servers, signed-in Codex/Claude Code accounts,
+  and supported API providers. Providers stay separate from their model choices; opening setup never connects,
+  downloads, or activates anything.
 
 ### Changed
-- Primary Codex/Claude MCP setup is now tokenless and read-only by default, with bounded installed-app
+- Primary Codex/Claude MCP setup is now tokenless and read-only by default via `--mcp-read-only`, with bounded installed-app
   readiness checks and explicit opt-in for screenshot access or recording control.
 - **Timeline-first workspace.** Timeline and Ask now share one compact workspace header with always-visible
   recording state. Activities is a Timeline representation, while Insights, Automations, Progress,
   Achievements, Appearance, and Settings open as focused secondary views and return without losing context.
+- **Four focused Settings destinations.** Permissions, AI, Data Storage, and MCP & AI Tools replace the old
+  settings maze. A single honest line reports current CPU, memory, and stored-data usage.
+- **Paste-like media retention.** New installs keep up to 5 GB of captured media; 10/20/50 GB and Forever are
+  explicit choices. Shrinking a limit asks before deleting old media, while low disk pauses capture and never
+  silently deletes history to self-heal.
+- Microphone and System Audio can now be controlled independently, including across low-disk pause and resume.
 - Every generative consumer now goes through one cancellable router with selection revision, authorization,
   deterministic context budgets, and provider/model/locality provenance. Interactive Ask takes priority over
   background work; stale or revoked output is discarded.

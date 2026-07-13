@@ -43,15 +43,21 @@ bash scripts/build-notarized.sh
 ```
 The script does it all: builds Release with **Hardened Runtime**, signs with **Developer ID** + a secure
 timestamp, packages the e5 retrieval model, submits to Apple (`notarytool --wait`, ~2–10 min), runs `stapler staple`
-and checks `spctl` (it should be `accepted, source=Notarized Developer ID`). The output is `dist/ZBSEye-notarized-*.zip`.
+and checks `spctl` (it should be `accepted, source=Notarized Developer ID`). It refuses a dirty worktree,
+ambiguous signing identities, or an existing artifact with the same candidate identity. The outputs are:
 
-The archive deliberately does **not** contain the multi-gigabyte generative model. On a supported Mac,
-the user starts its separate download from **AI Models → ZBS Eye Local**. The app verifies the immutable
+- `dist/ZBSEye-<version>-<build>-<git-sha>-notarized.zip`
+- the matching `.manifest.json` with the source revision, ZIP/executable hashes, Team ID, CDHash,
+  designated requirement, Hardened Runtime, and release-critical entitlement results.
+
+The archive deliberately does **not** contain the multi-gigabyte generative model. AI is off until the user
+opens **Settings → AI** and either chooses **On this Mac** or connects a cloud/account provider. The app verifies the immutable
 manifest before activation and stores the model under the resolved ZBS Eye data root. Partial assets,
 credentials, logs, and qualification reports must never appear in the release archive.
 
 ## Install on the recipient's machine
-Unzip into `/Applications`, launch with a **double-click** — Gatekeeper passes it without "Open Anyway"
+Verify the ZIP and executable hashes against the adjacent manifest, then unzip that exact candidate into
+`/Applications` and launch with a **double-click** — Gatekeeper passes it without "Open Anyway"
 (even offline, thanks to the stapled ticket). Screen Recording / Accessibility / Microphone permissions are
 granted once; the signature is stable, rebuilds don't reset them.
 

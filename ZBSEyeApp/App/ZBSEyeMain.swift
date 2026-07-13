@@ -1,7 +1,8 @@
 import Foundation
 
-/// Entry point. By default — a SwiftUI app. `--mcp` starts the read-only MCP
-/// profile; `--mcp-full` explicitly adds screenshots and recording control.
+/// Entry point. By default — a SwiftUI app. New setup uses
+/// `--mcp-read-only`; the historical `--mcp` contract remains full-access for
+/// existing harness configurations and is equivalent to `--mcp-full`.
 @main
 struct ZBSEyeMain {
     static func main() {
@@ -22,9 +23,10 @@ struct ZBSEyeMain {
             }
         }
         LanguageManager.applyAtLaunch()   // apply the in-app language override before any UI loads
-        let mcpProfile: MCPAccessProfile? = if CommandLine.arguments.contains("--mcp-full") {
+        let mcpProfile: MCPAccessProfile? = if CommandLine.arguments.contains("--mcp-full")
+            || CommandLine.arguments.contains("--mcp") {
             .advancedFull
-        } else if CommandLine.arguments.contains("--mcp") {
+        } else if CommandLine.arguments.contains("--mcp-read-only") {
             .memoryReadOnly
         } else {
             nil

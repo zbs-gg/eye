@@ -48,23 +48,28 @@ final class ResourceUsageSamplerTests: XCTestCase {
 
         store.start()
         store.start()
-        try? await Task.sleep(for: .milliseconds(75))
+        await sampler.waitUntilCallCount(atLeast: 2)
         store.stop()
         let stoppedAt = await sampler.callCount()
-        try? await Task.sleep(for: .milliseconds(50))
+        await Task.yield()
         let finalCount = await sampler.callCount()
 
-        XCTAssertGreaterThanOrEqual(stoppedAt, 2)
+        XCTAssertEqual(stoppedAt, 2)
         XCTAssertEqual(finalCount, stoppedAt)
         XCTAssertEqual(store.dataBytes, 42)
+        XCTAssertFalse(store.isSampling)
     }
 }
 
 private actor RecordingResourceSampler: ResourceUsageSampling {
     private var calls = 0
+    private var waiters: [(target: Int, continuation: CheckedContinuation<Void, Never>)] = []
 
     func sample() -> ResourceUsageRawSample? {
         calls += 1
+        let ready = waiters.filter { calls >= $0.target }
+        waiters.removeAll { calls >= $0.target }
+        ready.forEach { $0.continuation.resume() }
         return ResourceUsageRawSample(
             processTimeSeconds: Double(calls),
             monotonicSeconds: Double(calls),
@@ -73,4 +78,11 @@ private actor RecordingResourceSampler: ResourceUsageSampling {
     }
 
     func callCount() -> Int { calls }
+
+    func waitUntilCallCount(atLeast target: Int) async {
+        guard calls < target else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append((target, continuation))
+        }
+    }
 }

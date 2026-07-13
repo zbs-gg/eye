@@ -3,7 +3,10 @@
 # The pattern mirrors scripts/build-release.sh: xcodegen generate → xcodebuild
 # (PIPESTATUS-gated, can't trust grep's exit code) → check that "ZBS Eye.app"
 # is actually in DerivedData (and isn't left over from a previous build — hence the rm BEFORE).
-# Differences from release: Debug configuration, ad-hoc signing, no model bundling and no zip.
+# Differences from release: Debug configuration, signing disabled, no model bundling and no zip.
+# The app's Keychain access group requires a managed provisioning profile, so an ad-hoc Debug
+# signature is neither valid nor useful. Developer ID signing and entitlement validation belong to
+# scripts/build-notarized.sh, the single release gate.
 # SwiftLint — advisory ONLY: prints a count, never blocks.
 # Final: a line in ~/.claude/verify-log.jsonl per the schema
 #   {"ts","workspace","repo","loop","kind","outcome","ref"}.
@@ -35,18 +38,18 @@ APP="$DERIVED/Build/Products/Debug/ZBS Eye.app"
 rm -rf "$APP"
 
 set +e
-# CODE_SIGN_STYLE=Manual + empty DEVELOPMENT_TEAM — as in build-release.sh:
-# SPM dependencies (GRDB/swift-crypto/transformers) with automatic-signing
-# require an Apple Team → BUILD FAILED. With Manual they get ad-hoc signed without a team.
+# Compile and assemble the Debug bundle without signing. This stays portable for contributors and
+# avoids manufacturing a second gg.zbs.eye identity that could churn TCC or Keychain state.
 xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Debug \
   -derivedDataPath "$DERIVED" \
   -onlyUsePackageVersionsFromResolvedFile \
-  CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \
+  CODE_SIGNING_ALLOWED=NO \
   build 2>&1 | grep -E "error:|warning:|BUILD"
 XC_STATUS=${PIPESTATUS[0]}
 set -e
 [ "$XC_STATUS" -eq 0 ] || fail "xcodebuild failed (exit $XC_STATUS)"
 [ -d "$APP" ] || fail "ZBS Eye.app did not appear in $APP"
+[ -x "$APP/Contents/MacOS/ZBS Eye" ] || fail "ZBS Eye executable is missing from the Debug bundle"
 
 # SwiftLint — advisory only. NEVER blocks: swiftlint returns
 # non-zero on error-severity findings, so the whole call is under || true.
@@ -60,4 +63,4 @@ else
 fi
 
 ledger pass
-echo "✅ verify green: $APP ($(( $(date +%s) - START ))s)"
+echo "✅ verify green (headless compile): $APP ($(( $(date +%s) - START ))s)"

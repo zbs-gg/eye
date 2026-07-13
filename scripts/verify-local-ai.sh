@@ -235,7 +235,7 @@ PURE_TEST_SUITES=(
   "CodexAppServerClientTests"
   "ProcessProviderConnectionTests"
   "AIProviderProcessStoreTests"
-  "AIModelsPresentationTests"
+  "AISetupPresentationTests"
   "LocalAIContextPolicyTests"
   "LocalAIOutputContractTests"
   "LocalAIAnswerToolContractTests"
@@ -292,7 +292,7 @@ if [ "$RUN_CONCURRENCY_STRESS_TSAN" -eq 1 ]; then
 fi
 
 set +e
-xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration "$CONFIGURATION" \
+xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEyeUnitTests -configuration "$CONFIGURATION" \
   -destination 'platform=macOS' -derivedDataPath "$DERIVED" \
   -onlyUsePackageVersionsFromResolvedFile \
   CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \

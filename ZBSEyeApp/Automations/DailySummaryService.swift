@@ -1,7 +1,7 @@
 import Foundation
 
 /// Engine for the single v1 automation: "day summary". Three stages — collect (history from the DB → compact
-/// sessions) → summarize (the active processing model from "AI Models") → write (Markdown into a
+/// sessions) → summarize (the active optional AI) → write (Markdown into a
 /// folder/Obsidian). Actor: all DB, network, and file work is isolated; only Sendable crosses out.
 /// Egress crosses the process-wide LLMRouter with a consumer-scoped authorization snapshot; preview is
 /// mandatory before write (see DaySummaryStore) — protection from prompt injection out of private history.

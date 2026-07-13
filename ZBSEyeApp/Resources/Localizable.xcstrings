@@ -2,7 +2,14 @@
   "sourceLanguage": "en",
   "strings": {
     " ": {
-      "localizations": {}
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " "
+          }
+        }
+      }
     },
     "%1$@ media + %2$@ index": {
       "localizations": {
@@ -98,7 +105,14 @@
       }
     },
     "%lld": {
-      "localizations": {}
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld"
+          }
+        }
+      }
     },
     "%lld GB": {
       "localizations": {
@@ -154,10 +168,24 @@
       }
     },
     "%lld%%": {
-      "localizations": {}
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld%%"
+          }
+        }
+      }
     },
     "%lld×": {
-      "localizations": {}
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld×"
+          }
+        }
+      }
     },
     "(no transcript — found by time)": {
       "localizations": {
@@ -815,16 +843,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Год. Триста шестьдесят пять дней подряд. Это уже не серия — это твоя физика."
-          }
-        }
-      }
-    },
-    "AI Models": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Модели ИИ"
           }
         }
       }
@@ -1522,16 +1540,6 @@
         }
       }
     },
-    "Collects the day's activity from your history, runs it through your processing model (AI Models — local by default), and writes a Markdown digest to a folder of your choice.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Собирает активность дня из вашей истории, прогоняет её через выбранную модель обработки («Модели ИИ», по умолчанию локальную) и записывает Markdown-дайджест в выбранную папку."
-          }
-        }
-      }
-    },
     "Command": {
       "localizations": {
         "ru": {
@@ -1588,26 +1596,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Связанные моменты"
-          }
-        }
-      }
-    },
-    "Connections": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Подключения"
-          }
-        }
-      }
-    },
-    "Connections need to be set up": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Нужно настроить подключения"
           }
         }
       }
@@ -2362,26 +2350,6 @@
         }
       }
     },
-    "First pick a processing model in AI Models": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сначала выберите модель обработки в «Моделях ИИ»"
-          }
-        }
-      }
-    },
-    "First set up a local LLM in Connections": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сначала настройте локальную LLM в Подключениях"
-          }
-        }
-      }
-    },
     "Five hundred queries. The magnifying glass gained an investigator's kit: optics, threads of theories, a pinned case card.": {
       "localizations": {
         "ru": {
@@ -3002,16 +2970,6 @@
         }
       }
     },
-    "Looks at your activity for the day and gives 2–3 concrete observations: where your time goes, where you could focus better. Daily fragments go only to the processing model you chose in AI Models — local by default.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Смотрит на активность за день и даёт 2–3 конкретных наблюдения: куда уходит время, где можно лучше сфокусироваться. Фрагменты дня уходят только в модель, выбранную в «Моделях ИИ», — по умолчанию локальную."
-          }
-        }
-      }
-    },
     "Low disk — manage storage": {
       "localizations": {
         "ru": {
@@ -3053,7 +3011,14 @@
       }
     },
     "MCP": {
-      "localizations": {}
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MCP"
+          }
+        }
+      }
     },
     "MCP gives AI agents (Claude Desktop, Cursor, …) tools to search and read your memory — over stdio on this Mac, no network, no token needed.": {
       "localizations": {
@@ -3486,7 +3451,14 @@
       }
     },
     "OK": {
-      "localizations": {}
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        }
+      }
     },
     "Old data is deleted automatically when the limit is exceeded (every 30 minutes). The limit covers moments and audio; the search index grows separately and is cleaned along with history. \"Forever\" — at your own risk: the disk is finite.": {
       "localizations": {
@@ -3564,26 +3536,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Разовое согласие"
-          }
-        }
-      }
-    },
-    "Open AI Models": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Открыть «Модели ИИ»"
-          }
-        }
-      }
-    },
-    "Open Connections": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Открыть подключения"
           }
         }
       }
@@ -4948,16 +4900,6 @@
         }
       }
     },
-    "To produce insights, Daily Insights will send compact fragments of activity for the chosen day (app names, window titles, short snippets of on-screen text) to the processing model you chose in AI Models. Nothing is written to disk — only a request to that model.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Для инсайтов «Инсайты дня» отправят компактные фрагменты активности выбранного дня (названия приложений, заголовки окон, короткие фрагменты текста с экрана) в модель, выбранную в «Моделях ИИ». На диск ничего не пишется — только запрос в эту модель."
-          }
-        }
-      }
-    },
     "To the %@ milestone": {
       "localizations": {
         "ru": {
@@ -5489,7 +5431,14 @@
       }
     },
     "ZBS Eye": {
-      "localizations": {}
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZBS Eye"
+          }
+        }
+      }
     },
     "ZBS Eye continuously records your work on the computer so any moment can be found and replayed:": {
       "localizations": {
@@ -5592,7 +5541,14 @@
       }
     },
     "[%lld]": {
-      "localizations": {}
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[%lld]"
+          }
+        }
+      }
     },
     "active": {
       "localizations": {
@@ -5854,7 +5810,14 @@
       }
     },
     "· %@": {
-      "localizations": {}
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "· %@"
+          }
+        }
+      }
     },
     "· %lld sessions": {
       "localizations": {
@@ -6036,16 +5999,6 @@
         }
       }
     },
-    "Answers use the model you choose in AI Models. ZBS Eye Local works on this Mac; cloud providers receive excerpts only after your explicit consent.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ответы создаёт модель, выбранная в «Моделях ИИ». ZBS Eye Local работает на этом Mac; облачные провайдеры получают фрагменты только с вашего явного согласия."
-          }
-        }
-      }
-    },
     "Answers with %@ stay on this Mac.": {
       "localizations": {
         "ru": {
@@ -6182,26 +6135,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Проверяем этот Mac…"
-          }
-        }
-      }
-    },
-    "Choose a model in AI Models. ZBS Eye Local works on this Mac; cloud providers receive excerpts only after your explicit consent. Recordings and the index stay local.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выберите модель в «Моделях ИИ». ZBS Eye Local работает на этом Mac; облачные провайдеры получают фрагменты только с вашего явного согласия. Записи и индекс остаются локально."
-          }
-        }
-      }
-    },
-    "Choose a model in AI Models. ZBS Eye Local works without another app or account; the automation won't run until a model is active.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выберите модель в «Моделях ИИ». ZBS Eye Local работает без другого приложения и аккаунта; автоматизация не запустится, пока модель не будет активна."
           }
         }
       }
@@ -6806,16 +6739,6 @@
         }
       }
     },
-    "Pick a processing model in AI Models before asking your history.": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Перед вопросом к истории выберите модель обработки в «Моделях ИИ»."
-          }
-        }
-      }
-    },
     "Preparing local AI…": {
       "localizations": {
         "ru": {
@@ -7386,16 +7309,6 @@
         }
       }
     },
-    "To answer from your history I need a processing model — pick one in AI Models. Local models keep excerpts on this Mac; cloud providers receive excerpts only with your explicit consent. 👁": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Чтобы отвечать по вашей истории, нужна модель обработки — выберите её в «Моделях ИИ». Локальные модели оставляют фрагменты на этом Mac; облачные провайдеры получают их только с вашего явного согласия. 👁"
-          }
-        }
-      }
-    },
     "Upgrade Claude Code to the version supported by this ZBS Eye release.": {
       "localizations": {
         "ru": {
@@ -7682,6 +7595,1616 @@
           "stringUnit": {
             "state": "translated",
             "value": "👁 … 👁 (моргнуло)"
+          }
+        }
+      }
+    },
+    "%1$lld models": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld моделей"
+          }
+        }
+      }
+    },
+    "%1$lld need attention": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld требуют внимания"
+          }
+        }
+      }
+    },
+    "%1$lldm": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld мин"
+          }
+        }
+      }
+    },
+    "AI": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ИИ"
+          }
+        }
+      }
+    },
+    "AI Off": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ИИ выключен"
+          }
+        }
+      }
+    },
+    "AI is off": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ИИ выключен"
+          }
+        }
+      }
+    },
+    "AI is optional. Timeline, capture, and local search work without it.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ИИ необязателен. Таймлайн, запись и локальный поиск работают без него."
+          }
+        }
+      }
+    },
+    "API Provider": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "API-провайдер"
+          }
+        }
+      }
+    },
+    "Access": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ"
+          }
+        }
+      }
+    },
+    "Accessibility": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Универсальный доступ"
+          }
+        }
+      }
+    },
+    "Account or Code": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аккаунт или код-ассистент"
+          }
+        }
+      }
+    },
+    "Add AI before asking your history.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавьте ИИ, прежде чем задавать вопросы своей истории."
+          }
+        }
+      }
+    },
+    "Add AI only when you want generated insights. Local activity and Timeline keep working without it.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавьте ИИ, только когда нужны сгенерированные выводы. Локальная активность и Таймлайн работают без него."
+          }
+        }
+      }
+    },
+    "Add AI to generate a digest. Recording, Timeline, and local search keep working without it.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавьте ИИ для создания дайджеста. Запись, Таймлайн и локальный поиск работают без него."
+          }
+        }
+      }
+    },
+    "Add or switch AI…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавить или сменить ИИ…"
+          }
+        }
+      }
+    },
+    "Advanced": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дополнительно"
+          }
+        }
+      }
+    },
+    "Advanced · full access": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Расширенный · полный доступ"
+          }
+        }
+      }
+    },
+    "All history · text": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вся история · текст"
+          }
+        }
+      }
+    },
+    "All history · text + media": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вся история · текст и медиа"
+          }
+        }
+      }
+    },
+    "Allow and use": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешить и использовать"
+          }
+        }
+      }
+    },
+    "Allow this provider to answer from Eye?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешить этому провайдеру отвечать по данным Eye?"
+          }
+        }
+      }
+    },
+    "Apply limit and remove oldest media": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Применить лимит и удалить старые медиа"
+          }
+        }
+      }
+    },
+    "Ask only": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Только для Ask"
+          }
+        }
+      }
+    },
+    "Asking about": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Область вопроса"
+          }
+        }
+      }
+    },
+    "Audio engines run only during detected meetings.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись звука включается только во время обнаруженных встреч."
+          }
+        }
+      }
+    },
+    "Audio follows recording continuously.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Звук записывается всё время, пока работает запись."
+          }
+        }
+      }
+    },
+    "Audio is off. Screen capture continues.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Звук выключен. Запись экрана продолжается."
+          }
+        }
+      }
+    },
+    "Backup": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резервная копия"
+          }
+        }
+      }
+    },
+    "Browser and prior history": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Браузеры и прежняя история"
+          }
+        }
+      }
+    },
+    "Browsers are split by site (real host from your own history), not lumped as one app. On-device.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Браузеры разделяются по сайтам из вашей истории, а не объединяются в одно приложение. Обработка на устройстве."
+          }
+        }
+      }
+    },
+    "Capture and storage stay local. Cloud processing happens only for the provider and text scope you explicitly approve.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись и хранение остаются локальными. Облачная обработка выполняется только выбранным провайдером и только для явно разрешённого текста."
+          }
+        }
+      }
+    },
+    "Capture is paused because disk space is low. Eye will not delete history to self-heal.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись приостановлена из-за нехватки места. Eye не станет удалять историю для самовосстановления."
+          }
+        }
+      }
+    },
+    "Captured media": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записанные медиа"
+          }
+        }
+      }
+    },
+    "Check again": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверить снова"
+          }
+        }
+      }
+    },
+    "Checking the installed helper…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверяем установленный помощник…"
+          }
+        }
+      }
+    },
+    "Choose a provider": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите провайдера"
+          }
+        }
+      }
+    },
+    "Choose…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрать…"
+          }
+        }
+      }
+    },
+    "Claude": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude"
+          }
+        }
+      }
+    },
+    "Cloud providers receive only approved text excerpts. Raw screenshots, audio, and file paths are not sent.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Облачные провайдеры получают только разрешённые текстовые фрагменты. Скриншоты, аудио и пути к файлам не отправляются."
+          }
+        }
+      }
+    },
+    "Codex": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex"
+          }
+        }
+      }
+    },
+    "Collects the day's activity from your history, runs it through the AI you chose, and writes a Markdown digest to a folder of your choice.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Собирает активность за день из истории, обрабатывает её выбранным ИИ и сохраняет Markdown-дайджест в выбранную папку."
+          }
+        }
+      }
+    },
+    "Complete Sign-in": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Завершить вход"
+          }
+        }
+      }
+    },
+    "Computing…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Считаем…"
+          }
+        }
+      }
+    },
+    "Connect local server": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключить локальный сервер"
+          }
+        }
+      }
+    },
+    "Connect this provider and choose a current model.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключите провайдера и выберите актуальную модель."
+          }
+        }
+      }
+    },
+    "Connect this provider, then choose one of its models.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключите провайдера, затем выберите одну из его моделей."
+          }
+        }
+      }
+    },
+    "Connection type": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Тип подключения"
+          }
+        }
+      }
+    },
+    "Copy bearer token": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скопировать bearer-токен"
+          }
+        }
+      }
+    },
+    "Couldn't delete. Check diagnostics and try again.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось удалить. Проверьте диагностику и попробуйте снова."
+          }
+        }
+      }
+    },
+    "Credential saved": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Данные доступа сохранены"
+          }
+        }
+      }
+    },
+    "Current resource use: %1$@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текущее потребление ресурсов: %1$@"
+          }
+        }
+      }
+    },
+    "Data Storage": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранение данных"
+          }
+        }
+      }
+    },
+    "Delete ALL history? This is permanent.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить ВСЮ историю? Это необратимо."
+          }
+        }
+      }
+    },
+    "Delete the last 15 minutes permanently?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Безвозвратно удалить последние 15 минут?"
+          }
+        }
+      }
+    },
+    "Delete the last 24 hours permanently?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Безвозвратно удалить последние 24 часа?"
+          }
+        }
+      }
+    },
+    "Delete the last hour permanently?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Безвозвратно удалить последний час?"
+          }
+        }
+      }
+    },
+    "Disconnect": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отключить"
+          }
+        }
+      }
+    },
+    "Done": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готово"
+          }
+        }
+      }
+    },
+    "Downloading or preparing the local model…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скачиваем или подготавливаем локальную модель…"
+          }
+        }
+      }
+    },
+    "Enter an endpoint first.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сначала укажите адрес сервера."
+          }
+        }
+      }
+    },
+    "Export failed: %1$@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка экспорта: %1$@"
+          }
+        }
+      }
+    },
+    "Export or delete": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспорт или удаление"
+          }
+        }
+      }
+    },
+    "Eye could not verify every media file. Nothing was deleted; try again when recording is idle.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eye не смог проверить все медиафайлы. Ничего не удалено; попробуйте снова, когда запись неактивна."
+          }
+        }
+      }
+    },
+    "Eye will send only the text excerpts needed for %1$@ to %2$@. Raw images, audio, and file paths are not sent.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eye отправит в %2$@ только текстовые фрагменты, необходимые для %1$@. Изображения, аудио и пути к файлам не отправляются."
+          }
+        }
+      }
+    },
+    "Eye would need to remove about %1$@ of the oldest captured media. Search text and newer media stay available.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eye потребуется удалить около %1$@ самых старых медиа. Текст для поиска и более новые медиа сохранятся."
+          }
+        }
+      }
+    },
+    "Give Codex or Claude read-only Timeline access": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дать Codex или Claude доступ к Таймлайну только для чтения"
+          }
+        }
+      }
+    },
+    "Granted": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешено"
+          }
+        }
+      }
+    },
+    "HTTPS base URL": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Базовый HTTPS URL"
+          }
+        }
+      }
+    },
+    "How you spent the last %1$lld days": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Как прошли последние %1$lld дней"
+          }
+        }
+      }
+    },
+    "Import browser history": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортировать историю браузеров"
+          }
+        }
+      }
+    },
+    "Import browsers now": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортировать браузеры сейчас"
+          }
+        }
+      }
+    },
+    "Importing browsers…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортируем браузеры…"
+          }
+        }
+      }
+    },
+    "Importing prior history…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортируем прежнюю историю…"
+          }
+        }
+      }
+    },
+    "Keep Media": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранить медиа"
+          }
+        }
+      }
+    },
+    "Load Models": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузить модели"
+          }
+        }
+      }
+    },
+    "Local endpoint": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальный адрес"
+          }
+        }
+      }
+    },
+    "Location": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Расположение"
+          }
+        }
+      }
+    },
+    "Looks at your activity for the day and gives 2–3 concrete observations. If AI is enabled, only compact text fragments go to the provider you chose.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Анализирует активность за день и даёт 2–3 конкретных наблюдения. Если ИИ включён, выбранному провайдеру отправляются только компактные текстовые фрагменты."
+          }
+        }
+      }
+    },
+    "MCP & AI Tools": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MCP и ИИ-инструменты"
+          }
+        }
+      }
+    },
+    "Media is kept forever. Low disk still pauses capture.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Медиа хранятся навсегда. При нехватке места запись всё равно приостанавливается."
+          }
+        }
+      }
+    },
+    "Memory": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Память"
+          }
+        }
+      }
+    },
+    "Memory · read only": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Память · только чтение"
+          }
+        }
+      }
+    },
+    "Models from %1$@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модели от %1$@"
+          }
+        }
+      }
+    },
+    "Moment · %1$@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Момент · %1$@"
+          }
+        }
+      }
+    },
+    "No excluded apps.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исключённых приложений нет."
+          }
+        }
+      }
+    },
+    "Not enough activity yet — keep recording and this fills in.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Активности пока мало — продолжайте запись, и здесь появятся данные."
+          }
+        }
+      }
+    },
+    "Not ready": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не готово"
+          }
+        }
+      }
+    },
+    "Nothing connects, downloads, or activates until you choose.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ничего не подключается, не скачивается и не активируется без вашего выбора."
+          }
+        }
+      }
+    },
+    "Off · optional": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выключен · необязательно"
+          }
+        }
+      }
+    },
+    "One explicit download. The durable model job continues if this sheet closes.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Одно явное скачивание. Загрузка модели продолжится, даже если закрыть это окно."
+          }
+        }
+      }
+    },
+    "Open at login": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запускать при входе"
+          }
+        }
+      }
+    },
+    "OpenAI-compatible HTTPS API with its own Keychain credential.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenAI-совместимый HTTPS API с отдельным ключом в Связке ключей."
+          }
+        }
+      }
+    },
+    "Optional. Eye keeps recording, Timeline, and local search without it.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Необязательно. Eye продолжает запись, Таймлайн и локальный поиск без ИИ."
+          }
+        }
+      }
+    },
+    "Permissions needed — set up": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нужны разрешения — настроить"
+          }
+        }
+      }
+    },
+    "Private apps": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приватные приложения"
+          }
+        }
+      }
+    },
+    "Private one-click model managed by Eye on this Mac.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приватная модель в один клик под управлением Eye на этом Mac."
+          }
+        }
+      }
+    },
+    "Provider": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Провайдер"
+          }
+        }
+      }
+    },
+    "Range · %1$@ – %2$@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диапазон · %1$@ – %2$@"
+          }
+        }
+      }
+    },
+    "Re-check permissions": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверить разрешения снова"
+          }
+        }
+      }
+    },
+    "Ready · screen, microphone, sound": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готово · экран, микрофон, звук"
+          }
+        }
+      }
+    },
+    "Record audio": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записывать звук"
+          }
+        }
+      }
+    },
+    "Remove Credential": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить данные доступа"
+          }
+        }
+      }
+    },
+    "Repair & Diagnostics…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исправление и диагностика…"
+          }
+        }
+      }
+    },
+    "Restart Eye": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перезапустить Eye"
+          }
+        }
+      }
+    },
+    "Save Credential": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранить данные доступа"
+          }
+        }
+      }
+    },
+    "Save a credential first.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сначала сохраните данные доступа."
+          }
+        }
+      }
+    },
+    "Screen Recording": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись экрана"
+          }
+        }
+      }
+    },
+    "Search index": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поисковый индекс"
+          }
+        }
+      }
+    },
+    "Secret achievement": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Секретное достижение"
+          }
+        }
+      }
+    },
+    "Sign in to Codex": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Войти в Codex"
+          }
+        }
+      }
+    },
+    "Snapshots include the database and index, not captured media. The live SQLite database never goes into iCloud Drive.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Снимки включают базу данных и индекс, но не записанные медиа. Рабочая база SQLite никогда не помещается в iCloud Drive."
+          }
+        }
+      }
+    },
+    "Something not working? Describe it and have your own agent fix it — or file a GitHub issue.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Что-то не работает? Опишите проблему своему агенту, чтобы он помог её исправить, или создайте issue на GitHub."
+          }
+        }
+      }
+    },
+    "Something wrong?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Что-то не так?"
+          }
+        }
+      }
+    },
+    "Speech Recognition": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание речи"
+          }
+        }
+      }
+    },
+    "Storage is not ready yet.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранилище пока не готово."
+          }
+        }
+      }
+    },
+    "System Audio": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук"
+          }
+        }
+      }
+    },
+    "System Audio did not start. Check Screen Recording access.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук не запустился. Проверьте доступ к записи экрана."
+          }
+        }
+      }
+    },
+    "The credential could not be saved to Keychain.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сохранить данные доступа в Связке ключей."
+          }
+        }
+      }
+    },
+    "The media limit was saved, but automatic cleanup stayed off. Restart Eye to verify it safely.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Лимит медиа сохранён, но автоматическая очистка осталась выключенной. Перезапустите Eye для безопасной проверки."
+          }
+        }
+      }
+    },
+    "The microphone was unavailable at the last start.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "При последнем запуске микрофон был недоступен."
+          }
+        }
+      }
+    },
+    "The provider changed. Connect it and choose the model again.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Провайдер изменился. Подключите его и снова выберите модель."
+          }
+        }
+      }
+    },
+    "This day": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот день"
+          }
+        }
+      }
+    },
+    "This moment": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот момент"
+          }
+        }
+      }
+    },
+    "Timeline and local search keep working. Add AI only when you want a generated answer.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Таймлайн и локальный поиск продолжают работать. Добавьте ИИ, только когда нужен сгенерированный ответ."
+          }
+        }
+      }
+    },
+    "To produce insights, Eye will send compact text fragments for the chosen day to your active AI provider. Raw screenshots, audio, and file paths are not sent.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для создания выводов Eye отправит активному ИИ-провайдеру компактные текстовые фрагменты за выбранный день. Скриншоты, аудио и пути к файлам не отправляются."
+          }
+        }
+      }
+    },
+    "Today · text": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сегодня · текст"
+          }
+        }
+      }
+    },
+    "Today · text + media": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сегодня · текст и медиа"
+          }
+        }
+      }
+    },
+    "Turn AI off": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выключить ИИ"
+          }
+        }
+      }
+    },
+    "Turn this off to keep microphone recording without capturing calls, video, music, or Eye's own playback. Microphone and System Audio are independent.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выключите это, чтобы оставить микрофон, но не записывать звонки, видео, музыку или звук самого Eye. Микрофон и системный звук независимы."
+          }
+        }
+      }
+    },
+    "Unlock it — and you'll find out what it's for.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Откройте его — и узнаете, за что оно даётся."
+          }
+        }
+      }
+    },
+    "Use default location": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать стандартное расположение"
+          }
+        }
+      }
+    },
+    "Use only for clients that cannot speak MCP. MCP setup never needs this token.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Используйте только для клиентов без поддержки MCP. Для настройки MCP этот токен не нужен."
+          }
+        }
+      }
+    },
+    "Uses a server you run on numeric loopback.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использует ваш сервер на числовом loopback-адресе."
+          }
+        }
+      }
+    },
+    "Uses your existing signed-in coding-assistant account.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использует уже авторизованный аккаунт код-ассистента."
+          }
+        }
+      }
+    },
+    "Visible range": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Видимый диапазон"
+          }
+        }
+      }
+    },
+    "When the cap is reached, Eye removes the oldest captured media first. Choosing a smaller cap asks before any deletion can begin.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "При достижении лимита Eye сначала удаляет самые старые медиа. Перед уменьшением лимита Eye запросит подтверждение до начала удаления."
+          }
+        }
+      }
+    },
+    "Where the time went": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Куда ушло время"
+          }
+        }
+      }
+    },
+    "Your data": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ваши данные"
+          }
+        }
+      }
+    },
+    "http://127.0.0.1:8000/v1": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "http://127.0.0.1:8000/v1"
+          }
+        }
+      }
+    },
+    "https://inference.example/v1": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "https://inference.example/v1"
+          }
+        }
+      }
+    },
+    "iCloud Drive is unavailable. Local recording is unaffected.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iCloud Drive недоступен. Локальная запись продолжает работать."
+          }
+        }
+      }
+    },
+    "iCloud database snapshots": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Снимки базы данных в iCloud"
+          }
+        }
+      }
+    },
+    "the in-app AI features you explicitly run": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "функции ИИ в приложении, которые вы запускаете явно"
+          }
+        }
+      }
+    },
+    "Activity labels": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Метки активности"
+          }
+        }
+      }
+    },
+    "Allow": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешить"
+          }
+        }
+      }
+    },
+    "Allow background AI?": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешить фоновую работу ИИ?"
+          }
+        }
+      }
+    },
+    "Another Keep Media change is still finishing. Try again in a moment.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Предыдущее изменение настройки «Хранить медиа» ещё выполняется. Повторите через мгновение."
+          }
+        }
+      }
+    },
+    "Automatic cleanup is stopped for this run, but Eye could not save Forever. Try again before restarting.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматическая очистка остановлена до завершения Eye, но режим «Навсегда» не удалось сохранить. Повторите до перезапуска."
+          }
+        }
+      }
+    },
+    "Automatic cleanup is stopped for this run, but Eye could not save the new media limit. Try again before restarting.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматическая очистка остановлена до завершения Eye, но новый лимит медиа не удалось сохранить. Повторите до перезапуска."
+          }
+        }
+      }
+    },
+    "Automatic cleanup is stopped, but Eye could not finish saving Forever. Try again.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматическая очистка остановлена, но режим «Навсегда» не удалось сохранить полностью. Повторите попытку."
+          }
+        }
+      }
+    },
+    "Background AI": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Фоновый ИИ"
+          }
+        }
+      }
+    },
+    "Claude Code": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude Code"
+          }
+        }
+      }
+    },
+    "Claude Desktop": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude Desktop"
+          }
+        }
+      }
+    },
+    "Create scheduled summaries from relevant text excerpts.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Создавать запланированные сводки по нужным фрагментам текста."
+          }
+        }
+      }
+    },
+    "Generate short labels for captured activity from text excerpts.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Создавать короткие метки записанной активности по фрагментам текста."
+          }
+        }
+      }
+    },
+    "Merge the zbs-eye entry into %1$@. Keep every MCP server already in that file.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавьте запись zbs-eye в %1$@. Сохраните все MCP-серверы, которые уже есть в этом файле."
+          }
+        }
+      }
+    },
+    "Scheduled summaries": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запланированные сводки"
+          }
+        }
+      }
+    },
+    "ZBS Eye will automatically send only the text excerpts needed for %1$@ to %2$@. Raw screenshots, audio, and file paths are not sent.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZBS Eye будет автоматически отправлять в %2$@ только фрагменты текста, нужные для функции «%1$@». Исходные снимки экрана, аудио и пути к файлам не отправляются."
+          }
+        }
+      }
+    },
+    "activity labels": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "меток активности"
+          }
+        }
+      }
+    },
+    "scheduled summaries": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "запланированных сводок"
+          }
+        }
+      }
+    },
+    "the active cloud provider": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "активному облачному провайдеру"
           }
         }
       }
