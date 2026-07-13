@@ -544,19 +544,16 @@ struct DataStorageSettingsView: View {
 
 struct MCPToolsSettingsView: View {
     @Environment(AppEnvironment.self) private var env
+    @State private var readiness: MCPReadinessState?
+    @State private var presentation: MCPSetupPresentation?
+    @State private var profile = MCPAccessProfile.memoryReadOnly
+    @State private var checking = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 SettingsGroup("MCP") {
-                    Label("Ready to check", systemImage: "point.3.connected.trianglepath.dotted")
-                        .font(.headline)
-                    Text("Connect Codex or Claude to local Timeline text and transcripts. The primary connection is read-only and does not copy an API token.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    Text("The installed-app readiness check and copy buttons appear here after Eye verifies its signed helper.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    readinessContent
                 }
                 SettingsGroup("Advanced") {
                     DisclosureGroup("Local REST API") {
@@ -579,6 +576,92 @@ struct MCPToolsSettingsView: View {
             .frame(maxWidth: 720)
         }
         .navigationTitle("MCP & AI Tools")
+        .task { await checkReadiness(force: false) }
+        .onChange(of: profile) { _, _ in rebuildPresentation() }
+    }
+
+    @ViewBuilder
+    private var readinessContent: some View {
+        if checking || readiness == nil {
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("Checking the installed helper…")
+                    .foregroundStyle(.secondary)
+            }
+        } else if case .readyToConnect = readiness, let presentation {
+            Label(presentation.statusLabel, systemImage: "checkmark.circle.fill")
+                .font(.headline)
+                .foregroundStyle(.green)
+            Text(presentation.accessSummary)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            Picker("Access", selection: $profile) {
+                Text("Memory · read only").tag(MCPAccessProfile.memoryReadOnly)
+                Text("Advanced · full access").tag(MCPAccessProfile.advancedFull)
+            }
+            .pickerStyle(.segmented)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Codex").font(.headline)
+                CopyableSetupValue(value: presentation.codexCommand)
+                Text("Claude").font(.headline)
+                CopyableSetupValue(value: presentation.claudeJSON)
+            }
+            Text(presentation.restartInstruction)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if case .notReady(let failure) = readiness {
+            Label("Not ready", systemImage: "exclamationmark.triangle.fill")
+                .font(.headline)
+                .foregroundStyle(.orange)
+            Text(failure.correctiveAction)
+                .font(.callout)
+            Button("Check again") { Task { await checkReadiness(force: true) } }
+        }
+    }
+
+    private func checkReadiness(force: Bool) async {
+        guard !checking else { return }
+        checking = true
+        readiness = await env.mcpReadiness.check(force: force)
+        checking = false
+        rebuildPresentation()
+    }
+
+    private func rebuildPresentation() {
+        guard case .readyToConnect(let path) = readiness else {
+            presentation = nil
+            return
+        }
+        presentation = try? MCPSetupPresentation(
+            executableURL: URL(fileURLWithPath: path),
+            profile: profile
+        )
+    }
+}
+
+private struct CopyableSetupValue: View {
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(value)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+                .lineLimit(6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(value, forType: .string)
+            } label: {
+                Image(systemName: "doc.on.doc")
+            }
+            .buttonStyle(.borderless)
+            .help("Copy")
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 9))
     }
 }
 
