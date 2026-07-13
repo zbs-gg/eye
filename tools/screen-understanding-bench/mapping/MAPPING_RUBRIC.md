@@ -48,3 +48,6 @@ The hidden mapper repeats only the concealed stratified sample and must not see 
 is exact at the claim-decision level and at the critical-text/abstention decision level. A third, fresh
 identity receives only disagreements. The third mapper applies this same rubric and never sees method or
 case identities.
+
+The locked 60-case quality split conceals 15 duplicate arms per method (25%). This keeps each method's
+one-summary-per-case reliability cell at or above 15 decisions instead of drawing a conclusion from nine.

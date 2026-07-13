@@ -131,7 +131,7 @@ class ClaimMappingTests(unittest.TestCase):
         self.assertIn("[LOCAL_PATH_REDACTED]", serialized)
         self.assertIn("Also keep this", serialized)
 
-    def test_hidden_duplicates_are_deterministic_stratified_fifteen_percent(self) -> None:
+    def test_hidden_duplicates_are_deterministic_stratified_twenty_five_percent(self) -> None:
         first = self._prepare("stable-seed", "mapping-a")
         second = self._prepare("stable-seed", "mapping-b")
         first_hidden = self._load(first["hiddenPacket"])
@@ -140,17 +140,17 @@ class ClaimMappingTests(unittest.TestCase):
 
         self.assertEqual(first_hidden, second_hidden)
         self.assertEqual(len(first_primary["items"]), 180)
-        self.assertEqual(len(first_hidden["items"]), 27)
+        self.assertEqual(len(first_hidden["items"]), 45)
         counts = Counter(
             item["anonymousMethod"] for item in first_hidden["items"]
         )
-        self.assertEqual(sorted(counts.values()), [9, 9, 9])
+        self.assertEqual(sorted(counts.values()), [15, 15, 15])
         self.assertTrue(
             set(item["anonymousMethod"] for item in first_primary["items"])
             .isdisjoint(item["anonymousMethod"] for item in first_hidden["items"])
         )
         self.assertNotEqual(
-            [item["armID"] for item in first_primary["items"][:27]],
+            [item["armID"] for item in first_primary["items"][:45]],
             [item["armID"] for item in first_hidden["items"]],
         )
 
@@ -283,15 +283,16 @@ class ClaimMappingTests(unittest.TestCase):
             primary, "frontier-mapper-01", "primary-per-method.json"
         )
         hidden_output = self._judgments(hidden, "frontier-mapper-02")
-        weak_arm = next(
+        weak_arms = [
             arm_id for arm_id, owner in mapping["hidden"].items()
             if owner["methodID"] == "metadata-ax-ocr"
-        )
-        weak_item = next(
-            item for item in hidden_output["items"] if item["armID"] == weak_arm
-        )
-        for claim in weak_item["claimJudgments"]:
-            claim["judgment"] = {"unsupported": "critical"}
+        ][:2]
+        for weak_item in (
+            item for item in hidden_output["items"]
+            if item["armID"] in weak_arms
+        ):
+            for claim in weak_item["claimJudgments"]:
+                claim["judgment"] = {"unsupported": "critical"}
         second = self.base / "hidden-per-method.json"
         self._write_private(second, hidden_output)
 

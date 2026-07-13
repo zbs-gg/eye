@@ -20,7 +20,8 @@ PUBLIC_SCHEMA = "screen-understanding-public-claim-scores-v1"
 RUN_SCHEMA = "screen-understanding-built-in-run-v1"
 RECORD_SCHEMA = "screen-understanding-built-in-output-v1"
 EXPECTED_CASES = 60
-DUPLICATE_FRACTION = 0.15
+# Sixty locked cases need at least fifteen duplicate summary decisions per method.
+DUPLICATE_FRACTION = 0.25
 CLAIM_AGREEMENT_FLOOR = 0.90
 DECISION_AGREEMENT_FLOOR = 0.80
 METHOD_FILES = {
