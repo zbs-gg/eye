@@ -22,3 +22,15 @@ behavior without opening the private corpus. On the current qualification Mac, t
 profile exits before the malicious canary can prove its boundary. Therefore every third-party adapter is
 recorded as `security-unsupported` and is forbidden from opening the private corpus. Offline environment
 flags alone are not accepted as a substitute. A future OS/runtime may re-run this qualification.
+
+## Private reference oracle
+
+The operator does not manually label screenshots. Two independent frontier vision-model sessions create
+candidate-blind references, two fresh sessions audit concealed duplicates, and a final fresh session audits
+the selected references. Orchestrator-issued receipts bind each private packet and output to a distinct
+session. Any failed final slot blocks publication; there is no manual override.
+
+The frontier model is evaluation infrastructure only. It is absent from the app, adapters, runtime and
+footprint measurements, and public artifacts. `annotation/combine_canonical_v4.py` publishes the 200
+single-image plus 100 temporal-pair canonical root only after both lanes qualify. The combined reliability
+denominator is 255 audited slots: 30 single images x 6 slots plus 15 temporal pairs x 5 slots.
