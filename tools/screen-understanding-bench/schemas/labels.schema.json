@@ -23,7 +23,7 @@
       "properties": {
         "producer": {"const": "frontier-vlm"},
         "annotator": {"type": "string", "minLength": 1, "maxLength": 80},
-        "rubricVersion": {"const": "screen-understanding-canonical-v1"},
+        "rubricVersion": {"enum": ["screen-understanding-canonical-v1", "screen-understanding-canonical-v2"]},
         "blindedToCandidateOutputs": {"const": true},
         "candidateOutputsAvailable": {"const": false}
       }

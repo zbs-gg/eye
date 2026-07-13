@@ -24,6 +24,7 @@ class ValidateLabelBatchTests(unittest.TestCase):
             labels = root / "labels.json"
             work.write_text(json.dumps({
                 "pass": 1,
+                "rubricVersion": "screen-understanding-canonical-v1",
                 "items": [{"id": "a" * 24, "targetType": "single-frame"}],
             }))
             labels.write_text(json.dumps({
@@ -44,6 +45,7 @@ class ValidateLabelBatchTests(unittest.TestCase):
             labels = root / "labels.json"
             work.write_text(json.dumps({
                 "pass": 1,
+                "rubricVersion": "screen-understanding-canonical-v1",
                 "items": [{"id": "a" * 24, "targetType": "single-frame"}],
             }))
             payload = {

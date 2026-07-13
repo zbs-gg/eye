@@ -60,6 +60,7 @@ def prepare_batches(
     duplicate_fraction: float,
     seed: str,
     render: bool,
+    rubric_version: str = "screen-understanding-canonical-v1",
 ) -> dict:
     corpus = corpus_root.resolve(strict=True)
     output = annotation_root.resolve(strict=False)
@@ -146,7 +147,7 @@ def prepare_batches(
                 "schema": "screen-understanding-annotation-batch-v1",
                 "pass": 1,
                 "annotatorSlot": f"frontier-{index:02d}",
-                "rubricVersion": "screen-understanding-canonical-v1",
+                "rubricVersion": rubric_version,
                 "candidateOutputsAvailable": False,
                 "items": items,
             })
@@ -155,7 +156,7 @@ def prepare_batches(
                 "schema": "screen-understanding-annotation-batch-v1",
                 "pass": 2,
                 "annotatorSlot": f"frontier-audit-{index:02d}",
-                "rubricVersion": "screen-understanding-canonical-v1",
+                "rubricVersion": rubric_version,
                 "candidateOutputsAvailable": False,
                 "items": items,
             })
@@ -165,7 +166,7 @@ def prepare_batches(
             "protocolID": "screen-understanding-v1",
             "corpusManifestSHA256": digest(manifest_data),
             "splitSHA256": manifest.get("splitSHA256"),
-            "rubricVersion": "screen-understanding-canonical-v1",
+            "rubricVersion": rubric_version,
             "producer": "frontier-vlm",
             "candidateOutputsAvailable": False,
             "pass1Count": len(ordered),
@@ -188,6 +189,11 @@ def main() -> int:
     parser.add_argument("--batches", type=int, default=4)
     parser.add_argument("--duplicate-fraction", type=float, default=0.15)
     parser.add_argument("--seed", default="screen-understanding-canonical-v1")
+    parser.add_argument(
+        "--rubric-version",
+        choices=("screen-understanding-canonical-v1", "screen-understanding-canonical-v2"),
+        default="screen-understanding-canonical-v2",
+    )
     parser.add_argument("--skip-render", action="store_true")
     args = parser.parse_args()
     result = prepare_batches(
@@ -197,6 +203,7 @@ def main() -> int:
         duplicate_fraction=args.duplicate_fraction,
         seed=args.seed,
         render=not args.skip_render,
+        rubric_version=args.rubric_version,
     )
     print(json.dumps(result, sort_keys=True))
     return 0

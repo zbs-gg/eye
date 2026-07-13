@@ -66,7 +66,11 @@ def validate(work_path: Path, labels_path: Path) -> dict:
         raise ValueError("unexpected label batch schema")
     if output["pass"] != work["pass"] or output["pass"] not in [1, 2]:
         raise ValueError("annotation pass mismatch")
-    if output["rubricVersion"] != "screen-understanding-canonical-v1":
+    rubric_version = work["rubricVersion"]
+    if output["rubricVersion"] != rubric_version or rubric_version not in {
+        "screen-understanding-canonical-v1",
+        "screen-understanding-canonical-v2",
+    }:
         raise ValueError("annotation rubric mismatch")
     if not isinstance(output["annotator"], str) or not output["annotator"]:
         raise ValueError("annotator identity is missing")
@@ -112,6 +116,17 @@ def validate(work_path: Path, labels_path: Path) -> dict:
                 or any(not isinstance(text, str) or not 1 <= len(text) <= 240
                        for text in critical_text):
             raise ValueError("critical text is invalid")
+        if rubric_version == "screen-understanding-canonical-v2":
+            if [fact["id"] for fact in label["requiredFacts"]] != [
+                "required.surface", "required.content", "required.state",
+            ]:
+                raise ValueError("v2 required fact slots are invalid")
+            if [fact["id"] for fact in label["forbiddenInferences"]] != [
+                "forbidden.intent", "forbidden.outcome",
+            ]:
+                raise ValueError("v2 forbidden fact slots are invalid")
+            if len(critical_text) > 2:
+                raise ValueError("v2 critical text exceeds its cap")
 
         if label["targetType"] == "single-frame":
             singles += 1
@@ -119,7 +134,12 @@ def validate(work_path: Path, labels_path: Path) -> dict:
                 raise ValueError("single-frame change must be null")
         else:
             temporal += 1
-            validate_facts(label["meaningfulChange"], 0, 8, "change")
+            validate_facts(
+                label["meaningfulChange"],
+                0,
+                3 if rubric_version == "screen-understanding-canonical-v2" else 8,
+                "change",
+            )
 
         annotation = label["annotation"]
         exact_keys(annotation, {
@@ -129,7 +149,7 @@ def validate(work_path: Path, labels_path: Path) -> dict:
         if annotation != {
             "producer": "frontier-vlm",
             "annotator": output["annotator"],
-            "rubricVersion": "screen-understanding-canonical-v1",
+            "rubricVersion": rubric_version,
             "blindedToCandidateOutputs": True,
             "candidateOutputsAvailable": False,
         }:
