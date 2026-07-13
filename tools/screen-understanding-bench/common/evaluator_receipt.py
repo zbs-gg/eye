@@ -26,6 +26,7 @@ ISSUER = "codex-ce-work-orchestrator-v1"
 ROLES = frozenset({
     "annotation-pass1",
     "annotation-pass2",
+    "reference-correction",
     "correctness-auditor-1",
     "correctness-auditor-2",
     "correctness-tiebreak",
