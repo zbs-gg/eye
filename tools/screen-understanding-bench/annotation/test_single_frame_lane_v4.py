@@ -124,6 +124,39 @@ class SingleFrameLaneV4Tests(unittest.TestCase):
             self.lane.prepare_correction(self.sources, self.root / "tampered", "seed")
         self.assertFalse((self.root / "tampered").exists())
 
+    def test_extra_duplicate_can_enter_the_independent_correction_pass(self):
+        selection = json.loads(
+            (self.sources.aggregate_root / "selection.json").read_text()
+        )["items"]
+        extra = next(
+            item["case"] for item in selection
+            if item["targetType"] == "single-frame"
+            and item["selectedReference"] != "merge-required"
+        )
+        correction = self.root / "correction-with-feedback"
+        prepared = self.lane.prepare_correction(
+            self.sources, correction, "feedback-seed", {extra}
+        )
+        self.assertEqual(prepared["mergeRequiredCount"], 2)
+        self.assertEqual(prepared["additionalCorrectionCount"], 1)
+        self.assertEqual(prepared["correctionCount"], 3)
+
+        output = self._write_corrections(correction / "packet.json")
+        receipt = self._issue(
+            correction / "packet.json", output,
+            "reference-correction", "task:/root/feedback/turn:1",
+        )
+        audit = self.root / "feedback-audit"
+        manifest = self.lane.prepare_audit(
+            self.sources, correction, output, receipt, audit, "feedback-audit"
+        )
+        self.assertEqual(manifest["mergeRequiredCount"], 2)
+        self.assertEqual(manifest["additionalCorrectionCount"], 1)
+        self.assertEqual(manifest["correctionCount"], 3)
+        drafts = json.loads((audit / "draft-labels.json").read_text())["labels"]
+        corrected = next(item for item in drafts if item["case"] == extra)
+        self.assertEqual(corrected["annotation"]["mode"], "frontier-correction")
+
     def test_receipt_tamper_and_reused_sessions_fail_closed(self):
         payload = json.loads(self.sources.auditor_two_receipt.read_text())
         payload["sessionID"] = json.loads(self.sources.auditor_one_receipt.read_text())["sessionID"]

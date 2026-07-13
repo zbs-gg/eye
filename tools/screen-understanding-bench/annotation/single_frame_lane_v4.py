@@ -511,6 +511,7 @@ def prepare_correction(
     sources: V3EvidencePaths,
     output_root: Path,
     seed: str,
+    additional_case_ids: set[str] | None = None,
 ) -> dict:
     output = validate_private_output(output_root)
     if not seed:
@@ -525,6 +526,16 @@ def prepare_correction(
     )
     if not merge_ids:
         raise ValueError("single-frame correction packet requires at least one merge-required case")
+    additional = set(additional_case_ids or set())
+    if any(
+        not isinstance(identifier, str)
+        or not CASE_ID.fullmatch(identifier)
+        or identifier not in evidence["selections"]
+        for identifier in additional
+    ):
+        raise ValueError("additional corrections must be audited single-frame duplicates")
+    additional.difference_update(merge_ids)
+    correction_ids = sorted({*merge_ids, *additional})
     sessions = _session_provenance(evidence["receiptPairs"])
     output, staging = prepare_private_output(output)
     try:
@@ -532,7 +543,7 @@ def prepare_correction(
         packet_items = []
         owners = {}
         source_tokens = set(evidence["selections"])
-        for identifier in merge_ids:
+        for identifier in correction_ids:
             opaque_id = "correction-" + _digest_text(
                 f"{seed}:single-correction:{identifier}"
             )[:24]
@@ -571,6 +582,8 @@ def prepare_correction(
             "protocol": PROTOCOL,
             "rubricVersion": RUBRIC,
             "mergeRequiredCount": len(merge_ids),
+            "additionalCorrectionCount": len(additional),
+            "correctionCount": len(correction_ids),
             "candidateOutputsAvailable": False,
             "priorSessionProvenanceSHA256": _json_digest(sessions),
         }
@@ -601,6 +614,7 @@ def _load_corrections(
     exact_keys(mapping, {"schema", "protocol", "rubricVersion", "items"}, "correction mapping")
     exact_keys(manifest, {
         "schema", "protocol", "rubricVersion", "mergeRequiredCount",
+        "additionalCorrectionCount", "correctionCount",
         "candidateOutputsAvailable", "priorSessionProvenanceSHA256",
     }, "correction manifest")
     if packet["schema"] != "screen-understanding-single-frame-correction-packet-v4" \
@@ -636,8 +650,15 @@ def _load_corrections(
         identifier for identifier, item in evidence["selections"].items()
         if item["selectedReference"] == "merge-required"
     }
-    if {owner.get("case") for owner in mapping["items"].values()} != expected_merge \
-            or manifest["mergeRequiredCount"] != len(expected_merge):
+    expected_corrections = {
+        owner.get("case") for owner in mapping["items"].values()
+    }
+    additional = expected_corrections - expected_merge
+    if not expected_merge.issubset(expected_corrections) \
+            or not expected_corrections.issubset(evidence["selections"]) \
+            or manifest["mergeRequiredCount"] != len(expected_merge) \
+            or manifest["additionalCorrectionCount"] != len(additional) \
+            or manifest["correctionCount"] != len(expected_corrections):
         raise ValueError("correction mapping differs from derived merge-required singles")
     corrections: dict[str, dict] = {}
     seen_opaque = set()
@@ -653,8 +674,8 @@ def _load_corrections(
         reference = {key: item[key] for key in REFERENCE_KEYS}
         legacy_reference.validate_reference(reference, "single-frame")
         corrections[identifier] = reference
-    if seen_opaque != packet_ids or set(corrections) != expected_merge:
-        raise ValueError("corrections must cover every derived merge-required single")
+    if seen_opaque != packet_ids or set(corrections) != expected_corrections:
+        raise ValueError("corrections must cover every requested single-frame correction")
     receipt = validate_receipt(
         correction_receipt, packet_path, correction_output, "reference-correction"
     )
@@ -698,7 +719,7 @@ def prepare_audit(
     }
     for identifier, selection in evidence["selections"].items():
         selected = selection["selectedReference"]
-        if selected == "merge-required":
+        if identifier in corrections:
             reference = corrections[identifier]
             annotator = correction_payload["annotator"]
             mode = "frontier-correction"
@@ -711,6 +732,10 @@ def prepare_audit(
         drafts[identifier] = _make_draft(identifier, reference, annotator, mode)
     if len(drafts) != 200:
         raise ValueError("single-frame draft set must contain exactly 200 labels")
+    merge_required_count = sum(
+        item["selectedReference"] == "merge-required"
+        for item in evidence["selections"].values()
+    )
     sessions = _session_provenance(receipt_pairs)
     output, staging = prepare_private_output(output)
     try:
@@ -767,7 +792,9 @@ def prepare_audit(
             "caseCount": 30,
             "slotCount": 180,
             "draftLabelCount": 200,
-            "mergeRequiredCount": len(corrections),
+            "mergeRequiredCount": merge_required_count,
+            "additionalCorrectionCount": len(corrections) - merge_required_count,
+            "correctionCount": len(corrections),
             "candidateOutputsAvailable": False,
             "rawJointSingleFrame": evidence["result"]["joint"]["singleFrame"],
             "ignoredTemporalJoint": evidence["result"]["joint"]["temporalPair"],
@@ -851,7 +878,8 @@ def _load_final_audit(
     drafts_payload = _read_json(root / "draft-labels.json", "draft labels")
     exact_keys(manifest, {
         "schema", "protocol", "rubricVersion", "caseCount", "slotCount",
-        "draftLabelCount", "mergeRequiredCount", "candidateOutputsAvailable",
+        "draftLabelCount", "mergeRequiredCount", "additionalCorrectionCount",
+        "correctionCount", "candidateOutputsAvailable",
         "rawJointSingleFrame", "ignoredTemporalJoint", "priorSessionProvenanceSHA256",
     }, "final audit manifest")
     exact_keys(packet, {"schema", "protocol", "rubricVersion", "packetID", "items"}, "final packet")
@@ -873,9 +901,16 @@ def _load_final_audit(
             or drafts_payload["locked"] is not False \
             or manifest["priorSessionProvenanceSHA256"] != _json_digest(sessions):
         raise ValueError("final audit provenance is invalid or tampered")
+    merge_required_count = sum(
+        item["selectedReference"] == "merge-required"
+        for item in evidence["selections"].values()
+    )
     if manifest["rawJointSingleFrame"] != evidence["result"]["joint"]["singleFrame"] \
             or manifest["ignoredTemporalJoint"] != evidence["result"]["joint"]["temporalPair"] \
-            or manifest["mergeRequiredCount"] != len(corrections):
+            or manifest["mergeRequiredCount"] != merge_required_count \
+            or manifest["additionalCorrectionCount"] \
+            != len(corrections) - manifest["mergeRequiredCount"] \
+            or manifest["correctionCount"] != len(corrections):
         raise ValueError("final audit reliability inputs were changed")
     packet_items = {item.get("opaqueID"): item for item in packet["items"] if isinstance(item, dict)}
     if len(packet_items) != 30 or not isinstance(mapping["items"], dict) \
@@ -917,7 +952,7 @@ def _load_final_audit(
             expected_reference = _reference(source)
             expected_mode = "pass1-base"
             expected_annotator = source["annotation"]["annotator"]
-        elif selection["selectedReference"] == "merge-required":
+        elif identifier in corrections:
             expected_reference = corrections[identifier]
             expected_mode = "frontier-correction"
             expected_annotator = correction_annotator
@@ -1111,6 +1146,7 @@ def main() -> int:
     _add_sources(correction)
     correction.add_argument("--output-root", required=True, type=Path)
     correction.add_argument("--seed", default="single-frame-correction-v4")
+    correction.add_argument("--additional-case", action="append", default=[])
     audit = commands.add_parser("prepare-audit")
     _add_sources(audit)
     audit.add_argument("--correction-root", required=True, type=Path)
@@ -1129,7 +1165,9 @@ def main() -> int:
     args = parser.parse_args()
     source_paths = _sources(args)
     if args.command == "prepare-correction":
-        result = prepare_correction(source_paths, args.output_root, args.seed)
+        result = prepare_correction(
+            source_paths, args.output_root, args.seed, set(args.additional_case)
+        )
     elif args.command == "prepare-audit":
         result = prepare_audit(
             source_paths,

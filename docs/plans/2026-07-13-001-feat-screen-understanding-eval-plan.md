@@ -15,7 +15,7 @@ deepened: 2026-07-13
 
 - **Objective:** Build and run a reproducible local-only evaluation that determines whether ZBS Eye should enrich selected timeline frames with Apple Vision, a micro-VLM, a screen parser, or no additional model.
 - **Product authority:** The tiny-recorder principle and the user's confirmed no-cloud/no-large-VLM boundary outrank raw caption quality.
-- **Execution profile:** Test-first benchmark tooling, private local corpus, human ground truth, pinned offline artifacts, and separate quality and product-footprint lanes.
+- **Execution profile:** Test-first benchmark tooling, private local corpus, independently audited frontier-model ground truth, pinned offline artifacts, and separate quality and product-footprint lanes.
 - **Stop conditions:** Stop on any outbound network access, live-history mutation, private artifact entering git, capture/audio regression, native screenshot regression, or benchmark result that cannot be traced to a pinned runtime and dataset revision.
 - **Tail ownership:** This plan ends with an evidence-backed recommendation and reproducible reports. Installing the winning method in ZBS Eye is follow-up work.
 
@@ -25,7 +25,7 @@ deepened: 2026-07-13
 
 ### Summary
 
-ZBS Eye will evaluate screen understanding as optional asynchronous enrichment, not as part of capture and not as the Ask model. The benchmark will compare the production metadata/AX/OCR baseline, Apple Vision, several micro-models, a temporal micro-model, and OmniParser using real private history from this Mac. Human annotations are the only quality oracle; cloud and large VLMs are absent from every runner and protocol.
+ZBS Eye will evaluate screen understanding as optional asynchronous enrichment, not as part of capture and not as the Ask model. The benchmark will compare the production metadata/AX/OCR baseline, Apple Vision, several micro-models, a temporal micro-model, and OmniParser using real private history from this Mac. Independent frontier vision-language model passes create and audit the private quality oracle before candidate output is available. That large-model oracle is an out-of-band evaluation tool only: it is absent from the product, candidate runners, runtime measurements, and public artifacts.
 
 ### Problem Frame
 
@@ -39,7 +39,7 @@ The choice cannot be made from parameter count or generic benchmarks. ZBS Eye ne
 
 - R1. Dataset preparation must create a one-way isolated corpus from a GRDB online snapshot and copied historical media without mutating the live database or media tree.
 - R2. Private frames, labels, raw outputs, captions, source timestamps, and absolute source paths must remain under a gitignored benchmark root and never leave the Mac.
-- R3. Human labels must be created before candidate outputs are revealed and must capture required facts, important visible text, forbidden inferences, meaningful changes, ambiguity, and abstention.
+- R3. Two independent frontier-model label passes plus independent correctness and final-reference audits must run before candidate outputs are revealed. They must capture required facts, important visible text, forbidden inferences, meaningful changes, ambiguity, and abstention; failures trigger a fresh correction and re-audit rather than a manual override.
 - R4. The qualification corpus must contain approximately 200 single-frame cases and 100 temporal pairs, stratified by application class, language, text density, visual content, display, and change type.
 - R18. Admission-rate and storage projections must use a separate locked naturalistic chronological trace of at least one active day rather than the difficulty-balanced quality corpus.
 
@@ -115,7 +115,7 @@ The choice cannot be made from parameter count or generic benchmarks. ZBS Eye ne
 
 **In scope**
 
-- Private dataset extraction, human labeling, protocol locking, adapters, scoring, performance measurement, admission-policy replay, staging coexistence, and recommendation reporting.
+- Private dataset extraction, blinded frontier-model labeling and audit, protocol locking, adapters, scoring, performance measurement, admission-policy replay, staging coexistence, and recommendation reporting.
 - Research evaluation of FastVLM under Apple AMLR terms.
 - Synthetic public fixtures sufficient to test the harness without private history or model weights.
 
@@ -165,7 +165,7 @@ flowchart TB
   Live --> Media["Copy selected HEIC media"]
   Sampler --> Private["Private corpus root"]
   Media --> Private
-  Private --> Labels["Blind human labels"]
+  Private --> Labels["Blind frontier-model labels"]
   Private --> Baseline["Stored metadata + AX/OCR"]
   Private --> Vision["Apple Vision"]
   Private --> Adapters["Pinned local adapters"]
@@ -261,7 +261,7 @@ build/screen-understanding-results/    # private, gitignored
 - **Private-history leakage:** Raw captions can reveal more than images. Mitigation: private roots, git-path rejection, opaque case IDs, redacted aggregate export, and no automatic backup of benchmark artifacts.
 - **Runtime unfairness:** Preprocessing, precision, or startup semantics can dominate results. Mitigation: separate lanes, preserve canonical processing, record every transform, and include original-resolution plus fixed-long-edge sensitivity runs.
 - **Thermal/order contamination:** Sequential models can bias later measurements. Mitigation: counterbalanced order, cooldown, recorded thermal/power state, repeated p50/p95 runs, and clean child exit.
-- **Human-label leakage:** Seeing model output can bias ground truth. Mitigation: label first, delayed adjudication, locked split, and explicit ambiguous/unjudgeable cases.
+- **Oracle leakage or correlated model error:** Seeing candidate output can bias ground truth, and one frontier model can repeat its own mistake. Mitigation: label first, use distinct sessions for duplicate passes, correctness audit, tiebreak, correction, and final audit; receipt-bind every packet/output pair; keep the split locked; preserve explicit ambiguous/unjudgeable cases; refuse the seal below the reliability floor or after any final-audit error.
 - **Unsupported Mac paths:** Several official releases document Python/CUDA but no native Swift runtime. Mitigation: record unsupported product-footprint status instead of substituting an unverified conversion.
 - **Licensing:** FastVLM, OmniParser components, and LFM2 carry non-uniform terms. Mitigation: report benchmark eligibility and redistribution eligibility independently.
 - **False coexistence proof:** Unhosted XCTest does not exercise capture hardware. Mitigation: keep synthetic writer and real staging gates separate and label reports honestly.
@@ -286,12 +286,12 @@ build/screen-understanding-results/    # private, gitignored
   - Reject a cloud endpoint, large-VLM identifier, retry count above zero, missing revision/hash/license, or writable live-root path.
   - Reject a report that merges official-checkpoint and product-footprint scores.
   - Reject temporal capability for a method that declares only single-image input.
-  - Reject quality qualification when the exact product runtime was not scored, R20 is missed, a decision-critical cell is underpowered, or human-label reliability is below its floor.
+  - Reject quality qualification when the exact product runtime was not scored, R20 is missed, a decision-critical cell is underpowered, or canonical-oracle reliability is below its floor.
 - **Verification:** Fixture tests pass without model weights or private data, and the protocol hash is stable across repeated runs.
 
 ### U2. Prepare and lock the private corpus
 
-- **Goal:** Create a safe one-way dataset workflow from real ZBS Eye history and a human-label contract that cannot leak candidate output into ground truth.
+- **Goal:** Create a safe one-way dataset workflow from real ZBS Eye history and a blinded frontier-model label contract that cannot leak candidate output into ground truth or require the user to annotate screens manually.
 - **Requirements:** R1-R4, R18.
 - **Dependencies:** U1.
 - **Files:** `ZBSEyeTests/ScreenUnderstandingDatasetSupport.swift`, `ZBSEyeTests/ScreenUnderstandingDatasetPreparationTests.swift`, `ZBSEyeTests/ScreenUnderstandingDatasetPolicyTests.swift`, `tools/screen-understanding-bench/schemas/labels.schema.json`, `tools/screen-understanding-bench/synthetic-fixtures/`.
@@ -328,13 +328,13 @@ build/screen-understanding-results/    # private, gitignored
   - Verify FastVLM is marked research-reference and cannot enter the distributable candidate set.
 - **Verification:** All contract/error tests run without weights; each real adapter either passes an offline smoke test or reports unsupported with evidence.
 
-### U4. Add deterministic human-grounded scoring
+### U4. Add deterministic reference-grounded scoring
 
-- **Goal:** Score supported capabilities against blind human labels without a model judge or a misleading single ranking.
+- **Goal:** Score supported capabilities against sealed, independently audited frontier-model references without an unbound live judge or a misleading single ranking.
 - **Requirements:** R3, R10-R12, R17.
 - **Dependencies:** U1-U3.
 - **Files:** `ZBSEyeTests/ScreenUnderstandingScoring.swift`, `ZBSEyeTests/ScreenUnderstandingScoringTests.swift`, `tools/screen-understanding-bench/schemas/report.schema.json`.
-- **Approach:** Before inference, lock required/forbidden fact IDs, critical text/entities, usefulness, meaningful changes, `NO_CHANGE`, ambiguity, and abstention. After inference, a model-identity-blind human maps each atomic candidate claim to a locked fact ID or to unsupported/ambiguous; the deterministic scorer aggregates only those sealed mappings. Preserve raw outputs privately for audit. Measure concealed duplicate-label reliability before revealing method identity, adjudicate disagreements, and make affected comparisons inconclusive below the agreement floor. Report only sufficiently powered primary strata with macro summaries and confidence intervals; never publish intersection cells small enough to identify a case.
+- **Approach:** Before inference, independent frontier-model sessions lock required/forbidden fact IDs, critical text/entities, usefulness, meaningful changes, `NO_CHANGE`, ambiguity, and abstention. After inference, fresh model-identity-blind mapper sessions map each atomic candidate claim to a locked fact ID or to unsupported/ambiguous; the deterministic scorer aggregates only receipt-bound sealed mappings. Preserve raw outputs privately for audit. Measure concealed duplicate-label reliability before revealing method identity, adjudicate disagreements in a separate session, and make affected comparisons inconclusive below the agreement floor. Report only sufficiently powered primary strata with macro summaries and confidence intervals; never publish intersection cells small enough to identify a case.
 - **Execution note:** Build the scorer from adversarial synthetic fixtures before exposing any private labels or model output.
 - **Patterns to follow:** `ZBSEyeTests/LocalAIQualityGateV9Tests.swift`, `docs/evals/local-ai-v9.json`.
 - **Test scenarios:**
@@ -353,7 +353,7 @@ build/screen-understanding-results/    # private, gitignored
 - **Requirements:** R11-R14, R16-R20.
 - **Dependencies:** U1-U4.
 - **Files:** `ZBSEyeTests/ScreenUnderstandingBenchmarkTests.swift`, `ZBSEyeTests/ScreenUnderstandingPerformanceProtocol.swift`, `ZBSEyeTests/ScreenUnderstandingPerformanceProtocolTests.swift`, `scripts/verify-screen-understanding.sh`, `docs/SCREEN_UNDERSTANDING_EVAL.md`.
-- **Approach:** Run quality at official checkpoint/precision with canonical processing, then run the exact feasible Mac runtime/quantization over the locked test split through the same human-grounded scorer. A product runtime cannot inherit quality from its canonical checkpoint: it must meet R20 independently and may lose at most 2 points of usefulness or critical-text recall and add at most 1 point of severity-weighted hallucination versus its canonical arm. Only then run product-footprint. Each runtime arm uses at least 20 fresh-process cold samples, 30 warm samples, a 50-inference retained soak, and three counterbalanced blocks over identical case IDs. Measure end-to-end time from HEIC read through normalization, CPU core-seconds, complete descendant-process footprint, runtime-specific accelerator memory when observable, and physical footprint at peak plus 1/10/60 seconds after unload. Record system pressure, swap/compressor, thermal state, power source, and Low Power Mode. Use the labeled corpus for useful-event recall and the naturalistic trace for inferences/hour, resource/hour, and storage projections.
+- **Approach:** Run quality at official checkpoint/precision with canonical processing, then run the exact feasible Mac runtime/quantization over the locked test split through the same reference-grounded scorer. A product runtime cannot inherit quality from its canonical checkpoint: it must meet R20 independently and may lose at most 2 points of usefulness or critical-text recall and add at most 1 point of severity-weighted hallucination versus its canonical arm. Only then run product-footprint. Each runtime arm uses at least 20 fresh-process cold samples, 30 warm samples, a 50-inference retained soak, and three counterbalanced blocks over identical case IDs. Measure end-to-end time from HEIC read through normalization, CPU core-seconds, complete descendant-process footprint, runtime-specific accelerator memory when observable, and physical footprint at peak plus 1/10/60 seconds after unload. Record system pressure, swap/compressor, thermal state, power source, and Low Power Mode. Use the labeled corpus for useful-event recall and the naturalistic trace for inferences/hour, resource/hour, and storage projections.
 - **Execution note:** Run one bounded probe per adapter before the full matrix; a failed probe is recorded, not retried or hidden.
 - **Patterns to follow:** `scripts/verify-local-ai.sh`, `docs/evals/local-ai-performance-v1.json`, `ZBSEyeTests/MLXRuntimeQualificationTests.swift`.
 - **Test scenarios:**
@@ -422,7 +422,7 @@ Physical model gates use pre-downloaded sealed model roots, `HF_HUB_OFFLINE=1`, 
 - All required methods are evaluated or carry an explicit evidence-backed unsupported result.
 - Quality and footprint lanes remain independent, with per-stratum results and no model judge or large/cloud VLM.
 - The exact product runtime/quantization is scored independently, clears R20, and does not inherit quality from an official checkpoint.
-- Decision-critical cells meet pre-registered sample-size and human-label reliability floors or are explicitly inconclusive.
+- Decision-critical cells meet pre-registered sample-size and canonical-oracle reliability floors or are explicitly inconclusive.
 - At least one strategy reaches the final decision table; `no additional model` is accepted if none clears the gates.
 - Every recommended product candidate has passed real staging coexistence with independent mic/system-audio states and native macOS screenshots.
 - Every recommended product candidate meets the pre-registered R19 latency and footprint envelope; steady-state staging blocks meet the capture/ingest regression and active-gap limits.

@@ -323,8 +323,10 @@ xcodebuild \
   -scheme ZBSEye \
   -configuration Debug \
   -derivedDataPath build/ScreenUnderstandingDerivedData \
+  -clonedSourcePackagesDirPath build/DerivedData/SourcePackages \
   -disableAutomaticPackageResolution \
   -onlyUsePackageVersionsFromResolvedFile \
+  CODE_SIGNING_ALLOWED=NO \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY=- \
   DEVELOPMENT_TEAM= \
