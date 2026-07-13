@@ -688,6 +688,19 @@ class TemporalV4Tests(unittest.TestCase):
         self.assertEqual(len(labels["labels"]), 100)
         self.assertEqual({label["pair"] for label in labels["labels"]}, expected_pairs)
         self.assertTrue(all(label["locked"] is True for label in labels["labels"]))
+        self.assertTrue(all(
+            label["annotation"]["producer"] == "frontier-vlm"
+            and label["annotation"]["rubricVersion"]
+                == "screen-understanding-temporal-v4"
+            and label["annotation"]["blindedToCandidateOutputs"] is True
+            and label["annotation"]["candidateOutputsAvailable"] is False
+            for label in labels["labels"]
+        ))
+        self.assertEqual(
+            sum(label["annotation"]["mode"] == "pass1-base"
+                for label in labels["labels"]),
+            85,
+        )
         self.assertEqual(reliability["finalAudit"]["opportunityCount"], 75)
         self.assertEqual(reliability["finalAudit"]["materialFalseCount"], 0)
 

@@ -639,7 +639,7 @@ class ClaimMappingTests(unittest.TestCase):
             "finalReferenceAudit": {
                 "auditor": "fresh-final-auditor",
                 "caseCount": 45,
-                "slotCount": 285,
+                "slotCount": 255,
                 "materialFalseCount": 0,
                 "ambiguityErrorCount": 0,
                 "criticalErrorCount": 0,

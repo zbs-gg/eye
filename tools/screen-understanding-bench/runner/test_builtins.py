@@ -615,7 +615,11 @@ class BuiltInRunnerTests(unittest.TestCase):
                 "producer": "frontier-vlm",
                 "mode": "frontier-correction",
                 "annotator": "frontier-reference-03",
-                "rubricVersion": "screen-understanding-canonical-v2",
+                "rubricVersion": (
+                    "screen-understanding-canonical-v2"
+                    if target_type == "single-frame"
+                    else "screen-understanding-temporal-v4"
+                ),
                 "blindedToCandidateOutputs": True,
                 "candidateOutputsAvailable": False,
             },
@@ -729,7 +733,7 @@ class BuiltInRunnerTests(unittest.TestCase):
             "finalReferenceAudit": {
                 "auditor": "fresh-final-auditor",
                 "caseCount": 45,
-                "slotCount": 285,
+                "slotCount": 255,
                 "materialFalseCount": 0,
                 "ambiguityErrorCount": 0,
                 "criticalErrorCount": 0,
@@ -761,7 +765,7 @@ class BuiltInRunnerTests(unittest.TestCase):
                 reliability_path=canonical / "reliability.json",
                 finalizer_path=(
                     BENCHMARK_ROOT / "annotation" /
-                    "finalize_correctness_canonical.py"
+                    "combine_canonical_v4.py"
                 ),
                 source_annotation_root=self.source_annotations,
                 correctness_audit_root=self.correctness_audit,
@@ -773,7 +777,7 @@ class BuiltInRunnerTests(unittest.TestCase):
                 label_count=300,
                 duplicate_count=45,
                 final_audit_case_count=45,
-                final_audit_slot_count=285,
+                final_audit_slot_count=255,
             ),
         )
 

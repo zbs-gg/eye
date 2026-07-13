@@ -55,7 +55,8 @@ CANONICAL_ANNOTATION_FIELDS = {
     "blindedToCandidateOutputs", "candidateOutputsAvailable",
 }
 CANONICAL_ANNOTATION_MODES = {
-    "pass1-base", "selected-pass1", "selected-pass2", "frontier-correction",
+    "pass1-base", "selected-pass1", "selected-pass2", "selected-merge",
+    "frontier-correction",
 }
 FACT_SEVERITIES = {"minor", "major", "critical"}
 EXPECTED_SPLITS = frozenset({
@@ -367,18 +368,22 @@ def _validate_reference(label: dict[str, Any], expected_target: str) -> None:
         raise PreflightError("canonical ambiguity decision is invalid")
 
 
-def _validate_annotation(annotation: Any) -> None:
+def _validate_annotation(annotation: Any, target: str) -> None:
     _require_exact_fields(
         annotation,
         CANONICAL_ANNOTATION_FIELDS,
         "canonical annotation",
+    )
+    expected_rubric = (
+        CANONICAL_RUBRIC if target == "single-frame"
+        else "screen-understanding-temporal-v4"
     )
     if annotation["producer"] != "frontier-vlm" \
             or not isinstance(annotation["mode"], str) \
             or annotation["mode"] not in CANONICAL_ANNOTATION_MODES \
             or not isinstance(annotation["annotator"], str) \
             or not SAFE_ID.fullmatch(annotation["annotator"]) \
-            or annotation["rubricVersion"] != CANONICAL_RUBRIC \
+            or annotation["rubricVersion"] != expected_rubric \
             or annotation["blindedToCandidateOutputs"] is not True \
             or annotation["candidateOutputsAvailable"] is not False:
         raise PreflightError("canonical annotation provenance is invalid")
@@ -417,7 +422,7 @@ def _validate_labels(
         if expected_target is None:
             raise PreflightError("canonical label identifiers do not match the manifest")
         _validate_reference(label, expected_target)
-        _validate_annotation(label["annotation"])
+        _validate_annotation(label["annotation"], expected_target)
     if len(set(actual_ids)) != len(actual_ids) \
             or set(actual_ids) != set(expected_targets):
         raise PreflightError("canonical label identifiers do not match the manifest")
@@ -457,7 +462,7 @@ def _validate_reliability(reliability: dict[str, Any]) -> None:
         raise PreflightError("canonical final reference audit is invalid")
     if not isinstance(final_audit.get("auditor"), str) or not final_audit["auditor"] \
             or final_audit.get("caseCount") != 45 \
-            or final_audit.get("slotCount") != 285 \
+            or final_audit.get("slotCount") != 255 \
             or final_audit.get("materialFalseCount") != 0 \
             or final_audit.get("ambiguityErrorCount") != 0 \
             or final_audit.get("criticalErrorCount") != 0 \
@@ -531,7 +536,7 @@ def _validate_commit(commit: dict[str, Any]) -> None:
         "labelCount": 300,
         "duplicateCount": 45,
         "finalAuditCaseCount": 45,
-        "finalAuditSlotCount": 285,
+        "finalAuditSlotCount": 255,
     }:
         raise PreflightError("canonical commit counts are invalid")
 
@@ -630,7 +635,7 @@ def validate_seal(
             reliability_path=canonical_root / "reliability.json",
             finalizer_path=(
                 Path(__file__).parents[1] / "annotation" /
-                "finalize_correctness_canonical.py"
+                "combine_canonical_v4.py"
             ),
             source_annotation_root=source_annotation_root,
             correctness_audit_root=correctness_audit_root,
@@ -642,7 +647,7 @@ def validate_seal(
             label_count=300,
             duplicate_count=45,
             final_audit_case_count=45,
-            final_audit_slot_count=285,
+            final_audit_slot_count=255,
         )
     except ProvenanceError as error:
         raise PreflightError("canonical provenance evidence is invalid") from error

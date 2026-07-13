@@ -1577,6 +1577,12 @@ def finalize(
         final_root / "sources" / "pass1-receipt.json",
         "annotation-pass1",
     )
+    pass2 = validate_labels(
+        final_root / "sources" / "pass2-packet.json",
+        final_root / "sources" / "pass2-output.json",
+        final_root / "sources" / "pass2-receipt.json",
+        "annotation-pass2",
+    )
     work_mapping, _ = _load_json(
         final_root / "sources" / "work-owner-mapping.json",
         "temporal work owner mapping",
@@ -1681,17 +1687,58 @@ def finalize(
         selected_references[pair] = copy.deepcopy(packet_item["reference"])
     if not set(selected_references).issubset(all_pairs):
         raise ValueError("temporal final references are outside the pass1 corpus")
+    selection_payload, _ = _load_json(
+        final_root / "sources" / "aggregate-selection.json",
+        "temporal aggregate selection",
+    )
+    exact_keys(selection_payload, {
+        "schema", "protocol", "rubricVersion", "candidateOutputsAvailable", "items",
+    }, "temporal aggregate selection")
+    if selection_payload["schema"] != "screen-understanding-temporal-selection-v4" \
+            or selection_payload["protocol"] != PROTOCOL \
+            or selection_payload["rubricVersion"] != RUBRIC \
+            or selection_payload["candidateOutputsAvailable"] is not False:
+        raise ValueError("temporal aggregate selection metadata is invalid")
+    selected_modes = {}
+    for item in selection_payload["items"]:
+        exact_keys(item, {"pair", "selectedReference", "slotSources"}, "selection item")
+        pair = item["pair"]
+        decision = item["selectedReference"]
+        if pair in selected_modes or pair not in selected_references \
+                or decision not in {"pass1", "pass2", "merge"}:
+            raise ValueError("temporal aggregate selection item is invalid")
+        selected_modes[pair] = decision
+    if set(selected_modes) != set(selected_references):
+        raise ValueError("temporal aggregate selection does not cover final references")
     labels = []
     for opaque_id, owner in pass1_owners.items():
         pair = owner["pair"]
         reference = selected_references.get(pair)
         if reference is None:
             reference = _reference_from_label(pass1["labels"][opaque_id])
+            mode = "pass1-base"
+            annotator = pass1["annotator"]
+        else:
+            decision = selected_modes[pair]
+            mode = f"selected-{decision}"
+            annotator = (
+                pass1["annotator"] if decision == "pass1"
+                else pass2["annotator"] if decision == "pass2"
+                else "frontier-temporal-merge-v4"
+            )
         labels.append({
             "pair": pair,
             "targetType": "temporal-pair",
             **copy.deepcopy(reference),
             "locked": True,
+            "annotation": {
+                "producer": "frontier-vlm",
+                "mode": mode,
+                "annotator": annotator,
+                "rubricVersion": RUBRIC,
+                "blindedToCandidateOutputs": True,
+                "candidateOutputsAvailable": False,
+            },
         })
     labels.sort(key=lambda item: item["pair"])
     aggregate_result, _ = _load_json(
