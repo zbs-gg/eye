@@ -44,10 +44,18 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertTrue(script.contains("Print :com.apple.security.device.audio-input"))
         XCTAssertTrue(script.contains("Print :com.apple.security.get-task-allow"))
         XCTAssertTrue(script.contains("Print :com.apple.security.app-sandbox"))
-        XCTAssertTrue(script.contains("flags=.*runtime"))
+        XCTAssertTrue(script.contains(#"[[ "${SIGNING_DETAILS}" != *"flags="*"runtime"* ]]"#))
         XCTAssertTrue(script.contains("TeamIdentifier=${EXPECTED_TEAM}"))
         XCTAssertTrue(script.contains("CANDIDATE_REQUIREMENT"))
         XCTAssertTrue(script.contains("INSTALLED_REQUIREMENT"))
+    }
+
+    func testNotarizedBuildDoesNotUseQuietGrepPipelinesUnderPipefail() throws {
+        let url = repositoryRoot.appending(path: "scripts/build-notarized.sh")
+        let script = try String(contentsOf: url, encoding: .utf8)
+
+        XCTAssertFalse(script.contains("echo \"${SIGNING_DETAILS}\" | grep"))
+        XCTAssertFalse(script.contains("echo \"${GATEKEEPER_OUTPUT}\" | grep"))
     }
 
     func testNotarizedBuildEmitsAUniqueExactCandidateManifest() throws {
