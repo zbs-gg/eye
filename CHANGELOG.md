@@ -2,7 +2,7 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
-## [Unreleased]
+## [0.4.0] — 2026-07-14
 
 ### Added
 - **One-click built-in local AI.** On qualified Apple Silicon Macs, **ZBS Eye Local** downloads a pinned,
