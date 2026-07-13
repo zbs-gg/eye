@@ -1,3 +1,4 @@
+// Shared by the headless benchmark dataset CLI and the unhosted unit-test bundle.
 import CryptoKit
 import Darwin
 import Foundation

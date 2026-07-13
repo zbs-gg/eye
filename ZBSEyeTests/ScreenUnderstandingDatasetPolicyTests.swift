@@ -123,6 +123,7 @@ final class ScreenUnderstandingDatasetPolicyTests: XCTestCase {
             browserURL: nil,
             monitorID: monitor,
             relativePath: path,
+            mediaFingerprint: nil,
             text: text,
             textSources: text.isEmpty ? [] : ["ax"]
         )

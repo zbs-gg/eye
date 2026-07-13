@@ -5,6 +5,77 @@ import GRDB
 import XCTest
 
 final class ScreenUnderstandingDatasetPreparationTests: XCTestCase {
+    func testDatasetCLIHelpExposesOnlyExplicitPreparationInputs() throws {
+        var standardOutput = Data()
+
+        let status = try ScreenUnderstandingDatasetCommand().run(
+            arguments: ["--help"],
+            writeStandardOutput: { standardOutput.append($0) }
+        )
+
+        XCTAssertEqual(status, 0)
+        let help = String(decoding: standardOutput, as: UTF8.self)
+        for option in [
+            "--source-root PATH",
+            "--output-root PATH",
+            "--repository-root PATH",
+            "--trace-calendar gregorian",
+            "--trace-time-zone IANA",
+            "--trace-now-ms UNIX_MS",
+            "--trace-minimum-elapsed-ms N",
+            "--trace-minimum-activity-count N",
+        ] {
+            XCTAssertTrue(help.contains(option), option)
+        }
+    }
+
+    func testDatasetCLIUsesSharedPreparerAndEmitsPathFreeJSONReceipt() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.base) }
+        let output = fixture.base.appendingPathComponent("cli-corpus")
+        var standardOutput = Data()
+
+        let status = try ScreenUnderstandingDatasetCommand().run(
+            arguments: [
+                "--source-root", fixture.source.path,
+                "--output-root", output.path,
+                "--repository-root", repositoryRoot().path,
+                "--trace-calendar", "gregorian",
+                "--trace-time-zone", "UTC",
+                "--trace-now-ms", String(2 * 86_400_000),
+                "--trace-minimum-elapsed-ms", "3000",
+                "--trace-minimum-activity-count", "4",
+            ],
+            writeStandardOutput: { standardOutput.append($0) }
+        )
+
+        XCTAssertEqual(status, 0)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: output.appendingPathComponent("manifest.json").path
+        ))
+        let receipt = try JSONDecoder().decode(
+            ScreenUnderstandingDatasetReceipt.self,
+            from: standardOutput
+        )
+        XCTAssertEqual(receipt.schema, "screen-understanding-dataset-receipt-v1")
+        XCTAssertEqual(receipt.status, "prepared")
+        XCTAssertEqual(receipt.caseCount, 4)
+        XCTAssertEqual(receipt.temporalPairCount, 1)
+        XCTAssertEqual(receipt.baselineOnlyCaseCount, 1)
+        XCTAssertEqual(receipt.splitSHA256.count, 64)
+        XCTAssertEqual(receipt.naturalisticTraceSHA256.count, 64)
+        let receiptText = String(decoding: standardOutput, as: UTF8.self)
+        for forbidden in [
+            fixture.source.path,
+            output.path,
+            repositoryRoot().path,
+            "A short note",
+            "Editor",
+        ] {
+            XCTAssertFalse(receiptText.contains(forbidden), forbidden)
+        }
+    }
+
     func testSyntheticExportIsDeterministicPrivateAndSourcePreserving() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.base) }

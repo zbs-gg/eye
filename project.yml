@@ -55,6 +55,11 @@ schemes:
     test:
       targets:
         - ZBSEyeTests
+  ScreenUnderstandingDatasetCLI:
+    shared: true
+    build:
+      targets:
+        ScreenUnderstandingDatasetCLI: all
 
 targets:
   ZBSEye:
@@ -102,6 +107,24 @@ targets:
         INFOPLIST_KEY_LSUIElement: "NO"
         INFOPLIST_KEY_LSMinimumSystemVersion: "15.0"
 
+  # Headless research tool. It shares no sources or linkage with the shipping app target.
+  ScreenUnderstandingDatasetCLI:
+    type: tool
+    platform: macOS
+    sources:
+      - path: tools/screen-understanding-bench/dataset/ScreenUnderstandingDatasetSupport.swift
+      - path: tools/screen-understanding-bench/dataset/ScreenUnderstandingDatasetCommand.swift
+      - path: tools/screen-understanding-bench/dataset/main.swift
+    dependencies:
+      - package: GRDB
+        product: GRDB
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye.screen-understanding-dataset-cli
+        PRODUCT_NAME: ScreenUnderstandingDatasetCLI
+        CODE_SIGN_IDENTITY: "-"
+        SKIP_INSTALL: YES
+
   # Unhosted by design: a hosted macOS unit-test bundle would launch an ad-hoc
   # gg.zbs.eye build and can invalidate the installed app's TCC grants. Pure
   # production files are shared into this target explicitly as their tests land.
@@ -112,6 +135,8 @@ targets:
       - path: ZBSEyeTests
         excludes:
           - Info.plist
+      - path: tools/screen-understanding-bench/dataset/ScreenUnderstandingDatasetSupport.swift
+      - path: tools/screen-understanding-bench/dataset/ScreenUnderstandingDatasetCommand.swift
       - path: ZBSEyeApp/Connections/AIProvider.swift
       - path: ZBSEyeApp/Connections/AIProviderStore.swift
       - path: ZBSEyeApp/Connections/AIProviderRoutingBridge.swift
