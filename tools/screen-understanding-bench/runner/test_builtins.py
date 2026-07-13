@@ -1,5 +1,8 @@
 #!/usr/bin/python3
 
+from __future__ import annotations
+
+import base64
 import contextlib
 import hashlib
 import io
@@ -7,6 +10,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -20,7 +24,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from common.provenance import build_canonical_commit  # noqa: E402
 import run_quality as runner_module  # noqa: E402
-from run_quality import RunnerError, _vision_result, run_quality  # noqa: E402
+from run_quality import (  # noqa: E402
+    NativeVisionBackend,
+    RunnerError,
+    _vision_result,
+    run_quality,
+)
 from run_quality import (  # noqa: E402
     calculate_builtin_artifact_identity,
     expected_builtin_artifact,
@@ -36,6 +45,18 @@ class FakeVisionBackend:
             ]
             for case_id, _ in jobs
         }
+
+
+TEST_NATIVE_RUNTIME_IDENTITY = {
+    "macOSVersion": "26.2-test",
+    "macOSBuild": "25C56-test",
+    "hardwareModel": "TestMac1,1",
+    "architecture": "arm64-test",
+    "xcodeVersion": "Xcode 26.6 test (17F113)",
+    "swiftCompilerVersion": "Apple Swift version 6.3.3 test",
+    "sdkVersion": "26.5-test",
+    "visionFrameworkBundleVersion": "9.3.1-test",
+}
 
 
 class BuiltInRunnerTests(unittest.TestCase):
@@ -299,29 +320,220 @@ class BuiltInRunnerTests(unittest.TestCase):
         self.assertTrue(inventory["complete"])
         self.assertFalse(inventory["partialOutputsValidWithoutInventory"])
 
-    def test_inventory_is_the_last_commit_and_partial_outputs_are_invalid(self) -> None:
-        result_root = self._result_root("partial-commit")
+    def test_native_runtime_identity_has_exact_keys_and_hash(self) -> None:
+        result_root = self._result_root("runtime-identity")
+        inventory = run_quality(
+            self.corpus,
+            self.annotations,
+            result_root,
+            "metadata-ax-ocr",
+            **self._evidence_args(),
+        )
+
+        persisted = json.loads(
+            (result_root / "run-inventory.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(persisted, inventory)
+        identity = persisted["nativeRuntimeIdentity"]
+        self.assertEqual(identity, TEST_NATIVE_RUNTIME_IDENTITY)
+        self.assertEqual(set(identity), {
+            "macOSVersion",
+            "macOSBuild",
+            "hardwareModel",
+            "architecture",
+            "xcodeVersion",
+            "swiftCompilerVersion",
+            "sdkVersion",
+            "visionFrameworkBundleVersion",
+        })
+        encoded = (
+            json.dumps(
+                identity,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8") + b"\n"
+        )
+        self.assertEqual(
+            persisted["nativeRuntimeIdentitySHA256"],
+            hashlib.sha256(encoded).hexdigest(),
+        )
+        self.assertEqual(set(persisted["runnerSourceSHA256"]), {
+            "adapterManifest", "protocolManifest", "orchestrator",
+        })
+        self.assertNotIn("artifactRevision", identity)
+        self.assertNotIn("artifactIdentitySHA256", identity)
+
+    def test_native_runtime_identity_rejects_missing_keys(self) -> None:
+        evidence = self._evidence_args()
+        evidence["runtime_identity_collector"] = lambda: {
+            "macOSVersion": "26.2-test"
+        }
+        with self.assertRaisesRegex(RunnerError, "runtime identity"):
+            run_quality(
+                self.corpus,
+                self.annotations,
+                self._result_root("runtime-identity-missing"),
+                "metadata-ax-ocr",
+                **evidence,
+            )
+
+    def test_commit_failure_rolls_back_every_file_and_same_root_retries(self) -> None:
         original_replace = runner_module.os.replace
+        target_names = (
+            "metadata-ax-ocr.jsonl",
+            "apple-vision.jsonl",
+            "deterministic-hybrid.jsonl",
+            "run-inventory.json",
+        )
 
-        def fail_inventory_commit(source, destination):
-            destination_path = Path(destination)
-            if destination_path.parent.resolve() == result_root.resolve() \
-                    and destination_path.name == "run-inventory.json":
-                raise OSError("synthetic final commit failure")
-            return original_replace(source, destination)
+        for failure_name in target_names:
+            with self.subTest(failure_name=failure_name):
+                result_root = self._result_root(f"rollback-{failure_name}")
+                failed = False
 
-        with mock.patch.object(runner_module.os, "replace", side_effect=fail_inventory_commit):
-            with self.assertRaisesRegex(RunnerError, "commit"):
+                def fail_commit(source, destination):
+                    nonlocal failed
+                    destination_path = Path(destination)
+                    if not failed \
+                            and destination_path.parent.resolve() == result_root.resolve() \
+                            and destination_path.name == failure_name:
+                        failed = True
+                        raise OSError("synthetic staged commit failure")
+                    return original_replace(source, destination)
+
+                with mock.patch.object(
+                    runner_module.os, "replace", side_effect=fail_commit
+                ):
+                    with self.assertRaisesRegex(RunnerError, "commit"):
+                        run_quality(
+                            self.corpus,
+                            self.annotations,
+                            result_root,
+                            "metadata-ax-ocr,apple-vision,deterministic-hybrid",
+                            **self._evidence_args(),
+                            vision_backend=FakeVisionBackend(),
+                        )
+
+                self.assertTrue(failed)
+                self.assertTrue(all(
+                    not (result_root / name).exists() for name in target_names
+                ))
+
                 run_quality(
                     self.corpus,
                     self.annotations,
                     result_root,
-                    "metadata-ax-ocr",
+                    "metadata-ax-ocr,apple-vision,deterministic-hybrid",
                     **self._evidence_args(),
+                    vision_backend=FakeVisionBackend(),
                 )
+                self.assertTrue(all(
+                    (result_root / name).is_file() for name in target_names
+                ))
 
-        self.assertTrue((result_root / "metadata-ax-ocr.jsonl").is_file())
-        self.assertFalse((result_root / "run-inventory.json").exists())
+    def test_vision_uses_owner_read_only_per_run_media_copies(self) -> None:
+        result_root = self._result_root("vision-scratch")
+        captured_paths: list[Path] = []
+        manifest = json.loads(
+            (self.corpus / "manifest.json").read_text(encoding="utf-8")
+        )
+        expected_media_hashes = {
+            item["id"]: item["mediaSHA256"]
+            for item in manifest["cases"] if "mediaSHA256" in item
+        }
+        test_case = self
+
+        class InspectingVisionBackend:
+            def classify(self, jobs):
+                ordered = list(jobs)
+                for case_id, path in ordered:
+                    captured_paths.append(path)
+                    test_case.assertEqual(
+                        path.parent.parent.resolve(), result_root.resolve()
+                    )
+                    test_case.assertNotIn(
+                        test_case.corpus.resolve(), path.resolve().parents
+                    )
+                    test_case.assertEqual(
+                        stat.S_IMODE(path.stat().st_mode), 0o400
+                    )
+                    test_case.assertEqual(
+                        hashlib.sha256(path.read_bytes()).hexdigest(),
+                        expected_media_hashes[case_id],
+                    )
+                return FakeVisionBackend().classify(ordered)
+
+        run_quality(
+            self.corpus,
+            self.annotations,
+            result_root,
+            "apple-vision",
+            **self._evidence_args(),
+            vision_backend=InspectingVisionBackend(),
+        )
+
+        self.assertEqual(len(captured_paths), 60)
+        self.assertTrue(all(not path.exists() for path in captured_paths))
+
+    def test_media_replacement_after_manifest_verification_fails_closed(self) -> None:
+        manifest = json.loads(
+            (self.corpus / "manifest.json").read_text(encoding="utf-8")
+        )
+        case_id = manifest["splits"]["testSingleFrames"][0]
+        media_path = self.corpus / "cases" / case_id / "image.heic"
+        original_read = runner_module._read_private_regular
+        replaced = False
+
+        def replace_after_first_verified_read(path):
+            nonlocal replaced
+            data = original_read(path)
+            if Path(path).resolve() == media_path.resolve() and not replaced:
+                replaced = True
+                media_path.write_bytes(b"replaced-after-manifest-verification")
+                os.chmod(media_path, 0o600)
+            return data
+
+        with mock.patch.object(
+            runner_module,
+            "_read_private_regular",
+            side_effect=replace_after_first_verified_read,
+        ):
+            with self.assertRaisesRegex(RunnerError, "integrity"):
+                run_quality(
+                    self.corpus,
+                    self.annotations,
+                    self._result_root("media-replaced"),
+                    "apple-vision",
+                    **self._evidence_args(),
+                    vision_backend=FakeVisionBackend(),
+                )
+        self.assertTrue(replaced)
+
+    def test_checked_in_native_vision_backend_runs_tiny_local_image(self) -> None:
+        unsupported = self._native_vision_unsupported_reason()
+        if unsupported is not None:
+            self.skipTest(unsupported)
+        image = self.base / "tiny-synthetic.png"
+        image.write_bytes(base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0l"
+            "EQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        ))
+        os.chmod(image, 0o600)
+
+        output = NativeVisionBackend().classify((
+            ("synthetic-a", image),
+            ("synthetic-b", image),
+        ))
+
+        self.assertEqual(list(output), ["synthetic-a", "synthetic-b"])
+        for value in output.values():
+            self.assertIsInstance(value["labels"], list)
+            self.assertIsInstance(value["errors"], list)
+            self.assertTrue(all(
+                error in {"classification-failed", "image-decode-failed"}
+                for error in value["errors"]
+            ))
 
     def test_stdout_and_errors_do_not_leak_case_content(self) -> None:
         marker = "PRIVATE-SCREEN-CONTENT-MUST-NOT-LEAK"
@@ -572,7 +784,55 @@ class BuiltInRunnerTests(unittest.TestCase):
             "aggregate_root": self.aggregate,
             "final_audit_root": self.annotations,
             "final_judgments": self.final_judgments,
+            "runtime_identity_collector": lambda: dict(
+                TEST_NATIVE_RUNTIME_IDENTITY
+            ),
         }
+
+    @staticmethod
+    def _native_vision_unsupported_reason() -> str | None:
+        if sys.platform != "darwin":
+            return "native Vision requires macOS"
+        for path in (Path("/usr/bin/xcrun"), Path("/usr/bin/sandbox-exec")):
+            if not path.is_file():
+                return f"native Vision tool is unavailable: {path}"
+        environment = {
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "LANG": "C",
+            "LC_ALL": "C",
+        }
+        for command, subject in (
+            (["/usr/bin/xcrun", "--find", "swiftc"], "Swift compiler"),
+            (
+                ["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"],
+                "macOS SDK",
+            ),
+            (
+                [
+                    "/usr/bin/sandbox-exec", "-p",
+                    runner_module.NETWORK_DENY_PROFILE,
+                    "/usr/bin/true",
+                ],
+                "sandbox-exec runtime",
+            ),
+        ):
+            try:
+                result = subprocess.run(
+                    command,
+                    env=environment,
+                    check=False,
+                    capture_output=True,
+                    timeout=30,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                return f"native Vision {subject} is unsupported"
+            if result.returncode != 0:
+                return f"native Vision {subject} is unsupported"
+        if not Path(
+            "/System/Library/Frameworks/Vision.framework"
+        ).is_dir():
+            return "native Vision framework is unavailable"
+        return None
 
     def _result_root(self, name: str) -> Path:
         path = self.base / name

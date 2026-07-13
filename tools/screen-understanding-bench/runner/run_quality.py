@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -43,6 +43,19 @@ VISION_DEPENDENT_METHODS = frozenset({
     "apple-vision",
     "deterministic-hybrid",
 })
+NATIVE_RUNTIME_IDENTITY_KEYS = (
+    "macOSVersion",
+    "macOSBuild",
+    "hardwareModel",
+    "architecture",
+    "xcodeVersion",
+    "swiftCompilerVersion",
+    "sdkVersion",
+    "visionFrameworkBundleVersion",
+)
+VISION_FRAMEWORK_INFO = Path(
+    "/System/Library/Frameworks/Vision.framework/Resources/Info.plist"
+)
 
 
 class RunnerError(ValueError):
@@ -135,6 +148,74 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _runtime_command(command: list[str]) -> str:
+    environment = {
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "LANG": "C",
+        "LC_ALL": "C",
+    }
+    try:
+        result = subprocess.run(
+            command,
+            env=environment,
+            check=False,
+            capture_output=True,
+            timeout=30,
+        )
+        value = result.stdout.decode("utf-8").strip()
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError) as error:
+        raise RunnerError("native runtime identity collection failed") from error
+    if result.returncode != 0 or not value:
+        raise RunnerError("native runtime identity collection failed")
+    return value
+
+
+def collect_native_runtime_identity() -> dict[str, str]:
+    """Collect the exact local native stack separately from source pins."""
+    return {
+        "macOSVersion": _runtime_command([
+            "/usr/bin/sw_vers", "-productVersion",
+        ]),
+        "macOSBuild": _runtime_command([
+            "/usr/bin/sw_vers", "-buildVersion",
+        ]),
+        "hardwareModel": _runtime_command([
+            "/usr/sbin/sysctl", "-n", "hw.model",
+        ]),
+        "architecture": _runtime_command(["/usr/bin/uname", "-m"]),
+        "xcodeVersion": _runtime_command(["/usr/bin/xcodebuild", "-version"]),
+        "swiftCompilerVersion": _runtime_command([
+            "/usr/bin/xcrun", "swiftc", "--version",
+        ]),
+        "sdkVersion": _runtime_command([
+            "/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-version",
+        ]),
+        "visionFrameworkBundleVersion": _runtime_command([
+            "/usr/bin/plutil", "-extract", "CFBundleVersion", "raw", "-o", "-",
+            str(VISION_FRAMEWORK_INFO),
+        ]),
+    }
+
+
+def _validated_native_runtime_identity(
+    collector: Callable[[], dict[str, str]],
+) -> dict[str, str]:
+    try:
+        value = collector()
+    except RunnerError:
+        raise
+    except Exception as error:
+        raise RunnerError("native runtime identity collection failed") from error
+    if not isinstance(value, dict) \
+            or set(value) != set(NATIVE_RUNTIME_IDENTITY_KEYS) \
+            or any(
+                not isinstance(value[key], str) or not value[key].strip()
+                for key in NATIVE_RUNTIME_IDENTITY_KEYS
+            ):
+        raise RunnerError("native runtime identity is invalid")
+    return {key: value[key] for key in NATIVE_RUNTIME_IDENTITY_KEYS}
+
+
 def _assert_owner_only_directory(path: Path) -> Path:
     try:
         if path.is_symlink() or not path.is_dir():
@@ -152,24 +233,38 @@ def _paths_overlap(first: Path, second: Path) -> bool:
 
 
 def _read_private_regular(path: Path) -> bytes:
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
     try:
-        metadata = path.lstat()
-        if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise RunnerError("case integrity verification failed") from error
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
             raise RunnerError("case integrity verification failed")
         if stat.S_IMODE(metadata.st_mode) & 0o077:
             raise RunnerError("case integrity verification failed")
-        return path.read_bytes()
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 64 * 1024)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
     except RunnerError:
         raise
     except OSError as error:
         raise RunnerError("case integrity verification failed") from error
+    finally:
+        os.close(descriptor)
 
 
 def _verified_case_paths(
     corpus_root: Path,
     case: dict[str, Any],
     expected_id: str,
-) -> tuple[Path, Path, dict[str, Any]]:
+) -> tuple[Path, str, dict[str, Any]]:
     if case.get("id") != expected_id or case.get("baselineOnly") is not False:
         raise RunnerError("locked test split integrity verification failed")
     case_root = corpus_root / "cases" / expected_id
@@ -214,7 +309,26 @@ def _verified_case_paths(
     if not isinstance(context, dict):
         raise RunnerError("case context is invalid")
     _validate_context(context)
-    return context_path, media_path, context
+    return media_path, expected_media_hash, context
+
+
+def _materialize_verified_media(
+    inputs: list[tuple[str, Path, str, dict[str, Any]]],
+    scratch: Path,
+) -> list[tuple[str, Path]]:
+    jobs = []
+    for case_id, media_path, expected_hash, _ in inputs:
+        media_data = _read_private_regular(media_path)
+        if not hmac.compare_digest(_sha256(media_data), expected_hash):
+            raise RunnerError("case integrity verification failed")
+        copy_path = scratch / f"{case_id}.heic"
+        _write_owner_only_atomic(copy_path, media_data)
+        try:
+            copy_path.chmod(0o400)
+        except OSError as error:
+            raise RunnerError("case integrity verification failed") from error
+        jobs.append((case_id, copy_path))
+    return jobs
 
 
 def _validate_context(context: dict[str, Any]) -> None:
@@ -380,12 +494,19 @@ def _commit_staged_run(
     method_files: list[str],
 ) -> None:
     """Commit the inventory last; outputs without it are an invalid partial run."""
+    inventory_name = "run-inventory.json"
+    names = [*method_files, inventory_name]
+    destinations = [result_root / name for name in names]
     try:
         for name in method_files:
             os.replace(staging / name, result_root / name)
-        inventory_name = "run-inventory.json"
         os.replace(staging / inventory_name, result_root / inventory_name)
     except OSError as error:
+        for destination in reversed(destinations):
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                pass
         raise RunnerError("private result commit failed") from error
 
 
@@ -496,6 +617,9 @@ def run_quality(
     protocol_manifest: Optional[Path] = None,
     runner_source: Optional[Path] = None,
     vision_worker_source: Optional[Path] = None,
+    runtime_identity_collector: Optional[
+        Callable[[], dict[str, str]]
+    ] = None,
 ) -> dict[str, Any]:
     dataset_root = Path(dataset_root).resolve()
     annotation_root = Path(annotation_root).resolve()
@@ -541,6 +665,9 @@ def run_quality(
             Path(vision_worker_source_path),
         )
     )
+    native_runtime_identity = _validated_native_runtime_identity(
+        runtime_identity_collector or collect_native_runtime_identity
+    )
     validate_seal(
         dataset_root,
         annotation_root,
@@ -571,15 +698,15 @@ def run_quality(
     if len(by_id) != len(cases):
         raise RunnerError("corpus case inventory is invalid")
 
-    inputs: list[tuple[str, Path, dict[str, Any]]] = []
+    inputs: list[tuple[str, Path, str, dict[str, Any]]] = []
     for case_id in split_ids:
         case = by_id.get(case_id)
         if not isinstance(case, dict):
             raise RunnerError("locked test split integrity verification failed")
-        _, media_path, context = _verified_case_paths(
+        media_path, expected_media_hash, context = _verified_case_paths(
             dataset_root, case, case_id
         )
-        inputs.append((case_id, media_path, context))
+        inputs.append((case_id, media_path, expected_media_hash, context))
 
     selected_ids = [entry["id"] for entry in selected]
     needs_vision = any(
@@ -591,21 +718,25 @@ def run_quality(
         backend = vision_backend or NativeVisionBackend(
             source_bytes=vision_worker_source_bytes
         )
-        try:
-            vision_by_id = backend.classify(
-                [(case_id, media_path) for case_id, media_path, _ in inputs]
-            )
-        except RunnerError:
-            raise
-        except Exception as error:
-            raise RunnerError("native Vision execution failed") from error
+        with tempfile.TemporaryDirectory(
+            prefix=".screen-media-", dir=result_root
+        ) as directory:
+            media_scratch = Path(directory)
+            os.chmod(media_scratch, 0o700)
+            jobs = _materialize_verified_media(inputs, media_scratch)
+            try:
+                vision_by_id = backend.classify(jobs)
+            except RunnerError:
+                raise
+            except Exception as error:
+                raise RunnerError("native Vision execution failed") from error
         if set(vision_by_id) != set(split_ids):
             raise RunnerError("native Vision output inventory is invalid")
 
     records_by_method: dict[str, list[dict[str, Any]]] = {
         method: [] for method in selected_ids
     }
-    for case_id, _, context in inputs:
+    for case_id, _, _, context in inputs:
         baseline = _baseline_result(context)
         vision = _vision_result(vision_by_id[case_id]) if needs_vision else None
         for method in selected_ids:
@@ -652,6 +783,10 @@ def run_quality(
             ),
             "canonicalCommitSHA256": _sha256(
                 _read_private_regular(annotation_root / "canonical" / "commit.json")
+            ),
+            "nativeRuntimeIdentity": native_runtime_identity,
+            "nativeRuntimeIdentitySHA256": _sha256(
+                _json_bytes(native_runtime_identity)
             ),
             "methodArtifacts": {
                 method_id: artifact_pins[method_id]
