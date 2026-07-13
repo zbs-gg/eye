@@ -17,6 +17,7 @@ from .contracts import (
     CLAIM_SOURCE_CAPABILITIES,
     DUPLICATE_FRACTION,
     EXPECTED_CASES,
+    FORBIDDEN_FRAGMENTS,
     FORBIDDEN_FACT_IDS,
     MAPPING_SCHEMA,
     METHOD_FILES,
@@ -56,6 +57,24 @@ from preflight import (  # noqa: E402
 
 PrivateJSONLoader = Callable[[Path, str], tuple[dict[str, Any], bytes]]
 PrivateJSONWriter = Callable[[Path, Any], bytes]
+
+
+def _redact_local_path_lines(value: Any) -> Any:
+    """Remove private path-bearing lines while preserving unrelated screen text."""
+
+    if isinstance(value, dict):
+        return {key: _redact_local_path_lines(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_redact_local_path_lines(child) for child in value]
+    if not isinstance(value, str):
+        return value
+    lines = value.split("\n")
+    return "\n".join(
+        "[LOCAL_PATH_REDACTED]"
+        if any(fragment in line for fragment in FORBIDDEN_FRAGMENTS)
+        else line
+        for line in lines
+    )
 
 
 def _validate_reference(label: dict[str, Any]) -> dict[str, Any]:
@@ -283,7 +302,9 @@ def _build_item(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     alias = "method-" + _token(seed, f"{stage}-method", method, 12)
     arm_id = "arm-" + _token(seed, f"{stage}-arm", f"{method}:{case_id}")
-    raw_claims, visible, abstention = _extract_claims(result)
+    packet_result = _redact_local_path_lines(result)
+    packet_reference = _redact_local_path_lines(reference)
+    raw_claims, visible, abstention = _extract_claims(packet_result)
     claims = []
     claim_ids = []
     for index, claim in enumerate(raw_claims):
@@ -295,14 +316,14 @@ def _build_item(
     item = {
         "armID": arm_id,
         "anonymousMethod": alias,
-        "requiredFacts": reference["requiredFacts"],
-        "forbiddenInferences": reference["forbiddenInferences"],
-        "criticalText": reference["criticalText"],
+        "requiredFacts": packet_reference["requiredFacts"],
+        "forbiddenInferences": packet_reference["forbiddenInferences"],
+        "criticalText": packet_reference["criticalText"],
         "claims": claims,
         "visibleText": visible,
         "abstention": abstention,
-        "ambiguity": reference["ambiguity"],
-        "abstentionAllowed": reference["abstentionAllowed"],
+        "ambiguity": packet_reference["ambiguity"],
+        "abstentionAllowed": packet_reference["abstentionAllowed"],
     }
     owner = {
         "methodID": method,

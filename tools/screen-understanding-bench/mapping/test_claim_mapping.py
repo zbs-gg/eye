@@ -101,6 +101,36 @@ class ClaimMappingTests(unittest.TestCase):
         self.assertNotIn("Exact OCR text", claim_texts)
         self.assertIn("label:computer screen", claim_texts)
 
+    def test_visible_local_path_lines_are_redacted_without_dropping_other_text(self) -> None:
+        inventory_path = self.results / "run-inventory.json"
+        inventory = self._load(inventory_path)
+        for method in METHODS:
+            path = self.results / f"{method}.jsonl"
+            records = [json.loads(line) for line in path.read_text().splitlines()]
+            records[0]["result"]["visibleText"] = [
+                "Keep this line\n/Users/private-name/secret file.txt\nAlso keep this"
+            ]
+            data = b"".join(
+                json.dumps(record, sort_keys=True, separators=(",", ":"))
+                .encode("utf-8") + b"\n"
+                for record in records
+            )
+            path.write_bytes(data)
+            os.chmod(path, 0o600)
+            inventory["outputSHA256"][method] = hashlib.sha256(data).hexdigest()
+        self._write_private(inventory_path, inventory)
+
+        prepared = self._prepare("path-redaction")
+        serialized = json.dumps(
+            [self._load(prepared["primaryPacket"]), self._load(prepared["hiddenPacket"])],
+            sort_keys=True,
+        )
+        self.assertNotIn("/Users/", serialized)
+        self.assertNotIn("private-name", serialized)
+        self.assertIn("Keep this line", serialized)
+        self.assertIn("[LOCAL_PATH_REDACTED]", serialized)
+        self.assertIn("Also keep this", serialized)
+
     def test_hidden_duplicates_are_deterministic_stratified_fifteen_percent(self) -> None:
         first = self._prepare("stable-seed", "mapping-a")
         second = self._prepare("stable-seed", "mapping-b")
