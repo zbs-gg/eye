@@ -14,8 +14,11 @@ from unittest import mock
 from pathlib import Path
 
 
+BENCHMARK_ROOT = Path(__file__).parents[1]
+sys.path.insert(0, str(BENCHMARK_ROOT))
 sys.path.insert(0, str(Path(__file__).parent))
 
+from common.provenance import build_canonical_commit  # noqa: E402
 import run_quality as runner_module  # noqa: E402
 from run_quality import RunnerError, _vision_result, run_quality  # noqa: E402
 from run_quality import (  # noqa: E402
@@ -41,6 +44,10 @@ class BuiltInRunnerTests(unittest.TestCase):
         self.base = Path(self.temporary.name)
         self.corpus = self.base / "corpus"
         self.annotations = self.base / "annotations"
+        self.source_annotations = self.base / "source-annotations"
+        self.correctness_audit = self.base / "correctness-audit"
+        self.aggregate = self.base / "aggregate"
+        self.final_judgments = self.base / "final-judgments.json"
         self._make_fixture()
 
     def tearDown(self) -> None:
@@ -54,6 +61,7 @@ class BuiltInRunnerTests(unittest.TestCase):
             self.annotations,
             result_root,
             "metadata-ax-ocr",
+            **self._evidence_args(),
         )
 
         self.assertEqual(inventory["split"], "testSingleFrames")
@@ -61,6 +69,35 @@ class BuiltInRunnerTests(unittest.TestCase):
         records = self._records(result_root, "metadata-ax-ocr")
         self.assertEqual(len(records), 60)
         self.assertTrue(all(record["mappingPending"] is True for record in records))
+
+    def test_quality_rejects_missing_commit_before_case_access(self) -> None:
+        shutil.rmtree(self.corpus / "cases")
+        (self.annotations / "canonical" / "commit.json").unlink()
+
+        with self.assertRaisesRegex(ValueError, "commit"):
+            run_quality(
+                self.corpus,
+                self.annotations,
+                self._result_root("missing-commit"),
+                "metadata-ax-ocr",
+                **self._evidence_args(),
+            )
+
+    def test_quality_rejects_tampered_final_judgments_before_case_access(self) -> None:
+        shutil.rmtree(self.corpus / "cases")
+        self._write_private_json(
+            self.final_judgments,
+            {"auditor": "tampered-final-auditor"},
+        )
+
+        with self.assertRaisesRegex(ValueError, "provenance evidence"):
+            run_quality(
+                self.corpus,
+                self.annotations,
+                self._result_root("tampered-judgments"),
+                "metadata-ax-ocr",
+                **self._evidence_args(),
+            )
 
     def test_builtin_artifact_identity_is_method_and_source_bound(self) -> None:
         runner = b"runner-source"
@@ -123,6 +160,7 @@ class BuiltInRunnerTests(unittest.TestCase):
                 self.annotations,
                 self._result_root("source-drift"),
                 "metadata-ax-ocr",
+                **self._evidence_args(),
                 runner_source=drifted_source,
             )
 
@@ -143,6 +181,7 @@ class BuiltInRunnerTests(unittest.TestCase):
                 self.annotations,
                 self._result_root("manifest-drift"),
                 "metadata-ax-ocr",
+                **self._evidence_args(),
                 adapter_manifest=tampered_manifest,
             )
 
@@ -160,6 +199,7 @@ class BuiltInRunnerTests(unittest.TestCase):
                 self.annotations,
                 self._result_root("traversal"),
                 "metadata-ax-ocr",
+                **self._evidence_args(),
             )
 
         self._make_fixture(replace=True)
@@ -174,6 +214,7 @@ class BuiltInRunnerTests(unittest.TestCase):
                 self.annotations,
                 self._result_root("tampered"),
                 "metadata-ax-ocr",
+                **self._evidence_args(),
             )
 
     def test_outputs_are_deterministic_and_hybrid_is_exact_union(self) -> None:
@@ -183,10 +224,12 @@ class BuiltInRunnerTests(unittest.TestCase):
 
         run_quality(
             self.corpus, self.annotations, first, methods,
+            **self._evidence_args(),
             vision_backend=FakeVisionBackend(),
         )
         run_quality(
             self.corpus, self.annotations, second, methods,
+            **self._evidence_args(),
             vision_backend=FakeVisionBackend(),
         )
 
@@ -236,6 +279,7 @@ class BuiltInRunnerTests(unittest.TestCase):
             self.annotations,
             result_root,
             "metadata-ax-ocr",
+            **self._evidence_args(),
         )
 
         for name in ("metadata-ax-ocr.jsonl", "run-inventory.json"):
@@ -245,6 +289,12 @@ class BuiltInRunnerTests(unittest.TestCase):
             (result_root / "metadata-ax-ocr.jsonl").read_bytes()
         ).hexdigest()
         self.assertEqual(inventory["outputSHA256"]["metadata-ax-ocr"], expected)
+        self.assertEqual(
+            inventory["canonicalCommitSHA256"],
+            hashlib.sha256(
+                (self.annotations / "canonical" / "commit.json").read_bytes()
+            ).hexdigest(),
+        )
         self.assertEqual(inventory["commitFile"], "run-inventory.json")
         self.assertTrue(inventory["complete"])
         self.assertFalse(inventory["partialOutputsValidWithoutInventory"])
@@ -267,6 +317,7 @@ class BuiltInRunnerTests(unittest.TestCase):
                     self.annotations,
                     result_root,
                     "metadata-ax-ocr",
+                    **self._evidence_args(),
                 )
 
         self.assertTrue((result_root / "metadata-ax-ocr.jsonl").is_file())
@@ -292,6 +343,7 @@ class BuiltInRunnerTests(unittest.TestCase):
                 self.annotations,
                 self._result_root("no-leak"),
                 "metadata-ax-ocr",
+                **self._evidence_args(),
             )
 
         self.assertNotIn(marker, stdout.getvalue())
@@ -304,6 +356,7 @@ class BuiltInRunnerTests(unittest.TestCase):
             self.annotations,
             result_root,
             "metadata-ax-ocr",
+            **self._evidence_args(),
         )
         encoded = json.dumps(self._records(result_root, "metadata-ax-ocr"))
 
@@ -358,15 +411,23 @@ class BuiltInRunnerTests(unittest.TestCase):
 
     def _make_fixture(self, *, replace: bool = False) -> None:
         if replace:
-            for root in (self.corpus, self.annotations):
+            for root in (
+                self.corpus,
+                self.annotations,
+                self.source_annotations,
+                self.correctness_audit,
+                self.aggregate,
+            ):
                 if root.exists():
                     shutil.rmtree(root)
+            self.final_judgments.unlink(missing_ok=True)
         canonical = self.annotations / "canonical"
         self.corpus.mkdir(mode=0o700)
         canonical.mkdir(parents=True, mode=0o700)
         os.chmod(self.annotations, 0o700)
         (self.corpus / ".metadata_never_index").touch()
         (self.annotations / ".metadata_never_index").touch()
+        (canonical / ".metadata_never_index").touch()
 
         singles = [f"{index:024x}" for index in range(200)]
         pairs = [f"{index + 10_000:024x}" for index in range(100)]
@@ -465,6 +526,53 @@ class BuiltInRunnerTests(unittest.TestCase):
             },
             "qualified": True,
         })
+        for evidence_root in (
+            self.source_annotations,
+            self.correctness_audit,
+            self.aggregate,
+        ):
+            evidence_root.mkdir(mode=0o700)
+            (evidence_root / ".metadata_never_index").touch()
+            self._write_private_json(
+                evidence_root / "evidence.json", {"fixture": True}
+            )
+        self._write_private_json(
+            self.annotations / "audit-manifest.json", {"fixture": True}
+        )
+        self._write_private_json(
+            self.final_judgments, {"auditor": "fresh-final-auditor"}
+        )
+        self._write_private_json(
+            canonical / "commit.json",
+            build_canonical_commit(
+                labels_path=canonical / "labels.json",
+                reliability_path=canonical / "reliability.json",
+                finalizer_path=(
+                    BENCHMARK_ROOT / "annotation" /
+                    "finalize_correctness_canonical.py"
+                ),
+                source_annotation_root=self.source_annotations,
+                correctness_audit_root=self.correctness_audit,
+                aggregate_root=self.aggregate,
+                final_audit_root=self.annotations,
+                final_judgments_path=self.final_judgments,
+                protocol="screen-understanding-correctness-audit-v3",
+                rubric_version="screen-understanding-canonical-v2",
+                label_count=300,
+                duplicate_count=45,
+                final_audit_case_count=45,
+                final_audit_slot_count=285,
+            ),
+        )
+
+    def _evidence_args(self) -> dict:
+        return {
+            "source_annotation_root": self.source_annotations,
+            "correctness_audit_root": self.correctness_audit,
+            "aggregate_root": self.aggregate,
+            "final_audit_root": self.annotations,
+            "final_judgments": self.final_judgments,
+        }
 
     def _result_root(self, name: str) -> Path:
         path = self.base / name

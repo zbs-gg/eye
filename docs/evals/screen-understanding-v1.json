@@ -18,8 +18,8 @@
       "disposition": "baseline",
       "remote": false,
       "sizeClass": "builtin",
-      "artifactRevision": "runner-3145a01ea0c2",
-      "artifactSHA256": "3145a01ea0c2d58cec247e53840c16b0f81a37c3ac98caac54df8d4f37917b84",
+      "artifactRevision": "runner-b3f0f7285be3",
+      "artifactSHA256": "b3f0f7285be371bed9c41d12d4165655dbced03679424e996425ee4f28b47996",
       "license": "AGPL-3.0-or-later",
       "inputCapabilities": ["single-image"],
       "outputCapabilities": ["summary", "atomic-facts", "visible-text", "confidence", "abstention", "errors", "runtime-metadata"]
@@ -29,8 +29,8 @@
       "disposition": "baseline",
       "remote": false,
       "sizeClass": "builtin",
-      "artifactRevision": "runner-11ac02d57116",
-      "artifactSHA256": "11ac02d57116660fda7cd4e8e3dc940e6ccb2197287e120d0ede2b7b3075fe93",
+      "artifactRevision": "runner-b6cd35656e5d",
+      "artifactSHA256": "b6cd35656e5dfdb007521f69aec371b9c389f22740bbfce5c9bac7e0d3681c94",
       "license": "Apple-SDK",
       "inputCapabilities": ["single-image"],
       "outputCapabilities": ["labels", "confidence", "abstention", "errors", "runtime-metadata"]
@@ -40,8 +40,8 @@
       "disposition": "baseline",
       "remote": false,
       "sizeClass": "builtin",
-      "artifactRevision": "runner-3f6d566a43be",
-      "artifactSHA256": "3f6d566a43befd36a442d6e48de2676b7fd4787f949c7a66d5b1b0447d3885e9",
+      "artifactRevision": "runner-4609fc2b3a92",
+      "artifactSHA256": "4609fc2b3a92177fa555e04d9353d7ad56a6442f350b9064f99f7ffa42e0efa7",
       "license": "AGPL-3.0-or-later",
       "inputCapabilities": ["single-image"],
       "outputCapabilities": ["summary", "atomic-facts", "visible-text", "labels", "confidence", "abstention", "errors", "runtime-metadata"]

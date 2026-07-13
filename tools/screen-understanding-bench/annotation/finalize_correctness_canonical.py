@@ -19,11 +19,13 @@ from annotation import prepare_final_reference_audit as final_reference_preparer
 from annotation import validate_correctness_audit as correctness_validator
 from annotation import validate_final_reference_audit as final_reference_validator
 from common.contracts import exact_keys
+from common.provenance import build_canonical_commit
 from common.private_io import (
     atomic_private_json,
     prepare_private_output,
     publish_private_output,
     validate_private_input,
+    validate_private_input_file,
     validate_private_output,
 )
 
@@ -234,6 +236,7 @@ def finalize(
     correctness_audit = validate_private_input(correctness_audit_root)
     aggregate = validate_private_input(aggregate_root)
     audit = validate_private_input(final_audit_root)
+    judgments = validate_private_input_file(judgments_path)
     canonical = validate_private_output(audit / "canonical")
 
     prepare = final_reference_preparer
@@ -248,7 +251,7 @@ def finalize(
         raise ValueError("final audit manifest raw joint rates were changed")
     final_result = final_reference_validator.validate(
         audit / "packet" / "packet.json",
-        judgments_path,
+        judgments,
         mapping["forbiddenAuditors"],
     )
     if final_result["criticalErrorCount"] != 0 or final_result["qualified"] is not True:
@@ -302,6 +305,23 @@ def finalize(
         canonical, staging = prepare_private_output(canonical)
         atomic_private_json(staging / "labels.json", labels_payload)
         atomic_private_json(staging / "reliability.json", reliability)
+        commit = build_canonical_commit(
+            labels_path=staging / "labels.json",
+            reliability_path=staging / "reliability.json",
+            finalizer_path=Path(__file__),
+            source_annotation_root=annotation,
+            correctness_audit_root=correctness_audit,
+            aggregate_root=aggregate,
+            final_audit_root=audit,
+            final_judgments_path=judgments,
+            protocol=PROTOCOL,
+            rubric_version=RUBRIC,
+            label_count=300,
+            duplicate_count=45,
+            final_audit_case_count=45,
+            final_audit_slot_count=285,
+        )
+        atomic_private_json(staging / "commit.json", commit)
         publish_private_output(staging, canonical)
     except BaseException:
         if staging is not None:

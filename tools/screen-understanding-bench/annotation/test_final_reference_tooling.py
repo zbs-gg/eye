@@ -1,9 +1,11 @@
+import hashlib
 import importlib.util
 import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 DIRECTORY = Path(__file__).parent
@@ -158,7 +160,21 @@ class FinalReferenceToolingTests(unittest.TestCase):
             self.assertFalse((audit / "canonical").exists())
 
             good = self.write_judgments(packet, base / "good.json", "fresh-final")
-            result = finalize.finalize(annotation, correctness, aggregate, audit, good)
+            writes = []
+            original_write = finalize.atomic_private_json
+
+            def record_write(path, value):
+                writes.append(path.name)
+                return original_write(path, value)
+
+            with mock.patch.object(
+                finalize,
+                "atomic_private_json",
+                side_effect=record_write,
+            ):
+                result = finalize.finalize(
+                    annotation, correctness, aggregate, audit, good
+                )
             self.assertEqual(result["labelCount"], 300)
             self.assertEqual(result["slotCount"], 285)
             self.assertEqual(result["criticalErrorCount"], 0)
@@ -168,7 +184,8 @@ class FinalReferenceToolingTests(unittest.TestCase):
             self.assertEqual(labels["schema"], "screen-understanding-canonical-labels-v3")
             self.assertEqual(len(labels["labels"]), 300)
             self.assertTrue(all(label["locked"] for label in labels["labels"]))
-            reliability = json.loads((audit / "canonical" / "reliability.json").read_text())
+            reliability_path = audit / "canonical" / "reliability.json"
+            reliability = json.loads(reliability_path.read_text())
             self.assertTrue(reliability["qualified"])
             self.assertGreaterEqual(reliability["rawJoint"]["overall"], 0.90)
             self.assertEqual(reliability["finalReferenceAudit"]["criticalErrorCount"], 0)
@@ -178,6 +195,24 @@ class FinalReferenceToolingTests(unittest.TestCase):
             self.assertNotIn("/users/", canonical_text)
             self.assertEqual(os.stat(labels_path).st_mode & 0o777, 0o600)
             self.assertTrue((audit / "canonical" / ".metadata_never_index").is_file())
+            commit_path = audit / "canonical" / "commit.json"
+            commit = json.loads(commit_path.read_text())
+            self.assertEqual(
+                commit["schema"], "screen-understanding-canonical-commit-v3"
+            )
+            self.assertEqual(
+                commit["canonical"]["labelsSHA256"],
+                hashlib.sha256(labels_path.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                commit["canonical"]["reliabilitySHA256"],
+                hashlib.sha256(reliability_path.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(writes[-1], "commit.json")
+            self.assertEqual(os.stat(commit_path).st_mode & 0o777, 0o600)
+            commit_text = commit_path.read_text().lower()
+            self.assertNotIn("/users/", commit_text)
+            self.assertNotIn("/volumes/", commit_text)
             with self.assertRaisesRegex(ValueError, "already exists"):
                 finalize.finalize(annotation, correctness, aggregate, audit, good)
 

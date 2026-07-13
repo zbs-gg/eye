@@ -486,6 +486,11 @@ def run_quality(
     result_root: Path,
     methods: str,
     *,
+    source_annotation_root: Path,
+    correctness_audit_root: Path,
+    aggregate_root: Path,
+    final_audit_root: Path,
+    final_judgments: Path,
     vision_backend: Optional[Any] = None,
     adapter_manifest: Optional[Path] = None,
     protocol_manifest: Optional[Path] = None,
@@ -494,9 +499,21 @@ def run_quality(
 ) -> dict[str, Any]:
     dataset_root = Path(dataset_root).resolve()
     annotation_root = Path(annotation_root).resolve()
+    source_annotation_root = Path(source_annotation_root).resolve()
+    correctness_audit_root = Path(correctness_audit_root).resolve()
+    aggregate_root = Path(aggregate_root).resolve()
+    final_audit_root = Path(final_audit_root).resolve()
+    final_judgments = Path(final_judgments).resolve()
     result_root = _assert_owner_only_directory(Path(result_root))
-    if _paths_overlap(result_root, dataset_root) \
-            or _paths_overlap(result_root, annotation_root):
+    if any(_paths_overlap(result_root, private_input) for private_input in (
+        dataset_root,
+        annotation_root,
+        source_annotation_root,
+        correctness_audit_root,
+        aggregate_root,
+        final_audit_root,
+        final_judgments,
+    )):
         raise RunnerError("result root must be separate from private inputs")
     manifest_path = adapter_manifest or (
         Path(__file__).parents[1] / "adapters" / "manifest.json"
@@ -524,7 +541,15 @@ def run_quality(
             Path(vision_worker_source_path),
         )
     )
-    validate_seal(dataset_root, annotation_root)
+    validate_seal(
+        dataset_root,
+        annotation_root,
+        source_annotation_root=source_annotation_root,
+        correctness_audit_root=correctness_audit_root,
+        aggregate_root=aggregate_root,
+        final_audit_root=final_audit_root,
+        final_judgments=final_judgments,
+    )
 
     try:
         manifest_data = _read_private_regular(dataset_root / "manifest.json")
@@ -625,6 +650,9 @@ def run_quality(
             "canonicalReliabilitySHA256": _sha256(
                 _read_private_regular(annotation_root / "canonical" / "reliability.json")
             ),
+            "canonicalCommitSHA256": _sha256(
+                _read_private_regular(annotation_root / "canonical" / "commit.json")
+            ),
             "methodArtifacts": {
                 method_id: artifact_pins[method_id]
                 for method_id in selected_ids
@@ -656,6 +684,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset-root", required=True, type=Path)
     parser.add_argument("--annotation-root", required=True, type=Path)
+    parser.add_argument("--source-annotation-root", required=True, type=Path)
+    parser.add_argument("--correctness-audit-root", required=True, type=Path)
+    parser.add_argument("--aggregate-root", required=True, type=Path)
+    parser.add_argument("--final-audit-root", required=True, type=Path)
+    parser.add_argument("--final-judgments", required=True, type=Path)
     parser.add_argument("--result-root", required=True, type=Path)
     parser.add_argument("--methods", required=True)
     args = parser.parse_args()
@@ -665,6 +698,11 @@ def main() -> int:
             args.annotation_root,
             args.result_root,
             args.methods,
+            source_annotation_root=args.source_annotation_root,
+            correctness_audit_root=args.correctness_audit_root,
+            aggregate_root=args.aggregate_root,
+            final_audit_root=args.final_audit_root,
+            final_judgments=args.final_judgments,
         )
     except UnsupportedMethodError as error:
         print(f"security-unsupported: {error}", file=sys.stderr)

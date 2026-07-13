@@ -8,8 +8,11 @@ import unittest
 from pathlib import Path
 
 
+BENCHMARK_ROOT = Path(__file__).parents[1]
+sys.path.insert(0, str(BENCHMARK_ROOT))
 sys.path.insert(0, str(Path(__file__).parent))
 
+from common.provenance import build_canonical_commit  # noqa: E402
 from preflight import (  # noqa: E402
     PreflightError,
     UnsupportedMethodError,
@@ -207,6 +210,50 @@ class CanonicalSealTests(unittest.TestCase):
             },
             "qualified": True,
         })
+        self.source_annotation_root = root / "source-annotations"
+        self.correctness_audit_root = root / "correctness-audit"
+        self.aggregate_root = root / "aggregate"
+        for evidence_root in (
+            self.source_annotation_root,
+            self.correctness_audit_root,
+            self.aggregate_root,
+        ):
+            evidence_root.mkdir(mode=0o700)
+            (evidence_root / ".metadata_never_index").touch()
+            self._write_private_json(
+                evidence_root / "evidence.json", {"fixture": True}
+            )
+        self.final_audit_root = self.annotation_root
+        self._write_private_json(
+            self.final_audit_root / "audit-manifest.json", {"fixture": True}
+        )
+        self.final_judgments = root / "final-judgments.json"
+        self._write_private_json(
+            self.final_judgments, {"auditor": "fresh-final-auditor"}
+        )
+        self.commit_path = canonical_root / "commit.json"
+        self._write_private_json(
+            self.commit_path,
+            build_canonical_commit(
+                labels_path=self.labels_path,
+                reliability_path=self.reliability_path,
+                finalizer_path=(
+                    BENCHMARK_ROOT / "annotation" /
+                    "finalize_correctness_canonical.py"
+                ),
+                source_annotation_root=self.source_annotation_root,
+                correctness_audit_root=self.correctness_audit_root,
+                aggregate_root=self.aggregate_root,
+                final_audit_root=self.final_audit_root,
+                final_judgments_path=self.final_judgments,
+                protocol="screen-understanding-correctness-audit-v3",
+                rubric_version="screen-understanding-canonical-v2",
+                label_count=300,
+                duplicate_count=45,
+                final_audit_case_count=45,
+                final_audit_slot_count=285,
+            ),
+        )
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -215,8 +262,19 @@ class CanonicalSealTests(unittest.TestCase):
         path.write_text(json.dumps(value), encoding="utf-8")
         os.chmod(path, 0o600)
 
+    def _validate(self) -> dict:
+        return validate_seal(
+            self.corpus_root,
+            self.annotation_root,
+            source_annotation_root=self.source_annotation_root,
+            correctness_audit_root=self.correctness_audit_root,
+            aggregate_root=self.aggregate_root,
+            final_audit_root=self.final_audit_root,
+            final_judgments=self.final_judgments,
+        )
+
     def test_valid_v3_seal_matches_all_manifest_cases(self) -> None:
-        summary = validate_seal(self.corpus_root, self.annotation_root)
+        summary = self._validate()
 
         self.assertEqual(summary, {
             "labelCount": 300,
@@ -225,13 +283,37 @@ class CanonicalSealTests(unittest.TestCase):
             "rubricVersion": "screen-understanding-canonical-v2",
         })
 
+    def test_shaped_seal_without_commit_is_rejected(self) -> None:
+        self.commit_path.unlink()
+        with self.assertRaisesRegex(PreflightError, "commit"):
+            self._validate()
+
+    def test_explicit_evidence_is_required(self) -> None:
+        with self.assertRaisesRegex(PreflightError, "explicit provenance evidence"):
+            validate_seal(self.corpus_root, self.annotation_root)
+
+    def test_semantically_valid_evidence_tamper_is_rejected(self) -> None:
+        self._write_private_json(
+            self.source_annotation_root / "evidence.json",
+            {"fixture": False},
+        )
+
+        with self.assertRaisesRegex(PreflightError, "provenance evidence"):
+            self._validate()
+
+    def test_missing_evidence_exclusion_is_rejected_before_acceptance(self) -> None:
+        (self.aggregate_root / ".metadata_never_index").unlink()
+
+        with self.assertRaisesRegex(PreflightError, "Spotlight"):
+            self._validate()
+
     def test_tampered_label_lock_is_rejected(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
         labels["labels"][0]["locked"] = False
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "locked"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_tampered_label_identifier_is_rejected(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
@@ -239,7 +321,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "manifest"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_unexpected_envelope_field_is_rejected(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
@@ -247,7 +329,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "envelope"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_missing_label_field_is_rejected(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
@@ -255,7 +337,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "label fields"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_unexpected_annotation_field_is_rejected(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
@@ -263,7 +345,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "annotation fields"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_missing_annotation_field_is_rejected(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
@@ -271,7 +353,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "annotation fields"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_invalid_annotation_mode_is_rejected(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
@@ -279,7 +361,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "provenance"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_non_scalar_annotation_mode_fails_closed(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
@@ -287,7 +369,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "provenance"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_required_fact_slots_are_exact(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
@@ -295,7 +377,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "required fact slots"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_forbidden_fact_requires_severity(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
@@ -303,7 +385,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "severity"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_non_scalar_fact_severity_fails_closed(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
@@ -311,7 +393,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "severity"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_label_target_must_match_manifest(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
@@ -320,7 +402,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "target type"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_single_frame_rejects_temporal_change(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
@@ -328,7 +410,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "temporal change"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_temporal_change_ids_must_be_unique(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
@@ -340,7 +422,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "change fact identifiers"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_unqualified_reliability_is_rejected(self) -> None:
         reliability = json.loads(self.reliability_path.read_text(encoding="utf-8"))
@@ -348,7 +430,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.reliability_path, reliability)
 
         with self.assertRaisesRegex(PreflightError, "qualified"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_v2_seal_is_rejected_after_correctness_protocol_upgrade(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
@@ -357,7 +439,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "schema"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_final_reference_error_is_rejected(self) -> None:
         reliability = json.loads(self.reliability_path.read_text(encoding="utf-8"))
@@ -366,26 +448,26 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.reliability_path, reliability)
 
         with self.assertRaisesRegex(PreflightError, "final reference"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_world_readable_seal_is_rejected(self) -> None:
         os.chmod(self.labels_path, 0o604)
 
         with self.assertRaisesRegex(PreflightError, "owner-only"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_dataset_root_requires_exclusions_before_labels_are_read(self) -> None:
         (self.corpus_root / ".metadata_never_index").unlink()
         self.labels_path.write_text("not-json", encoding="utf-8")
 
         with self.assertRaisesRegex(PreflightError, "Spotlight"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_annotation_root_requires_exclusions(self) -> None:
         (self.annotation_root / ".metadata_never_index").unlink()
 
         with self.assertRaisesRegex(PreflightError, "Spotlight"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
     def test_private_path_field_is_rejected(self) -> None:
         labels = json.loads(self.labels_path.read_text(encoding="utf-8"))
@@ -393,7 +475,7 @@ class CanonicalSealTests(unittest.TestCase):
         self._write_private_json(self.labels_path, labels)
 
         with self.assertRaisesRegex(PreflightError, "path"):
-            validate_seal(self.corpus_root, self.annotation_root)
+            self._validate()
 
 
 class CanonicalLabelSchemaTests(unittest.TestCase):

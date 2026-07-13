@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 """Fail-closed preflight for the private screen-understanding quality runner."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -11,11 +13,21 @@ from pathlib import Path
 from typing import Any
 
 
-COMMON_DIRECTORY = Path(__file__).parents[1] / "common"
-if str(COMMON_DIRECTORY) not in sys.path:
-    sys.path.insert(0, str(COMMON_DIRECTORY))
+BENCHMARK_DIRECTORY = Path(__file__).parents[1]
+if str(BENCHMARK_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(BENCHMARK_DIRECTORY))
 
-from private_root import PrivateRootError, validate_private_root  # noqa: E402
+from common.private_io import validate_private_input_file  # noqa: E402
+from common.private_root import (  # noqa: E402
+    PrivateRootError,
+    validate_private_root,
+)
+from common.provenance import (  # noqa: E402
+    COMMIT_SCHEMA,
+    HASH_ALGORITHM,
+    ProvenanceError,
+    build_canonical_commit,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
@@ -56,6 +68,13 @@ EXPECTED_SPLITS = frozenset({
 })
 FORBIDDEN_VALUE_FRAGMENTS = ("/Users/", "/Volumes/", "file://")
 FORBIDDEN_KEYS = frozenset({"candidateoutput", "candidateoutputs", "methodid"})
+COMMIT_FIELDS = {
+    "schema", "protocol", "rubricVersion", "hashAlgorithm",
+    "candidateOutputsAvailableDuringAnnotation", "canonical", "producer",
+    "evidence", "counts",
+}
+TREE_EVIDENCE_FIELDS = {"sha256", "fileCount", "directoryCount"}
+FILE_EVIDENCE_FIELDS = {"sha256", "byteCount"}
 
 
 class PreflightError(ValueError):
@@ -447,7 +466,96 @@ def _validate_reliability(reliability: dict[str, Any]) -> None:
         raise PreflightError("canonical final reference audit is not qualified")
 
 
-def validate_seal(corpus_root: Path, annotation_root: Path) -> dict[str, Any]:
+def _validate_commit_evidence(
+    evidence: Any,
+    expected_fields: set[str],
+    subject: str,
+) -> None:
+    _require_exact_fields(evidence, expected_fields, subject)
+    digest = evidence.get("sha256")
+    if not isinstance(digest, str) or not SHA256.fullmatch(digest):
+        raise PreflightError(f"{subject} digest is invalid")
+    for key in expected_fields - {"sha256"}:
+        value = evidence.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise PreflightError(f"{subject} count is invalid")
+
+
+def _validate_commit(commit: dict[str, Any]) -> None:
+    _require_exact_fields(commit, COMMIT_FIELDS, "canonical commit")
+    if commit.get("schema") != COMMIT_SCHEMA \
+            or commit.get("protocol") != CANONICAL_PROTOCOL \
+            or commit.get("rubricVersion") != CANONICAL_RUBRIC \
+            or commit.get("hashAlgorithm") != HASH_ALGORITHM \
+            or commit.get("candidateOutputsAvailableDuringAnnotation") is not False:
+        raise PreflightError("canonical commit metadata is invalid")
+    canonical = commit.get("canonical")
+    _require_exact_fields(
+        canonical,
+        {"labelsSHA256", "reliabilitySHA256"},
+        "canonical commit outputs",
+    )
+    if any(
+        not isinstance(value, str) or not SHA256.fullmatch(value)
+        for value in canonical.values()
+    ):
+        raise PreflightError("canonical commit output digest is invalid")
+    producer = commit.get("producer")
+    _require_exact_fields(producer, {"finalizerSHA256"}, "canonical commit producer")
+    if not isinstance(producer["finalizerSHA256"], str) \
+            or not SHA256.fullmatch(producer["finalizerSHA256"]):
+        raise PreflightError("canonical commit finalizer digest is invalid")
+    evidence = commit.get("evidence")
+    _require_exact_fields(evidence, {
+        "sourceAnnotationRoot", "correctnessAuditRoot", "aggregateRoot",
+        "finalAudit", "finalJudgments",
+    }, "canonical commit evidence")
+    for key in (
+        "sourceAnnotationRoot", "correctnessAuditRoot", "aggregateRoot",
+        "finalAudit",
+    ):
+        _validate_commit_evidence(
+            evidence[key], TREE_EVIDENCE_FIELDS, f"canonical commit {key}"
+        )
+    _validate_commit_evidence(
+        evidence["finalJudgments"],
+        FILE_EVIDENCE_FIELDS,
+        "canonical commit final judgments",
+    )
+    counts = commit.get("counts")
+    _require_exact_fields(counts, {
+        "labelCount", "duplicateCount", "finalAuditCaseCount",
+        "finalAuditSlotCount",
+    }, "canonical commit counts")
+    if counts != {
+        "labelCount": 300,
+        "duplicateCount": 45,
+        "finalAuditCaseCount": 45,
+        "finalAuditSlotCount": 285,
+    }:
+        raise PreflightError("canonical commit counts are invalid")
+
+
+def validate_seal(
+    corpus_root: Path,
+    annotation_root: Path,
+    *,
+    source_annotation_root: Path | None = None,
+    correctness_audit_root: Path | None = None,
+    aggregate_root: Path | None = None,
+    final_audit_root: Path | None = None,
+    final_judgments: Path | None = None,
+) -> dict[str, Any]:
+    if any(value is None for value in (
+        source_annotation_root,
+        correctness_audit_root,
+        aggregate_root,
+        final_audit_root,
+        final_judgments,
+    )):
+        raise PreflightError(
+            "explicit provenance evidence roots and final judgments are required"
+        )
     try:
         corpus_root = validate_private_root(
             corpus_root,
@@ -461,8 +569,38 @@ def validate_seal(corpus_root: Path, annotation_root: Path) -> dict[str, Any]:
             must_exist=True,
             require_exclusions=True,
         )
+        source_annotation_root = validate_private_root(
+            source_annotation_root,
+            REPOSITORY_ROOT,
+            must_exist=True,
+            require_exclusions=True,
+        )
+        correctness_audit_root = validate_private_root(
+            correctness_audit_root,
+            REPOSITORY_ROOT,
+            must_exist=True,
+            require_exclusions=True,
+        )
+        aggregate_root = validate_private_root(
+            aggregate_root,
+            REPOSITORY_ROOT,
+            must_exist=True,
+            require_exclusions=True,
+        )
+        final_audit_root = validate_private_root(
+            final_audit_root,
+            REPOSITORY_ROOT,
+            must_exist=True,
+            require_exclusions=True,
+        )
+        final_judgments = validate_private_input_file(final_judgments)
     except PrivateRootError as error:
         raise PreflightError(str(error)) from error
+    _assert_owner_only(final_judgments, "final judgments")
+    if annotation_root != final_audit_root:
+        raise PreflightError(
+            "canonical root and final-audit evidence root must be identical"
+        )
 
     canonical_root = annotation_root / "canonical"
     if canonical_root.is_symlink() or not canonical_root.is_dir():
@@ -474,15 +612,42 @@ def validate_seal(corpus_root: Path, annotation_root: Path) -> dict[str, Any]:
     reliability, _ = _load_json(
         canonical_root / "reliability.json", "canonical reliability"
     )
+    commit, _ = _load_json(canonical_root / "commit.json", "canonical commit")
     single_ids, temporal_ids = _validate_manifest(manifest)
     _reject_private_payload(labels)
     _reject_private_payload(reliability)
+    _reject_private_payload(commit)
     expected_targets = {
         **{identifier: "single-frame" for identifier in single_ids},
         **{identifier: "temporal-pair" for identifier in temporal_ids},
     }
     _validate_labels(labels, expected_targets)
     _validate_reliability(reliability)
+    _validate_commit(commit)
+    try:
+        expected_commit = build_canonical_commit(
+            labels_path=canonical_root / "labels.json",
+            reliability_path=canonical_root / "reliability.json",
+            finalizer_path=(
+                Path(__file__).parents[1] / "annotation" /
+                "finalize_correctness_canonical.py"
+            ),
+            source_annotation_root=source_annotation_root,
+            correctness_audit_root=correctness_audit_root,
+            aggregate_root=aggregate_root,
+            final_audit_root=final_audit_root,
+            final_judgments_path=final_judgments,
+            protocol=CANONICAL_PROTOCOL,
+            rubric_version=CANONICAL_RUBRIC,
+            label_count=300,
+            duplicate_count=45,
+            final_audit_case_count=45,
+            final_audit_slot_count=285,
+        )
+    except ProvenanceError as error:
+        raise PreflightError("canonical provenance evidence is invalid") from error
+    if commit != expected_commit:
+        raise PreflightError("canonical commit does not match provenance evidence")
     return {
         "labelCount": len(single_ids) + len(temporal_ids),
         "singleFrameCount": len(single_ids),
@@ -495,6 +660,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset-root", required=True, type=Path)
     parser.add_argument("--annotation-root", required=True, type=Path)
+    parser.add_argument("--source-annotation-root", required=True, type=Path)
+    parser.add_argument("--correctness-audit-root", required=True, type=Path)
+    parser.add_argument("--aggregate-root", required=True, type=Path)
+    parser.add_argument("--final-audit-root", required=True, type=Path)
+    parser.add_argument("--final-judgments", required=True, type=Path)
     parser.add_argument("--methods", required=True)
     parser.add_argument(
         "--adapter-manifest",
@@ -509,7 +679,15 @@ def main() -> int:
             require_owner_only=False,
         )
         selected = select_methods(manifest, args.methods)
-        summary = validate_seal(args.dataset_root, args.annotation_root)
+        summary = validate_seal(
+            args.dataset_root,
+            args.annotation_root,
+            source_annotation_root=args.source_annotation_root,
+            correctness_audit_root=args.correctness_audit_root,
+            aggregate_root=args.aggregate_root,
+            final_audit_root=args.final_audit_root,
+            final_judgments=args.final_judgments,
+        )
     except UnsupportedMethodError as error:
         print(f"security-unsupported: {error}", file=sys.stderr)
         return 3
