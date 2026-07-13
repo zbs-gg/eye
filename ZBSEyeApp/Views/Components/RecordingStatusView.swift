@@ -36,6 +36,12 @@ struct RecordingStatusView: View {
                     Label(degraded, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption2).foregroundStyle(.orange).lineLimit(2)
                 }
+            } else if env.recording.lowDiskPaused {
+                HStack(spacing: 6) {
+                    Circle().fill(Color.orange).frame(width: 8, height: 8)
+                    Text("Low disk space — capture paused")
+                        .font(.caption).foregroundStyle(.orange)
+                }
             } else if let until = env.recording.pausedUntil {
                 HStack(spacing: 6) {
                     Circle().fill(Color.orange).frame(width: 8, height: 8)

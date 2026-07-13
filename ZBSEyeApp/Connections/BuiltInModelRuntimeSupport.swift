@@ -75,22 +75,13 @@ enum BuiltInModelRuntimeSupport {
         _ progress: BuiltInDownloadCapacityProgress,
         availableBytes: Int64
     ) -> BuiltInDownloadCapacityDecision {
-        let reserve = BuiltInModelManager.captureReserveBytes.addingReportingOverflow(
-            BuiltInModelManager.capacitySafetyBytes
+        let required = DiskReservePolicy.standard.requiredCapacityForDownload(
+            remainingBytes: progress.remainingBytes
         )
-        guard !reserve.overflow else {
-            return .insufficient(requiredBytes: .max, availableBytes: max(0, availableBytes))
-        }
-        let required = max(0, progress.remainingBytes).addingReportingOverflow(
-            reserve.partialValue
-        )
-        guard !required.overflow else {
-            return .insufficient(requiredBytes: .max, availableBytes: max(0, availableBytes))
-        }
         let available = max(0, availableBytes)
-        return available >= required.partialValue
+        return available >= required
             ? .sufficient
-            : .insufficient(requiredBytes: required.partialValue, availableBytes: available)
+            : .insufficient(requiredBytes: required, availableBytes: available)
     }
 
     static var allowedAssetHosts: Set<String> {

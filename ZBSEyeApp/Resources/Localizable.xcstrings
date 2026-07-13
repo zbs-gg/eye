@@ -3022,6 +3022,36 @@
         }
       }
     },
+    "Low disk space — capture paused": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мало места — запись приостановлена"
+          }
+        }
+      }
+    },
+    "Low disk space — recording will resume after storage recovers": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мало места — запись возобновится, когда место освободится"
+          }
+        }
+      }
+    },
+    "Stop recording": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Остановить запись"
+          }
+        }
+      }
+    },
     "MCP": {
       "localizations": {}
     },

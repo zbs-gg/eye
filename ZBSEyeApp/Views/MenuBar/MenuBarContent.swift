@@ -53,7 +53,7 @@ struct MenuBarContent: View {
 
             Divider()
 
-            Button(env.recording.isCapturing ? "Pause" : "Start recording") {
+            Button(recordingButtonTitle) {
                 env.recording.toggle()
             }
             if env.recording.isCapturing {
@@ -96,5 +96,14 @@ struct MenuBarContent: View {
         case .some(true): "Audio forced on — tap to force off"
         case .some(false): "Audio forced off — tap for auto"
         }
+    }
+
+    private var recordingButtonTitle: String {
+        if env.recording.lowDiskPaused, env.recording.wantsRecording {
+            return String(localized: "Stop recording")
+        }
+        return env.recording.isCapturing
+            ? String(localized: "Pause")
+            : String(localized: "Start recording")
     }
 }

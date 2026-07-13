@@ -165,6 +165,8 @@ targets:
       - path: ZBSEyeApp/Connections/BuiltInModelRuntimeSupport.swift
       - path: ZBSEyeApp/State/BuiltInModelStore.swift
       - path: ZBSEyeApp/State/RecordingMaintenanceAdmission.swift
+      - path: ZBSEyeApp/State/LowDiskGuard.swift
+      - path: ZBSEyeApp/State/RecordingStore.swift
       - path: ZBSEyeApp/Audio/SystemAudioCaptureLifecycle.swift
       - path: ZBSEyeApp/App/AppBootstrapGate.swift
       - path: ZBSEyeApp/App/ZBSEyeAppDelegate.swift
@@ -184,6 +186,7 @@ targets:
       - path: ZBSEyeApp/Automations/AutomationMarkdownSafety.swift
       - path: ZBSEyeApp/Data/StorageLocation.swift
       - path: ZBSEyeApp/Data/KeepMediaPolicy.swift
+      - path: ZBSEyeApp/Data/DiskReservePolicy.swift
       - path: ZBSEyeApp/Data/CaptureRecord.swift
       - path: ZBSEyeApp/Data/Models.swift
       - path: ZBSEyeApp/Data/ZBSEyeDatabase.swift

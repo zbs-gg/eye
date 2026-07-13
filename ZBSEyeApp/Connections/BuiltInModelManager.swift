@@ -87,8 +87,10 @@ actor BuiltInModelManager {
     ) async -> BuiltInModelProviderEffectResult
     typealias FaultHook = @Sendable (BuiltInModelManagerFaultPoint) throws -> Void
 
-    static let captureReserveBytes: Int64 = 2 * 1_024 * 1_024 * 1_024
-    static let capacitySafetyBytes: Int64 = 512 * 1_024 * 1_024
+    // Compatibility names for existing lifecycle tests. The policy itself is
+    // shared with continuous capture rather than duplicated in model code.
+    static let captureReserveBytes = DiskReservePolicy.standard.pauseBytes
+    static let capacitySafetyBytes = DiskReservePolicy.standard.modelSafetyBytes
 
     private struct ResumeLedger: Codable, Sendable {
         var files: [String: BuiltInDownloadResumeState]
@@ -1795,11 +1797,9 @@ actor BuiltInModelManager {
     ) -> Int64 {
         let doubled = artifactBytes.multipliedReportingOverflow(by: 2)
         guard !doubled.overflow else { return Int64.max }
-        let reserve = captureReserveBytes.addingReportingOverflow(capacitySafetyBytes)
-        guard !reserve.overflow else { return Int64.max }
-        let base = doubled.partialValue.addingReportingOverflow(reserve.partialValue)
-        guard !base.overflow else { return Int64.max }
-        return max(0, base.partialValue - max(0, savedBytes))
+        return DiskReservePolicy.standard.addingModelReserve(
+            to: max(0, doubled.partialValue - max(0, savedBytes))
+        )
     }
 
     private static func secureDirectory(_ url: URL) throws {

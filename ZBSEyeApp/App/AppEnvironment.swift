@@ -92,10 +92,9 @@ final class AppEnvironment {
     @ObservationIgnored private var meetingTask: Task<Void, Never>?
     @ObservationIgnored private(set) var browserHistoryImporter: BrowserHistoryImporter?
     @ObservationIgnored private var browserHistoryTask: Task<Void, Never>?
-    @ObservationIgnored private var emergencyPruneInFlight = false
-    @ObservationIgnored private var lastEmergencyPruneAt: Date?
-    /// Minimum free space: below this — capture is paused + emergency prune (we don't fill the disk to the brim).
-    private nonisolated static let minFreeBytes: Int64 = 2 * 1024 * 1024 * 1024
+    @ObservationIgnored private var lowDiskTask: Task<Void, Never>?
+    @ObservationIgnored private var lowDiskGuard = LowDiskGuard()
+    @ObservationIgnored private var lowDiskDrainConfirmed = true
 
     /// Race an operation against a timeout — so a backup on exit doesn't hang quit forever.
     nonisolated static func withTimeout(seconds: Double, _ op: @escaping @Sendable () async -> Void) async {
@@ -565,13 +564,11 @@ final class AppEnvironment {
                 self?.permissions.clearScreenNeedsRestart()
             }
             coordinator.onCycleOK = { [weak rec = recording] in rec?.noteCycleOK() }
-            // Disk-guard: at < minFree we skip capture, raise the status, and kick off an emergency prune.
+            // The independent disk monitor owns transitions. This cycle gate is
+            // only a final admission check while an asynchronous drain settles.
             coordinator.diskOK = { [weak self] in
                 guard let self else { return false }
-                let ok = storage.freeBytes() > Self.minFreeBytes
-                if self.recording.lowDiskPaused != !ok { self.recording.setLowDisk(!ok) }
-                if !ok { self.emergencyPrune() }
-                return ok
+                return !self.recording.lowDiskPaused
             }
             coordinator.isIgnoredApp = { [weak self] in self?.privacy.isIgnored($0) ?? false }
             coordinator.ignoredBundleIds = { [weak self] in Set(self?.privacy.ignoredBundleIds ?? []) }
@@ -835,6 +832,20 @@ final class AppEnvironment {
 
         // Permission polling (the user grants them in System Settings — the UI and autostart pick it up themselves).
         permissions.startPolling()
+        // Cold-launch admission is evaluated before autostart. Disk monitoring
+        // then continues independently of screen cycles, so audio-only capture
+        // cannot outlive a low-disk transition.
+        if storage != nil {
+            await evaluateDiskPressure()
+            lowDiskTask?.cancel()
+            lowDiskTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(5))
+                    guard !Task.isCancelled, let self else { return }
+                    await self.evaluateDiskPressure()
+                }
+            }
+        }
         // Autostart: "eternal memory" resumes after a reboot/crash, if the user had it on.
         recording.startIfWanted()
         // Watcher (4s): (1) autostart on late permission grant; (2) degradation on permission revocation mid-run
@@ -1043,22 +1054,44 @@ final class AppEnvironment {
         }
     }
 
-    /// Emergency prune on low-disk: targets FREE space (×2 the pause threshold = hysteresis),
-    /// not the 7d/20GB policy — otherwise, with a disk filled by data that isn't ours, prune would delete nothing
-    /// and the recording pause would never self-heal. Cooldown 10 min — no churn on every capture tick.
-    private func emergencyPrune() {
-        guard !emergencyPruneInFlight, let retention else { return }
-        if let last = lastEmergencyPruneAt, Date().timeIntervalSince(last) < 600 { return }
-        emergencyPruneInFlight = true
-        lastEmergencyPruneAt = Date()
-        Task.detached(priority: .utility) { [weak self] in
-            Log.retention.warning("low disk -> emergency prune (target free \(Self.minFreeBytes * 2))")
-            let r = try? await retention.pruneUntilFree(targetFreeBytes: Self.minFreeBytes * 2)
-            if let r, r.framesDeleted + r.audioDeleted == 0 {
-                Log.retention.warning("emergency prune freed nothing — disk full by other data")
+    private func evaluateDiskPressure() async {
+        guard let storage else { return }
+        let available = await Task.detached(priority: .utility) {
+            storage.availableCapacityForImportantUsage()
+        }.value
+        switch lowDiskGuard.evaluate(availableBytes: available) {
+        case .none:
+            return
+        case .pauseCapture:
+            let drain = await recording.pauseForLowDiskAndDrain(
+                systemCaptureTimeout: .seconds(5)
+            )
+            lowDiskDrainConfirmed = Self.isConfirmedStopped(drain)
+            if !lowDiskDrainConfirmed {
+                Log.audio.error("low-disk pause remains closed: capture teardown was not confirmed")
             }
-            await MainActor.run { self?.emergencyPruneInFlight = false }
+        case .resumeCapture:
+            if !lowDiskDrainConfirmed {
+                let retry = await recording.pauseForLowDiskAndDrain(
+                    systemCaptureTimeout: .seconds(5)
+                )
+                lowDiskDrainConfirmed = Self.isConfirmedStopped(retry)
+            }
+            guard lowDiskDrainConfirmed else {
+                lowDiskGuard.holdPaused()
+                Log.audio.error("low-disk recovery withheld: capture teardown is still unconfirmed")
+                return
+            }
+            recording.resumeAfterLowDisk()
         }
+    }
+
+    nonisolated private static func isConfirmedStopped(
+        _ drain: RecordingMaintenanceDrain
+    ) -> Bool {
+        drain.capture.activeCycles == 0
+            && drain.audio.activeLegs == 0
+            && drain.audio.systemCaptureOutcome.isConfirmedStopped
     }
 }
 

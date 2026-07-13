@@ -41,8 +41,18 @@ final class StorageManager: Sendable {
 
     /// Free space on the media volume (for the disk-guard: don't hammer the disk by writing 24/7).
     func freeBytes() -> Int64 {
-        let vals = try? mediaDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        return Int64(vals?.volumeAvailableCapacityForImportantUsage ?? .max)
+        availableCapacityForImportantUsage() ?? .max
+    }
+
+    /// Admission checks must distinguish an unreadable volume from abundant space.
+    /// UI-only callers can keep using `freeBytes`; capture treats nil as unsafe.
+    func availableCapacityForImportantUsage() -> Int64? {
+        let vals = try? mediaDirectory.resourceValues(
+            forKeys: [.volumeAvailableCapacityForImportantUsageKey]
+        )
+        guard let bytes = vals?.volumeAvailableCapacityForImportantUsage,
+              bytes >= 0 else { return nil }
+        return Int64(bytes)
     }
 
     func totalBytes() -> Int64 {
