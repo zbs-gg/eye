@@ -137,14 +137,14 @@ if /usr/libexec/PlistBuddy -c 'Print :com.apple.security.app-sandbox' "${SIGNED_
 fi
 
 SIGNING_DETAILS=$(codesign -dvv "${APP}" 2>&1)
-echo "${SIGNING_DETAILS}" | grep -q "TeamIdentifier=${EXPECTED_TEAM}" || {
+if [[ "${SIGNING_DETAILS}" != *"TeamIdentifier=${EXPECTED_TEAM}"* ]]; then
   echo "❌ Final app TeamIdentifier is not ${EXPECTED_TEAM}."
   exit 1
-}
-echo "${SIGNING_DETAILS}" | grep -Eq 'flags=.*runtime' || {
+fi
+if [[ "${SIGNING_DETAILS}" != *"flags="*"runtime"* ]]; then
   echo "❌ Final app is missing Hardened Runtime."
   exit 1
-}
+fi
 CANDIDATE_REQUIREMENT=$(codesign -d -r- "${APP}" 2>&1 | sed -n 's/^designated => //p')
 [ -n "${CANDIDATE_REQUIREMENT}" ] || { echo "❌ Could not read the candidate designated requirement."; exit 1; }
 if [ -d "/Applications/ZBS Eye.app" ]; then
@@ -182,10 +182,10 @@ GATEKEEPER_OUTPUT=$(spctl -a -vvv -t exec "${APP}" 2>&1) || {
   exit 1
 }
 echo "${GATEKEEPER_OUTPUT}"
-echo "${GATEKEEPER_OUTPUT}" | grep -qi "accepted" || {
+if [[ "${GATEKEEPER_OUTPUT}" != *"accepted"* ]]; then
   echo "❌ Gatekeeper did not report an accepted app."
   exit 1
-}
+fi
 # final zip — with the already-stapled .app (an offline recipient passes Gatekeeper)
 ditto -c -k --keepParent "${APP}" "${ZIP}"
 ZIP_SHA256=$(shasum -a 256 "${ZIP}" | awk '{print $1}')
