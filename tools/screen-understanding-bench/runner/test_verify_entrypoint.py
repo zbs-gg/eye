@@ -44,6 +44,12 @@ class VerifyEntrypointTests(unittest.TestCase):
                 source,
             )
 
+    def test_fixture_mode_requires_xcode_success_marker(self) -> None:
+        source = ENTRYPOINT.read_text(encoding="utf-8")
+
+        self.assertIn("XC_STATUS=$?", source)
+        self.assertIn(r'grep -q "\*\* TEST SUCCEEDED \*\*" "$LOG"', source)
+
 
 if __name__ == "__main__":
     unittest.main()

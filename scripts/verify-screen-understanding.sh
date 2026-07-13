@@ -143,6 +143,9 @@ jq empty \
   tools/screen-understanding-bench/schemas/report.schema.json
 
 xcodegen generate
+LOG="$(mktemp -t zbseye-screen-understanding.XXXXXX)"
+trap 'rm -f "$LOG"' EXIT
+set +e
 xcodebuild \
   -project ZBSEye.xcodeproj \
   -scheme ZBSEye \
@@ -161,7 +164,22 @@ xcodebuild \
   -only-testing:ZBSEyeTests/ScreenUnderstandingVisionAdapterTests \
   -only-testing:ZBSEyeTests/ScreenUnderstandingScoringTests \
   -only-testing:ZBSEyeTests/ScreenUnderstandingPerformanceProtocolTests \
-  -only-testing:ZBSEyeTests/ScreenUnderstandingBenchmarkTests
+  -only-testing:ZBSEyeTests/ScreenUnderstandingBenchmarkTests >"$LOG" 2>&1
+XC_STATUS=$?
+set -e
+
+grep -E "error:|warning:|Test Suite|Executed|TEST (SUCCEEDED|FAILED)" "$LOG" || true
+[ "$XC_STATUS" -eq 0 ] || {
+  printf 'error: screen-understanding Xcode tests failed (exit %s); full log: %s\n' \
+    "$XC_STATUS" "$LOG" >&2
+  trap - EXIT
+  exit "$XC_STATUS"
+}
+grep -q "\*\* TEST SUCCEEDED \*\*" "$LOG" || {
+  printf 'error: xcodebuild exited without TEST SUCCEEDED; full log: %s\n' "$LOG" >&2
+  trap - EXIT
+  exit 1
+}
 
 /usr/bin/python3 -m unittest discover -s tools/screen-understanding-bench/annotation -p 'test_*.py'
 /usr/bin/python3 -m unittest discover -s tools/screen-understanding-bench/mapping -p 'test_*.py'
