@@ -187,6 +187,8 @@ targets:
       - path: ZBSEyeApp/Data/StorageLocation.swift
       - path: ZBSEyeApp/Data/KeepMediaPolicy.swift
       - path: ZBSEyeApp/Data/AutomaticRetentionAdmission.swift
+      - path: ZBSEyeApp/Data/CapturedMediaReconciler.swift
+      - path: ZBSEyeApp/Data/RetentionManager.swift
       - path: ZBSEyeApp/Data/DiskReservePolicy.swift
       - path: ZBSEyeApp/Data/CaptureRecord.swift
       - path: ZBSEyeApp/Data/Models.swift

@@ -43,6 +43,7 @@ final class AppEnvironment {
     private(set) var database: ZBSEyeDatabase?
     private(set) var ingest: IngestService?
     private(set) var retention: RetentionManager?
+    @ObservationIgnored private var automaticRetentionAdmission: AutomaticRetentionAdmission?
     private(set) var timelineStore: TimelineStore?
     private(set) var ask: AskStore?
     private(set) var cartographer: CartographerStore?
@@ -313,13 +314,28 @@ final class AppEnvironment {
             // database, and captured-media tree are available. This one-time
             // reconciliation never calls RetentionManager; an uncertain result
             // keeps automatic deletion closed.
-            let keepMediaInventory = await Self.classifyFreshKeepMediaProfile(
-                db: db,
-                storage: storage
-            )
+            let keepMediaInventory: KeepMediaInventoryEvidence
+            if storageSettings.automaticRetentionRecord.phase == .pendingFinite {
+                // Persisted finite admission never crosses a process boundary.
+                // Perform the one expensive exact DB/filesystem proof before
+                // reopening it; the scheduler reuses the resulting permit.
+                keepMediaInventory = await CapturedMediaReconciler.reconcile(
+                    db: db,
+                    storage: storage
+                )
+            } else {
+                keepMediaInventory = await Self.classifyFreshKeepMediaProfile(
+                    db: db,
+                    storage: storage
+                )
+            }
             let keepMediaResolution = storageSettings.initializeKeepMediaPolicy(
                 inventory: keepMediaInventory
             )
+            let automaticRetentionAdmission = AutomaticRetentionAdmission(
+                record: storageSettings.automaticRetentionRecord
+            )
+            self.automaticRetentionAdmission = automaticRetentionAdmission
             Log.retention.info(
                 "Keep Media initialized: \(keepMediaResolution.policy.rawValue, privacy: .public), deletion admitted=\(keepMediaResolution.automaticDeletionAdmitted)"
             )
@@ -765,17 +781,27 @@ final class AppEnvironment {
             // must not let the disk drift past the limit between restarts.
             retentionTask = Task.detached(priority: .utility) { [weak self] in
                 while !Task.isCancelled {
-                    // A migrated finite policy is deletion-inert until U2's
-                    // authoritative boundary reconciliation opens admission.
-                    let policy = await MainActor.run { () -> (Bool, Int64?) in
-                        guard let s = self?.storageSettings else {
-                            return (false, nil)
-                        }
-                        return (s.automaticDeletionAdmitted, s.effectiveMaxBytes)
-                    }
                     let report: PruneReport?
-                    if policy.0 {
-                        report = try? await retention.prune(retentionDays: nil, maxBytes: policy.1)
+                    if let permit = automaticRetentionAdmission.currentPermit() {
+                        do {
+                            let automatic = try await retention.pruneAutomatically(
+                                permit: permit,
+                                admission: automaticRetentionAdmission
+                            )
+                            report = PruneReport(
+                                framesDeleted: automatic.framesDeleted,
+                                audioDeleted: automatic.audioDeleted,
+                                orphansDeleted: 0
+                            )
+                        } catch AutomaticRetentionError.postCommitFileDeletionFailed {
+                            Log.retention.error(
+                                "automatic retention paused after post-commit media deletion failure"
+                            )
+                            report = nil
+                        } catch {
+                            Log.retention.error("automatic retention failed closed")
+                            report = nil
+                        }
                     } else {
                         report = nil
                     }

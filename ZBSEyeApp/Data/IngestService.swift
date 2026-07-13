@@ -5,8 +5,8 @@ import GRDB
 /// one transaction (upsert app, insert screen_capture, insert text_blocks → triggers fill FTS).
 /// Removes the Task.detached races of the old version.
 /// NB: writes to the DB are serialized by the GRDB DatabasePool across RetentionManager AND IngestService (not one writer
-/// object, but one serialized writer channel of the pool). Coordination with retention — via a grace window in
-/// sweepOrphans (see RetentionManager), so the orphan sweep doesn't delete an in-flight frame.
+/// object, but one serialized writer channel of the pool). Automatic retention
+/// never sweeps physical orphans; exact admission reconciliation detects them.
 actor IngestService {
     private let db: ZBSEyeDatabase
     private let storage: StorageManager
@@ -87,8 +87,11 @@ actor IngestService {
             }
         } catch {
             // The transaction failed — clean up the file written by THIS layer (.heicData). Files of .fileWritten
-            // belong to the capture layer — on failure sweepOrphans will pick them up (after the grace window).
-            if case .heicData = rec.image, let p = relativePath { storage.deleteFile(relativePath: p) }
+            // belong to the capture layer. Cleanup here is best-effort; exact
+            // admission reconciliation detects leftovers before deletion reopens.
+            if case .heicData = rec.image, let p = relativePath {
+                try? storage.deleteFile(relativePath: p)
+            }
             throw error
         }
     }

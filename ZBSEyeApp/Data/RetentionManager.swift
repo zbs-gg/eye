@@ -1,62 +1,126 @@
 import Foundation
 import GRDB
 
-/// Retention defaults. ZBS Eye = "forever memory": by default we delete NOTHING (0 = forever). The user
-/// can enable a limit by days/size in Settings. The old default of 7d/20GB SILENTLY trimmed history —
-/// for "forever memory" that contradicts the essence of the product (and it ate the import of prior history live).
-enum RetentionPolicy: Sendable {
-    static let defaultDays = 0                  // 0 = forever
-    static let defaultMaxBytes: Int64 = 0       // 0 = no limit
-}
-
 struct PruneReport: Sendable {
     var framesDeleted = 0
     var audioDeleted = 0
     var orphansDeleted = 0
 }
 
-/// Pruning by days AND size (default 7d/20GB). The cascade cleans text_blocks → triggers clean FTS.
-/// Size is computed from the DB (`SUM(bytes)`), not by walking the FS (HIGH fix from review). The orphan sweep
-/// respects the grace window so it doesn't delete a frame that IngestService wrote but hasn't committed yet (race fix).
+enum CapturedMediaKind: Int, Sendable, Equatable {
+    case frame = 0
+    case audio = 1
+}
+
+struct AutomaticRetentionVictim: Sendable, Equatable {
+    let kind: CapturedMediaKind
+    let id: Int64
+    let ts: Int64
+    let relativePath: String
+    let bytes: Int64
+}
+
+struct AutomaticRetentionRunReport: Sendable, Equatable {
+    var victims: [AutomaticRetentionVictim] = []
+    var framesDeleted: Int { victims.count { $0.kind == .frame } }
+    var audioDeleted: Int { victims.count { $0.kind == .audio } }
+    var bytesCommitted: Int64 { victims.reduce(0) { $0 + $1.bytes } }
+}
+
+struct AutomaticRetentionFailureLedger: Sendable, Equatable {
+    let committedVictims: [AutomaticRetentionVictim]
+    let physicallyDeletedPaths: [String]
+    let failedPath: String
+}
+
+enum AutomaticRetentionError: Error, Sendable, Equatable {
+    case invalidCandidateState
+    case postCommitFileDeletionFailed(AutomaticRetentionFailureLedger)
+}
+
+/// Automatic Keep Media retention is a separate, permit-gated operation from
+/// manual privacy deletion and vector hygiene. A permit lease spans the whole
+/// GRDB write transaction, so Forever can wait for one already-authorized
+/// commit and prevent every later batch.
 actor RetentionManager {
+    private struct CommittedBatch: Sendable {
+        let victims: [AutomaticRetentionVictim]
+    }
+
     private let db: ZBSEyeDatabase
     private let storage: StorageManager
     private let maintenanceGate = DatabaseWriterMaintenanceGate()
+    private let automaticBatchSize: Int
+    private var automaticFailure: AutomaticRetentionFailureLedger?
 
-    /// Files younger than this window are treated as possibly in-flight and aren't touched by the orphan sweep.
-    private let orphanGraceSeconds: TimeInterval = 60
-
-    init(db: ZBSEyeDatabase, storage: StorageManager) {
+    init(
+        db: ZBSEyeDatabase,
+        storage: StorageManager,
+        automaticBatchSize: Int = 500
+    ) {
+        precondition(automaticBatchSize > 0)
         self.db = db
         self.storage = storage
+        self.automaticBatchSize = automaticBatchSize
     }
 
-    func prune(retentionDays: Int?, maxBytes: Int64?) async throws -> PruneReport {
+    func pruneAutomatically(
+        permit: AutomaticRetentionPermit,
+        admission: AutomaticRetentionAdmission
+    ) async throws -> AutomaticRetentionRunReport {
+        if let automaticFailure {
+            throw AutomaticRetentionError.postCommitFileDeletionFailed(automaticFailure)
+        }
+        guard permit.maxBytes > 0,
+              permit.policy.maxCapturedMediaBytes == permit.maxBytes else {
+            throw AutomaticRetentionError.invalidCandidateState
+        }
         guard maintenanceGate.beginOperation() else {
             throw DatabaseWriterMaintenanceError.suspendedForRelocation
         }
         defer { maintenanceGate.finishOperation() }
-        var report = PruneReport()
-        // FOOTGUN GUARD: days/maxBytes ≤ 0 = "forever" (NOT "delete everything older than 0 days" / "shrink to 0 bytes").
-        // Without this, the default-forever accidentally arriving as 0 would wipe the entire history.
-        if let days = retentionDays, days > 0 {
-            let cutoff = Int64(Date().addingTimeInterval(-Double(days) * 86400).timeIntervalSince1970 * 1000)
-            report.framesDeleted += try await deleteFramesOlderThan(cutoff)
+
+        var report = AutomaticRetentionRunReport()
+        var physicallyDeletedPaths: [String] = []
+        while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
             try checkOperationContinuation()
-            report.audioDeleted += try await deleteAudioOlderThan(cutoff)
-            try checkOperationContinuation()
+            // This synchronous lease deliberately contains the complete GRDB
+            // transaction, including COMMIT on return from pool.write.
+            let batch = try admission.withLease(permit) {
+                try db.pool.write { database in
+                    try Self.commitOldestBatch(
+                        in: database,
+                        storage: storage,
+                        maxBytes: permit.maxBytes,
+                        batchSize: automaticBatchSize
+                    )
+                }
+            }
+            guard !batch.victims.isEmpty else { break }
+
+            report.victims.append(contentsOf: batch.victims)
+            for victim in batch.victims {
+                do {
+                    try storage.deleteFile(relativePath: victim.relativePath)
+                    physicallyDeletedPaths.append(victim.relativePath)
+                } catch {
+                    // Rows and all dependent indexes already committed. Stop
+                    // immediately and expose the exact reconcilable orphan.
+                    let ledger = AutomaticRetentionFailureLedger(
+                        committedVictims: report.victims,
+                        physicallyDeletedPaths: physicallyDeletedPaths,
+                        failedPath: victim.relativePath
+                    )
+                    admission.revoke(to: permit.revision &+ 1)
+                    automaticFailure = ledger
+                    throw AutomaticRetentionError.postCommitFileDeletionFailed(ledger)
+                }
+            }
+            // The next loop deliberately re-reads both total and global head;
+            // a concurrent backdated import cannot be skipped behind a cursor.
         }
-        if let maxBytes, maxBytes > 0 {
-            let (f, a) = try await enforceSizeLimit(maxBytes)
-            report.framesDeleted += f
-            report.audioDeleted += a
-            try checkOperationContinuation()
-        }
-        report.orphansDeleted = try await sweepOrphans()
         try checkOperationContinuation()
-        try? await sweepVectorOrphans()   // vec0 has no FK: insurance against orphans (races, old bugs)
-        try checkOperationContinuation()
-        try await checkpoint()
+        if !report.victims.isEmpty { try await checkpoint() }
         return report
     }
 
@@ -68,125 +132,24 @@ actor RetentionManager {
         maintenanceGate.resume()
     }
 
-    private func checkOperationContinuation() throws {
-        try Task.checkCancellation()
-        guard !maintenanceGate.snapshot().suspended else {
-            throw DatabaseWriterMaintenanceError.suspendedForRelocation
-        }
-    }
-
-    /// vec-table orphans (the base row was deleted, the vector remained). Cheap with a PK subquery; once per prune.
-    private func sweepVectorOrphans() async throws {
-        try await db.pool.write { db in
-            try db.execute(sql: "DELETE FROM vec_screen WHERE capture_id NOT IN (SELECT id FROM screen_captures)")
-            try db.execute(sql: "DELETE FROM vec_transcripts WHERE transcription_id NOT IN (SELECT id FROM transcriptions)")
-        }
-    }
-
-    // ── MEDIA size from the DB (SUM bytes). The index file is DELIBERATELY left out of the enforce loop:
-    //    a sqlite file doesn't shrink on DELETE (only VACUUM) — include it in the threshold and, when the index
-    //    exceeds the limit, the loop would silently wipe the whole history. The UI honestly labels it "media limit". ──
-    private func dbBytes() async throws -> Int64 {
-        try await db.pool.read { db in
-            let f = try Int64.fetchOne(db, sql: "SELECT COALESCE(SUM(bytes), 0) FROM screen_captures") ?? 0
-            let a = try Int64.fetchOne(db, sql: "SELECT COALESCE(SUM(bytes), 0) FROM audio_captures") ?? 0
-            return f + a
-        }
-    }
-
-    // ── deletion by time (exit on number of rows deleted, not on paths — dedup-nil-paths fix) ──
-    private func deleteFramesOlderThan(_ cutoffMs: Int64) async throws -> Int {
-        var deleted = 0
-        while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
-            let (count, paths): (Int, [String]) = try await db.pool.write { db in
-                let rows = try ScreenCaptureRow
-                    .filter(Column("ts") < cutoffMs).order(Column("ts")).limit(500).fetchAll(db)
-                if rows.isEmpty { return (0, []) }
-                let ids = rows.compactMap(\.id)
-                try ScreenCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)  // cascade → FTS
-                try Self.deleteVectors(db, captureIds: ids)                              // vec0 (no FK cascade)
-                return (rows.count, rows.compactMap(\.relativePath))
-            }
-            if count == 0 { break }
-            for p in paths { storage.deleteFile(relativePath: p) }
-            deleted += count
-        }
-        return deleted
-    }
-
-    /// vec0 doesn't support FK cascade — clean explicitly by capture_id.
-    private static func deleteVectors(_ db: Database, captureIds: [Int64]) throws {
-        guard !captureIds.isEmpty else { return }
-        let list = captureIds.map(String.init).joined(separator: ",")
-        try db.execute(sql: "DELETE FROM vec_screen WHERE capture_id IN (\(list))")
-    }
-
-    /// Analog for audio: map audioId → transcription_id BEFORE the cascade delete of transcriptions
-    /// (otherwise vec_transcripts accumulates orphans — vec0 has no FK).
-    private static func deleteTranscriptVectors(_ db: Database, audioIds: [Int64]) throws {
-        guard !audioIds.isEmpty else { return }
-        let list = audioIds.map(String.init).joined(separator: ",")
-        let tids = try Int64.fetchAll(db, sql: "SELECT id FROM transcriptions WHERE audioId IN (\(list))")
-        guard !tids.isEmpty else { return }
-        let tlist = tids.map(String.init).joined(separator: ",")
-        try db.execute(sql: "DELETE FROM vec_transcripts WHERE transcription_id IN (\(tlist))")
-    }
-
-    private func deleteAudioOlderThan(_ cutoffMs: Int64) async throws -> Int {
-        var deleted = 0
-        while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
-            let (count, paths): (Int, [String]) = try await db.pool.write { db in
-                let rows = try AudioCaptureRow
-                    .filter(Column("ts") < cutoffMs).order(Column("ts")).limit(500).fetchAll(db)
-                if rows.isEmpty { return (0, []) }
-                let ids = rows.compactMap(\.id)
-                try Self.deleteTranscriptVectors(db, audioIds: ids)   // before the cascade (mapping needed)
-                try AudioCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
-                return (rows.count, rows.map(\.relativePath))
-            }
-            if count == 0 { break }
-            for p in paths { storage.deleteFile(relativePath: p) }
-            deleted += count
-        }
-        return deleted
-    }
-
-    // ── size: delete the oldest frames, then audio, while SUM(bytes) > the limit ──
-    private func enforceSizeLimit(_ maxBytes: Int64) async throws -> (frames: Int, audio: Int) {
-        var frames = 0, audio = 0
-        while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
-            guard try await dbBytes() > maxBytes else { break }
-            if try await deleteOldestFrameBatch(into: &frames) { continue }
-            if try await deleteOldestAudioBatch(into: &audio) { continue }
-            break   // nothing to delete — don't loop forever
-        }
-        return (frames, audio)
-    }
-
-    /// Emergency freeing of DISK SPACE (low-disk recording pause): deletes the oldest until free space is
-    /// below target. Difference from prune(): someone else may have filled the disk — a 7d/20GB policy
-    /// would then delete nothing, and the recording pause would never self-heal. If there's no ZBS Eye data
-    /// left and space is still low — the disk is occupied by others (returns how much was deleted; the caller shows status).
-    func pruneUntilFree(targetFreeBytes: Int64) async throws -> PruneReport {
+    /// Safe database-only hygiene. It is intentionally separate from
+    /// scheduled retention and never walks or deletes physical media.
+    func sweepVectorOrphans() async throws {
         guard maintenanceGate.beginOperation() else {
             throw DatabaseWriterMaintenanceError.suspendedForRelocation
         }
         defer { maintenanceGate.finishOperation() }
-        var report = PruneReport()
-        while !Task.isCancelled && !maintenanceGate.snapshot().suspended
-                && storage.freeBytes() < targetFreeBytes {
-            if try await deleteOldestFrameBatch(into: &report.framesDeleted) { continue }
-            if try await deleteOldestAudioBatch(into: &report.audioDeleted) { continue }
-            break   // no ZBS Eye data left — beyond here isn't our zone
+        try await db.pool.write { database in
+            try database.execute(
+                sql: "DELETE FROM vec_screen WHERE capture_id NOT IN (SELECT id FROM screen_captures)"
+            )
+            try database.execute(
+                sql: "DELETE FROM vec_transcripts WHERE transcription_id NOT IN (SELECT id FROM transcriptions)"
+            )
         }
-        try checkOperationContinuation()
-        try await checkpoint()   // return space to the OS: FTS optimize + WAL truncate
-        return report
     }
 
-    /// Deleting a PERIOD (privacy: "accidentally recorded a password/conversation — erase forever").
-    /// The cascade cleans text_blocks/transcriptions → FTS triggers; vec tables — explicitly (vec0 has no FK).
-    /// toMs = Int64.max + fromMs = 0 → "delete everything".
+    /// Manual privacy deletion remains independent of automatic admission.
     func deleteRange(fromMs: Int64, toMs: Int64) async throws -> PruneReport {
         guard maintenanceGate.beginOperation() else {
             throw DatabaseWriterMaintenanceError.suspendedForRelocation
@@ -194,116 +157,213 @@ actor RetentionManager {
         defer { maintenanceGate.finishOperation() }
         var report = PruneReport()
         while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
-            let (c, paths): (Int, [String]) = try await db.pool.write { db in
+            let (count, paths): (Int, [String]) = try await db.pool.write { database in
                 let rows = try ScreenCaptureRow
                     .filter(Column("ts") >= fromMs && Column("ts") <= toMs)
-                    .order(Column("ts")).limit(500).fetchAll(db)
-                if rows.isEmpty { return (0, []) }
+                    .order(Column("ts"), Column("id"))
+                    .limit(500)
+                    .fetchAll(database)
+                guard !rows.isEmpty else { return (0, []) }
                 let ids = rows.compactMap(\.id)
-                try ScreenCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
-                try Self.deleteVectors(db, captureIds: ids)
-                return (rows.count, rows.compactMap(\.relativePath))
+                try ScreenCaptureRow.filter(ids.contains(Column("id"))).deleteAll(database)
+                try Self.deleteVectors(database, captureIds: ids)
+                return (rows.count, rows.compactMap(\.relativePath).filter { $0 != "imported" })
             }
-            if c == 0 { break }
-            for p in paths { storage.deleteFile(relativePath: p) }
-            report.framesDeleted += c
+            guard count > 0 else { break }
+            // Manual privacy deletion keeps the historical best-effort file
+            // cleanup semantics: one already-missing file must not abort the
+            // rest of the requested range after its DB rows committed.
+            for path in paths { try? storage.deleteFile(relativePath: path) }
+            report.framesDeleted += count
         }
         try checkOperationContinuation()
         while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
-            let (c, paths): (Int, [String]) = try await db.pool.write { db in
+            let (count, paths): (Int, [String]) = try await db.pool.write { database in
                 let rows = try AudioCaptureRow
                     .filter(Column("ts") >= fromMs && Column("ts") <= toMs)
-                    .order(Column("ts")).limit(500).fetchAll(db)
-                if rows.isEmpty { return (0, []) }
+                    .order(Column("ts"), Column("id"))
+                    .limit(500)
+                    .fetchAll(database)
+                guard !rows.isEmpty else { return (0, []) }
                 let ids = rows.compactMap(\.id)
-                try Self.deleteTranscriptVectors(db, audioIds: ids)
-                try AudioCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
-                return (rows.count, rows.map(\.relativePath))
+                try Self.deleteTranscriptVectors(database, audioIds: ids)
+                try AudioCaptureRow.filter(ids.contains(Column("id"))).deleteAll(database)
+                return (rows.count, rows.map(\.relativePath).filter { $0 != "imported" })
             }
-            if c == 0 { break }
-            for p in paths { storage.deleteFile(relativePath: p) }
-            report.audioDeleted += c
+            guard count > 0 else { break }
+            for path in paths { try? storage.deleteFile(relativePath: path) }
+            report.audioDeleted += count
         }
         try checkOperationContinuation()
-        try? await checkpoint()   // best-effort: a checkpoint error must not mask a successful deletion
+        try? await checkpoint()
         try checkOperationContinuation()
-        // Full deletion → VACUUM: otherwise sqlite reuses pages, the file doesn't shrink, and the user
-        // sees "I deleted everything but it's still almost as full" — undermining trust in the privacy feature.
         if fromMs == 0 && toMs == Int64.max {
-            try? await db.pool.writeWithoutTransaction { db in
-                try db.execute(sql: "VACUUM")
+            try? await db.pool.writeWithoutTransaction { database in
+                try database.execute(sql: "VACUUM")
             }
         }
         return report
     }
 
-    /// Oldest batch of frames (500): true = something was deleted.
-    private func deleteOldestFrameBatch(into counter: inout Int) async throws -> Bool {
-        let (fc, fp): (Int, [String]) = try await db.pool.write { db in
-            let rows = try ScreenCaptureRow.order(Column("ts")).limit(500).fetchAll(db)
-            if rows.isEmpty { return (0, []) }
-            let ids = rows.compactMap(\.id)
-            try ScreenCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
-            try Self.deleteVectors(db, captureIds: ids)
-            return (rows.count, rows.compactMap(\.relativePath))
+    private nonisolated static func commitOldestBatch(
+        in database: Database,
+        storage: StorageManager,
+        maxBytes: Int64,
+        batchSize: Int
+    ) throws -> CommittedBatch {
+        let invalidCount = try Int.fetchOne(database, sql: """
+            SELECT COUNT(*) FROM (
+                SELECT relativePath, bytes FROM screen_captures
+                WHERE relativePath IS NOT NULL AND relativePath <> 'imported'
+                UNION ALL
+                SELECT relativePath, bytes FROM audio_captures
+                WHERE relativePath <> 'imported'
+            ) WHERE bytes IS NULL OR bytes <= 0
+            """) ?? 0
+        guard invalidCount == 0 else {
+            throw AutomaticRetentionError.invalidCandidateState
         }
-        guard fc > 0 else { return false }
-        for p in fp { storage.deleteFile(relativePath: p) }
-        counter += fc
-        return true
+        let duplicateCount = try Int.fetchOne(database, sql: """
+            SELECT COUNT(*) FROM (
+                SELECT relativePath FROM (
+                    SELECT relativePath FROM screen_captures
+                    WHERE relativePath IS NOT NULL AND relativePath <> 'imported'
+                    UNION ALL
+                    SELECT relativePath FROM audio_captures
+                    WHERE relativePath <> 'imported'
+                ) GROUP BY relativePath HAVING COUNT(*) > 1
+            )
+            """) ?? 0
+        guard duplicateCount == 0 else {
+            throw AutomaticRetentionError.invalidCandidateState
+        }
+
+        let total = try Int64.fetchOne(database, sql: """
+            SELECT COALESCE(SUM(bytes), 0) FROM (
+                SELECT bytes FROM screen_captures
+                WHERE relativePath IS NOT NULL AND relativePath <> 'imported'
+                UNION ALL
+                SELECT bytes FROM audio_captures
+                WHERE relativePath <> 'imported'
+            )
+            """) ?? 0
+        guard total > maxBytes else { return CommittedBatch(victims: []) }
+        let overage = total - maxBytes
+
+        let rows = try Row.fetchAll(database, sql: """
+            SELECT id, ts, kind, relativePath, bytes FROM (
+                SELECT id, ts, 0 AS kind, relativePath, bytes FROM screen_captures
+                WHERE relativePath IS NOT NULL AND relativePath <> 'imported'
+                UNION ALL
+                SELECT id, ts, 1 AS kind, relativePath, bytes FROM audio_captures
+                WHERE relativePath <> 'imported'
+            )
+            ORDER BY ts ASC, kind ASC, id ASC
+            LIMIT ?
+            """, arguments: [batchSize])
+        guard !rows.isEmpty else {
+            throw AutomaticRetentionError.invalidCandidateState
+        }
+
+        var victims: [AutomaticRetentionVictim] = []
+        var selectedBytes: Int64 = 0
+        for row in rows {
+            let kindRaw: Int = row["kind"]
+            let path: String = row["relativePath"]
+            let bytes: Int64 = row["bytes"]
+            guard let kind = CapturedMediaKind(rawValue: kindRaw),
+                  CapturedMediaReconciler.isSafeRelativePath(path),
+                  bytes > 0 else {
+                throw AutomaticRetentionError.invalidCandidateState
+            }
+            victims.append(AutomaticRetentionVictim(
+                kind: kind,
+                id: row["id"],
+                ts: row["ts"],
+                relativePath: path,
+                bytes: bytes
+            ))
+            let next = selectedBytes.addingReportingOverflow(bytes)
+            guard !next.overflow else {
+                throw AutomaticRetentionError.invalidCandidateState
+            }
+            selectedBytes = next.partialValue
+            if selectedBytes >= overage { break }
+        }
+
+        // Revalidate every selected file before deleting any database row.
+        // This remains inside both the permit lease and GRDB transaction.
+        do {
+            for victim in victims {
+                try storage.validateCapturedMediaFile(
+                    relativePath: victim.relativePath,
+                    expectedBytes: victim.bytes
+                )
+            }
+        } catch {
+            throw AutomaticRetentionError.invalidCandidateState
+        }
+
+        let frameIDs = victims.filter { $0.kind == .frame }.map(\.id)
+        let audioIDs = victims.filter { $0.kind == .audio }.map(\.id)
+        try deleteTranscriptVectors(database, audioIds: audioIDs)
+        if !frameIDs.isEmpty {
+            try database.execute(
+                sql: "DELETE FROM screen_captures WHERE id IN (\(idList(frameIDs)))"
+            )
+            try deleteVectors(database, captureIds: frameIDs)
+        }
+        if !audioIDs.isEmpty {
+            try database.execute(
+                sql: "DELETE FROM audio_captures WHERE id IN (\(idList(audioIDs)))"
+            )
+        }
+        return CommittedBatch(victims: victims)
     }
 
-    /// Oldest batch of audio (500): true = something was deleted.
-    private func deleteOldestAudioBatch(into counter: inout Int) async throws -> Bool {
-        let (ac, ap): (Int, [String]) = try await db.pool.write { db in
-            let rows = try AudioCaptureRow.order(Column("ts")).limit(500).fetchAll(db)
-            if rows.isEmpty { return (0, []) }
-            let ids = rows.compactMap(\.id)
-            try Self.deleteTranscriptVectors(db, audioIds: ids)   // before the cascade (mapping needed)
-            try AudioCaptureRow.filter(ids.contains(Column("id"))).deleteAll(db)
-            return (rows.count, rows.map(\.relativePath))
-        }
-        guard ac > 0 else { return false }
-        for p in ap { storage.deleteFile(relativePath: p) }
-        counter += ac
-        return true
+    private nonisolated static func idList(_ ids: [Int64]) -> String {
+        ids.map(String.init).joined(separator: ",")
     }
 
-    // ── orphan sweep with a grace window (fix for the race with in-flight ingest) ──
-    private func sweepOrphans() async throws -> Int {
-        let known: Set<String> = try await db.pool.read { db in
-            let s = try String.fetchAll(db, sql: "SELECT relativePath FROM screen_captures WHERE relativePath IS NOT NULL")
-            let a = try String.fetchAll(db, sql: "SELECT relativePath FROM audio_captures")
-            return Set(s).union(a)
+    private nonisolated static func deleteVectors(
+        _ database: Database,
+        captureIds: [Int64]
+    ) throws {
+        guard !captureIds.isEmpty else { return }
+        try database.execute(
+            sql: "DELETE FROM vec_screen WHERE capture_id IN (\(idList(captureIds)))"
+        )
+    }
+
+    private nonisolated static func deleteTranscriptVectors(
+        _ database: Database,
+        audioIds: [Int64]
+    ) throws {
+        guard !audioIds.isEmpty else { return }
+        let transcriptionIDs = try Int64.fetchAll(database, sql: """
+            SELECT id FROM transcriptions WHERE audioId IN (\(idList(audioIds)))
+            """)
+        guard !transcriptionIDs.isEmpty else { return }
+        try database.execute(sql: """
+            DELETE FROM vec_transcripts
+            WHERE transcription_id IN (\(idList(transcriptionIDs)))
+            """)
+    }
+
+    private func checkOperationContinuation() throws {
+        try Task.checkCancellation()
+        guard !maintenanceGate.snapshot().suspended else {
+            throw DatabaseWriterMaintenanceError.suspendedForRelocation
         }
-        let files = (try? FileManager.default.contentsOfDirectory(
-            at: storage.mediaDirectory,
-            includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        let graceCutoff = Date().addingTimeInterval(-orphanGraceSeconds)
-        var deleted = 0
-        for url in files {
-            guard !Task.isCancelled && !maintenanceGate.snapshot().suspended else { break }
-            let name = url.lastPathComponent
-            guard name.hasSuffix(".heic") || name.hasSuffix(".m4a") else { continue }
-            if known.contains(name) { continue }
-            // a too-fresh file may be a frame from in-flight ingest (written, not yet committed) — don't touch it
-            let mdate = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            if mdate > graceCutoff { continue }
-            try? FileManager.default.removeItem(at: url)
-            deleted += 1
-        }
-        return deleted
     }
 
     private func checkpoint() async throws {
-        try await db.pool.write { db in
-            try db.execute(sql: "INSERT INTO text_fts(text_fts) VALUES('optimize')")
-            try db.execute(sql: "INSERT INTO transcription_fts(transcription_fts) VALUES('optimize')")
+        try await db.pool.write { database in
+            try database.execute(sql: "INSERT INTO text_fts(text_fts) VALUES('optimize')")
+            try database.execute(sql: "INSERT INTO transcription_fts(transcription_fts) VALUES('optimize')")
         }
-        // WAL truncate MUST run OUTSIDE a transaction (inside write{} it's a silent no-op). busy under
-        // concurrent writes — no problem: the next prune will retry.
-        try? await db.pool.writeWithoutTransaction { db in
-            try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+        try? await db.pool.writeWithoutTransaction { database in
+            try database.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
         }
     }
 }
