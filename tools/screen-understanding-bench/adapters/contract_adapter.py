@@ -3,8 +3,10 @@
 
 import argparse
 import json
+import subprocess
 import sys
 import time
+from pathlib import Path
 
 
 def respond(payload: dict[str, object]) -> None:
@@ -15,14 +17,28 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
-        choices=("synthetic", "unsupported", "malformed", "crash", "hang"),
+        choices=(
+            "synthetic", "unsupported", "malformed", "crash", "hang", "hang-child",
+        ),
         default="synthetic",
     )
+    parser.add_argument("--child-pid-file", type=Path)
     args = parser.parse_args()
 
     if args.mode == "crash":
         return 23
     if args.mode == "hang":
+        time.sleep(3600)
+        return 0
+    if args.mode == "hang-child":
+        if args.child_pid_file is None:
+            return 24
+        child = subprocess.Popen([
+            sys.executable,
+            "-c",
+            "import time; time.sleep(3600)",
+        ])
+        args.child_pid_file.write_text(str(child.pid), encoding="utf-8")
         time.sleep(3600)
         return 0
 

@@ -48,6 +48,31 @@ final class ScreenUnderstandingAdapterContractTests: XCTestCase {
         }
     }
 
+    func testTimeoutKillsTheAdapterDescendantProcessGroup() throws {
+        let pidFile = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "screen-understanding-child-\(UUID().uuidString).pid"
+        )
+        defer { try? FileManager.default.removeItem(at: pidFile) }
+        let runner = try makeRunner(
+            mode: "hang-child",
+            extraArguments: ["--child-pid-file", pidFile.path]
+        )
+
+        XCTAssertThrowsError(try runner.run(
+            messages: [.hello(id: "1", protocolID: "screen-understanding-v1")],
+            timeoutSeconds: 1
+        )) { error in
+            XCTAssertTrue(error.localizedDescription.contains("timeout"))
+        }
+        let childPID = try XCTUnwrap(Int32(
+            String(contentsOf: pidFile, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        ))
+        errno = 0
+        XCTAssertEqual(Darwin.kill(childPID, 0), -1)
+        XCTAssertEqual(errno, ESRCH)
+    }
+
     func testManifestLocksEveryMethodAndRejectsUnsafeEntries() throws {
         let manifest = try ScreenUnderstandingAdapterManifest.load(from: manifestURL())
         XCTAssertNoThrow(try manifest.validate())
@@ -89,13 +114,17 @@ final class ScreenUnderstandingAdapterContractTests: XCTestCase {
         })
     }
 
-    private func makeRunner(mode: String) throws -> ScreenUnderstandingAdapterProcess {
+    private func makeRunner(
+        mode: String,
+        extraArguments: [String] = []
+    ) throws -> ScreenUnderstandingAdapterProcess {
         ScreenUnderstandingAdapterProcess(
             executable: URL(fileURLWithPath: "/usr/bin/python3"),
-            arguments: [adapterScriptURL().path, "--mode", mode],
+            arguments: [adapterScriptURL().path, "--mode", mode] + extraArguments,
             environment: ScreenUnderstandingAdapterEnvironment.make(
                 ephemeralHome: FileManager.default.temporaryDirectory
-            )
+            ),
+            processGroupLauncher: processGroupLauncherURL()
         )
     }
 
@@ -114,6 +143,12 @@ final class ScreenUnderstandingAdapterContractTests: XCTestCase {
     private func manifestURL() -> URL {
         repositoryRoot().appendingPathComponent(
             "tools/screen-understanding-bench/adapters/manifest.json"
+        )
+    }
+
+    private func processGroupLauncherURL() -> URL {
+        repositoryRoot().appendingPathComponent(
+            "tools/screen-understanding-bench/adapters/process_group_launcher.py"
         )
     }
 

@@ -7,6 +7,7 @@ enum ScreenUnderstandingAdapterError: Error, LocalizedError {
     case nonzeroExit(Int32, String)
     case malformedOutput(String)
     case responseMismatch
+    case retainedDescendants
 
     var errorDescription: String? {
         switch self {
@@ -20,6 +21,8 @@ enum ScreenUnderstandingAdapterError: Error, LocalizedError {
             "adapter returned malformed output: \(line)"
         case .responseMismatch:
             "adapter response count or identifiers did not match the request"
+        case .retainedDescendants:
+            "adapter retained descendant processes after exit"
         }
     }
 }
@@ -62,6 +65,7 @@ struct ScreenUnderstandingAdapterProcess: Sendable {
     var executable: URL
     var arguments: [String]
     var environment: [String: String]
+    var processGroupLauncher: URL
 
     func run(
         messages: [ScreenUnderstandingAdapterMessage],
@@ -72,8 +76,8 @@ struct ScreenUnderstandingAdapterProcess: Sendable {
         let output = Pipe()
         let errors = Pipe()
 
-        process.executableURL = executable
-        process.arguments = arguments
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = [processGroupLauncher.path, executable.path] + arguments
         process.environment = environment
         process.standardInput = input
         process.standardOutput = output
@@ -98,13 +102,18 @@ struct ScreenUnderstandingAdapterProcess: Sendable {
             Thread.sleep(forTimeInterval: min(0.01, max(0, deadline.timeIntervalSinceNow)))
         }
         if process.isRunning {
-            process.terminate()
+            terminateProcessGroup(process.processIdentifier, signal: SIGTERM)
             Thread.sleep(forTimeInterval: 0.05)
-            if process.isRunning {
-                Darwin.kill(process.processIdentifier, SIGKILL)
+            if processGroupExists(process.processIdentifier) {
+                terminateProcessGroup(process.processIdentifier, signal: SIGKILL)
             }
-            process.waitUntilExit()
+            if process.isRunning { process.waitUntilExit() }
             throw ScreenUnderstandingAdapterError.timeout
+        }
+
+        if processGroupExists(process.processIdentifier) {
+            terminateProcessGroup(process.processIdentifier, signal: SIGKILL)
+            throw ScreenUnderstandingAdapterError.retainedDescendants
         }
 
         let outputData = try output.fileHandleForReading.readToEnd() ?? Data()
@@ -135,6 +144,16 @@ struct ScreenUnderstandingAdapterProcess: Sendable {
             throw ScreenUnderstandingAdapterError.responseMismatch
         }
         return responses
+    }
+
+    private func processGroupExists(_ identifier: Int32) -> Bool {
+        errno = 0
+        if Darwin.kill(-identifier, 0) == 0 { return true }
+        return errno != ESRCH
+    }
+
+    private func terminateProcessGroup(_ identifier: Int32, signal: Int32) {
+        _ = Darwin.kill(-identifier, signal)
     }
 }
 
