@@ -2,6 +2,12 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
+## [0.4.1] — 2026-07-14
+
+### Fixed
+- Launching while the Mac is already locked now keeps screen capture suspended until the real unlock event,
+  instead of retrying an unavailable display every few seconds and briefly showing a false restart warning.
+
 ## [0.4.0] — 2026-07-14
 
 ### Added
