@@ -1,12 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://zbs.gg/schemas/screen-understanding/human-label-v1.json",
-  "title": "Blind human screen-understanding label",
+  "$id": "https://zbs.gg/schemas/screen-understanding/canonical-label-v1.json",
+  "title": "Blinded canonical screen-understanding reference label",
   "type": "object",
   "additionalProperties": false,
-  "required": ["case", "requiredFacts", "criticalText", "forbiddenInferences", "meaningfulChange", "ambiguity", "abstentionAllowed", "pass"],
+  "required": ["case", "targetType", "requiredFacts", "criticalText", "forbiddenInferences", "meaningfulChange", "ambiguity", "abstentionAllowed", "pass", "annotation"],
   "properties": {
     "case": {"type": "string", "pattern": "^[0-9a-f]{24}$"},
+    "targetType": {"type": "string", "enum": ["single-frame", "temporal-pair"]},
     "requiredFacts": {"type": "array", "items": {"$ref": "#/$defs/fact"}},
     "criticalText": {"type": "array", "items": {"type": "string"}},
     "forbiddenInferences": {"type": "array", "items": {"$ref": "#/$defs/fact"}},
@@ -14,7 +15,19 @@
     "ambiguity": {"type": "string", "enum": ["judgeable", "ambiguous", "unjudgeable"]},
     "abstentionAllowed": {"type": "boolean"},
     "pass": {"type": "integer", "enum": [1, 2]},
-    "locked": {"type": "boolean"}
+    "locked": {"type": "boolean"},
+    "annotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["producer", "annotator", "rubricVersion", "blindedToCandidateOutputs", "candidateOutputsAvailable"],
+      "properties": {
+        "producer": {"const": "frontier-vlm"},
+        "annotator": {"type": "string", "minLength": 1, "maxLength": 80},
+        "rubricVersion": {"const": "screen-understanding-canonical-v1"},
+        "blindedToCandidateOutputs": {"const": true},
+        "candidateOutputsAvailable": {"const": false}
+      }
+    }
   },
   "$defs": {
     "fact": {

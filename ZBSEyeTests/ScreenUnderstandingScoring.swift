@@ -20,7 +20,7 @@ enum ScreenUnderstandingAmbiguity: String, Codable, Sendable, Equatable {
     case unjudgeable
 }
 
-struct ScreenUnderstandingHumanFact: Codable, Sendable, Equatable, Hashable {
+struct ScreenUnderstandingReferenceFact: Codable, Sendable, Equatable, Hashable {
     var id: String
     var text: String
     var severity: ScreenUnderstandingFactSeverity
@@ -41,10 +41,10 @@ struct ScreenUnderstandingScoringCase: Sendable, Equatable {
     var id: String
     var stratum: String
     var clusterID: String
-    var requiredFacts: [ScreenUnderstandingHumanFact]
+    var requiredFacts: [ScreenUnderstandingReferenceFact]
     var criticalText: [String]
-    var forbiddenFacts: [ScreenUnderstandingHumanFact]
-    var meaningfulChange: [ScreenUnderstandingHumanFact]?
+    var forbiddenFacts: [ScreenUnderstandingReferenceFact]
+    var meaningfulChange: [ScreenUnderstandingReferenceFact]?
     var ambiguity: ScreenUnderstandingAmbiguity
     var abstentionAllowed: Bool
     var claims: [ScreenUnderstandingMappedClaim]
@@ -91,8 +91,8 @@ struct ScreenUnderstandingScorer: Sendable {
             throw ScreenUnderstandingScoringError.contradictoryAbstention
         }
 
-        var required: [String: ScreenUnderstandingHumanFact] = [:]
-        var forbidden: [String: ScreenUnderstandingHumanFact] = [:]
+        var required: [String: ScreenUnderstandingReferenceFact] = [:]
+        var forbidden: [String: ScreenUnderstandingReferenceFact] = [:]
         for fact in input.requiredFacts + (input.meaningfulChange ?? []) {
             guard required.updateValue(fact, forKey: fact.id) == nil else {
                 throw ScreenUnderstandingScoringError.duplicateFactID(fact.id)
@@ -184,7 +184,7 @@ struct ScreenUnderstandingScorer: Sendable {
     }
 }
 
-struct ScreenUnderstandingDuplicateLabel: Sendable, Equatable {
+struct ScreenUnderstandingDuplicateAnnotation: Sendable, Equatable {
     var firstFactIDs: Set<String>
     var secondFactIDs: Set<String>
     var firstDecision: Bool
@@ -199,7 +199,7 @@ struct ScreenUnderstandingReliabilityResult: Sendable, Equatable {
 
 enum ScreenUnderstandingReliability {
     static func evaluate(
-        duplicates: [ScreenUnderstandingDuplicateLabel],
+        duplicates: [ScreenUnderstandingDuplicateAnnotation],
         minimumFactAgreement: Double,
         minimumDecisionAgreement: Double
     ) -> ScreenUnderstandingReliabilityResult {

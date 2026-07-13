@@ -113,7 +113,7 @@ final class ScreenUnderstandingScoringTests: XCTestCase {
         _ id: String,
         _ text: String,
         _ severity: ScreenUnderstandingFactSeverity = .minor
-    ) -> ScreenUnderstandingHumanFact {
+    ) -> ScreenUnderstandingReferenceFact {
         .init(id: id, text: text, severity: severity)
     }
 
@@ -128,10 +128,10 @@ final class ScreenUnderstandingScoringTests: XCTestCase {
         id: String = "case",
         stratum: String = "text-rich",
         clusterID: String = "cluster",
-        requiredFacts: [ScreenUnderstandingHumanFact] = [],
+        requiredFacts: [ScreenUnderstandingReferenceFact] = [],
         criticalText: [String] = [],
-        forbiddenFacts: [ScreenUnderstandingHumanFact] = [],
-        meaningfulChange: [ScreenUnderstandingHumanFact]? = nil,
+        forbiddenFacts: [ScreenUnderstandingReferenceFact] = [],
+        meaningfulChange: [ScreenUnderstandingReferenceFact]? = nil,
         ambiguity: ScreenUnderstandingAmbiguity = .judgeable,
         abstentionAllowed: Bool = false,
         claims: [ScreenUnderstandingMappedClaim] = [],

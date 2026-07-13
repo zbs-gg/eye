@@ -201,7 +201,7 @@ struct ScreenUnderstandingEvalProtocol: Codable, Sendable, Equatable {
         guard corpus.duplicateLabelFraction >= 0.15,
               corpus.minimumFactAgreement >= 0.90,
               corpus.minimumDecisionAgreement >= 0.80 else {
-            throw ScreenUnderstandingProtocolError.invalid("Human label agreement gate is too weak")
+            throw ScreenUnderstandingProtocolError.invalid("Canonical annotation agreement gate is too weak")
         }
         guard !reporting.combinedQualityFootprintScoreAllowed else {
             throw ScreenUnderstandingProtocolError.invalid("Quality and footprint lane scores cannot merge")
@@ -252,7 +252,7 @@ struct ScreenUnderstandingEvalProtocol: Codable, Sendable, Equatable {
             || evidence.factAgreement < corpus.minimumFactAgreement
             || evidence.decisionAgreement < corpus.minimumDecisionAgreement
         {
-            failures.append("human label agreement gate failed")
+            failures.append("canonical annotation agreement gate failed")
         }
         return failures
     }

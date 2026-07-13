@@ -132,12 +132,21 @@ final class ScreenUnderstandingDatasetPreparationTests: XCTestCase {
             JSONSerialization.jsonObject(with: Data(contentsOf: schema)) as? [String: Any]
         )
         XCTAssertEqual(object["additionalProperties"] as? Bool, false)
+        let properties = try XCTUnwrap(object["properties"] as? [String: Any])
         let text = String(decoding: try Data(contentsOf: schema), as: UTF8.self)
         for required in ["requiredFacts", "criticalText", "forbiddenInferences", "meaningfulChange", "ambiguity", "abstentionAllowed"] {
             XCTAssertTrue(text.contains(required), required)
         }
+        for canonical in [
+            "annotation",
+            "frontier-vlm",
+            "blindedToCandidateOutputs",
+            "rubricVersion",
+        ] {
+            XCTAssertTrue(text.contains(canonical), canonical)
+        }
         for forbidden in ["candidateOutput", "methodID", "modelName"] {
-            XCTAssertFalse(text.contains(forbidden), forbidden)
+            XCTAssertNil(properties[forbidden], forbidden)
         }
     }
 

@@ -58,7 +58,7 @@
     }
   ],
   "qualityConclusion": "not-run",
-  "qualityReason": "Blind human labels are not sealed. Publishing a quality ranking now would be invalid.",
+  "qualityReason": "Blinded frontier-model canonical annotations are not sealed yet. Publishing a quality ranking now would be invalid.",
   "containsPersonalCorpus": false,
   "containsCaseMaterial": false
 }

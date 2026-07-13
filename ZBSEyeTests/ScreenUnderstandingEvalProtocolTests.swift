@@ -103,7 +103,7 @@ final class ScreenUnderstandingEvalProtocolTests: XCTestCase {
         assertRejected(benchmark, containing: "temporal")
     }
 
-    func testQualificationRequiresExactRuntimeR20PowerAndReliableHumanLabels() throws {
+    func testQualificationRequiresExactRuntimeR20PowerAndReliableCanonicalAnnotations() throws {
         let benchmark = try fixtureProtocol()
         let accepted = ScreenUnderstandingQualificationEvidence(
             exactProductRuntimeScored: true,
