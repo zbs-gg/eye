@@ -5,8 +5,10 @@ cd "$(dirname "$0")/.."
 
 MODE="fixtures"
 DATASET_ROOT=""
+ANNOTATION_ROOT=""
 MODEL_ROOT=""
 RESULT_ROOT=""
+METHODS=""
 
 usage() {
   printf '%s\n' \
@@ -16,10 +18,12 @@ usage() {
     "  --quality-matrix        Run the locked private quality matrix." \
     "  --performance-matrix    Run the locked product-footprint matrix." \
     "  --dataset-root PATH     Explicit sealed private corpus root for a physical gate." \
+    "  --annotation-root PATH  Explicit sealed canonical annotation root." \
+    "  --methods IDS           Comma-separated adapter IDs to run, in declared order." \
     "  --model-root PATH       Explicit sealed model/runtime root for a physical gate." \
     "  --result-root PATH      Explicit owner-only private result root for a physical gate." \
     "" \
-    "Physical modes are fail-closed while any selected adapter is security-unsupported."
+    "Quality mode preflights only selected methods; built-ins do not require a model root."
 }
 
 die() {
@@ -35,6 +39,16 @@ while [ "$#" -gt 0 ]; do
     --dataset-root)
       [ "$#" -ge 2 ] || die "--dataset-root requires a path"
       DATASET_ROOT="$2"
+      shift
+      ;;
+    --annotation-root)
+      [ "$#" -ge 2 ] || die "--annotation-root requires a path"
+      ANNOTATION_ROOT="$2"
+      shift
+      ;;
+    --methods)
+      [ "$#" -ge 2 ] || die "--methods requires comma-separated adapter IDs"
+      METHODS="$2"
       shift
       ;;
     --model-root)
@@ -61,7 +75,40 @@ export TRANSFORMERS_OFFLINE=1
 export ZBS_EYE_ALLOW_MODEL_DOWNLOADS=0
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy || true
 
-if [ "$MODE" != "fixtures" ]; then
+if [ "$MODE" = "quality" ]; then
+  [ -n "$DATASET_ROOT" ] && [ -d "$DATASET_ROOT" ] || die "physical gate requires --dataset-root"
+  [ -n "$ANNOTATION_ROOT" ] && [ -d "$ANNOTATION_ROOT" ] \
+    || die "physical gate requires --annotation-root"
+  [ -n "$METHODS" ] || die "physical gate requires --methods"
+  DATASET_ROOT="$(cd "$DATASET_ROOT" && pwd -P)"
+  ANNOTATION_ROOT="$(cd "$ANNOTATION_ROOT" && pwd -P)"
+  if [ -n "$MODEL_ROOT" ]; then
+    [ -d "$MODEL_ROOT" ] || die "--model-root is not a directory"
+    MODEL_ROOT="$(cd "$MODEL_ROOT" && pwd -P)"
+  fi
+  if [ -n "$RESULT_ROOT" ]; then
+    [ -d "$RESULT_ROOT" ] || die "--result-root is not a directory"
+    RESULT_ROOT="$(cd "$RESULT_ROOT" && pwd -P)"
+    [ "$(stat -f '%OLp' "$RESULT_ROOT")" = "700" ] \
+      || die "result root must have owner-only mode 700"
+  fi
+  REPOSITORY_ROOT="$(pwd -P)"
+  case "$DATASET_ROOT:$ANNOTATION_ROOT:$MODEL_ROOT:$RESULT_ROOT" in
+    *"$REPOSITORY_ROOT"*) die "private/model/result roots must be outside the repository" ;;
+  esac
+  git diff-index --quiet HEAD -- || die "physical gate requires a clean tracked source tree"
+  [ -z "$(git ls-files --others --exclude-standard -- '*.swift' '*.py' '*.json' '*.sh')" ] \
+    || die "physical gate requires no untracked executable or benchmark source files"
+  /usr/bin/python3 tools/screen-understanding-bench/runner/preflight.py \
+    --dataset-root "$DATASET_ROOT" \
+    --annotation-root "$ANNOTATION_ROOT" \
+    --methods "$METHODS"
+  printf '%s\n' \
+    "runner execution not yet implemented: canonical seal and selected built-ins passed preflight" >&2
+  exit 4
+fi
+
+if [ "$MODE" = "performance" ]; then
   [ -n "$DATASET_ROOT" ] && [ -d "$DATASET_ROOT" ] || die "physical gate requires --dataset-root"
   [ -n "$MODEL_ROOT" ] && [ -d "$MODEL_ROOT" ] || die "physical gate requires --model-root"
   [ -n "$RESULT_ROOT" ] && [ -d "$RESULT_ROOT" ] || die "physical gate requires --result-root"
@@ -83,7 +130,7 @@ if [ "$MODE" != "fixtures" ]; then
       "security-unsupported: the inherited OS sandbox boundary is not proven; private matrix not started" >&2
     exit 3
   fi
-  die "physical matrix runner is unavailable until sandbox qualification and blind labels pass"
+  die "physical performance runner is unavailable until sandbox qualification passes"
 fi
 
 jq empty \
