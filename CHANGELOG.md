@@ -2,6 +2,11 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
+## [0.4.2] — 2026-07-14
+
+### Fixed
+- REST `/health` and the MCP handshake now report the installed bundle version instead of a release literal.
+
 ## [0.4.1] — 2026-07-14
 
 ### Fixed

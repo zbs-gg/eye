@@ -77,7 +77,7 @@ enum ZBSEyeMCPServer {
 
         let server = Server(
             name: "zbseye",
-            version: "0.4.0",
+            version: AppVersion.current,
             capabilities: .init(tools: .init(listChanged: false)))
 
         await server.withMethodHandler(ListTools.self) { _ in
