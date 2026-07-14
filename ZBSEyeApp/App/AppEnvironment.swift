@@ -776,7 +776,7 @@ final class AppEnvironment {
             let rec = recording
             let deps = ZBSEyeHTTPServer.Deps(
                 search: searchSvc, timeline: timelineSvc, db: db, mediaDir: storage.mediaDirectory,
-                token: token, version: "0.4.0",
+                token: token, version: AppVersion.current,
                 isCapturing: { await MainActor.run { rec.isCapturing } },
                 toggleCapture: { enable in
                     await MainActor.run {

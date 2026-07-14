@@ -80,8 +80,8 @@ final class ReleaseConfigurationTests: XCTestCase {
         let url = repositoryRoot.appending(path: "project.yml")
         let project = try String(contentsOf: url, encoding: .utf8)
 
-        XCTAssertTrue(project.contains("MARKETING_VERSION: \"0.4.1\""))
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: \"6\""))
+        XCTAssertTrue(project.contains("MARKETING_VERSION: \"0.4.2\""))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: \"7\""))
     }
 
     func testSelfSignedBuildPreservesEntitlementsWhenBundlingTheModel() throws {
