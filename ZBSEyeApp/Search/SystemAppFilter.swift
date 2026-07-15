@@ -1,8 +1,8 @@
 import Foundation
 
 /// Single source of truth for "is this bundleId real user activity?". System shells (loginwindow,
-/// screen saver, Dock, Control Center…) get captured like any frontmost app, but they are not what
-/// the user was DOING — in Activities and usage stats they must read as gaps/idle, never as a
+/// screen saver, Dock, Control Center…) can exist in imported or legacy history, but they are not
+/// what the user was DOING — in Activities and usage stats they must read as gaps/idle, never as a
 /// "top app". Real apps intentionally pass (Finder, Terminal, System Settings are user activity).
 /// Case-insensitive: macOS reports inconsistent casing across versions (Spotlight vs spotlight).
 /// Stateless enum + statics — Sendable by construction, usable from any actor.

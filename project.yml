@@ -93,8 +93,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: "ZBS Eye"
         INFOPLIST_KEY_CFBundleName: "ZBS Eye"
         GENERATE_INFOPLIST_FILE: YES
-        MARKETING_VERSION: "0.4.3"          # CFBundleShortVersionString
-        CURRENT_PROJECT_VERSION: "8"        # CFBundleVersion
+        MARKETING_VERSION: "0.4.4"          # CFBundleShortVersionString
+        CURRENT_PROJECT_VERSION: "9"        # CFBundleVersion
         CODE_SIGN_ENTITLEMENTS: ZBSEyeApp/ZBSEye.entitlements
         # Default — ad-hoc for development. scripts/build-release.sh can use the legacy self-signed
         # "ZBS Eye Dev" identity; distributable releases must use scripts/build-notarized.sh with the
@@ -165,6 +165,7 @@ targets:
       - path: ZBSEyeApp/Connections/BuiltInModelRuntimeSupport.swift
       - path: ZBSEyeApp/State/BuiltInModelStore.swift
       - path: ZBSEyeApp/State/RecordingMaintenanceAdmission.swift
+      - path: ZBSEyeApp/Capture/CaptureSessionPolicy.swift
       - path: ZBSEyeApp/State/LowDiskGuard.swift
       - path: ZBSEyeApp/State/RecordingStore.swift
       - path: ZBSEyeApp/Audio/SystemAudioCaptureLifecycle.swift
@@ -235,8 +236,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye.tests
-        MARKETING_VERSION: "0.4.3"
-        CURRENT_PROJECT_VERSION: "8"
+        MARKETING_VERSION: "0.4.4"
+        CURRENT_PROJECT_VERSION: "9"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: ZBSEyeTests/Info.plist
         ZBS_EYE_MODEL_DIR: ""

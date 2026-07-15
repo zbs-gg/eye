@@ -29,7 +29,7 @@ final class CaptureCoordinator {
 
     private(set) var isRunning = false
     private var suspended = false              // lock/sleep
-    private var screenLocked = false           // screen is locked — gates the resume-kick on screensaver.didstop
+    private var screenLocked = false           // screen is locked — gates every non-unlock resume notification
     private var tickTimer: Timer?
     private var observers: [NSObjectProtocol] = []
     private var distributedObservers: [NSObjectProtocol] = []
@@ -43,6 +43,7 @@ final class CaptureCoordinator {
     private var sckFailureStreak = 0
     private var lastIdleCaptureAt = Date.distantPast
     private var burstTask: Task<Void, Never>?
+    private var lastProtectedSystemShell: String?
 
     var onFrame: (@MainActor () -> Void)?
     /// N SCK failures in a row with a granted permission (the classic -3801: TCC requires a process restart) —
@@ -108,8 +109,7 @@ final class CaptureCoordinator {
         // and ScreenCaptureKit reports an empty display list. Seed the gate from
         // the current login session so we wait for the real unlock notification
         // instead of probing the unavailable display every active tick.
-        let sessionInfo = CGSessionCopyCurrentDictionary() as? [String: Any]
-        let sessionWasAlreadyLocked = sessionInfo?["CGSSessionScreenIsLocked"] as? Bool ?? false
+        let sessionWasAlreadyLocked = Self.currentSessionLocked() ?? false
         screenLocked = sessionWasAlreadyLocked
         suspended = sessionWasAlreadyLocked
 
@@ -124,7 +124,7 @@ final class CaptureCoordinator {
         })
         observers.append(wsc.addObserver(forName: NSWorkspace.didWakeNotification,
                                          object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.suspended = false; self?.invalidateAndTrigger() }   // active resume-kick: don't wait for an app-switch, recover from a possible stuck state (started-under-lock)
+            Task { @MainActor in self?.resumeIfSessionUnlocked() }
         })
         // DISPLAY sleep (without system sleep) — otherwise idle capture would write black frames all night,
         // and SCK errors would arm a false "restart needed".
@@ -134,7 +134,7 @@ final class CaptureCoordinator {
         })
         observers.append(wsc.addObserver(forName: NSWorkspace.screensDidWakeNotification,
                                          object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.suspended = false; self?.invalidateAndTrigger() }   // active resume-kick: don't wait for an app-switch, recover from a possible stuck state (started-under-lock)
+            Task { @MainActor in self?.resumeIfSessionUnlocked() }
         })
         observers.append(wsc.addObserver(forName: NSWorkspace.didTerminateApplicationNotification,
                                          object: nil, queue: .main) { [weak self] note in
@@ -167,12 +167,7 @@ final class CaptureCoordinator {
         })
         distributedObservers.append(dnc.addObserver(forName: .init("com.apple.screensaver.didstop"),
                                                     object: nil, queue: .main) { [weak self] _ in
-            // the screensaver ended: we lift suspend, BUT under lock we DON'T trigger capture — we wait for screenIsUnlocked
-            // (otherwise we'd waste an extra cycle on the login session). On an unlocked screen the resume-kick is correct.
-            Task { @MainActor in
-                self?.suspended = false
-                if self?.screenLocked == false { self?.invalidateAndTrigger() }
-            }
+            Task { @MainActor in self?.resumeIfSessionUnlocked() }
         })
 
         tickTimer = Timer.scheduledTimer(withTimeInterval: config.activeTickSeconds, repeats: true) { [weak self] _ in
@@ -221,13 +216,15 @@ final class CaptureCoordinator {
         burstTask?.cancel(); burstTask = nil
         pendingCycle = false
         emptyStreak.removeAll(); lastContentText.removeAll()
+        lastProtectedSystemShell = nil
         return cycle
     }
 
     // MARK: triggers
 
     private func tickFired() {
-        guard isRunning, !suspended else { return }
+        guard isRunning, !suspended,
+              CaptureSessionPolicy.mayCapture(screenLocked: screenLocked) else { return }
         // idle: no input longer than the threshold → a RARE mode (a frame once per idleCaptureInterval), not a full stop:
         // "record everything" includes input-free incoming — reading, video, arriving messages.
         // This is HEALTH, not a failure — we keep the heartbeat, otherwise the UI after lunch would scream "capture died".
@@ -245,7 +242,8 @@ final class CaptureCoordinator {
     }
 
     private func invalidateAndTrigger() {
-        guard !suspended else { return }
+        guard !suspended,
+              CaptureSessionPolicy.mayCapture(screenLocked: screenLocked) else { return }
         Task { await pipeline.invalidateContent() }
         trigger()
         // burst trio: the immediate frame above + frames at 700ms/2s — Electron/web are often not yet drawn
@@ -262,7 +260,8 @@ final class CaptureCoordinator {
     }
 
     private func trigger() {
-        guard isRunning, !suspended else { return }
+        guard isRunning, !suspended,
+              CaptureSessionPolicy.mayCapture(screenLocked: screenLocked) else { return }
         if cycleTask != nil { pendingCycle = true; return }   // single-flight
         cycleTask = Task { @MainActor [weak self] in
             await self?.runCycle()
@@ -275,9 +274,19 @@ final class CaptureCoordinator {
     // MARK: cycle
 
     private func runCycle() async {
+        guard CaptureSessionPolicy.mayCapture(screenLocked: screenLocked) else { return }
         guard diskOK() else { return }   // disk almost full — we don't write (AppEnvironment raises the status)
         guard let app = NSWorkspace.shared.frontmostApplication,
               let bundleId = app.bundleIdentifier else { return }
+        guard CaptureSessionPolicy.mayCapture(screenLocked: screenLocked, bundleId: bundleId) else {
+            if lastProtectedSystemShell != bundleId {
+                Log.capture.error("capture refused for protected system shell: \(bundleId, privacy: .public)")
+                lastProtectedSystemShell = bundleId
+            }
+            onCycleOK?()
+            return
+        }
+        lastProtectedSystemShell = nil
         // privacy exclusion: a deliberate skip = cycle health (heartbeat), not a failure
         if isIgnoredApp(bundleId) { onCycleOK?(); return }
         let pid = app.processIdentifier
@@ -337,6 +346,9 @@ final class CaptureCoordinator {
             return
         }
         guard let frame else { return }
+        // Lock/display notifications can arrive while AX/SCK work is suspended at an await.
+        // Re-read both tracked state and the current shell before committing any captured bytes.
+        guard currentSessionStillAllowsCapture() else { return }
 
         if frame.isDuplicate {
             // same image — but if the AX text changed (scroll/new message), we write context-only
@@ -353,6 +365,32 @@ final class CaptureCoordinator {
                     image: .heicData(frame.heicData), width: frame.width, height: frame.height,
                     monitorId: String(frame.displayID))
         lastContentText[bundleId] = ax.contentText
+    }
+
+    private func resumeIfSessionUnlocked() {
+        guard CaptureSessionPolicy.mayResume(
+            screenLocked: screenLocked,
+            sessionLockedNow: Self.currentSessionLocked()
+        ) else {
+            suspended = true
+            return
+        }
+        suspended = false
+        invalidateAndTrigger()
+    }
+
+    private func currentSessionStillAllowsCapture() -> Bool {
+        guard let bundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return false }
+        return CaptureSessionPolicy.mayCapture(
+            screenLocked: screenLocked,
+            sessionLockedNow: Self.currentSessionLocked(),
+            bundleId: bundleId
+        )
+    }
+
+    private static func currentSessionLocked() -> Bool? {
+        let sessionInfo = CGSessionCopyCurrentDictionary() as? [String: Any]
+        return sessionInfo?["CGSSessionScreenIsLocked"] as? Bool
     }
 
     /// The display of the topmost normal window (layer 0) of the process — by intersecting bounds with displays.
