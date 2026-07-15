@@ -2,6 +2,14 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
+## [0.4.4] — 2026-07-15
+
+### Fixed
+- Capture now stays suspended across wake and screen-saver transitions until macOS reports a real unlock,
+  preventing a delayed timer tick from recording the lock screen.
+- `loginwindow` and screen-saver processes are rejected again at the final capture boundary, so an out-of-order
+  session notification cannot put protected system-shell frames into history.
+
 ## [0.4.3] — 2026-07-15
 
 ### Fixed

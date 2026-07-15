@@ -22,4 +22,17 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
         XCTAssertTrue(source.contains("suspended = sessionWasAlreadyLocked"))
         XCTAssertTrue(source.contains("if !sessionWasAlreadyLocked { trigger() }"))
     }
+
+    func testCaptureCycleRechecksSessionAfterAwaitBeforeWriting() throws {
+        let source = try coordinatorSource
+        let frameReady = try XCTUnwrap(source.range(of: "guard let frame else { return }"))
+        let finalGate = try XCTUnwrap(source.range(of: "guard currentSessionStillAllowsCapture() else { return }"))
+        let firstWrite = try XCTUnwrap(
+            source.range(of: "await write(", range: finalGate.upperBound..<source.endIndex)
+        )
+
+        XCTAssertLessThan(frameReady.lowerBound, finalGate.lowerBound)
+        XCTAssertLessThan(finalGate.lowerBound, firstWrite.lowerBound)
+        XCTAssertTrue(source.contains("sessionLockedNow: Self.currentSessionLocked()"))
+    }
 }
