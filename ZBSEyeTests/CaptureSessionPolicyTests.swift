@@ -1,6 +1,55 @@
 import XCTest
 
 final class CaptureSessionPolicyTests: XCTestCase {
+    func testMacOSUnlockedSessionDictionaryOmitsTheLockKey() {
+        let validSession: [String: Any] = [
+            CaptureSessionPolicy.macOSOnConsoleKey: true,
+            CaptureSessionPolicy.macOSLoginDoneKey: true,
+        ]
+
+        XCTAssertEqual(CaptureSessionPolicy.sessionLockState(from: validSession), false)
+        XCTAssertEqual(
+            CaptureSessionPolicy.sessionLockState(
+                from: validSession.merging(
+                    [CaptureSessionPolicy.macOSLockKey: false],
+                    uniquingKeysWith: { _, new in new }
+                )
+            ),
+            false
+        )
+        XCTAssertEqual(
+            CaptureSessionPolicy.sessionLockState(
+                from: validSession.merging(
+                    [CaptureSessionPolicy.macOSLockKey: true],
+                    uniquingKeysWith: { _, new in new }
+                )
+            ),
+            true
+        )
+    }
+
+    func testFailedOrMalformedSessionQueryStaysFailClosed() {
+        XCTAssertNil(CaptureSessionPolicy.sessionLockState(from: nil))
+        XCTAssertNil(CaptureSessionPolicy.sessionLockState(from: [:]))
+        XCTAssertNil(
+            CaptureSessionPolicy.sessionLockState(
+                from: [
+                    CaptureSessionPolicy.macOSOnConsoleKey: false,
+                    CaptureSessionPolicy.macOSLoginDoneKey: true,
+                ]
+            )
+        )
+        XCTAssertNil(
+            CaptureSessionPolicy.sessionLockState(
+                from: [
+                    CaptureSessionPolicy.macOSOnConsoleKey: true,
+                    CaptureSessionPolicy.macOSLoginDoneKey: true,
+                    CaptureSessionPolicy.macOSLockKey: "unexpected",
+                ]
+            )
+        )
+    }
+
     func testScreenSaverStopDoesNotResumeWhileTheSessionIsLocked() {
         XCTAssertFalse(CaptureSessionPolicy.mayResume(screenLocked: true, sessionLockedNow: false))
         XCTAssertFalse(CaptureSessionPolicy.mayResume(screenLocked: false, sessionLockedNow: true))

@@ -21,8 +21,8 @@ final class ReleaseConfigurationTests: XCTestCase {
         }
 
         func runPreflight(
-            expectedVersion: String = "0.4.4",
-            expectedBuild: String = "9",
+            expectedVersion: String = "0.4.5",
+            expectedBuild: String = "10",
             remoteOverride: URL? = nil,
             verifyOnly: Bool = false
         ) throws -> CommandResult {
@@ -111,7 +111,7 @@ final class ReleaseConfigurationTests: XCTestCase {
             )
 
             let fixture = ReleaseFixture(root: root, remote: remote, worktree: worktree, script: script)
-            try fixture.setCandidate(appVersion: "0.4.4", appBuild: "9")
+            try fixture.setCandidate(appVersion: "0.4.5", appBuild: "10")
             return fixture
         }
 
@@ -284,9 +284,9 @@ final class ReleaseConfigurationTests: XCTestCase {
         let project = try String(contentsOf: url, encoding: .utf8)
 
         XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION:").count - 1, 2)
-        XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION: \"0.4.4\"").count - 1, 2)
+        XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION: \"0.4.5\"").count - 1, 2)
         XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION:").count - 1, 2)
-        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"9\"").count - 1, 2)
+        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"10\"").count - 1, 2)
     }
 
     func testReleaseDocumentationRequiresAnExactManifestBoundArtifactPair() throws {
@@ -436,7 +436,7 @@ final class ReleaseConfigurationTests: XCTestCase {
 
         XCTAssertEqual(result.status, 0, result.output)
         XCTAssertTrue(result.output.contains("release preflight passed"), result.output)
-        XCTAssertTrue(result.output.contains("ZBSEYE_RELEASE_PREFLIGHT_IDENTITY=0.4.4:9:"), result.output)
+        XCTAssertTrue(result.output.contains("ZBSEYE_RELEASE_PREFLIGHT_IDENTITY=0.4.5:10:"), result.output)
     }
 
     func testReleasePreflightRejectsTrackedStagedAndUntrackedChanges() throws {
@@ -600,10 +600,10 @@ final class ReleaseConfigurationTests: XCTestCase {
         }
         do {
             let fixture = try ReleaseFixture.make(script: releasePreflightScript)
-            _ = try fixture.git("tag", "v0.4.4")
+            _ = try fixture.git("tag", "v0.4.5")
             _ = try ReleaseFixture.runChecked(
                 "/usr/bin/git",
-                ["push", fixture.remote.path, "v0.4.4"],
+                ["push", fixture.remote.path, "v0.4.5"],
                 directory: fixture.worktree
             )
             let result = try fixture.runPreflight()
@@ -614,10 +614,10 @@ final class ReleaseConfigurationTests: XCTestCase {
 
     func testReleasePreflightVerifyOnlyStillRejectsAnExistingCandidateTag() throws {
         let fixture = try ReleaseFixture.make(script: releasePreflightScript)
-        _ = try fixture.git("tag", "v0.4.4")
+        _ = try fixture.git("tag", "v0.4.5")
         _ = try ReleaseFixture.runChecked(
             "/usr/bin/git",
-            ["push", fixture.remote.path, "v0.4.4"],
+            ["push", fixture.remote.path, "v0.4.5"],
             directory: fixture.worktree
         )
 
