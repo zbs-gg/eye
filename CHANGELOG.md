@@ -2,7 +2,12 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
-## [0.4.4] — 2026-07-15
+## [0.4.5] — 2026-07-15
+
+### Fixed
+- Restored normal capture in unlocked macOS sessions while keeping the lock-screen privacy gate fail-closed. macOS normally omits `CGSSessionScreenIsLocked` when unlocked; the app now accepts that shape only for a current on-console, login-complete session and rejects failed or malformed queries.
+
+## [0.4.4] — 2026-07-15 (withdrawn)
 
 ### Fixed
 - Capture now stays suspended across wake and screen-saver transitions until macOS reports a real unlock,
