@@ -24,3 +24,13 @@ The schema-constrained aggregate derived from private evaluation evidence while 
 ## Relationships
 
 The Frontier Reference Oracle produces Canonical References. Concealed Mappers connect candidate claims to those references. Reliability Qualification controls which results may enter the Public Decision.
+
+## Capture privacy
+
+### Capture Admission
+The authorization decision that permits a captured screen moment to enter local history only while the active login session is definitely unlocked and the foreground process is ordinary user content.
+
+Capture Admission is evaluated again after asynchronous frame work and immediately before persistence, so a lock transition can revoke work that began while the session was still eligible.
+
+### Protected System Shell
+A macOS process that renders login or screen-saver surfaces rather than user activity and is therefore never eligible for capture, even when another session signal is stale.
