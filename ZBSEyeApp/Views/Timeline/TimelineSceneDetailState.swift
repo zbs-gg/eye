@@ -77,13 +77,7 @@ struct TimelineSceneDetailState {
     }
 
     private static func matches(_ scene: ActivityScene, frame: FrameDetail) -> Bool {
-        guard (scene.startTs...scene.endTs).contains(frame.ts) else { return false }
-        if let sceneBundle = scene.bundleId, let frameBundle = frame.bundleId {
-            return sceneBundle == frameBundle
-        }
-        if let sceneApp = scene.appName, let frameApp = frame.appName {
-            return sceneApp == frameApp
-        }
-        return false
+        scene.captureIds.contains(frame.id)
+            && (scene.startTs...scene.endTs).contains(frame.ts)
     }
 }

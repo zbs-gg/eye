@@ -28,8 +28,8 @@ final class TimelineSceneDetailStateTests: XCTestCase {
 
     func testLoadedSceneReplacesFallbackOnlyWhenItContainsTheVisibleFrame() {
         let frame = makeFrame(id: 8, ts: Date(timeIntervalSince1970: 100))
-        let matching = makeScene(id: "matching", start: 90, end: 110, frameCount: 2)
-        let foreign = makeScene(id: "foreign", start: 120, end: 140, frameCount: 3)
+        let matching = makeScene(id: "matching", start: 90, end: 110, frameCount: 2, captureIDs: [8])
+        let foreign = makeScene(id: "foreign", start: 120, end: 140, frameCount: 3, captureIDs: [8])
 
         var state = TimelineSceneDetailState()
         XCTAssertTrue(state.beginLoading(for: frame))
@@ -47,7 +47,7 @@ final class TimelineSceneDetailStateTests: XCTestCase {
     func testFrameInsideLoadedSceneReusesItWithoutAnotherLookup() {
         let firstFrame = makeFrame(id: 8, ts: Date(timeIntervalSince1970: 100))
         let nextFrame = makeFrame(id: 9, ts: Date(timeIntervalSince1970: 105))
-        let matching = makeScene(id: "matching", start: 90, end: 110, frameCount: 2)
+        let matching = makeScene(id: "matching", start: 90, end: 110, frameCount: 2, captureIDs: [8, 9])
 
         var state = TimelineSceneDetailState()
         XCTAssertTrue(state.beginLoading(for: firstFrame))
@@ -73,7 +73,8 @@ final class TimelineSceneDetailStateTests: XCTestCase {
             start: 90,
             end: 110,
             frameCount: 2,
-            bundleID: "first.app"
+            bundleID: "first.app",
+            captureIDs: [8]
         )
 
         var state = TimelineSceneDetailState()
@@ -88,7 +89,7 @@ final class TimelineSceneDetailStateTests: XCTestCase {
     func testLateResultForPreviousFrameCannotReplaceCurrentCard() {
         let oldFrame = makeFrame(id: 1, ts: Date(timeIntervalSince1970: 100))
         let currentFrame = makeFrame(id: 2, ts: Date(timeIntervalSince1970: 200))
-        let oldScene = makeScene(id: "old", start: 90, end: 110, frameCount: 4)
+        let oldScene = makeScene(id: "old", start: 90, end: 110, frameCount: 4, captureIDs: [1])
 
         var state = TimelineSceneDetailState()
         XCTAssertTrue(state.beginLoading(for: oldFrame))
@@ -97,6 +98,27 @@ final class TimelineSceneDetailStateTests: XCTestCase {
 
         XCTAssertEqual(state.card(for: currentFrame).frameCount, 1)
         XCTAssertNil(state.card(for: currentFrame).jumpToStart)
+    }
+
+    func testEqualTimeSameAppCaptureOutsideLoadedSceneRequiresExactLookup() {
+        let firstFrame = makeFrame(id: 8, ts: Date(timeIntervalSince1970: 100), bundleID: "same.app")
+        let laterSameAppFrame = makeFrame(id: 10, ts: Date(timeIntervalSince1970: 100), bundleID: "same.app")
+        let firstScene = makeScene(
+            id: "first-a",
+            start: 100,
+            end: 100,
+            frameCount: 1,
+            bundleID: "same.app",
+            captureIDs: [8]
+        )
+
+        var state = TimelineSceneDetailState()
+        XCTAssertTrue(state.beginLoading(for: firstFrame))
+        state.finishLoading(firstScene, forFrameID: firstFrame.id)
+
+        XCTAssertTrue(state.beginLoading(for: laterSameAppFrame))
+        XCTAssertEqual(state.card(for: laterSameAppFrame).frameCount, 1)
+        XCTAssertNil(state.card(for: laterSameAppFrame).jumpToStart)
     }
 
     func testSceneServiceSelectorUsesCaptureIDWhenTimestampsMatch() {
@@ -171,10 +193,12 @@ final class TimelineSceneDetailStateTests: XCTestCase {
         start: TimeInterval,
         end: TimeInterval,
         frameCount: Int,
-        bundleID: String? = "example.app"
+        bundleID: String? = "example.app",
+        captureIDs: Set<Int64> = [8]
     ) -> ActivityScene {
         ActivityScene(
             id: id,
+            captureIds: captureIDs,
             appId: 1,
             bundleId: bundleID,
             appName: "App",

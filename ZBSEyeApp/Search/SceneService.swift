@@ -73,7 +73,8 @@ actor SceneService {
                                    windowTitle: repTitle, browserURL: repURL, repText: repText)
         let sceneId = "\(first.appId.map(String.init) ?? "noapp")-\(first.ts)"
         return ActivityScene(
-            id: sceneId, appId: first.appId, bundleId: first.bundleId, appName: first.appName,
+            id: sceneId, captureIds: Set(seg.captureIds),
+            appId: first.appId, bundleId: first.bundleId, appName: first.appName,
             repWindowTitle: repTitle, browserURL: repURL,
             startTs: dateFromMs(seg.startMs), endTs: dateFromMs(seg.endMs),
             durationSec: max(1, Double(seg.durationMs) / 1000.0),
