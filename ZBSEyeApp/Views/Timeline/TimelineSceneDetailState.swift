@@ -6,31 +6,25 @@ struct TimelineSceneLoadKey: Equatable {
 }
 
 struct TimelineSceneCardPresentation {
-    let id: String
     let bundleId: String?
-    let startTs: Date
+    let jumpToStart: Date?
     let durationSec: Double
     let frameCount: Int
     let summary: String
-    let canJumpToStart: Bool
 
     init(scene: ActivityScene) {
-        id = scene.id
         bundleId = scene.bundleId
-        startTs = scene.startTs
+        jumpToStart = scene.startTs
         durationSec = scene.durationSec
         frameCount = scene.frameCount
         summary = scene.summary
-        canJumpToStart = true
     }
 
     init(frame: FrameDetail) {
-        id = "frame-\(frame.id)"
         bundleId = frame.bundleId
-        startTs = frame.ts
+        jumpToStart = nil
         durationSec = 0
         frameCount = 1
-        canJumpToStart = false
 
         let app = Self.nonEmpty(frame.appName) ?? Self.nonEmpty(frame.bundleId) ?? "Captured moment"
         if let window = Self.nonEmpty(frame.windowTitle), window != app {

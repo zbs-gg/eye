@@ -45,7 +45,9 @@ actor SceneService {
         containingCaptureID captureID: Int64,
         in sessions: [ActivitySession]
     ) -> ActivitySession? {
-        sessions.first { $0.captureIds.contains(captureID) }
+        sessions.first { session in
+            session.captures.contains { $0.id == captureID }
+        }
     }
 
     // MARK: - assembly

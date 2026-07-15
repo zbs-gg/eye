@@ -273,9 +273,9 @@ private struct TimelineBody: View {
                         let card = sceneDetailState.card(for: c)
                         SceneSummaryCard(
                             card: card,
-                            onJump: card.canJumpToStart ? {
-                                Task { await store.seek(to: card.startTs) }
-                            } : nil
+                            onJump: card.jumpToStart.map { start in
+                                { Task { await store.seek(to: start) } }
+                            }
                         )
                         DisclosureGroup(isExpanded: Binding(
                             get: { extractedTextExpandedFrameID == c.id },

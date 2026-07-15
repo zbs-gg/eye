@@ -7,11 +7,18 @@ final class ReleaseConfigurationTests: XCTestCase {
         let output: String
     }
 
-    private struct ReleaseFixture {
+    private final class ReleaseFixture {
         let root: URL
         let remote: URL
         let worktree: URL
         let script: URL
+
+        init(root: URL, remote: URL, worktree: URL, script: URL) {
+            self.root = root
+            self.remote = remote
+            self.worktree = worktree
+            self.script = script
+        }
 
         func runPreflight(
             expectedVersion: String = "0.4.3",
@@ -30,8 +37,12 @@ final class ReleaseConfigurationTests: XCTestCase {
             )
         }
 
-        func git(_ arguments: String..., at directory: URL? = nil) throws -> CommandResult {
-            try Self.run("/usr/bin/git", arguments, directory: directory ?? worktree)
+        deinit {
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        func git(_ arguments: String...) throws -> CommandResult {
+            try Self.run("/usr/bin/git", arguments, directory: worktree)
         }
 
         func setCandidate(

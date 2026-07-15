@@ -21,11 +21,9 @@ final class TimelineSceneDetailStateTests: XCTestCase {
         XCTAssertTrue(state.beginLoading(for: frame))
         let card = state.card(for: frame)
 
-        XCTAssertEqual(card.id, "frame-42")
         XCTAssertEqual(card.summary, "ChatGPT · Inbox")
         XCTAssertEqual(card.frameCount, 1)
-        XCTAssertEqual(card.startTs, frame.ts)
-        XCTAssertFalse(card.canJumpToStart)
+        XCTAssertNil(card.jumpToStart)
     }
 
     func testLoadedSceneReplacesFallbackOnlyWhenItContainsTheVisibleFrame() {
@@ -36,13 +34,14 @@ final class TimelineSceneDetailStateTests: XCTestCase {
         var state = TimelineSceneDetailState()
         XCTAssertTrue(state.beginLoading(for: frame))
         state.finishLoading(matching, forFrameID: frame.id)
-        XCTAssertEqual(state.card(for: frame).id, "matching")
-        XCTAssertTrue(state.card(for: frame).canJumpToStart)
+        XCTAssertEqual(state.card(for: frame).summary, "matching")
+        XCTAssertEqual(state.card(for: frame).jumpToStart, matching.startTs)
 
         var foreignState = TimelineSceneDetailState()
         XCTAssertTrue(foreignState.beginLoading(for: frame))
         foreignState.finishLoading(foreign, forFrameID: frame.id)
-        XCTAssertEqual(foreignState.card(for: frame).id, "frame-8")
+        XCTAssertEqual(foreignState.card(for: frame).frameCount, 1)
+        XCTAssertNil(foreignState.card(for: frame).jumpToStart)
     }
 
     func testFrameInsideLoadedSceneReusesItWithoutAnotherLookup() {
@@ -55,7 +54,7 @@ final class TimelineSceneDetailStateTests: XCTestCase {
         state.finishLoading(matching, forFrameID: firstFrame.id)
 
         XCTAssertFalse(state.beginLoading(for: nextFrame))
-        XCTAssertEqual(state.card(for: nextFrame).id, "matching")
+        XCTAssertEqual(state.card(for: nextFrame).summary, "matching")
     }
 
     func testSameTimestampFromAnotherAppDoesNotReuseLoadedScene() {
@@ -82,7 +81,8 @@ final class TimelineSceneDetailStateTests: XCTestCase {
         state.finishLoading(firstScene, forFrameID: firstFrame.id)
 
         XCTAssertTrue(state.beginLoading(for: otherDisplayFrame))
-        XCTAssertEqual(state.card(for: otherDisplayFrame).id, "frame-9")
+        XCTAssertEqual(state.card(for: otherDisplayFrame).frameCount, 1)
+        XCTAssertNil(state.card(for: otherDisplayFrame).jumpToStart)
     }
 
     func testLateResultForPreviousFrameCannotReplaceCurrentCard() {
@@ -95,7 +95,8 @@ final class TimelineSceneDetailStateTests: XCTestCase {
         XCTAssertTrue(state.beginLoading(for: currentFrame))
         state.finishLoading(oldScene, forFrameID: oldFrame.id)
 
-        XCTAssertEqual(state.card(for: currentFrame).id, "frame-2")
+        XCTAssertEqual(state.card(for: currentFrame).frameCount, 1)
+        XCTAssertNil(state.card(for: currentFrame).jumpToStart)
     }
 
     func testSceneServiceSelectorUsesCaptureIDWhenTimestampsMatch() {
