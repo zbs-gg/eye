@@ -34,41 +34,97 @@ install via "Open Anyway", and rebuilds can churn TCC permissions (exactly what 
 bash scripts/build-notarized.sh
 ```
 
-The script is self-checking, in order: finds the Developer ID identity → verifies the notarytool
-profile BEFORE the long build → `xcodegen generate` → Release build with Hardened Runtime +
-`--timestamp --options runtime` → bundles the e5 embedding model (offline first run) → re-signs the
-top bundle → `notarytool submit --wait` (2–10 min) → `stapler staple` → Gatekeeper check.
+Run only from a clean checkout whose `HEAD` is the freshly fetched canonical `origin/main`.
+`scripts/release-preflight.sh` also rejects hidden tracked changes, ignored files inside compiled source
+roots, a non-monotonic version/build, an existing candidate tag, and disagreement between app and test
+target versions.
 
-Success looks like:
+The build verifies the Developer ID identity and notary profile before the long work, creates a Hardened
+Runtime Release archive, submits it to Apple, staples the accepted ticket, and checks Gatekeeper. It prints
+one exact ZIP and one exact manifest whose names include version, build, and source revision:
 
-- `spctl` line contains `accepted` and `source=Notarized Developer ID`
-- output artifact: `dist/ZBSEye-notarized-YYYYMMDD.zip` (the stapled app — passes Gatekeeper offline)
+```text
+dist/ZBSEye-<version>-<build>-<12-character-source>-notarized.zip
+dist/ZBSEye-<version>-<build>-<12-character-source>-notarized.manifest.json
+```
+
+Copy those exact paths from the output. Never rediscover an artifact by wildcard, modification time, or
+“newest file”. Verify the pair before upload:
+
+```bash
+ZIP='paste exact path printed by the build'
+MANIFEST='paste matching exact path printed by the build'
+bash scripts/verify-release-artifact.sh "$ZIP" "$MANIFEST"
+```
 
 If notarytool rejects: `xcrun notarytool log <submission-id> --keychain-profile zbseye-notary` —
 usual causes are nested code without Hardened Runtime/timestamp or a stray `get-task-allow`
 entitlement from a Debug build (the script builds Release, so normally it passes first try).
 
-## Publish
+## Draft and reverse-verify
 
 ```bash
-VERSION=vX.Y.Z   # match CFBundleShortVersionString AND the "## [$VERSION]" heading in CHANGELOG.md
-# You already renamed "## [Unreleased]" to "## [$VERSION]" (see the note below), so extract THAT
-# block — everything under the "## [$VERSION]" heading up to the next "## " — not [Unreleased],
-# which no longer exists after the rename (extracting it would yield an empty --notes).
-gh release create "$VERSION" dist/ZBSEye-notarized-*.zip \
-  --title "ZBS Eye $VERSION" \
-  --notes "$(awk -v v="## [$VERSION]" 'index($0,v)==1{f=1;next} f&&/^## /{exit} f' CHANGELOG.md)"
+TAG=vX.Y.Z
+SOURCE=$(git rev-parse HEAD)
+gh release create "$TAG" "$ZIP" "$MANIFEST" --draft --target "$SOURCE" \
+  --title "ZBS Eye $TAG" --notes-file /path/to/release-notes.md
 ```
 
-Release notes come from `CHANGELOG.md`: in the **same PR that tags the release**, rename the top
-`## [Unreleased]` heading to `## [$VERSION]` first — then the command above pulls exactly that
-version's items, so the published notes match what you shipped.
+Download the two exact named draft assets into a clean directory. Keep the locally generated manifest as
+the trust anchor and verify the downloaded bytes against it:
 
-## Post-release sanity
+```bash
+QUALIFIED_MANIFEST="$MANIFEST"
+DOWNLOADED_ZIP='exact downloaded ZIP path'
+DOWNLOADED_MANIFEST='exact downloaded manifest path'
+bash scripts/verify-release-artifact.sh \
+  "$DOWNLOADED_ZIP" "$DOWNLOADED_MANIFEST" "$QUALIFIED_MANIFEST"
+```
 
-- Download the asset from the GitHub release page (not your local copy) and verify:
-  ```bash
-  spctl -a -vvv -t exec "/path/to/unzipped/ZBS Eye.app"   # accepted, Notarized Developer ID
-  ```
-- Install = unzip into `/Applications`, double-click. Permissions are granted once and survive
-  future updates (stable signature).
+The draft target must equal `SOURCE`; GitHub's reported asset sizes and SHA-256 digests must match the
+qualified local pair.
+
+## Installed-artifact privacy and liveness gate
+
+Install the verified draft ZIP into `/Applications` while preserving the previous installed bundle as a
+rollback. Do not change the data root, database, media, models, preferences, Keychain, or TCC grants.
+
+Before publishing, exercise the installed app and live database:
+
+1. Save the current recording setting and database maximum capture ID.
+2. Enable recording through the installed app's real MCP surface. Activate an ordinary app and require the
+   maximum ID to advance. “Capturing” with no new row fails the gate.
+3. Lock the Mac normally. Leave it locked for several capture intervals and require the maximum ID to remain
+   unchanged.
+4. Unlock normally, activate an ordinary app, and require capture to resume. The first post-unlock row must
+   be ordinary user content, with zero `loginwindow` or screen-saver rows in the test window.
+5. Take a normal system screenshot while Eye records and confirm prompt-free, responsive completion.
+6. Restore the saved recording setting and stop the temporary MCP client, whether the gate passes or fails.
+
+See `docs/solutions/security-issues/macos-capture-session-lock-state-contract.md` for the session contract
+and the two failure modes this gate catches. If any step fails, delete the draft, restore the known-good app,
+fix the defect, and advance version **and** build before rebuilding.
+
+## Publish and verify public identity
+
+Immediately before publication:
+
+```bash
+bash scripts/release-preflight.sh --verify-only
+gh release edit "$TAG" --draft=false
+```
+
+Confirm the public release is not a draft or prerelease, targets `SOURCE`, and reports the qualified size and
+SHA-256 digest for both assets. Re-downloading and running `verify-release-artifact.sh` again is the strongest
+check when the network permits.
+
+A public release is immutable history. Never replace bytes under an existing version. If post-public
+verification fails, withdraw the release and tag, restore the known-good app, and ship a higher version/build.
+
+## Completion
+
+- Keep the private notarization evidence printed by the build under the maintainer evidence directory.
+- Keep the newly installed release only after the complete dogfood gate passes; then old rebuildable archives
+  and temporary downloads may be removed.
+- Report the exact release URL, version/build/source, test result, installed state, recording state, and any
+  remaining manual action.

@@ -91,7 +91,32 @@ DOWNLOADED_MANIFEST='paste the exact downloaded manifest path'
 bash scripts/verify-release-artifact.sh "$DOWNLOADED_ZIP" "$DOWNLOADED_MANIFEST" "$QUALIFIED_MANIFEST"
 ```
 
-Re-run `bash scripts/release-preflight.sh --verify-only` immediately before the public transition.
+Install that exact verified draft download into `/Applications`, preserving the previous installed bundle as
+a rollback without changing the data root, media, models, preferences, Keychain, or TCC grants. Then run the
+installed-app privacy and liveness gate before publishing:
+
+1. Record the live database maximum capture ID and the user's current recording setting.
+2. Enable recording through the installed app's real MCP surface. Activate an ordinary app and require the
+   database maximum to advance; a healthy control plane with no new row is a failure.
+3. Lock the Mac using the normal system lock/screen-saver path. Leave it locked for several capture intervals
+   and require the database maximum to stay unchanged.
+4. Unlock normally, activate an ordinary app, and require the database maximum to advance again. The first
+   post-unlock row must be ordinary user content, and the whole test window must contain zero `loginwindow`
+   or screen-saver rows.
+5. Take a normal system screenshot while Eye records and confirm it completes promptly without a new
+   permission prompt.
+6. Restore the user's original recording setting and stop the temporary MCP client, even when a check fails.
+
+The session-state contract and exact failure modes are documented in
+[`docs/solutions/security-issues/macos-capture-session-lock-state-contract.md`](solutions/security-issues/macos-capture-session-lock-state-contract.md).
+If the draft fails any step, delete the draft, restore the last known-good installed app, fix the defect, and
+advance both version and build before rebuilding. Do not publish a failed candidate or replace bytes under an
+existing version.
+
+Re-run `bash scripts/release-preflight.sh --verify-only` immediately before the public transition. After
+publishing, verify that GitHub reports the expected size and SHA-256 digest for both public assets; a public
+artifact is immutable release history. If post-public verification ever fails, withdraw the release and tag,
+restore the last known-good app, and ship the correction under a higher version/build.
 
 The raw `notarytool submit` JSON and Apple log are retained outside the repository and `dist/`, by default under
 `~/Library/Application Support/ZBS Eye Maintainer/Release Evidence/`. The script prints the exact directory,

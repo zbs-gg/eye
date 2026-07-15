@@ -104,8 +104,9 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
    lookup, the media-directory boundary), no egress.
 4. **Honest state:** the UI doesn't lie (the recording icon, permission statuses, "busy").
 
-Check: `xcodebuild … build` green. There is no test target yet (NB for the reviewer — verification was
-live: a REST battery, MCP, a sqlite reconciliation; see commit history with "live" markers).
+Check both the build and the unhosted `ZBSEyeUnitTests` target. Pure production policies are shared into
+that target explicitly so verification does not launch an ad-hoc `gg.zbs.eye` app or churn the installed
+app's TCC grants. Distribution and OS-integration changes still require installed-app REST/MCP/SQLite dogfood.
 
 ## Status (what works)
 
@@ -113,13 +114,13 @@ Working and verified live: screen capture (HEIC + AX/OCR), audio + transcription
 (cross-lingual), timeline, REST + MCP, import of previous history, retention, **relocatable storage**,
 **iCloud backup** (compressed, keep-N, on exit), size tracking, the daily-summary automation, export.
 
-Deferred: a test target (XCTest); source_id for multi-monitor dedup (~0.15% of frames, documented in
-`HistoryImporter`).
+Deferred: source_id for multi-monitor dedup (~0.15% of frames, documented in `HistoryImporter`).
 
 **Distribution — Developer ID + notarization (NOT the App Store).** The App Store requires App Sandbox,
 under which cross-app AX (the core) is impossible + a "records everything" profile gets rejected — so, like
 Rewind/screenpipe, the target is a notarized Developer ID outside the App Store. The pipeline is ready:
 `scripts/build-notarized.sh` (Hardened Runtime + Developer ID + timestamp + notarytool + staple), cert/cred
-setup — `docs/NOTARIZE.md`. There's just one blocker: the paid Apple Developer Program ($99) + a
-"Developer ID Application" certificate. Until then — `scripts/build-release.sh` (self-signed "ZBS Eye Dev"
-+ "Open Anyway"; its cdhash/TCC churn is exactly what notarization removes).
+setup — `docs/NOTARIZE.md`. Release qualification binds an exact version/build/source ZIP to its manifest,
+reverse-verifies the draft download, and exercises the installed artifact across unlocked capture and a real
+lock → unlock transition before publication. `scripts/build-release.sh` remains only the self-signed local
+fallback ("Open Anyway"; its cdhash/TCC churn is exactly what notarization removes).

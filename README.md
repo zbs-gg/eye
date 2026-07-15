@@ -114,7 +114,12 @@ do a security review first** — it's all here, nothing to hide.
    Gatekeeper result. Never select a release asset by wildcard or by "newest file".
 3. Unzip that verified exact ZIP into `/Applications` and launch with a **double-click** (Gatekeeper passes
    it, even offline — the ticket is stapled).
-4. Grant **Screen Recording** + **Accessibility** (optionally Microphone) once. The notarized signature
+4. Before publishing, qualify the installed artifact in both directions: prove an ordinary unlocked app
+   creates a new moment, then lock the Mac long enough for several capture intervals and prove no new moment
+   is written; after unlock, prove capture resumes with an ordinary app and zero `loginwindow` / screen-saver
+   rows. Restore the previous recording setting when done. The complete gate is in
+   [`docs/NOTARIZE.md`](docs/NOTARIZE.md).
+5. Grant **Screen Recording** + **Accessibility** (optionally Microphone) once. The notarized signature
    is stable: rebuilds do NOT reset permissions.
 
 **Dev build without a paid account (self-signed):** `bash scripts/make-signing-cert.sh` (once) →
