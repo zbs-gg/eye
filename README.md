@@ -108,10 +108,10 @@ do a security review first** — it's all here, nothing to hide.
 
 1. Build it: `bash scripts/build-notarized.sh` (needs a "Developer ID Application" certificate +
    a notarytool profile — one-time setup in [`docs/NOTARIZE.md`](docs/NOTARIZE.md)).
-2. Use only the exact version/build/source ZIP path and matching `.manifest.json` path printed by the script.
-   The manifest is authoritative: its `artifact`, `version`, `build`, and `sourceRevision` must identify that
-   ZIP, and its `zipSHA256` and `executableSHA256` must match before upload or installation. Never select a
-   release asset by wildcard or by "newest file".
+2. Use only the exact version/build/source ZIP path and matching `.manifest.json` path printed by the script,
+   then run `bash scripts/verify-release-artifact.sh "$ZIP" "$MANIFEST"`. The verifier checks the hashes and
+   independently pins the actual Developer ID Team, designated requirement, CDHash, stapled ticket, and
+   Gatekeeper result. Never select a release asset by wildcard or by "newest file".
 3. Unzip that verified exact ZIP into `/Applications` and launch with a **double-click** (Gatekeeper passes
    it, even offline — the ticket is stapled).
 4. Grant **Screen Recording** + **Accessibility** (optionally Microphone) once. The notarized signature

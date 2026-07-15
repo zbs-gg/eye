@@ -58,6 +58,22 @@ TOP_LEVEL=$(git rev-parse --show-toplevel 2>/dev/null) || fail "not a Git worktr
 TOP_LEVEL=$(cd "${TOP_LEVEL}" && pwd -P)
 [ "${TOP_LEVEL}" = "$(pwd -P)" ] || fail "run from the repository root, not a nested directory."
 
+# Git status deliberately honors assume-unchanged and skip-worktree flags.
+# Neither is allowed on a qualified release checkout because both can hide
+# tracked build inputs that differ from HEAD.
+HIDDEN_INDEX_STATE=$(git ls-files -v | awk '
+  substr($0, 1, 1) == "S" || substr($0, 1, 1) ~ /^[a-z]$/ { print; exit }
+')
+[ -z "${HIDDEN_INDEX_STATE}" ] || \
+  fail "tracked files use assume-unchanged or skip-worktree index flags."
+
+# XcodeGen recursively includes these shipping source roots. Ignored files do
+# not appear in porcelain status, so reject them explicitly before generation.
+IGNORED_BUILD_INPUTS=$(git ls-files --others --ignored --exclude-standard -- \
+  ZBSEyeApp Packages/ZBSEyeVec)
+[ -z "${IGNORED_BUILD_INPUTS}" ] || \
+  fail "ignored files exist inside shipping source roots."
+
 # Porcelain includes staged, unstaged, and nonignored untracked files. Ignored
 # build output is intentionally excluded.
 DIRTY_STATE=$(git status --porcelain=v1 --untracked-files=all)
@@ -67,7 +83,13 @@ DIRTY_STATE=$(git status --porcelain=v1 --untracked-files=all)
 }
 
 git config --get remote.origin.url >/dev/null 2>&1 || fail "missing required origin remote."
-ORIGIN_URL=$(git config --get remote.origin.url)
+# `git remote get-url` resolves url.*.insteadOf rules. Validate the same
+# effective fetch target Git will use, not the reassuring literal in config.
+EFFECTIVE_ORIGINS=$(git remote get-url --all origin 2>/dev/null) || \
+  fail "could not resolve the effective origin fetch URL."
+ORIGIN_COUNT=$(printf '%s\n' "${EFFECTIVE_ORIGINS}" | awk 'NF { count += 1 } END { print count + 0 }')
+[ "${ORIGIN_COUNT}" -eq 1 ] || fail "origin must resolve to exactly one fetch URL."
+ORIGIN_URL="${EFFECTIVE_ORIGINS}"
 
 normalize_github_remote() {
   local url="$1"
@@ -86,9 +108,9 @@ normalize_github_remote() {
 }
 
 NORMALIZED_ORIGIN=$(normalize_github_remote "${ORIGIN_URL}") || \
-  fail "origin is not a canonical GitHub SSH/HTTPS remote: ${ORIGIN_URL}"
+  fail "effective origin is not a canonical GitHub SSH/HTTPS remote."
 [ "${NORMALIZED_ORIGIN}" = "zbs-gg/eye" ] || \
-  fail "origin does not match canonical repository zbs-gg/eye: ${ORIGIN_URL}"
+  fail "effective origin does not match canonical repository zbs-gg/eye."
 
 if [ "${FIXTURE_MODE}" -eq 1 ]; then
   FETCH_SOURCE="${ZBSEYE_RELEASE_PREFLIGHT_FIXTURE_REMOTE:-}"
@@ -116,12 +138,6 @@ if [ "${SOURCE_REVISION}" != "${MAIN_REVISION}" ]; then
   else
     fail "candidate HEAD is divergent from freshly fetched origin/main."
   fi
-fi
-
-if [ "${MODE}" = "verify-only" ]; then
-  [ "${FIXTURE_MODE}" -eq 0 ] || fail "--verify-only is production-only."
-  echo "✅ release preflight verify-only passed: HEAD is freshly fetched canonical origin/main (${SOURCE_REVISION})."
-  exit 0
 fi
 
 project_value() {
@@ -227,4 +243,9 @@ read -r BASELINE_VERSION BASELINE_BUILD < <(read_identity "${BASELINE_PROJECT}" 
 (( 10#${CANDIDATE_BUILD} > 10#${BASELINE_BUILD} )) || \
   fail "candidate build ${CANDIDATE_BUILD} must be newer than release baseline build ${BASELINE_BUILD}."
 
-echo "✅ release preflight passed: clean canonical main ${SOURCE_REVISION}, ${CANDIDATE_VERSION} (${CANDIDATE_BUILD}) > ${LATEST_TAG} (${BASELINE_BUILD})."
+if [ "${MODE}" = "verify-only" ]; then
+  echo "✅ release preflight verify-only passed: clean canonical main ${SOURCE_REVISION}, ${CANDIDATE_VERSION} (${CANDIDATE_BUILD}) > ${LATEST_TAG} (${BASELINE_BUILD})."
+else
+  echo "✅ release preflight passed: clean canonical main ${SOURCE_REVISION}, ${CANDIDATE_VERSION} (${CANDIDATE_BUILD}) > ${LATEST_TAG} (${BASELINE_BUILD})."
+fi
+echo "ZBSEYE_RELEASE_PREFLIGHT_IDENTITY=${CANDIDATE_VERSION}:${CANDIDATE_BUILD}:${SOURCE_REVISION}"

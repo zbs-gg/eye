@@ -23,11 +23,12 @@ final class ReleaseConfigurationTests: XCTestCase {
         func runPreflight(
             expectedVersion: String = "0.4.3",
             expectedBuild: String = "8",
-            remoteOverride: URL? = nil
+            remoteOverride: URL? = nil,
+            verifyOnly: Bool = false
         ) throws -> CommandResult {
             try Self.run(
                 "/bin/bash",
-                [script.path, "--fixture", worktree.path],
+                [script.path] + (verifyOnly ? ["--verify-only"] : []) + ["--fixture", worktree.path],
                 environment: [
                     "ZBSEYE_RELEASE_PREFLIGHT_FIXTURE": "1",
                     "ZBSEYE_RELEASE_PREFLIGHT_FIXTURE_REMOTE": (remoteOverride ?? remote).path,
@@ -42,7 +43,7 @@ final class ReleaseConfigurationTests: XCTestCase {
         }
 
         func git(_ arguments: String...) throws -> CommandResult {
-            try Self.run("/usr/bin/git", arguments, directory: worktree)
+            try Self.runChecked("/usr/bin/git", arguments, directory: worktree)
         }
 
         func setCandidate(
@@ -60,22 +61,22 @@ final class ReleaseConfigurationTests: XCTestCase {
             )
             _ = try git("add", "project.yml")
             _ = try git("commit", "-m", "candidate \(appVersion) (\(appBuild))")
-            _ = try Self.run("/usr/bin/git", ["push", remote.path, "HEAD:main"], directory: worktree)
+            _ = try Self.runChecked("/usr/bin/git", ["push", remote.path, "HEAD:main"], directory: worktree)
         }
 
         func advanceRemote() throws {
             let updater = root.appending(path: "updater-\(UUID().uuidString)")
-            _ = try Self.run("/usr/bin/git", ["clone", remote.path, updater.path])
+            _ = try Self.runChecked("/usr/bin/git", ["clone", remote.path, updater.path])
             try "remote advanced\n".write(
                 to: updater.appending(path: "remote.txt"),
                 atomically: true,
                 encoding: .utf8
             )
-            _ = try Self.run("/usr/bin/git", ["config", "user.name", "Release Fixture"], directory: updater)
-            _ = try Self.run("/usr/bin/git", ["config", "user.email", "fixture@example.invalid"], directory: updater)
-            _ = try Self.run("/usr/bin/git", ["add", "remote.txt"], directory: updater)
-            _ = try Self.run("/usr/bin/git", ["commit", "-m", "advance remote"], directory: updater)
-            _ = try Self.run("/usr/bin/git", ["push", "origin", "main"], directory: updater)
+            _ = try Self.runChecked("/usr/bin/git", ["config", "user.name", "Release Fixture"], directory: updater)
+            _ = try Self.runChecked("/usr/bin/git", ["config", "user.email", "fixture@example.invalid"], directory: updater)
+            _ = try Self.runChecked("/usr/bin/git", ["add", "remote.txt"], directory: updater)
+            _ = try Self.runChecked("/usr/bin/git", ["commit", "-m", "advance remote"], directory: updater)
+            _ = try Self.runChecked("/usr/bin/git", ["push", "origin", "main"], directory: updater)
         }
 
         static func make(script: URL, includeBaseline: Bool = true) throws -> ReleaseFixture {
@@ -86,24 +87,24 @@ final class ReleaseConfigurationTests: XCTestCase {
             let worktree = root.appending(path: "candidate")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
-            _ = try run("/usr/bin/git", ["init", "--bare", "--initial-branch=main", remote.path])
-            _ = try run("/usr/bin/git", ["init", "--initial-branch=main", seed.path])
-            _ = try run("/usr/bin/git", ["config", "user.name", "Release Fixture"], directory: seed)
-            _ = try run("/usr/bin/git", ["config", "user.email", "fixture@example.invalid"], directory: seed)
+            _ = try runChecked("/usr/bin/git", ["init", "--bare", "--initial-branch=main", remote.path])
+            _ = try runChecked("/usr/bin/git", ["init", "--initial-branch=main", seed.path])
+            _ = try runChecked("/usr/bin/git", ["config", "user.name", "Release Fixture"], directory: seed)
+            _ = try runChecked("/usr/bin/git", ["config", "user.email", "fixture@example.invalid"], directory: seed)
             try writeProject(to: seed, appVersion: "0.4.2", appBuild: "7", testVersion: "0.4.2", testBuild: "7")
             try "baseline\n".write(to: seed.appending(path: "README.md"), atomically: true, encoding: .utf8)
-            _ = try run("/usr/bin/git", ["add", "."], directory: seed)
-            _ = try run("/usr/bin/git", ["commit", "-m", "baseline"], directory: seed)
+            _ = try runChecked("/usr/bin/git", ["add", "."], directory: seed)
+            _ = try runChecked("/usr/bin/git", ["commit", "-m", "baseline"], directory: seed)
             if includeBaseline {
-                _ = try run("/usr/bin/git", ["tag", "v0.4.2"], directory: seed)
+                _ = try runChecked("/usr/bin/git", ["tag", "v0.4.2"], directory: seed)
             }
-            _ = try run("/usr/bin/git", ["remote", "add", "origin", remote.path], directory: seed)
-            _ = try run("/usr/bin/git", ["push", "origin", "main", "--tags"], directory: seed)
+            _ = try runChecked("/usr/bin/git", ["remote", "add", "origin", remote.path], directory: seed)
+            _ = try runChecked("/usr/bin/git", ["push", "origin", "main", "--tags"], directory: seed)
 
-            _ = try run("/usr/bin/git", ["clone", remote.path, worktree.path])
-            _ = try run("/usr/bin/git", ["config", "user.name", "Release Fixture"], directory: worktree)
-            _ = try run("/usr/bin/git", ["config", "user.email", "fixture@example.invalid"], directory: worktree)
-            _ = try run(
+            _ = try runChecked("/usr/bin/git", ["clone", remote.path, worktree.path])
+            _ = try runChecked("/usr/bin/git", ["config", "user.name", "Release Fixture"], directory: worktree)
+            _ = try runChecked("/usr/bin/git", ["config", "user.email", "fixture@example.invalid"], directory: worktree)
+            _ = try runChecked(
                 "/usr/bin/git",
                 ["remote", "set-url", "origin", "git@github.com:zbs-gg/eye.git"],
                 directory: worktree
@@ -161,6 +162,24 @@ final class ReleaseConfigurationTests: XCTestCase {
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             return CommandResult(status: process.terminationStatus, output: String(decoding: data, as: UTF8.self))
         }
+
+        @discardableResult
+        static func runChecked(
+            _ executable: String,
+            _ arguments: [String],
+            directory: URL? = nil,
+            environment: [String: String] = [:]
+        ) throws -> CommandResult {
+            let result = try run(executable, arguments, directory: directory, environment: environment)
+            guard result.status == 0 else {
+                throw NSError(
+                    domain: "ZBSEye.ReleaseFixture",
+                    code: Int(result.status),
+                    userInfo: [NSLocalizedDescriptionKey: result.output]
+                )
+            }
+            return result
+        }
     }
 
     private var repositoryRoot: URL {
@@ -209,6 +228,18 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertTrue(script.contains("TeamIdentifier=${EXPECTED_TEAM}"))
         XCTAssertTrue(script.contains("CANDIDATE_REQUIREMENT"))
         XCTAssertTrue(script.contains("INSTALLED_REQUIREMENT"))
+        XCTAssertTrue(script.contains("XCODE_XCCONFIG_FILE"))
+        XCTAssertTrue(script.contains("ZBSEYE_RELEASE_PREFLIGHT_IDENTITY"))
+        XCTAssertTrue(script.contains("Exported app identity"))
+        XCTAssertTrue(script.contains("scripts/release-preflight.sh --verify-only"))
+        XCTAssertTrue(script.contains("FINAL_PREFLIGHT_OUTPUT"))
+        XCTAssertTrue(script.contains("FINAL_QUALIFIED_IDENTITY"))
+        XCTAssertTrue(script.contains("Release identity changed during the qualified build"))
+        XCTAssertTrue(script.contains("scripts/validate-notary-evidence.sh"))
+        XCTAssertLessThan(
+            try XCTUnwrap(script.range(of: "scripts/release-preflight.sh --verify-only")?.lowerBound),
+            try XCTUnwrap(script.range(of: "xcrun notarytool submit")?.lowerBound)
+        )
     }
 
     func testNotarizedBuildDoesNotUseQuietGrepPipelinesUnderPipefail() throws {
@@ -272,12 +303,131 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertFalse(notarize.contains("ZBSEye-notarized-*.zip"))
         XCTAssertTrue(readme.contains("matching `.manifest.json` path printed by the script"))
         XCTAssertTrue(readme.contains("release asset by wildcard"))
+        XCTAssertTrue(readme.contains("scripts/verify-release-artifact.sh"))
         XCTAssertTrue(notarize.contains("final two `✅` lines print the exact release paths"))
         XCTAssertTrue(notarize.contains("Attach exactly `$ZIP` and `$MANIFEST`"))
-        XCTAssertTrue(notarize.contains("plutil -extract artifact"))
-        XCTAssertTrue(notarize.contains("plutil -extract sourceRevision"))
-        XCTAssertTrue(notarize.contains("plutil -extract zipSHA256"))
-        XCTAssertTrue(notarize.contains("plutil -extract executableSHA256"))
+        XCTAssertTrue(notarize.contains("scripts/verify-release-artifact.sh"))
+        XCTAssertTrue(notarize.contains("$DOWNLOADED_MANIFEST\" \"$QUALIFIED_MANIFEST"))
+    }
+
+    func testReleaseArtifactVerifierPinsTheIndependentPublisherIdentity() throws {
+        let url = repositoryRoot.appending(path: "scripts/verify-release-artifact.sh")
+        let script = try String(contentsOf: url, encoding: .utf8)
+
+        XCTAssertTrue(script.contains("EXPECTED_TEAM=\"44N4NZ86S5\""))
+        XCTAssertTrue(script.contains("EXPECTED_BUNDLE_ID=\"gg.zbs.eye\""))
+        XCTAssertTrue(script.contains("cmp -s"))
+        XCTAssertTrue(script.contains("codesign --verify --strict"))
+        XCTAssertTrue(script.contains("TeamIdentifier=${EXPECTED_TEAM}"))
+        XCTAssertTrue(script.contains("CDHash="))
+        XCTAssertTrue(script.contains("codesign -d -r-"))
+        XCTAssertTrue(script.contains("xcrun stapler validate"))
+        XCTAssertTrue(script.contains("spctl -a -vvv -t exec"))
+        XCTAssertTrue(script.contains("/usr/bin/unzip -Z1"))
+        XCTAssertTrue(script.contains("unexpected archive entry outside ZBS Eye.app"))
+        XCTAssertTrue(script.contains("[ ! -L \"${APP}\" ]"))
+    }
+
+    func testReleaseArtifactVerifierRejectsExtraArchiveEntriesBeforeExtraction() throws {
+        let directory = try makeTemporaryDirectory(prefix: "zbseye-release-extra-entry")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let app = directory.appending(path: "ZBS Eye.app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        try "placeholder".write(to: app.appending(path: "placeholder.txt"), atomically: true, encoding: .utf8)
+        try "unexpected".write(
+            to: directory.appending(path: "extra.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let zip = directory.appending(path: "candidate.zip")
+        _ = try ReleaseFixture.runChecked(
+            "/usr/bin/zip",
+            ["-qry", zip.path, "ZBS Eye.app", "extra.txt"],
+            directory: directory
+        )
+        let hashResult = try ReleaseFixture.runChecked("/usr/bin/shasum", ["-a", "256", zip.path])
+        let zipHash = try XCTUnwrap(hashResult.output.split(separator: " ").first.map(String.init))
+        let manifest: [String: Any] = [
+            "artifact": zip.lastPathComponent,
+            "version": "0.4.3",
+            "build": "8",
+            "sourceRevision": String(repeating: "a", count: 40),
+            "teamIdentifier": "44N4NZ86S5",
+            "cdHash": "candidate-cdhash",
+            "designatedRequirement": #"identifier "gg.zbs.eye""#,
+            "zipSHA256": zipHash,
+            "executableSHA256": String(repeating: "b", count: 64),
+            "notaryStatus": "Accepted",
+            "notarySubmissionID": "submission-123",
+            "notaryLogSHA256": String(repeating: "c", count: 64),
+        ]
+        let manifestURL = directory.appending(path: "candidate.manifest.json")
+        try JSONSerialization.data(withJSONObject: manifest).write(to: manifestURL)
+
+        let result = try ReleaseFixture.run(
+            "/bin/bash",
+            [repositoryRoot.appending(path: "scripts/verify-release-artifact.sh").path, zip.path, manifestURL.path]
+        )
+
+        XCTAssertNotEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("unexpected archive entry"), result.output)
+    }
+
+    func testNotaryEvidenceValidatorAcceptsOnlyCompleteAcceptedEvidence() throws {
+        for issues in ["null", "[]"] {
+            let directory = try makeTemporaryDirectory(prefix: "zbseye-notary-valid")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let submission = directory.appending(path: "submission.json")
+            let log = directory.appending(path: "log.json")
+            try #"{"status":"Accepted","id":"submission-123"}"#.write(
+                to: submission,
+                atomically: true,
+                encoding: .utf8
+            )
+            try "{\"jobId\":\"SUBMISSION-123\",\"status\":\"Accepted\",\"issues\":\(issues)}".write(
+                to: log,
+                atomically: true,
+                encoding: .utf8
+            )
+
+            let result = try runNotaryEvidenceValidator(submission: submission, log: log)
+
+            XCTAssertEqual(result.status, 0, result.output)
+            XCTAssertTrue(result.output.hasPrefix("Accepted\tsubmission-123\t"), result.output)
+            let fields = result.output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\t")
+            XCTAssertEqual(fields.count, 3, result.output)
+            XCTAssertTrue(fields.last?.allSatisfy(\.isHexDigit) == true, result.output)
+            XCTAssertEqual(fields.last?.count, 64, result.output)
+        }
+    }
+
+    func testNotaryEvidenceValidatorFailsClosedOnRejectedOrMalformedEvidence() throws {
+        let cases: [(String, String, String)] = [
+            (#"{"status":"Rejected","id":"submission-123"}"#, #"{"jobId":"submission-123","status":"Accepted","issues":[]}"#, "submission status"),
+            (#"{"status":"Accepted"}"#, #"{"jobId":"submission-123","status":"Accepted","issues":[]}"#, "string ID"),
+            (#"{"status":"Accepted","id":"submission-123"}"#, "", "missing or empty"),
+            (#"{"status":"Accepted","id":"submission-123"}"#, "not-json", "string status"),
+            (#"{"status":"Accepted","id":"submission-123"}"#, #"{"jobId":"submission-123","status":"Rejected","issues":[]}"#, "log status"),
+            (#"{"status":"Accepted","id":"submission-123"}"#, #"{"jobId":"different-submission","status":"Accepted","issues":[]}"#, "does not match"),
+            (#"{"status":"Accepted","id":"submission-123"}"#, #"{"status":"Accepted","issues":[]}"#, "string jobId"),
+            (#"{"status":"Accepted","id":"submission-123"}"#, #"{"jobId":"submission-123","status":"Accepted"}"#, "null or an array"),
+            (#"{"status":"Accepted","id":"submission-123"}"#, #"{"jobId":"submission-123","status":"Accepted","issues":{}}"#, "null or an array"),
+            (#"{"status":"Accepted","id":"submission-123"}"#, #"{"jobId":"submission-123","status":"Accepted","issues":[{"severity":"error"}]}"#, "error issue"),
+        ]
+
+        for (submissionJSON, logJSON, expectedMessage) in cases {
+            let directory = try makeTemporaryDirectory(prefix: "zbseye-notary-invalid")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let submission = directory.appending(path: "submission.json")
+            let log = directory.appending(path: "log.json")
+            try submissionJSON.write(to: submission, atomically: true, encoding: .utf8)
+            try logJSON.write(to: log, atomically: true, encoding: .utf8)
+
+            let result = try runNotaryEvidenceValidator(submission: submission, log: log)
+
+            XCTAssertNotEqual(result.status, 0, "case unexpectedly passed: \(submissionJSON) / \(logJSON)")
+            XCTAssertTrue(result.output.contains(expectedMessage), result.output)
+        }
     }
 
     func testReleasePreflightAcceptsOnlyAnExactCleanFreshMainCandidate() throws {
@@ -286,6 +436,7 @@ final class ReleaseConfigurationTests: XCTestCase {
 
         XCTAssertEqual(result.status, 0, result.output)
         XCTAssertTrue(result.output.contains("release preflight passed"), result.output)
+        XCTAssertTrue(result.output.contains("ZBSEYE_RELEASE_PREFLIGHT_IDENTITY=0.4.3:8:"), result.output)
     }
 
     func testReleasePreflightRejectsTrackedStagedAndUntrackedChanges() throws {
@@ -313,6 +464,56 @@ final class ReleaseConfigurationTests: XCTestCase {
         }
     }
 
+    func testReleasePreflightRejectsHiddenTrackedAndIgnoredBuildInputs() throws {
+        do {
+            let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+            _ = try fixture.git("update-index", "--assume-unchanged", "README.md")
+            try "hidden change\n".append(to: fixture.worktree.appending(path: "README.md"))
+
+            let result = try fixture.runPreflight()
+
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertTrue(result.output.contains("assume-unchanged or skip-worktree"), result.output)
+        }
+        do {
+            let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+            _ = try fixture.git("update-index", "--skip-worktree", "README.md")
+            try "hidden change\n".append(to: fixture.worktree.appending(path: "README.md"))
+
+            let result = try fixture.runPreflight()
+
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertTrue(result.output.contains("assume-unchanged or skip-worktree"), result.output)
+        }
+        do {
+            let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+            try "workspace/\n".write(
+                to: fixture.worktree.appending(path: ".gitignore"),
+                atomically: true,
+                encoding: .utf8
+            )
+            _ = try fixture.git("add", ".gitignore")
+            _ = try fixture.git("commit", "-m", "add source ignore rule")
+            _ = try ReleaseFixture.runChecked(
+                "/usr/bin/git",
+                ["push", fixture.remote.path, "HEAD:main"],
+                directory: fixture.worktree
+            )
+            let ignoredDirectory = fixture.worktree.appending(path: "ZBSEyeApp/workspace")
+            try FileManager.default.createDirectory(at: ignoredDirectory, withIntermediateDirectories: true)
+            try "struct HiddenReleaseInput {}\n".write(
+                to: ignoredDirectory.appending(path: "Evil.swift"),
+                atomically: true,
+                encoding: .utf8
+            )
+
+            let result = try fixture.runPreflight()
+
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertTrue(result.output.contains("ignored files exist inside shipping source roots"), result.output)
+        }
+    }
+
     func testReleasePreflightFailsClosedOnRemoteAndFetchAmbiguity() throws {
         do {
             let fixture = try ReleaseFixture.make(script: releasePreflightScript)
@@ -327,6 +528,30 @@ final class ReleaseConfigurationTests: XCTestCase {
             let result = try fixture.runPreflight()
             XCTAssertNotEqual(result.status, 0, result.output)
             XCTAssertTrue(result.output.contains("canonical"), result.output)
+        }
+        do {
+            let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+            let hostile = "file://\(fixture.root.appending(path: "hostile.git").path)"
+            _ = try fixture.git(
+                "config",
+                "url.\(hostile).insteadOf",
+                "git@github.com:zbs-gg/eye.git"
+            )
+            let result = try fixture.runPreflight()
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertTrue(result.output.contains("effective origin"), result.output)
+        }
+        do {
+            let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+            _ = try fixture.git(
+                "remote",
+                "set-url",
+                "origin",
+                "https://x-access-token:sentinel-secret@github.com/zbs-gg/eye.git"
+            )
+            let result = try fixture.runPreflight()
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertFalse(result.output.contains("sentinel-secret"), result.output)
         }
         do {
             let fixture = try ReleaseFixture.make(script: releasePreflightScript)
@@ -376,7 +601,7 @@ final class ReleaseConfigurationTests: XCTestCase {
         do {
             let fixture = try ReleaseFixture.make(script: releasePreflightScript)
             _ = try fixture.git("tag", "v0.4.3")
-            _ = try ReleaseFixture.run(
+            _ = try ReleaseFixture.runChecked(
                 "/usr/bin/git",
                 ["push", fixture.remote.path, "v0.4.3"],
                 directory: fixture.worktree
@@ -385,6 +610,27 @@ final class ReleaseConfigurationTests: XCTestCase {
             XCTAssertNotEqual(result.status, 0, result.output)
             XCTAssertTrue(result.output.contains("already exists"), result.output)
         }
+    }
+
+    func testReleasePreflightVerifyOnlyStillRejectsAnExistingCandidateTag() throws {
+        let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+        _ = try fixture.git("tag", "v0.4.3")
+        _ = try ReleaseFixture.runChecked(
+            "/usr/bin/git",
+            ["push", fixture.remote.path, "v0.4.3"],
+            directory: fixture.worktree
+        )
+
+        let result = try fixture.runPreflight(verifyOnly: true)
+
+        XCTAssertNotEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("already exists"), result.output)
+    }
+
+    func testReleaseFixtureCheckedRunnerRejectsGitSetupFailures() {
+        XCTAssertThrowsError(
+            try ReleaseFixture.runChecked("/usr/bin/git", ["not-a-real-git-command"])
+        )
     }
 
     func testReleasePreflightRejectsRegressedIdentityAndTargetDisagreement() throws {
@@ -429,7 +675,7 @@ final class ReleaseConfigurationTests: XCTestCase {
         let fixture = try ReleaseFixture.make(script: releasePreflightScript)
         _ = try fixture.git("tag", "v999.0.0-beta")
         _ = try fixture.git("tag", "version-not-a-release")
-        _ = try ReleaseFixture.run(
+        _ = try ReleaseFixture.runChecked(
             "/usr/bin/git",
             ["push", fixture.remote.path, "--tags"],
             directory: fixture.worktree
@@ -441,6 +687,20 @@ final class ReleaseConfigurationTests: XCTestCase {
 
     private var releasePreflightScript: URL {
         repositoryRoot.appending(path: "scripts/release-preflight.sh")
+    }
+
+    private func runNotaryEvidenceValidator(submission: URL, log: URL) throws -> CommandResult {
+        try ReleaseFixture.run(
+            "/bin/bash",
+            [repositoryRoot.appending(path: "scripts/validate-notary-evidence.sh").path, submission.path, log.path]
+        )
+    }
+
+    private func makeTemporaryDirectory(prefix: String) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "\(prefix)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
 
     func testSelfSignedBuildPreservesEntitlementsWhenBundlingTheModel() throws {
