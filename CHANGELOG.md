@@ -2,6 +2,16 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
+## [0.4.3] — 2026-07-15
+
+### Fixed
+- Timeline Scene details now stay bound to the visible moment, show an immediate one-moment fallback while
+  grouping loads, and reject stale or same-time results from another capture.
+
+### Changed
+- Release qualification now proves a clean, freshly fetched `main` candidate with a monotonic version/build,
+  then binds the exact notarized ZIP to its manifest and retained Apple notarization evidence.
+
 ## [0.4.2] — 2026-07-14
 
 ### Fixed
@@ -225,8 +235,9 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   available, fallback input + ↻ if the server is silent.
 - **Developer ID notarization pipeline** (`scripts/build-notarized.sh` + `docs/NOTARIZE.md`): build with
   Hardened Runtime → Developer ID signature + a secure timestamp → `notarytool submit --wait` → `stapler
-  staple` → a Gatekeeper check. The output is a notarized `dist/ZBSEye-notarized-*.zip` (double-click to
-  launch, no "Open Anyway"; the signature is stable — rebuilds don't reset TCC permissions).
+  staple` → a Gatekeeper check. The output is a notarized
+  `dist/ZBSEye-<version>-<build>-<source>-notarized.zip` (double-click to launch, no "Open Anyway"; the
+  signature is stable — rebuilds don't reset TCC permissions).
 
 ### Changed
 - **Distribution decision: Developer ID + notarization, NOT the Mac App Store.** The App Store requires App

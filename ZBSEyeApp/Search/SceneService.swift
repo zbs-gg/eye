@@ -1,22 +1,5 @@
 import Foundation
 
-/// One scene — continuous activity in a single app with no gap > `gapThreshold`.
-/// Sendable: it crosses actor boundaries (SceneService → SceneStore → SwiftUI).
-struct ActivityScene: Sendable, Identifiable {
-    let id: String             // "appId-startTs" — a stable key for ForEach
-    let appId: Int64?
-    let bundleId: String?
-    let appName: String?
-    let repWindowTitle: String?
-    let browserURL: String?
-    let startTs: Date
-    let endTs: Date
-    let durationSec: Double
-    let frameCount: Int
-    let summary: String        // 1–2 lines of a meaningful description (heuristic, no LLM)
-    let isSystem: Bool         // system shell (loginwindow…) — hidden from blocks, debug toggle only
-}
-
 /// Segments `screen_captures` into scenes on the fly (no schema migration). Fetching/segmentation/batch text
 /// are delegated to the shared DayActivityRepository — here it's only the domain assembly of a scene + a heuristic summary.
 /// Actor: db-read only (via repo), not a writer.
@@ -40,13 +23,10 @@ actor SceneService {
         return try await build(from: caps)
     }
 
-    /// The scene that a moment in time falls into (for the timeline's right panel).
-    /// Widened window (±90 min) + EXACT containment: we return a scene only if its range actually
-    /// covers `time`. A cursor in a "gap" (no activity) → nil (the UI shows RAW). No fallback to "nearest"
-    /// (Pro review #4 — a frame from another scene must not stand in for the current one).
-    func scene(containing time: Date) async throws -> ActivityScene? {
+    /// The scene containing the exact visible frame (for the timeline's right panel).
+    /// Capture identity matters: separate displays can produce different apps at the same timestamp.
+    func scene(containingCaptureID captureID: Int64, at time: Date) async throws -> ActivityScene? {
         let window: TimeInterval = 90 * 60
-        let timeMs = msFromDate(time)
         let caps = try await repo.captures(fromMs: msFromDate(time.addingTimeInterval(-window)),
                                            toMs: msFromDate(time.addingTimeInterval(window)))
         guard !caps.isEmpty else { return nil }
@@ -54,9 +34,20 @@ actor SceneService {
         // same one the user tapped in a block's session list (Pro review: panel vs card consistency).
         let sessions = DayActivityRepository.sessions(caps, grouping: .appOnly, gapMs: gapMs,
                                                       excludeSystem: false)
-        guard let seg = sessions.first(where: { $0.startMs <= timeMs && $0.endMs >= timeMs }) else { return nil }
+        guard let seg = Self.session(containingCaptureID: captureID, in: sessions) else { return nil }
         let text = try await repo.batchText(captureIds: [seg.rep.id])
         return Self.buildScene(seg, repText: text[seg.rep.id] ?? "")
+    }
+
+    /// Pure selector kept visible to the unhosted regression target. Timestamp equality is intentionally
+    /// irrelevant here: only the frame row's capture identity can select its owning session.
+    nonisolated static func session(
+        containingCaptureID captureID: Int64,
+        in sessions: [ActivitySession]
+    ) -> ActivitySession? {
+        sessions.first { session in
+            session.captures.contains { $0.id == captureID }
+        }
     }
 
     // MARK: - assembly
@@ -82,7 +73,8 @@ actor SceneService {
                                    windowTitle: repTitle, browserURL: repURL, repText: repText)
         let sceneId = "\(first.appId.map(String.init) ?? "noapp")-\(first.ts)"
         return ActivityScene(
-            id: sceneId, appId: first.appId, bundleId: first.bundleId, appName: first.appName,
+            id: sceneId, captureIds: Set(seg.captureIds),
+            appId: first.appId, bundleId: first.bundleId, appName: first.appName,
             repWindowTitle: repTitle, browserURL: repURL,
             startTs: dateFromMs(seg.startMs), endTs: dateFromMs(seg.endMs),
             durationSec: max(1, Double(seg.durationMs) / 1000.0),

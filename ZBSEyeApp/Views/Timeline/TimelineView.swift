@@ -41,9 +41,10 @@ private struct TimelineBody: View {
     @State private var seekTask: Task<Void, Never>?
     @State private var jumpDate = Date()
     @FocusState private var searchFocused: Bool
-    /// The current scene for the right panel (updates when the cursor changes).
-    @State private var currentScene: ActivityScene?
-    @State private var sceneLoadTask: Task<Void, Never>?
+    /// The right panel follows the exact frame visible on screen, not the free-running cursor.
+    @State private var sceneDetailState = TimelineSceneDetailState()
+    /// Keep disclosure state scoped to one visible frame so scrubbing never exposes another frame's text.
+    @State private var extractedTextExpandedFrameID: Int64?
 
     private var showResults: Bool { store.isSearching || !store.results.isEmpty }
 
@@ -269,17 +270,27 @@ private struct TimelineBody: View {
                             }
                         }
                         Divider()
-                        // The scene summary instead of a RAW OCR dump; fallback to raw text if there's no scene.
-                        // Gate (Pro #4): we show the scene ONLY if its range actually covers
-                        // the current frame — otherwise (a stale/foreign scene during debounce) we show RAW.
-                        if let scene = currentScene, scene.startTs <= c.ts, c.ts <= scene.endTs {
-                            SceneSummaryCard(scene: scene) {
-                                Task { await store.seek(to: scene.startTs) }
+                        let card = sceneDetailState.card(for: c)
+                        SceneSummaryCard(
+                            card: card,
+                            onJump: card.jumpToStart.map { start in
+                                { Task { await store.seek(to: start) } }
                             }
-                        } else {
+                        )
+                        DisclosureGroup(isExpanded: Binding(
+                            get: { extractedTextExpandedFrameID == c.id },
+                            set: { extractedTextExpandedFrameID = $0 ? c.id : nil }
+                        )) {
                             Text(c.text.isEmpty ? "(no text extracted)" : c.text)
-                                .font(.callout).textSelection(.enabled)
+                                .font(.callout)
+                                .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.top, 4)
+                        } label: {
+                            Label("Extracted text", systemImage: "text.viewfinder")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                                .accessibilityLabel("Extracted text")
                         }
                     }
                     .transition(.opacity)
@@ -292,15 +303,22 @@ private struct TimelineBody: View {
             .animation(reduceMotion ? .none : .smooth(duration: 0.2), value: store.current?.id)
             .animation(reduceMotion ? .none : .smooth(duration: 0.2), value: store.audioDetail?.id)
         }
-        .onChange(of: store.cursor) { _, newCursor in
-            // When the cursor changes we load the scene for the right panel.
-            // We debounce — only after it settles (no point loading every frame during play).
-            sceneLoadTask?.cancel()
-            sceneLoadTask = Task {
-                try? await Task.sleep(for: .milliseconds(300))
-                guard !Task.isCancelled else { return }
-                currentScene = await env.sceneStore?.scene(for: newCursor)
+        .task(id: TimelineSceneLoadKey(
+            frameID: store.current?.id,
+            sceneStoreReady: env.sceneStore != nil
+        )) {
+            guard let frame = store.current else {
+                sceneDetailState.clear()
+                extractedTextExpandedFrameID = nil
+                return
             }
+            guard sceneDetailState.beginLoading(for: frame) else { return }
+            // Avoid querying every transient playback frame. The one-moment card stays visible meanwhile.
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            let scene = await env.sceneStore?.scene(for: frame)
+            guard !Task.isCancelled else { return }
+            sceneDetailState.finishLoading(scene, forFrameID: frame.id)
         }
     }
 

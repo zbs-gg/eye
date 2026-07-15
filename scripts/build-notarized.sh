@@ -23,13 +23,34 @@ EXPORT_DIR="build/DeveloperIDExport"
 EXPORT_OPTIONS="build/ExportOptions-DeveloperID.plist"
 EXPORT_METHOD="developer-id"
 APP="$EXPORT_DIR/ZBS Eye.app"
-SOURCE_REVISION=$(git rev-parse --verify HEAD)
-SOURCE_SHORT=$(git rev-parse --short=12 HEAD)
 
-git diff --quiet && git diff --cached --quiet || {
-  echo "❌ Refusing to build a release from a dirty worktree. Commit the exact candidate first."
+[ -z "${XCODE_XCCONFIG_FILE:-}" ] || {
+  echo "❌ XCODE_XCCONFIG_FILE must be unset for a qualified release build."
   exit 1
 }
+
+# Provenance must be proven before project generation or archive work can
+# mutate ignored build output. This gate freshly fetches canonical main/tags.
+PREFLIGHT_OUTPUT=$(bash scripts/release-preflight.sh)
+printf '%s\n' "${PREFLIGHT_OUTPUT}"
+QUALIFIED_IDENTITY=""
+while IFS= read -r line; do
+  case "${line}" in
+    ZBSEYE_RELEASE_PREFLIGHT_IDENTITY=*) QUALIFIED_IDENTITY="${line#*=}" ;;
+  esac
+done <<< "${PREFLIGHT_OUTPUT}"
+[ -n "${QUALIFIED_IDENTITY}" ] || {
+  echo "❌ Release preflight did not return a qualified identity."
+  exit 1
+}
+IFS=: read -r QUALIFIED_VERSION QUALIFIED_BUILD QUALIFIED_REVISION <<< "${QUALIFIED_IDENTITY}"
+
+SOURCE_REVISION=$(git rev-parse --verify HEAD)
+[ "${SOURCE_REVISION}" = "${QUALIFIED_REVISION}" ] || {
+  echo "❌ Candidate HEAD changed after release preflight."
+  exit 1
+}
+SOURCE_SHORT=$(git rev-parse --short=12 HEAD)
 
 # ── 0. find the Developer ID identity + team from the keychain ──
 DEVID_LINES=$(security find-identity -v -p codesigning \
@@ -87,6 +108,12 @@ xcodebuild -exportArchive \
   -allowProvisioningUpdates
 
 [ -d "${APP}" ] || { echo "❌ \"ZBS Eye.app\" did not build"; exit 1; }
+VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${APP}/Contents/Info.plist")
+BUILD_NUMBER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${APP}/Contents/Info.plist")
+[ "${VERSION}" = "${QUALIFIED_VERSION}" ] && [ "${BUILD_NUMBER}" = "${QUALIFIED_BUILD}" ] || {
+  echo "❌ Exported app identity ${VERSION} (${BUILD_NUMBER}) differs from preflight-qualified ${QUALIFIED_VERSION} (${QUALIFIED_BUILD})."
+  exit 1
+}
 PROFILE="${APP}/Contents/embedded.provisionprofile"
 [ -f "${PROFILE}" ] || {
   echo "❌ Xcode did not embed a Developer ID provisioning profile."
@@ -157,8 +184,6 @@ fi
 
 # ── 4. notarization (Apple checks for 5–15 min) ──
 mkdir -p dist
-VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${APP}/Contents/Info.plist")
-BUILD_NUMBER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${APP}/Contents/Info.plist")
 ARTIFACT_STEM="ZBSEye-${VERSION}-${BUILD_NUMBER}-${SOURCE_SHORT}-notarized"
 ZIP="dist/${ARTIFACT_STEM}.zip"
 MANIFEST="dist/${ARTIFACT_STEM}.manifest.json"
@@ -168,9 +193,79 @@ SUBMISSION_ZIP="build/${ARTIFACT_STEM}-submission.zip"
   exit 1
 }
 rm -f "${SUBMISSION_ZIP}"
+# Close the long-build TOCTOU window before any bytes leave the Mac. This also
+# rechecks that the candidate tag has not appeared since the first preflight.
+FINAL_PREFLIGHT_OUTPUT=$(bash scripts/release-preflight.sh --verify-only)
+printf '%s\n' "${FINAL_PREFLIGHT_OUTPUT}"
+FINAL_QUALIFIED_IDENTITY=""
+while IFS= read -r line; do
+  case "${line}" in
+    ZBSEYE_RELEASE_PREFLIGHT_IDENTITY=*) FINAL_QUALIFIED_IDENTITY="${line#*=}" ;;
+  esac
+done <<< "${FINAL_PREFLIGHT_OUTPUT}"
+[ "${FINAL_QUALIFIED_IDENTITY}" = "${QUALIFIED_IDENTITY}" ] || {
+  echo "❌ Release identity changed during the qualified build."
+  exit 1
+}
 ditto -c -k --keepParent "${APP}" "${SUBMISSION_ZIP}"
 echo "▸ Submitting to Apple notarytool (--wait, usually 2–10 min)…"
-xcrun notarytool submit "${SUBMISSION_ZIP}" --keychain-profile "${NOTARY_PROFILE}" --wait
+RELEASE_EVIDENCE_ROOT="${ZBSEYE_RELEASE_EVIDENCE_DIR:-${HOME}/Library/Application Support/ZBS Eye Maintainer/Release Evidence}"
+PREVIOUS_UMASK=$(umask)
+umask 077
+mkdir -p "${RELEASE_EVIDENCE_ROOT}"
+chmod 700 "${RELEASE_EVIDENCE_ROOT}"
+EVIDENCE_DIR="${RELEASE_EVIDENCE_ROOT}/${ARTIFACT_STEM}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+mkdir -m 700 "${EVIDENCE_DIR}"
+NOTARY_SUBMISSION_JSON="${EVIDENCE_DIR}/notary-submission.json"
+NOTARY_LOG="${EVIDENCE_DIR}/notary-log.json"
+
+set +e
+xcrun notarytool submit "${SUBMISSION_ZIP}" \
+  --keychain-profile "${NOTARY_PROFILE}" \
+  --wait \
+  --output-format json > "${NOTARY_SUBMISSION_JSON}"
+NOTARY_SUBMIT_STATUS=$?
+set -e
+chmod 600 "${NOTARY_SUBMISSION_JSON}"
+cat "${NOTARY_SUBMISSION_JSON}"
+[ "${NOTARY_SUBMIT_STATUS}" -eq 0 ] || {
+  echo "❌ notarytool submit failed (exit ${NOTARY_SUBMIT_STATUS}). Evidence retained at ${EVIDENCE_DIR}"
+  exit 1
+}
+
+NOTARY_STATUS=$(/usr/bin/plutil -extract status raw -expect string -o - "${NOTARY_SUBMISSION_JSON}" 2>/dev/null || true)
+NOTARY_SUBMISSION_ID=$(/usr/bin/plutil -extract id raw -expect string -o - "${NOTARY_SUBMISSION_JSON}" 2>/dev/null || true)
+[ "${NOTARY_STATUS}" = "Accepted" ] || {
+  echo "❌ Apple notarization status is ${NOTARY_STATUS:-missing}, expected Accepted. Evidence retained at ${EVIDENCE_DIR}"
+  exit 1
+}
+[ -n "${NOTARY_SUBMISSION_ID}" ] || {
+  echo "❌ Accepted notary response did not contain a submission ID. Evidence retained at ${EVIDENCE_DIR}"
+  exit 1
+}
+
+xcrun notarytool log \
+  --keychain-profile "${NOTARY_PROFILE}" \
+  "${NOTARY_SUBMISSION_ID}" \
+  "${NOTARY_LOG}"
+chmod 600 "${NOTARY_LOG}"
+[ -s "${NOTARY_LOG}" ] || {
+  echo "❌ Apple returned an empty notarization log. Evidence retained at ${EVIDENCE_DIR}"
+  exit 1
+}
+NOTARY_EVIDENCE=$(bash scripts/validate-notary-evidence.sh "${NOTARY_SUBMISSION_JSON}" "${NOTARY_LOG}") || {
+  echo "❌ Apple notarization evidence failed validation. Evidence retained at ${EVIDENCE_DIR}"
+  exit 1
+}
+IFS=$'\t' read -r VALIDATED_NOTARY_STATUS VALIDATED_SUBMISSION_ID NOTARY_LOG_SHA256 <<< "${NOTARY_EVIDENCE}"
+[ "${VALIDATED_NOTARY_STATUS}" = "${NOTARY_STATUS}" ] && \
+  [ "${VALIDATED_SUBMISSION_ID}" = "${NOTARY_SUBMISSION_ID}" ] || {
+  echo "❌ Apple submission and reviewed log identity disagree. Evidence retained at ${EVIDENCE_DIR}"
+  exit 1
+}
+umask "${PREVIOUS_UMASK}"
+echo "✅ Apple notarization Accepted (${NOTARY_SUBMISSION_ID})."
+echo "✅ Private release evidence retained at ${EVIDENCE_DIR}"
 
 # ── 5. staple the ticket into the app + Gatekeeper check ──
 xcrun stapler staple "${APP}"
@@ -208,6 +303,9 @@ rm -f "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert designatedRequirement -string "${CANDIDATE_REQUIREMENT}" "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert zipSHA256 -string "${ZIP_SHA256}" "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert executableSHA256 -string "${EXECUTABLE_SHA256}" "${MANIFEST_PLIST}"
+/usr/bin/plutil -insert notaryStatus -string "${NOTARY_STATUS}" "${MANIFEST_PLIST}"
+/usr/bin/plutil -insert notarySubmissionID -string "${NOTARY_SUBMISSION_ID}" "${MANIFEST_PLIST}"
+/usr/bin/plutil -insert notaryLogSHA256 -string "${NOTARY_LOG_SHA256}" "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert hardenedRuntime -bool YES "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert audioInputEntitlement -bool YES "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert appSandbox -bool NO "${MANIFEST_PLIST}"
