@@ -385,10 +385,10 @@ private func loadAppIcon(bundleId: String?) async -> NSImage? {
 
 // MARK: - scene summary card for the timeline's right panel
 
-/// Embedded in TimelineView's `detailPanel` instead of a RAW OCR dump when the current scene is known.
+/// Shared by the Timeline fallback and grouped-Scene forms.
 struct SceneSummaryCard: View {
-    let scene: ActivityScene
-    let onJump: () -> Void      // "Jump to start" — seek(startTs)
+    let card: TimelineSceneCardPresentation
+    let onJump: (() -> Void)?
 
     @State private var appIcon: NSImage?
 
@@ -403,32 +403,40 @@ struct SceneSummaryCard: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button {
-                    onJump()
-                } label: {
-                    Label("Start", systemImage: "arrow.left.to.line")
-                        .font(.caption)
+                if let onJump {
+                    Button(action: onJump) {
+                        Label("Start", systemImage: "arrow.left.to.line")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.tint)
+                    .accessibilityLabel("Start of scene")
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.tint)
             }
 
-            Text(scene.summary)
+            Text(card.summary)
                 .font(.callout)
                 .lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 10) {
-                Label(durationLabel(scene.durationSec), systemImage: "clock")
-                Label("\(scene.frameCount) moments", systemImage: "photo")
+                Label(durationLabel(card.durationSec), systemImage: "clock")
+                if card.frameCount == 1 {
+                    Label("1 moment", systemImage: "photo")
+                } else {
+                    Label("\(card.frameCount) moments", systemImage: "photo")
+                }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
         }
         .padding(10)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
-        .task(id: scene.bundleId) {
-            appIcon = await loadAppIcon(bundleId: scene.bundleId)
+        .task(id: card.bundleId) {
+            appIcon = nil
+            let icon = await loadAppIcon(bundleId: card.bundleId)
+            guard !Task.isCancelled else { return }
+            appIcon = icon
         }
     }
 }

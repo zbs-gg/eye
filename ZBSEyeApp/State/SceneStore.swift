@@ -73,9 +73,9 @@ final class SceneStore {
         if gen == loadGeneration { isLoading = false }
     }
 
-    /// The scene containing the given moment in time (for the timeline's right panel).
-    func scene(for time: Date) async -> ActivityScene? {
-        try? await service.scene(containing: time)
+    /// The scene containing the exact visible frame (for the timeline's right panel).
+    func scene(for frame: FrameDetail) async -> ActivityScene? {
+        try? await service.scene(containingCaptureID: frame.id, at: frame.ts)
     }
 
     // MARK: - LLM block labels (optional, heuristic fallback always shown)

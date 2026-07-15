@@ -23,13 +23,13 @@ EXPORT_DIR="build/DeveloperIDExport"
 EXPORT_OPTIONS="build/ExportOptions-DeveloperID.plist"
 EXPORT_METHOD="developer-id"
 APP="$EXPORT_DIR/ZBS Eye.app"
+
+# Provenance must be proven before project generation or archive work can
+# mutate ignored build output. This gate freshly fetches canonical main/tags.
+bash scripts/release-preflight.sh
+
 SOURCE_REVISION=$(git rev-parse --verify HEAD)
 SOURCE_SHORT=$(git rev-parse --short=12 HEAD)
-
-git diff --quiet && git diff --cached --quiet || {
-  echo "❌ Refusing to build a release from a dirty worktree. Commit the exact candidate first."
-  exit 1
-}
 
 # ── 0. find the Developer ID identity + team from the keychain ──
 DEVID_LINES=$(security find-identity -v -p codesigning \
@@ -170,7 +170,68 @@ SUBMISSION_ZIP="build/${ARTIFACT_STEM}-submission.zip"
 rm -f "${SUBMISSION_ZIP}"
 ditto -c -k --keepParent "${APP}" "${SUBMISSION_ZIP}"
 echo "▸ Submitting to Apple notarytool (--wait, usually 2–10 min)…"
-xcrun notarytool submit "${SUBMISSION_ZIP}" --keychain-profile "${NOTARY_PROFILE}" --wait
+RELEASE_EVIDENCE_ROOT="${ZBSEYE_RELEASE_EVIDENCE_DIR:-${HOME}/Library/Application Support/ZBS Eye Maintainer/Release Evidence}"
+PREVIOUS_UMASK=$(umask)
+umask 077
+mkdir -p "${RELEASE_EVIDENCE_ROOT}"
+chmod 700 "${RELEASE_EVIDENCE_ROOT}"
+EVIDENCE_DIR="${RELEASE_EVIDENCE_ROOT}/${ARTIFACT_STEM}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+mkdir -m 700 "${EVIDENCE_DIR}"
+NOTARY_SUBMISSION_JSON="${EVIDENCE_DIR}/notary-submission.json"
+NOTARY_LOG="${EVIDENCE_DIR}/notary-log.json"
+
+set +e
+xcrun notarytool submit "${SUBMISSION_ZIP}" \
+  --keychain-profile "${NOTARY_PROFILE}" \
+  --wait \
+  --output-format json > "${NOTARY_SUBMISSION_JSON}"
+NOTARY_SUBMIT_STATUS=$?
+set -e
+chmod 600 "${NOTARY_SUBMISSION_JSON}"
+cat "${NOTARY_SUBMISSION_JSON}"
+[ "${NOTARY_SUBMIT_STATUS}" -eq 0 ] || {
+  echo "❌ notarytool submit failed (exit ${NOTARY_SUBMIT_STATUS}). Evidence retained at ${EVIDENCE_DIR}"
+  exit 1
+}
+
+NOTARY_STATUS=$(/usr/bin/plutil -extract status raw -o - "${NOTARY_SUBMISSION_JSON}" 2>/dev/null || true)
+NOTARY_SUBMISSION_ID=$(/usr/bin/plutil -extract id raw -o - "${NOTARY_SUBMISSION_JSON}" 2>/dev/null || true)
+[ "${NOTARY_STATUS}" = "Accepted" ] || {
+  echo "❌ Apple notarization status is ${NOTARY_STATUS:-missing}, expected Accepted. Evidence retained at ${EVIDENCE_DIR}"
+  exit 1
+}
+[ -n "${NOTARY_SUBMISSION_ID}" ] || {
+  echo "❌ Accepted notary response did not contain a submission ID. Evidence retained at ${EVIDENCE_DIR}"
+  exit 1
+}
+
+xcrun notarytool log \
+  --keychain-profile "${NOTARY_PROFILE}" \
+  "${NOTARY_SUBMISSION_ID}" \
+  "${NOTARY_LOG}"
+chmod 600 "${NOTARY_LOG}"
+[ -s "${NOTARY_LOG}" ] || {
+  echo "❌ Apple returned an empty notarization log. Evidence retained at ${EVIDENCE_DIR}"
+  exit 1
+}
+NOTARY_LOG_STATUS=$(/usr/bin/plutil -extract status raw -o - "${NOTARY_LOG}" 2>/dev/null || true)
+[ "${NOTARY_LOG_STATUS}" = "Accepted" ] || {
+  echo "❌ Apple notarization log status is ${NOTARY_LOG_STATUS:-missing}, expected Accepted. Evidence retained at ${EVIDENCE_DIR}"
+  exit 1
+}
+NOTARY_LOG_ISSUES=$(/usr/bin/plutil -extract issues json -o - "${NOTARY_LOG}" 2>/dev/null || printf '[]')
+if printf '%s' "${NOTARY_LOG_ISSUES}" | tr -d '[:space:]' | grep -q '"severity":"error"'; then
+  echo "❌ Apple notarization log contains an error issue. Evidence retained at ${EVIDENCE_DIR}"
+  exit 1
+fi
+NOTARY_LOG_SHA256=$(shasum -a 256 "${NOTARY_LOG}" | awk '{print $1}')
+[ -n "${NOTARY_LOG_SHA256}" ] || {
+  echo "❌ Could not hash Apple notarization log. Evidence retained at ${EVIDENCE_DIR}"
+  exit 1
+}
+umask "${PREVIOUS_UMASK}"
+echo "✅ Apple notarization Accepted (${NOTARY_SUBMISSION_ID})."
+echo "✅ Private release evidence retained at ${EVIDENCE_DIR}"
 
 # ── 5. staple the ticket into the app + Gatekeeper check ──
 xcrun stapler staple "${APP}"
@@ -208,6 +269,9 @@ rm -f "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert designatedRequirement -string "${CANDIDATE_REQUIREMENT}" "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert zipSHA256 -string "${ZIP_SHA256}" "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert executableSHA256 -string "${EXECUTABLE_SHA256}" "${MANIFEST_PLIST}"
+/usr/bin/plutil -insert notaryStatus -string "${NOTARY_STATUS}" "${MANIFEST_PLIST}"
+/usr/bin/plutil -insert notarySubmissionID -string "${NOTARY_SUBMISSION_ID}" "${MANIFEST_PLIST}"
+/usr/bin/plutil -insert notaryLogSHA256 -string "${NOTARY_LOG_SHA256}" "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert hardenedRuntime -bool YES "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert audioInputEntitlement -bool YES "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert appSandbox -bool NO "${MANIFEST_PLIST}"

@@ -187,6 +187,16 @@
         }
       }
     },
+    "1 moment": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 момент"
+          }
+        }
+      }
+    },
     "(no transcript — found by time)": {
       "localizations": {
         "ru": {
@@ -2156,6 +2166,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Экспорт…"
+          }
+        }
+      }
+    },
+    "Extracted text": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Извлечённый текст"
           }
         }
       }

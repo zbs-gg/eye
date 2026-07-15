@@ -93,8 +93,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: "ZBS Eye"
         INFOPLIST_KEY_CFBundleName: "ZBS Eye"
         GENERATE_INFOPLIST_FILE: YES
-        MARKETING_VERSION: "0.4.2"          # CFBundleShortVersionString
-        CURRENT_PROJECT_VERSION: "7"        # CFBundleVersion
+        MARKETING_VERSION: "0.4.3"          # CFBundleShortVersionString
+        CURRENT_PROJECT_VERSION: "8"        # CFBundleVersion
         CODE_SIGN_ENTITLEMENTS: ZBSEyeApp/ZBSEye.entitlements
         # Default — ad-hoc for development. scripts/build-release.sh can use the legacy self-signed
         # "ZBS Eye Dev" identity; distributable releases must use scripts/build-notarized.sh with the
@@ -199,6 +199,11 @@ targets:
       - path: ZBSEyeApp/Data/StorageRelocationPolicy.swift
       - path: ZBSEyeApp/Support/Log.swift
       - path: ZBSEyeApp/Search/SearchModels.swift
+      - path: ZBSEyeApp/Search/SceneModels.swift
+      - path: ZBSEyeApp/Search/SystemAppFilter.swift
+      - path: ZBSEyeApp/Search/DayActivityRepository.swift
+      - path: ZBSEyeApp/Search/SceneService.swift
+      - path: ZBSEyeApp/Views/Timeline/TimelineSceneDetailState.swift
       - path: ZBSEyeApp/Search/AskScope.swift
       - path: ZBSEyeApp/Search/AskDatabaseRetrieval.swift
       - path: ZBSEyeApp/MCP/MCPHistorySearchRouting.swift
@@ -230,8 +235,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye.tests
-        MARKETING_VERSION: "0.4.2"
-        CURRENT_PROJECT_VERSION: "7"
+        MARKETING_VERSION: "0.4.3"
+        CURRENT_PROJECT_VERSION: "8"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: ZBSEyeTests/Info.plist
         ZBS_EYE_MODEL_DIR: ""
