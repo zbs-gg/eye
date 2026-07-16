@@ -10,6 +10,17 @@ enum KeychainStore {
         case fail
     }
 
+    enum SecretReadAction: Equatable {
+        case use(String)
+        case create
+        case fail
+    }
+
+    enum SecretError: Error, Sendable, Equatable {
+        case readFailed
+        case writeFailed
+    }
+
     static let service = "gg.zbs.eye"
 
     /// CRITICAL: we use the MODERN data-protection keychain (like on iOS), NOT the legacy file keychain.
@@ -32,6 +43,41 @@ enum KeychainStore {
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
               let data = item as? Data, let s = String(data: data, encoding: .utf8) else { return nil }
         return s
+    }
+
+    static func secretReadAction(status: OSStatus, data: Data?) -> SecretReadAction {
+        if status == errSecItemNotFound { return .create }
+        guard status == errSecSuccess,
+              let data,
+              let value = String(data: data, encoding: .utf8),
+              !value.isEmpty else { return .fail }
+        return .use(value)
+    }
+
+    /// A missing webhook secret is initialized once. Any other Keychain read failure is terminal:
+    /// replacing an unreadable stable secret would make retries unverifiable by the receiver.
+    static func callAutomationSigningSecret() throws -> String {
+        let account = "call-automation-signing-secret-v1"
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            useDataProtection: true,
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        switch secretReadAction(status: status, data: item as? Data) {
+        case .use(let value):
+            return value
+        case .create:
+            let value = try randomTokenOrThrow()
+            guard set(value, account: account) else { throw SecretError.writeFailed }
+            return value
+        case .fail:
+            throw SecretError.readFailed
+        }
     }
 
     @discardableResult
@@ -95,8 +141,14 @@ enum KeychainStore {
     }
 
     private static func randomToken() -> String {
+        (try? randomTokenOrThrow()) ?? UUID().uuidString.lowercased()
+    }
+
+    private static func randomTokenOrThrow() throws -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            throw SecretError.writeFailed
+        }
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
 }

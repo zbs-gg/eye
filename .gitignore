@@ -15,6 +15,10 @@ build/
 .build/
 .swiftpm/
 
+# Python fixture helpers
+__pycache__/
+*.py[cod]
+
 # MLX / ML model weights (downloaded on demand, never committed)
 *.safetensors
 *.gguf

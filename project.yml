@@ -190,6 +190,12 @@ targets:
       - path: ZBSEyeApp/Server/KeychainStore.swift
       - path: ZBSEyeApp/Server/LocalPeerAuthenticator.swift
       - path: ZBSEyeApp/Automations/AutomationModels.swift
+      - path: ZBSEyeApp/Automations/CallAutomationModels.swift
+      - path: ZBSEyeApp/Automations/CallAutomationRepository.swift
+      - path: ZBSEyeApp/Automations/CallAutomationDispatcher.swift
+      - path: ZBSEyeApp/Automations/CallAutomationPayload.swift
+      - path: ZBSEyeApp/Automations/LoopbackWebhookTransport.swift
+      - path: ZBSEyeApp/State/CallAutomationStore.swift
       - path: ZBSEyeApp/Automations/AutomationAuditWriter.swift
       - path: ZBSEyeApp/Automations/AutomationMarkdownSafety.swift
       - path: ZBSEyeApp/Data/StorageLocation.swift
@@ -206,6 +212,7 @@ targets:
       - path: ZBSEyeApp/Data/IngestService.swift
       - path: ZBSEyeApp/Calls/CallModels.swift
       - path: ZBSEyeApp/Calls/CallRepository.swift
+      - path: ZBSEyeApp/Calls/CallRepository+AutomationTransitions.swift
       - path: ZBSEyeApp/Calls/CallRepository+EvidenceStorage.swift
       - path: ZBSEyeApp/Calls/CallRecoveryService.swift
       - path: ZBSEyeApp/Calls/CallMediaMutationJournal.swift

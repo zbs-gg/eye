@@ -15,6 +15,7 @@ final class CallDatabaseTests: XCTestCase {
             "call_transcript_jobs", "call_transcript_revisions",
             "call_transcript_segments", "call_transcript_projection_gaps",
             "call_media_mutations", "call_source_gaps", "call_transcript_fts",
+            "call_automation_config", "call_automation_outbox",
         ].allSatisfy(freshTables.contains))
 
         let upgraded = try CallDatabaseTestStore(runMigrations: false)
@@ -39,8 +40,73 @@ final class CallDatabaseTests: XCTestCase {
             )
         }
         XCTAssertEqual(snapshot.appCount, 1)
-        XCTAssertEqual(snapshot.migrations.last, "v10_call_preferred_vector_guard")
+        XCTAssertEqual(snapshot.migrations.last, "v11_call_automation_outbox")
         XCTAssertGreaterThanOrEqual(snapshot.triggerCount, 6)
+    }
+
+    func testEnabledCallTransitionsEnqueueEndedAndPreferredFinalAtomically() async throws {
+        let store = try CallDatabaseTestStore()
+        try await store.database.pool.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE call_automation_config
+                    SET enabled = 1,
+                        endpointURL = 'http://127.0.0.1:7777/events',
+                        endpointFingerprint = 'receiver-a',
+                        updatedAtMs = 900
+                    WHERE id = 1
+                    """
+            )
+        }
+        let repository = CallRepository(database: store.database)
+        let call = try await repository.createCall(startedAtMs: 1_000, idempotencyKey: "hook-call")
+        let callID = try XCTUnwrap(call.id)
+        let finalJob = try await repository.endCall(
+            callID: callID,
+            idempotencyKey: "hook-end",
+            endedAtMs: 2_000
+        )
+
+        let endedEvents = try await store.database.pool.read { db in
+            try String.fetchAll(
+                db,
+                sql: "SELECT eventType FROM call_automation_outbox WHERE callId = ? ORDER BY sequence",
+                arguments: [callID]
+            )
+        }
+        XCTAssertEqual(endedEvents, ["call.ended"])
+
+        let claim = try await repository.claimNextTranscriptJob(nowMs: 2_100)
+        XCTAssertEqual(claim?.id, finalJob.id)
+        _ = try await repository.commitTranscriptJob(
+            jobID: try XCTUnwrap(claim?.id),
+            segments: [.init(source: .me, startMs: 1_100, endMs: 1_900, text: "private")],
+            language: "en",
+            engine: "fixture",
+            modelRevision: "fixture-v1",
+            degraded: false,
+            nowMs: 2_200
+        )
+
+        let snapshot = try await store.database.pool.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT eventType, payloadJSON
+                    FROM call_automation_outbox
+                    WHERE callId = ?
+                    ORDER BY sequence
+                    """,
+                arguments: [callID]
+            )
+        }
+        XCTAssertEqual(snapshot.map { $0["eventType"] as String }, [
+            "call.ended", "call.transcript.ready",
+        ])
+        XCTAssertTrue(snapshot.allSatisfy { row in
+            let payload: String = row["payloadJSON"]
+            return !payload.contains("private")
+        })
     }
 
     func testPreferredRevisionAcceptsReadyProjectionThenFinalAndCleansStaleSearchState() async throws {

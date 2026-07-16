@@ -201,6 +201,7 @@ extension CallRepository {
                 db,
                 sql: "SELECT id FROM calls WHERE state = 'recording' ORDER BY id"
             )
+            let newlyInterruptedCallIDs = Set(interruptedCallIDs)
             for callID in interruptedCallIDs {
                 let durableEnd = try Int64.fetchOne(
                     db,
@@ -327,6 +328,20 @@ extension CallRepository {
                         startTs, endTs, startTs, callID, callID, nowMs, nowMs,
                     ])
                 if db.changesCount > 0 { finalJobsCreated += 1 }
+                if newlyInterruptedCallIDs.contains(callID) {
+                    try CallAutomationOutbox.enqueueIfEnabled(
+                        eventType: .callEnded,
+                        semanticIdentity: "call-ended:\(callID):\(generation)",
+                        callID: callID,
+                        occurredAtMs: endTs,
+                        data: CallEndedAutomationData(
+                            state: CallLifecycleState.interrupted.rawValue,
+                            interrupted: true,
+                            degraded: true
+                        ),
+                        db: db
+                    )
+                }
             }
 
             return CallRecoveryDatabaseReport(
@@ -916,6 +931,13 @@ extension CallRepository {
             call.degradationReason = "erase_pending"
             call.updatedAtMs = nowMs
             try call.update(db)
+
+            // Privacy erasure wins over delivery. Claims exclude erase-pending calls, and every
+            // undelivered row is removed in this same initial erasure transaction.
+            try db.execute(
+                sql: "DELETE FROM call_automation_outbox WHERE callId = ? AND state != 'delivered'",
+                arguments: [callID]
+            )
 
             try db.execute(
                 sql: """

@@ -83,7 +83,7 @@ final class ZBSEyeDatabase: Sendable {
             "v1", "v2_vector", "v3_vec_e5_384", "v4_vec_transcripts",
             "v5_browser_visits", "v6_embed_queue", "v7_call_envelopes",
             "v8_call_transcript_projection_gaps", "v9_call_source_gaps",
-            "v10_call_preferred_vector_guard",
+            "v10_call_preferred_vector_guard", "v11_call_automation_outbox",
         ]
     private static func warnIfNewerSchema(_ pool: DatabasePool) {
         let applied = (try? pool.read { db in
@@ -643,6 +643,54 @@ final class ZBSEyeDatabase: Sendable {
                     SELECT id, callId, text FROM call_transcript_revisions
                     WHERE id = new.preferredRevisionId;
                 END;
+                """)
+        }
+        // v11: call lifecycle facts use a transactional outbox. Source transitions and their
+        // automation hints commit together; network delivery remains entirely outside the writer.
+        m.registerMigration("v11_call_automation_outbox") { db in
+            try db.execute(sql: """
+                CREATE TABLE call_automation_config (
+                    id                      INTEGER PRIMARY KEY CHECK (id = 1),
+                    enabled                 INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+                    endpointURL             TEXT,
+                    endpointFingerprint     TEXT,
+                    updatedAtMs             INTEGER NOT NULL DEFAULT 0,
+                    CHECK (enabled = 0 OR (endpointURL IS NOT NULL AND endpointFingerprint IS NOT NULL))
+                );
+                INSERT INTO call_automation_config(id, enabled, updatedAtMs) VALUES (1, 0, 0);
+
+                CREATE TABLE call_automation_outbox (
+                    sequence                INTEGER PRIMARY KEY AUTOINCREMENT,
+                    eventID                 TEXT NOT NULL UNIQUE,
+                    semanticIdentity        TEXT NOT NULL UNIQUE,
+                    callId                  INTEGER NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+                    eventType               TEXT NOT NULL CHECK (eventType IN (
+                                                'call.ended',
+                                                'call.transcript.ready',
+                                                'call.transcript.failed'
+                                            )),
+                    occurredAtMs            INTEGER NOT NULL,
+                    endpointFingerprint     TEXT NOT NULL,
+                    payloadJSON             TEXT NOT NULL,
+                    state                   TEXT NOT NULL DEFAULT 'pending' CHECK (state IN (
+                                                'pending', 'sending', 'delivered', 'blocked'
+                                            )),
+                    attempts                INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+                    nextAttemptAtMs         INTEGER NOT NULL,
+                    leaseExpiresAtMs        INTEGER,
+                    httpStatus              INTEGER,
+                    lastErrorCode           TEXT,
+                    deliveredAtMs           INTEGER,
+                    createdAtMs             INTEGER NOT NULL,
+                    updatedAtMs             INTEGER NOT NULL
+                );
+                CREATE INDEX idx_call_automation_claim
+                    ON call_automation_outbox(state, nextAttemptAtMs, sequence);
+                CREATE INDEX idx_call_automation_call_sequence
+                    ON call_automation_outbox(callId, sequence);
+                CREATE INDEX idx_call_automation_delivered
+                    ON call_automation_outbox(deliveredAtMs)
+                    WHERE state = 'delivered';
                 """)
         }
         return m

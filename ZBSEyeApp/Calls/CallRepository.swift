@@ -256,7 +256,8 @@ actor CallRepository {
             guard var call = try CallRow.fetchOne(db, key: callID) else {
                 throw CallRepositoryError.callNotFound(callID)
             }
-            if call.state == .recording {
+            let endedNow = call.state == .recording
+            if endedNow {
                 call.state = .finalizing
                 call.endTs = max(call.startTs, endedAtMs)
                 call.endIdempotencyKey = idempotencyKey
@@ -266,6 +267,7 @@ actor CallRepository {
                 call.updatedAtMs = endedAtMs
                 try call.update(db)
             }
+            let finalJob: CallTranscriptJobRow
             if var existing = try CallTranscriptJobRow
                 .filter(
                     Column("callId") == callID
@@ -278,31 +280,36 @@ actor CallRepository {
                 existing.coverageFrozen = true
                 existing.updatedAtMs = max(existing.updatedAtMs, endedAtMs)
                 try existing.update(db)
-                return existing
+                finalJob = existing
+            } else {
+                let logicalEnd = call.endTs ?? max(call.startTs, endedAtMs)
+                var job = CallTranscriptJobRow(
+                    id: nil,
+                    identity: "final:\(callID):\(call.mediaGeneration)",
+                    callId: callID,
+                    bookmarkId: nil,
+                    kind: .final,
+                    mediaGeneration: call.mediaGeneration,
+                    state: .pending,
+                    priority: 0,
+                    logicalStartMs: call.startTs,
+                    logicalEndMs: logicalEnd,
+                    contextStartMs: call.startTs,
+                    meEndSample: meEndSample,
+                    systemEndSample: systemEndSample,
+                    coverageFrozen: true,
+                    attempts: 0,
+                    errorCode: nil,
+                    createdAtMs: endedAtMs,
+                    updatedAtMs: endedAtMs
+                )
+                try job.insert(db)
+                finalJob = job
             }
-            let logicalEnd = call.endTs ?? max(call.startTs, endedAtMs)
-            var job = CallTranscriptJobRow(
-                id: nil,
-                identity: "final:\(callID):\(call.mediaGeneration)",
-                callId: callID,
-                bookmarkId: nil,
-                kind: .final,
-                mediaGeneration: call.mediaGeneration,
-                state: .pending,
-                priority: 0,
-                logicalStartMs: call.startTs,
-                logicalEndMs: logicalEnd,
-                contextStartMs: call.startTs,
-                meEndSample: meEndSample,
-                systemEndSample: systemEndSample,
-                coverageFrozen: true,
-                attempts: 0,
-                errorCode: nil,
-                createdAtMs: endedAtMs,
-                updatedAtMs: endedAtMs
-            )
-            try job.insert(db)
-            return job
+            if endedNow {
+                try Self.enqueueCallEndedAutomation(call: call, callID: callID, occurredAtMs: endedAtMs, db: db)
+            }
+            return finalJob
         }
     }
 
@@ -502,6 +509,8 @@ actor CallRepository {
                         job.callId,
                     ]
                 )
+                try Self.enqueueTranscriptFailedAutomation(
+                    job: job, jobID: jobID, errorCode: errorCode, occurredAtMs: nowMs, db: db)
             }
             try Self.admitDeferredCheckpoints(db: db, nowMs: nowMs)
             return nextState
@@ -694,6 +703,9 @@ actor CallRepository {
                     sql: "INSERT OR REPLACE INTO embed_queue(row_id, kind, ts, attempts) VALUES (?, 2, ?, 0)",
                     arguments: [revisionID, call.startTs]
                 )
+                try Self.enqueueTranscriptReadyAutomation(
+                    call: call, job: job, revisionID: revisionID, degraded: degraded,
+                    occurredAtMs: nowMs, db: db)
                 try Self.admitDeferredCheckpoints(db: db, nowMs: nowMs)
                 return CallTranscriptCommitResult(
                     intervalOrFinalRevisionID: revisionID,

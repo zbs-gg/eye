@@ -72,6 +72,7 @@ final class AppEnvironment {
     private(set) var cartographer: CartographerStore?
     private(set) var httpServer: ZBSEyeHTTPServer?
     private(set) var automations: DaySummaryStore?
+    private(set) var callAutomation: CallAutomationStore?
     private(set) var sceneStore: SceneStore?
     private(set) var audio: AudioCoordinator?
     private(set) var storage: StorageManager?   // for the Settings storage card (used/delete/Finder)
@@ -82,6 +83,7 @@ final class AppEnvironment {
     private(set) var progress: ProgressStore?
     @ObservationIgnored private(set) var usageStats: UsageStatsService?
     @ObservationIgnored private var automationAuditWriter: AutomationAuditWriter?
+    @ObservationIgnored private var callAutomationDispatcher: CallAutomationDispatcher?
     @ObservationIgnored private(set) var llmRouter: LLMRouter?
     @ObservationIgnored private(set) var aiComputeCoordinator: AIComputeCoordinator?
     @ObservationIgnored private(set) var whisperModelStore: WhisperModelStore?
@@ -421,6 +423,8 @@ final class AppEnvironment {
                 let reconciliation = self.cancelBuiltInModelReconciliation()
                 await self.callTranscriptWorker?.suspendAndDrain()
                 await self.whisperModelStore?.suspendAndDrain()
+                await self.callAutomationDispatcher?.suspendAndDrainForRelocation()
+                await self.callAutomation?.suspendAndDrain()
 
                 // These two ownership barriers share the fail-closed Quit path:
                 // each is caller-bounded, but its task remains retained until it
@@ -445,6 +449,8 @@ final class AppEnvironment {
                         self.recording.resumeAfterMaintenance()
                         await self.whisperModelStore?.resumeAfterDrain()
                         await self.callTranscriptWorker?.resume()
+                        await self.callAutomationDispatcher?.resumeAfterRelocation()
+                        await self.callAutomation?.resumeAfterSuspension()
                     } else {
                         self.relocationTerminationDrainTask = localRuntimePhase.operation
                     }
@@ -475,12 +481,15 @@ final class AppEnvironment {
                         self.recording.resumeAfterMaintenance()
                         await self.whisperModelStore?.resumeAfterDrain()
                         await self.callTranscriptWorker?.resume()
+                        await self.callAutomationDispatcher?.resumeAfterRelocation()
+                        await self.callAutomation?.resumeAfterSuspension()
                     } else {
                         self.relocationTerminationDrainTask = computePhase.operation
                     }
                     return false
                 }
                 await reconciliation?.value
+                await self.callAutomationDispatcher?.shutdown()
                 await self.builtInModels.shutdown()
                 self.localAIMemoryPressureSource?.cancel()
                 self.localAIMemoryPressureSource = nil
@@ -526,6 +535,29 @@ final class AppEnvironment {
                 )
             }
 
+            let callAutomationRepository = CallAutomationRepository(database: db)
+            let callAutomationTransport = LoopbackWebhookTransport()
+            let callAutomationDispatcher = CallAutomationDispatcher(
+                repository: callAutomationRepository,
+                transport: callAutomationTransport
+            )
+            let callAutomationStore = CallAutomationStore(
+                repository: callAutomationRepository,
+                transport: callAutomationTransport,
+                dispatcher: callAutomationDispatcher
+            )
+            self.callAutomationDispatcher = callAutomationDispatcher
+            self.callAutomation = callAutomationStore
+            await callEvidenceDeletionService.attachCallAutomation(
+                suspend: { await callAutomationDispatcher.suspendAndDrainForRelocation() },
+                resume: { await callAutomationDispatcher.resumeAfterRelocation() }
+            )
+            await callAutomationStore.load()
+            await callAutomationDispatcher.setStatusDidChange { [weak callAutomationStore] in
+                await callAutomationStore?.refresh()
+            }
+            await callAutomationDispatcher.start()
+
             // The continuous semantic indexer owns ALL embedding: it fills vectors for frames/transcripts off the
             // hot path and UNLOADS the model when the backlog is drained. Its own EmbeddingService (search keeps a
             // separate one so an index batch never blocks a search-query embed). Started delayed @ .utility so the
@@ -553,7 +585,10 @@ final class AppEnvironment {
                     repository: callRepository,
                     computeCoordinator: computeCoordinator,
                     dataRoot: resolvedDataRoot,
-                    modelStore: whisperModelStore
+                    modelStore: whisperModelStore,
+                    afterSourceTransition: { [weak callAutomationDispatcher] in
+                        await callAutomationDispatcher?.kick()
+                    }
                 )
                 self.callTranscriptWorker = callTranscriptWorker
                 await callEvidenceDeletionService.attachTranscriptWorker(
@@ -770,7 +805,10 @@ final class AppEnvironment {
             let callCoordinator = CallCoordinator(
                 repository: callRepository,
                 mediaRoot: storage.mediaDirectory,
-                audio: callAudio
+                audio: callAudio,
+                afterSourceTransition: { [weak callAutomationDispatcher] in
+                    await callAutomationDispatcher?.kick()
+                }
             )
             calls.requestedSources = { [weak self] in
                 guard let self, self.audioSettings.audioMode != .off else { return .none }
@@ -1204,6 +1242,8 @@ final class AppEnvironment {
             if let builtInModelManager {
                 _ = try await builtInModelManager.suspendAndDrainForRelocation()
             }
+            await callAutomationDispatcher?.suspendAndDrainForRelocation()
+            await callAutomation?.suspendAndDrain()
             await callTranscriptWorker?.suspendAndDrain()
             await whisperModelStore?.suspendAndDrain()
             if let aiComputeCoordinator {
@@ -1280,6 +1320,8 @@ final class AppEnvironment {
                     _ = await terminationDrain?.value
                 },
                 resumeOldGraphAdmissions: {
+                    await self.callAutomationDispatcher?.resumeAfterRelocation()
+                    await self.callAutomation?.resumeAfterSuspension()
                     await self.automationAuditWriter?.resumeAfterRelocation()
                     await self.retention?.resumeAfterRelocation()
                     await self.browserHistoryImporter?.resumeAfterRelocation()
