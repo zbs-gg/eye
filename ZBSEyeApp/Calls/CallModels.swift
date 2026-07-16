@@ -213,6 +213,17 @@ struct CallTranscriptSegmentRow: Codable, FetchableRecord, MutablePersistableRec
     mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 }
 
+struct CallTranscriptProjectionGapRow: Codable, FetchableRecord, PersistableRecord, Sendable, Equatable {
+    static let databaseTableName = "call_transcript_projection_gaps"
+
+    var revisionId: Int64
+    var bookmarkId: Int64
+    var ordinal: Int
+    var state: CallBookmarkState
+    var logicalStartMs: Int64
+    var logicalEndMs: Int64
+}
+
 struct CallMediaMutationRow: Codable, FetchableRecord, MutablePersistableRecord, Sendable, Equatable {
     static let databaseTableName = "call_media_mutations"
 
@@ -302,4 +313,17 @@ struct CallRecoveryReport: Sendable, Equatable {
     var chunksDiscarded: Int
     var mutationsCompleted: Int
     var mutationsRolledBack: Int
+}
+
+struct CallTranscriptJobEvidence: Sendable, Equatable {
+    let call: CallRow
+    let job: CallTranscriptJobRow
+    let bookmark: CallBookmarkRow?
+    let chunks: [CallAudioChunkRow]
+}
+
+struct CallTranscriptCommitResult: Sendable, Equatable {
+    let intervalOrFinalRevisionID: Int64
+    let preferredRevisionID: Int64
+    let final: Bool
 }

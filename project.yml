@@ -208,6 +208,9 @@ targets:
       - path: ZBSEyeApp/Calls/CallSpool.swift
       - path: ZBSEyeApp/Calls/CallAudioWindowAssembler.swift
       - path: ZBSEyeApp/Calls/CallCoordinator.swift
+      - path: ZBSEyeApp/Calls/TranscriptOverlapReconciler.swift
+      - path: ZBSEyeApp/Calls/CallTranscriptProjection.swift
+      - path: ZBSEyeApp/Calls/CallTranscriptWorker.swift
       - path: ZBSEyeApp/Calls/WhisperModelManifest.swift
       - path: ZBSEyeApp/Calls/WhisperModelStore.swift
       - path: ZBSEyeApp/Calls/WhisperHelperCommand.swift

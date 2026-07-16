@@ -82,6 +82,7 @@ final class ZBSEyeDatabase: Sendable {
         [
             "v1", "v2_vector", "v3_vec_e5_384", "v4_vec_transcripts",
             "v5_browser_visits", "v6_embed_queue", "v7_call_envelopes",
+            "v8_call_transcript_projection_gaps",
         ]
     private static func warnIfNewerSchema(_ pool: DatabasePool) {
         let applied = (try? pool.read { db in
@@ -579,6 +580,24 @@ final class ZBSEyeDatabase: Sendable {
                     DELETE FROM call_transcript_fts WHERE revision_id = old.id;
                     DELETE FROM vec_call_transcripts WHERE revision_id = old.id;
                 END;
+                """)
+        }
+        // v8: provisional transcript text must not imply that missing/failed
+        // Bookmark intervals were transcribed. Keep explicit gap provenance
+        // beside each immutable projection without polluting searchable text.
+        m.registerMigration("v8_call_transcript_projection_gaps") { db in
+            try db.execute(sql: """
+                CREATE TABLE call_transcript_projection_gaps (
+                    revisionId     INTEGER NOT NULL REFERENCES call_transcript_revisions(id) ON DELETE CASCADE,
+                    bookmarkId     INTEGER NOT NULL REFERENCES call_bookmarks(id) ON DELETE CASCADE,
+                    ordinal        INTEGER NOT NULL CHECK (ordinal > 0),
+                    state          TEXT NOT NULL CHECK (state IN ('preparing', 'pending', 'deferred_capacity', 'ready', 'ready_degraded', 'failed', 'satisfied_by_final')),
+                    logicalStartMs INTEGER NOT NULL,
+                    logicalEndMs   INTEGER NOT NULL CHECK (logicalEndMs >= logicalStartMs),
+                    PRIMARY KEY (revisionId, bookmarkId)
+                ) WITHOUT ROWID;
+                CREATE INDEX idx_call_projection_gaps_bookmark
+                    ON call_transcript_projection_gaps(bookmarkId, revisionId);
                 """)
         }
         return m

@@ -81,6 +81,8 @@ final class AppEnvironment {
     @ObservationIgnored private(set) var llmRouter: LLMRouter?
     @ObservationIgnored private(set) var aiComputeCoordinator: AIComputeCoordinator?
     @ObservationIgnored private(set) var whisperModelStore: WhisperModelStore?
+    @ObservationIgnored private(set) var callTranscriptWorker: CallTranscriptWorker?
+    @ObservationIgnored private var callTranscriptWorkerTask: Task<Void, Never>?
     @ObservationIgnored private(set) var builtInModelManager: BuiltInModelManager?
     @ObservationIgnored private var builtInModelProviderBridge: BuiltInModelProviderBridge?
     @ObservationIgnored private var builtInModelReconciliationTask: Task<Void, Never>?
@@ -407,6 +409,7 @@ final class AppEnvironment {
                 }
                 self.cancelBuiltInModelRecovery()
                 let reconciliation = self.cancelBuiltInModelReconciliation()
+                await self.callTranscriptWorker?.suspendAndDrain()
                 await self.whisperModelStore?.suspendAndDrain()
 
                 // These two ownership barriers share the fail-closed Quit path:
@@ -431,6 +434,7 @@ final class AppEnvironment {
                         }
                         self.recording.resumeAfterMaintenance()
                         await self.whisperModelStore?.resumeAfterDrain()
+                        await self.callTranscriptWorker?.resume()
                     } else {
                         self.relocationTerminationDrainTask = localRuntimePhase.operation
                     }
@@ -460,6 +464,7 @@ final class AppEnvironment {
                         await self.builtInModels.refresh()
                         self.recording.resumeAfterMaintenance()
                         await self.whisperModelStore?.resumeAfterDrain()
+                        await self.callTranscriptWorker?.resume()
                     } else {
                         self.relocationTerminationDrainTask = computePhase.operation
                     }
@@ -527,6 +532,19 @@ final class AppEnvironment {
                 )
                 let whisperModelStore = WhisperModelStore(root: speechRoot)
                 self.whisperModelStore = whisperModelStore
+                let callTranscriptWorker = CallTranscriptWorker(
+                    repository: callRepository,
+                    computeCoordinator: computeCoordinator,
+                    dataRoot: resolvedDataRoot,
+                    modelStore: whisperModelStore
+                )
+                self.callTranscriptWorker = callTranscriptWorker
+                if storage.freeBytes() < DiskReservePolicy.standard.pauseBytes {
+                    await callTranscriptWorker.suspendAndDrain()
+                }
+                callTranscriptWorkerTask = Task.detached(priority: .utility) {
+                    await callTranscriptWorker.runLoop()
+                }
                 Task.detached(priority: .utility) {
                     _ = await whisperModelStore.refresh()
                 }
@@ -682,11 +700,7 @@ final class AppEnvironment {
                     guard let audioCoordinator else { return .none }
                     let permitted = await MainActor.run { [weak self] in
                         guard let self else { return CallSourceSelection.none }
-                        let diskOK = storage.freeBytes() > Self.minFreeBytes
-                        if !diskOK {
-                            self.recording.setLowDisk(true)
-                            self.emergencyPrune()
-                        }
+                        let diskOK = storage.freeBytes() >= DiskReservePolicy.standard.pauseBytes
                         guard !self.recording.lowDiskPaused, diskOK else {
                             return CallSourceSelection.none
                         }
@@ -984,13 +998,6 @@ final class AppEnvironment {
                 try? await Task.sleep(for: .seconds(4))
                 guard let self else { return }
                 self.recording.startIfWanted()
-                if self.calls.isActive,
-                   let storage = self.storage,
-                   storage.freeBytes() <= Self.minFreeBytes {
-                    self.recording.setLowDisk(true)
-                    self.emergencyPrune()
-                    await self.calls.endAndWait(reason: .lowDisk)
-                }
                 // permission revoked mid-run → honest degradation in the UI (instead of a forever-green dot)
                 if self.recording.isCapturing {
                     if !self.permissions.allCriticalGranted {
@@ -1117,12 +1124,13 @@ final class AppEnvironment {
 
         let relocator = StorageRelocator()
         do {
-            // Ordered barrier: downloads/runtime first (cancels generation),
-            // then query/background e5. Capture/audio remain independently
-            // paused for data consistency, never because inference asked.
+            // Ordered barrier: stop transcript jobs before draining the model
+            // store they read, then stop the remaining compute users. Capture
+            // and audio stay independently paused for data consistency.
             if let builtInModelManager {
                 _ = try await builtInModelManager.suspendAndDrainForRelocation()
             }
+            await callTranscriptWorker?.suspendAndDrain()
             await whisperModelStore?.suspendAndDrain()
             if let aiComputeCoordinator {
                 try await aiComputeCoordinator.suspendAndDrain()
@@ -1208,6 +1216,7 @@ final class AppEnvironment {
                     await self.aiComputeCoordinator?.resume()
                     try? await self.builtInModelManager?.resumeAfterRelocation()
                     await self.whisperModelStore?.resumeAfterDrain()
+                    await self.callTranscriptWorker?.resume()
                     await self.builtInModels.refresh()
                     self.recording.resumeAfterMaintenance()
                 }
@@ -1226,6 +1235,10 @@ final class AppEnvironment {
         case .none:
             return
         case .pauseCapture:
+            // Stop speech scratch work first, then close the explicit Call
+            // Envelope before draining the shared physical capture legs.
+            await callTranscriptWorker?.suspendAndDrain()
+            await calls.endAndWait(reason: .lowDisk)
             let drain = await recording.pauseForLowDiskAndDrain(
                 systemCaptureTimeout: .seconds(5)
             )
@@ -1246,6 +1259,7 @@ final class AppEnvironment {
                 return
             }
             recording.resumeAfterLowDisk()
+            await callTranscriptWorker?.resume()
         }
     }
 }
