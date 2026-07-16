@@ -9,6 +9,13 @@ struct AudioDrainAcknowledgement: Sendable, Equatable {
     let systemCaptureOutcome: SystemAudioCaptureTeardownOutcome
 }
 
+typealias CallAudioFrameSink = @Sendable (AudioFrame) async -> Bool
+
+struct AudioIngressTargets: Sendable, Equatable {
+    let me: Int64?
+    let system: Int64?
+}
+
 /// Audio-recording orchestrator (@MainActor): two independent legs — microphone (AVAudioEngine) and system
 /// audio (ScreenCaptureKit). Different permissions (mic vs screen recording), a shared TranscriptionService.
 /// The gates (what to enable) live outside (RecordingStore/AppEnvironment). @Observable — per-source flags
@@ -44,6 +51,7 @@ final class AudioCoordinator {
     /// Relocation closes the background-backfill admission path too; otherwise
     /// it could enqueue a transcript after the audio legs had acknowledged.
     @ObservationIgnored private var maintenanceSuspended = false
+    @ObservationIgnored private var callFrameSink: CallAudioFrameSink?
 
     init(storage: StorageManager, ingest: IngestService, config: AudioConfig = AudioConfig()) {
         let backend = SFSpeechBackend()
@@ -183,6 +191,21 @@ final class AudioCoordinator {
 
     func health() async -> TranscriptionHealth { await transcription.snapshot() }
 
+    func installCallFrameSink(_ sink: CallAudioFrameSink?) {
+        callFrameSink = sink
+    }
+
+    func acceptedIngressTargets() -> AudioIngressTargets {
+        AudioIngressTargets(
+            me: micEngine.latestAcceptedIngressSequence,
+            system: systemEngine.latestAcceptedIngressSequence
+        )
+    }
+
+    func drainIngressGaps() -> [AudioIngressGap] {
+        micEngine.drainIngressGaps() + systemEngine.drainIngressGaps()
+    }
+
     /// Backfill: audio segments WITHOUT a transcript (a crash lost the in-memory queue / a transient failure) —
     /// re-transcribe them. A 7-day window (we don't grind on permanent failures like music forever), the file must
     /// exist. Called from bootstrap with a delay.
@@ -273,6 +296,7 @@ final class AudioCoordinator {
             self.systemRunning = true
             await pipeline.reset()
             for await frame in stream {
+                if await self.routeToCallIfOwned(frame) { continue }
                 let closed = await pipeline.feed(frame)
                 if closed { self.onSegment?() }
             }
@@ -290,6 +314,7 @@ final class AudioCoordinator {
             await previous?.value
             await pipeline.reset()
             for await frame in stream {
+                if await self?.routeToCallIfOwned(frame) == true { continue }
                 let closed = await pipeline.feed(frame)
                 if closed { Task { @MainActor in self?.onSegment?() } }
             }
@@ -297,6 +322,11 @@ final class AudioCoordinator {
             // epoch guard: the tail of an OLD leg after an auto-restart does not overwrite the NEW indicator
             await MainActor.run { if self?.micEpoch == epoch { self?.micRunning = false } }
         }
+    }
+
+    private func routeToCallIfOwned(_ frame: AudioFrame) async -> Bool {
+        guard let callFrameSink else { return false }
+        return await callFrameSink(frame)
     }
 }
 

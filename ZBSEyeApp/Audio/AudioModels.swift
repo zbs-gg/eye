@@ -3,12 +3,75 @@ import Foundation
 /// Sendable values of the audio pipeline. Non-Sendable types (AVAudioPCMBuffer/AVAudioEngine) live inside their
 /// own domains; only these types cross outward.
 
-/// One frame from the microphone tap: mono samples (normalized float) + RMS energy for VAD.
+enum AudioFrameTimingProvenance: String, Codable, Sendable, Equatable {
+    case microphone
+    case screenCaptureKit
+    case callbackFallback
+}
+
+struct AudioFrameTiming: Codable, Sendable, Equatable {
+    let source: CallAudioSource
+    let epoch: Int
+    let ingressSequence: Int64
+    let normalizedHostTimeNs: Int64
+    let sourceSampleTime: Int64?
+    let captureSampleRate: Double
+    let frameCount: Int
+    let capturedAt: Date
+    let provenance: AudioFrameTimingProvenance
+}
+
+enum AudioIngressGapReason: String, Codable, Sendable, Equatable {
+    case consumerOverflow
+    case sourceRestart
+    case sourceUnavailable
+    case telemetryOverflow
+}
+
+struct AudioIngressGap: Codable, Sendable, Equatable {
+    let source: CallAudioSource
+    let epoch: Int
+    let firstIngressSequence: Int64
+    let lastIngressSequence: Int64
+    let reason: AudioIngressGapReason
+}
+
+/// One frame from an audio callback. Hardware objects never cross this boundary;
+/// capture timing is explicit so a Bookmark can freeze accepted ingress rather
+/// than guessing from wall-clock time.
 struct AudioFrame: Sendable {
     let samples: [Float]
     let rms: Float
-    let sampleRate: Double
-    let ts: Date
+    let timing: AudioFrameTiming
+
+    var sampleRate: Double { timing.captureSampleRate }
+    var ts: Date { timing.capturedAt }
+
+    init(samples: [Float], rms: Float, timing: AudioFrameTiming) {
+        self.samples = samples
+        self.rms = rms
+        self.timing = timing
+    }
+
+    /// Compatibility for the legacy VAD path and fixtures that do not own a
+    /// capture-engine ingress sequence.
+    init(samples: [Float], rms: Float, sampleRate: Double, ts: Date) {
+        self.init(
+            samples: samples,
+            rms: rms,
+            timing: AudioFrameTiming(
+                source: .me,
+                epoch: 0,
+                ingressSequence: 0,
+                normalizedHostTimeNs: Int64(ts.timeIntervalSince1970 * 1_000_000_000),
+                sourceSampleTime: nil,
+                captureSampleRate: sampleRate,
+                frameCount: samples.count,
+                capturedAt: ts,
+                provenance: .callbackFallback
+            )
+        )
+    }
 }
 
 /// A completed speech segment: the file is already written and an audio_captures row inserted — ready for transcription.

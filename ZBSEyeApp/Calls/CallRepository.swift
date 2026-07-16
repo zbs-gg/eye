@@ -288,6 +288,44 @@ actor CallRepository {
         }
     }
 
+    func updateAudioChunkProgress(
+        id: Int64,
+        endSample: Int64,
+        endMs: Int64,
+        bytes: Int64,
+        sha256: String?,
+        finalized: Bool
+    ) async throws {
+        try await database.pool.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE call_audio_chunks
+                    SET endSample = ?, endMs = ?, bytes = ?, sha256 = ?, finalized = ?
+                    WHERE id = ? AND finalized = 0
+                    """,
+                arguments: [endSample, endMs, bytes, sha256, finalized, id]
+            )
+        }
+    }
+
+    func closeSourceSpan(
+        id: Int64,
+        endedAtMs: Int64,
+        endSample: Int64,
+        endHostTimeNs: Int64
+    ) async throws {
+        try await database.pool.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE call_source_spans
+                    SET endedAtMs = ?, endSample = ?, endHostTimeNs = ?
+                    WHERE id = ? AND endedAtMs IS NULL
+                    """,
+                arguments: [endedAtMs, endSample, endHostTimeNs, id]
+            )
+        }
+    }
+
     func recoverDatabaseState(nowMs: Int64) async throws -> CallRecoveryDatabaseReport {
         try await database.pool.write { db in
             let interruptedCallIDs = try Int64.fetchAll(
