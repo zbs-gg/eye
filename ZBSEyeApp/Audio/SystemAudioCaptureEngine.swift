@@ -177,6 +177,10 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
               let sink = frameAdmission.sink(for: stream),
               let payload = Self.payload(from: sampleBuffer) else { return }
         let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let normalizedHostTimeNs = sink.normalizedHostTimeNs(for: presentationTime)
+        let callbackHostTimeNs = Int64(
+            CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock())) * 1_000_000_000
+        )
         _ = sink.publisher.yield(
             samples: payload.samples,
             rms: payload.rms,
@@ -184,8 +188,12 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
             sourceSampleTime: presentationTime.isValid
                 ? Int64(CMTimeGetSeconds(presentationTime) * payload.sampleRate)
                 : nil,
-            normalizedHostTimeNs: sink.normalizedHostTimeNs(for: presentationTime),
-            capturedAt: Date(),
+            normalizedHostTimeNs: normalizedHostTimeNs,
+            capturedAt: AudioHostClockWallMapper.date(
+                for: normalizedHostTimeNs,
+                callbackHostTimeNs: callbackHostTimeNs,
+                callbackWallDate: Date()
+            ),
             provenance: presentationTime.isValid ? .screenCaptureKit : .callbackFallback
         )
     }

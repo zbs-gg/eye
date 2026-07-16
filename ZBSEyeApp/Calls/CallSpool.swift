@@ -184,6 +184,7 @@ actor CallSpool {
     private var currentSpanID: Int64?
     private var pendingFinalizations: [PendingFinalization] = []
     private var currentSample: Int64 = 0
+    private var totalCommittedBytes: Int64 = 0
     private var nextChunkSequence = 0
     private var watermark: CallSpoolWatermark?
 
@@ -285,6 +286,7 @@ actor CallSpool {
             try activeHandle.write(contentsOf: data[byteStart..<byteEnd])
             chunks[index].endSample += Int64(count)
             chunks[index].committedBytes += Int64(count * 2)
+            totalCommittedBytes += Int64(count * 2)
             currentSample += Int64(count)
             sampleCursor += count
             if chunks[index].endSample - chunks[index].startSample >= policy.maxSamplesPerChunk {
@@ -295,7 +297,7 @@ actor CallSpool {
             ingressSequence: ingressSequence,
             endSample: currentSample,
             normalizedHostTimeNs: normalizedHostTimeNs,
-            committedBytes: chunks.reduce(0) { $0 + $1.committedBytes }
+            committedBytes: totalCommittedBytes
         )
         watermark = next
         return next

@@ -90,13 +90,21 @@ final class AudioCaptureEngine: @unchecked Sendable {
             } else {
                 hostTimeNs = Int64(AVAudioTime.seconds(forHostTime: mach_absolute_time()) * 1_000_000_000)
             }
+            let callbackHostTimeNs = Int64(
+                AVAudioTime.seconds(forHostTime: mach_absolute_time()) * 1_000_000_000
+            )
+            let capturedAt = AudioHostClockWallMapper.date(
+                for: hostTimeNs,
+                callbackHostTimeNs: callbackHostTimeNs,
+                callbackWallDate: Date()
+            )
             _ = publisher.yield(
                 samples: mono,
                 rms: rms,
                 captureSampleRate: sr,
                 sourceSampleTime: time.isSampleTimeValid ? time.sampleTime : nil,
                 normalizedHostTimeNs: hostTimeNs,
-                capturedAt: Date(),
+                capturedAt: capturedAt,
                 provenance: time.isHostTimeValid ? .microphone : .callbackFallback
             )
         }

@@ -45,26 +45,49 @@ struct WhisperHelperResult: Codable, Sendable, Equatable {
     let segments: [WhisperHelperResultSegment]
 }
 
-struct WhisperHelperRuntime: Sendable {
-    let run: @Sendable (
-        _ modelURL: URL,
-        _ inputs: [WhisperHelperPreparedInput]
-    ) throws -> [WhisperHelperResultSegment]
+/// The helper process invokes this synchronous closure serially. Native
+/// whisper state never crosses a task or escapes the short-lived process.
+struct WhisperHelperRuntimeSession: @unchecked Sendable {
+    let runBatch: ([WhisperHelperPreparedInput]) throws -> [WhisperHelperResultSegment]
+}
 
-    static let native = WhisperHelperRuntime { modelURL, inputs in
-        let session = try WhisperSession(modelURL: modelURL)
-        return try inputs.flatMap { input in
-            let base = Double(input.startSample) / Double(input.sampleRate)
-            return try session.transcribe(samples: input.samples).map { segment in
-                WhisperHelperResultSegment(
-                    source: input.source,
-                    startSeconds: base + segment.startSeconds,
-                    endSeconds: base + segment.endSeconds,
-                    text: segment.text
-                )
-            }
+/// Test/runtime dependency container used synchronously by `execute()`.
+struct WhisperHelperRuntime: @unchecked Sendable {
+    let makeSession: (URL) throws -> WhisperHelperRuntimeSession
+
+    init(
+        _ run: @escaping (
+            _ modelURL: URL,
+            _ inputs: [WhisperHelperPreparedInput]
+        ) throws -> [WhisperHelperResultSegment]
+    ) {
+        makeSession = { modelURL in
+            WhisperHelperRuntimeSession { inputs in try run(modelURL, inputs) }
         }
     }
+
+    init(
+        makeSession: @escaping (URL) throws -> WhisperHelperRuntimeSession
+    ) {
+        self.makeSession = makeSession
+    }
+
+    static let native = WhisperHelperRuntime(makeSession: { modelURL in
+        let session = try WhisperSession(modelURL: modelURL)
+        return WhisperHelperRuntimeSession { inputs in
+            try inputs.flatMap { input in
+                let base = Double(input.startSample) / Double(input.sampleRate)
+                return try session.transcribe(samples: input.samples).map { segment in
+                    WhisperHelperResultSegment(
+                        source: input.source,
+                        startSeconds: base + segment.startSeconds,
+                        endSeconds: base + segment.endSeconds,
+                        text: segment.text
+                    )
+                }
+            }
+        }
+    })
 }
 
 enum WhisperHelperCommandError: Error, Sendable, Equatable {
@@ -238,10 +261,9 @@ struct WhisperHelperCommand {
             throw WhisperHelperCommandError.outputExists
         }
 
-        guard !decoded.audioRanges.isEmpty, decoded.audioRanges.count <= 64 else {
+        guard !decoded.audioRanges.isEmpty, decoded.audioRanges.count <= 4_096 else {
             throw WhisperHelperCommandError.invalidAudioRange
         }
-        var totalBytes: Int64 = 0
         for range in decoded.audioRanges {
             guard range.relativePath.hasPrefix("media/calls/"),
                   ManagedAssetVerifier.isSafeRelativePath(range.relativePath),
@@ -249,14 +271,10 @@ struct WhisperHelperCommand {
                   range.lengthBytes > 0,
                   range.lengthBytes.isMultiple(of: 2),
                   range.sampleRate == 16_000,
-                  range.startSample >= 0 else {
+                  range.startSample >= 0,
+                  range.lengthBytes <= Int64(Self.maximumInputBytes) else {
                 throw WhisperHelperCommandError.invalidAudioRange
             }
-            let addition = totalBytes.addingReportingOverflow(range.lengthBytes)
-            guard !addition.overflow, addition.partialValue <= Int64(Self.maximumInputBytes) else {
-                throw WhisperHelperCommandError.inputTooLarge
-            }
-            totalBytes = addition.partialValue
         }
 
         manifest = decoded
@@ -270,8 +288,12 @@ struct WhisperHelperCommand {
         runtime: WhisperHelperRuntime = .native,
         fileManager: FileManager = .default
     ) throws {
-        let inputs = try manifest.audioRanges.map(loadRange)
-        let segments = try runtime.run(modelURL, inputs)
+        let session = try runtime.makeSession(modelURL)
+        var segments: [WhisperHelperResultSegment] = []
+        for ranges in Self.batches(manifest.audioRanges) {
+            let inputs = try ranges.map(loadRange)
+            segments.append(contentsOf: try session.runBatch(inputs))
+        }
         let result = WhisperHelperResult(
             formatVersion: 1,
             jobID: manifest.jobID,
@@ -298,6 +320,26 @@ struct WhisperHelperCommand {
             try? fileManager.removeItem(at: temporary)
             throw WhisperHelperCommandError.writeFailed
         }
+    }
+
+    private static func batches(
+        _ ranges: [WhisperHelperAudioRange]
+    ) -> [[WhisperHelperAudioRange]] {
+        var result: [[WhisperHelperAudioRange]] = []
+        var current: [WhisperHelperAudioRange] = []
+        var bytes: Int64 = 0
+        for range in ranges {
+            if !current.isEmpty,
+               current.count == 64 || bytes + range.lengthBytes > Int64(maximumInputBytes) {
+                result.append(current)
+                current = []
+                bytes = 0
+            }
+            current.append(range)
+            bytes += range.lengthBytes
+        }
+        if !current.isEmpty { result.append(current) }
+        return result
     }
 
     private func loadRange(_ range: WhisperHelperAudioRange) throws -> WhisperHelperPreparedInput {

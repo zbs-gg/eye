@@ -9229,32 +9229,12 @@
         }
       }
     },
-    "AI Models": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Модели ИИ"
-          }
-        }
-      }
-    },
     "Collects the day's activity from your history, runs it through your processing model (AI Models — local by default), and writes a Markdown digest to a folder of your choice.": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Собирает активность дня из вашей истории, прогоняет её через выбранную модель обработки («Модели ИИ», по умолчанию локальную) и записывает Markdown-дайджест в выбранную папку."
-          }
-        }
-      }
-    },
-    "Connections": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Подключения"
           }
         }
       }

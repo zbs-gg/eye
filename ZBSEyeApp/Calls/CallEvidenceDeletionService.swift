@@ -187,11 +187,11 @@ actor CallEvidenceDeletionService {
             ).scavenge()
             var reports: [CallRedactionReport] = []
             reports.reserveCapacity(manifests.count)
-            for manifest in manifests {
-                let mutation = try await repository.beginRedaction(
-                    manifest: manifest,
-                    nowMs: nowMs
-                )
+            let mutations = try await repository.beginRedactions(
+                manifests: manifests,
+                nowMs: nowMs
+            )
+            for (manifest, mutation) in zip(manifests, mutations) {
                 guard let mutationID = mutation.id else {
                     throw CallRepositoryError.invalidMediaMutation(manifest.callID)
                 }

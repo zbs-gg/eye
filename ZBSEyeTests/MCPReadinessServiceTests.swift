@@ -278,9 +278,14 @@ final class MCPReadinessServiceTests: XCTestCase {
             MCPToolPolicy.toolNames(for: .memoryReadOnly),
             [
                 "search_history", "get_transcript", "get_context_at",
-                "get_timeline", "get_status", "get_diagnostics",
+                "get_timeline", "list_calls", "get_call",
+                "list_call_bookmarks", "read_call_transcript",
+                "get_status", "get_diagnostics",
             ]
         )
+        for tool in ["list_calls", "get_call", "list_call_bookmarks", "read_call_transcript"] {
+            XCTAssertTrue(MCPToolPolicy.allows(tool, profile: .memoryReadOnly))
+        }
         XCTAssertFalse(MCPToolPolicy.allows("get_frame_image", profile: .memoryReadOnly))
         XCTAssertFalse(MCPToolPolicy.allows("toggle_recording", profile: .memoryReadOnly))
         XCTAssertTrue(MCPToolPolicy.allows("get_frame_image", profile: .advancedFull))

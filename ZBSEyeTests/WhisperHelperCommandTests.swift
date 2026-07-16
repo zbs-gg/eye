@@ -36,6 +36,26 @@ final class WhisperHelperCommandTests: XCTestCase {
         XCTAssertEqual(mode.intValue & 0o777, 0o600)
     }
 
+    func testOneJobReusesOneRuntimeSessionAcrossBoundedInputBatches() throws {
+        let fixture = try WhisperHelperFixture(rangeCount: 65, audioLengthBytes: 2)
+        defer { fixture.cleanup() }
+        let counter = WhisperHelperRuntimeCounter()
+        let runtime = WhisperHelperRuntime(makeSession: { _ in
+            counter.sessionCount += 1
+            return WhisperHelperRuntimeSession { inputs in
+                counter.batchCount += 1
+                counter.inputCount += inputs.count
+                return []
+            }
+        })
+
+        try fixture.command().execute(runtime: runtime)
+
+        XCTAssertEqual(counter.sessionCount, 1)
+        XCTAssertEqual(counter.batchCount, 2)
+        XCTAssertEqual(counter.inputCount, 65)
+    }
+
     func testRejectsTraversalOutsideManagedRoot() throws {
         let fixture = try WhisperHelperFixture()
         defer { fixture.cleanup() }
@@ -146,6 +166,7 @@ private struct WhisperHelperFixture {
     init(
         resultRelativePath suppliedResult: String? = nil,
         modelSHA256 suppliedHash: String? = nil,
+        rangeCount: Int = 1,
         audioLengthBytes: Int64 = 8
     ) throws {
         root = FileManager.default.temporaryDirectory
@@ -201,16 +222,16 @@ private struct WhisperHelperFixture {
             modelRelativePath: "ai/speech/v1/model/model.bin",
             modelSHA256: suppliedHash ?? modelDigest,
             resultRelativePath: resultRelativePath,
-            audioRanges: [
+            audioRanges: (0..<rangeCount).map { index in
                 WhisperHelperAudioRange(
                     source: .me,
                     relativePath: "media/calls/1/me.pcm",
                     offsetBytes: 0,
                     lengthBytes: audioLengthBytes,
                     sampleRate: 16_000,
-                    startSample: 16_000
-                ),
-            ]
+                    startSample: 16_000 + Int64(index)
+                )
+            }
         )
         try JSONEncoder().encode(manifest).write(to: manifestURL)
     }
@@ -229,4 +250,10 @@ private struct WhisperHelperFixture {
     func cleanup() {
         try? FileManager.default.removeItem(at: root)
     }
+}
+
+private final class WhisperHelperRuntimeCounter {
+    var sessionCount = 0
+    var batchCount = 0
+    var inputCount = 0
 }

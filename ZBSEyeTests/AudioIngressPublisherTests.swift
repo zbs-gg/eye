@@ -62,6 +62,10 @@ final class AudioIngressPublisherTests: XCTestCase {
         XCTAssertEqual(droppedGap?.firstIngressSequence, 0)
         XCTAssertEqual(droppedGap?.lastIngressSequence, 0)
         XCTAssertEqual(droppedGap?.reason, .consumerOverflow)
+        XCTAssertEqual(droppedGap?.startHostTimeNs, 1_000)
+        XCTAssertEqual(droppedGap?.startMs, 1_000)
+        XCTAssertNotNil(droppedGap?.endHostTimeNs)
+        XCTAssertNotNil(droppedGap?.endMs)
         XCTAssertEqual(publisher.latestAcceptedIngressSequence, 1)
 
         var iterator = publisher.stream.makeAsyncIterator()
@@ -73,6 +77,17 @@ final class AudioIngressPublisherTests: XCTestCase {
         XCTAssertEqual(retained.timing.ingressSequence, 1)
         XCTAssertEqual(retained.timing.sourceSampleTime, 1)
         XCTAssertEqual(retained.timing.normalizedHostTimeNs, 2_000)
+    }
+
+    func testHostClockMapperRemovesCallbackDeliveryDelay() {
+        let callbackWall = Date(timeIntervalSince1970: 1_000)
+        let mapped = AudioHostClockWallMapper.date(
+            for: 8_000_000_000,
+            callbackHostTimeNs: 10_000_000_000,
+            callbackWallDate: callbackWall
+        )
+
+        XCTAssertEqual(mapped.timeIntervalSince1970, 998, accuracy: 0.000_001)
     }
 
     func testYieldAfterTerminationIsRejectedAndDoesNotAdvanceAcceptedTarget() {
@@ -123,6 +138,44 @@ final class AudioIngressPublisherTests: XCTestCase {
         XCTAssertLessThanOrEqual(gaps.count, 16)
         XCTAssertEqual(gaps.first?.firstIngressSequence, 90)
         XCTAssertEqual(gaps.last?.lastIngressSequence, 188)
+    }
+
+    func testTelemetryCollapseIncludesNewestDroppedFrameTimeBounds() async throws {
+        let publisher = AudioIngressPublisher(source: .me, epoch: 0, capacity: 1)
+        var iterator = publisher.stream.makeAsyncIterator()
+        for pair in 0..<17 {
+            let first = pair * 2
+            _ = publisher.yield(
+                samples: [0.1],
+                rms: 0.1,
+                captureSampleRate: 48_000,
+                sourceSampleTime: Int64(first),
+                normalizedHostTimeNs: Int64(first * 1_000),
+                capturedAt: Date(timeIntervalSince1970: Double(first)),
+                provenance: .microphone
+            )
+            _ = publisher.yield(
+                samples: [0.2],
+                rms: 0.2,
+                captureSampleRate: 48_000,
+                sourceSampleTime: Int64(first + 1),
+                normalizedHostTimeNs: Int64((first + 1) * 1_000),
+                capturedAt: Date(timeIntervalSince1970: Double(first + 1)),
+                provenance: .microphone
+            )
+            let retained = await iterator.next()
+            _ = try XCTUnwrap(retained)
+        }
+
+        let gaps = publisher.drainGaps()
+        XCTAssertEqual(gaps.count, 1)
+        XCTAssertEqual(gaps[0].reason, .telemetryOverflow)
+        XCTAssertEqual(gaps[0].firstIngressSequence, 0)
+        XCTAssertEqual(gaps[0].lastIngressSequence, 32)
+        XCTAssertEqual(gaps[0].startHostTimeNs, 0)
+        XCTAssertGreaterThanOrEqual(gaps[0].endHostTimeNs ?? -1, 32_000)
+        XCTAssertEqual(gaps[0].startMs, 0)
+        XCTAssertGreaterThanOrEqual(gaps[0].endMs ?? -1, 32_000)
     }
 
     func testStatefulPCMResamplerOutputDoesNotDependOnInputFrameSplits() {

@@ -20,6 +20,9 @@ fixture_gate() {
   xcodegen generate >/dev/null
   local derived="build/DerivedData"
   local selected=(
+    -only-testing:ZBSEyeTests/AIComputeCoordinatorTests
+    -only-testing:ZBSEyeTests/AudioIngressPublisherTests
+    -only-testing:ZBSEyeTests/AutomaticRetentionAdmissionTests
     -only-testing:ZBSEyeTests/CallAPITests
     -only-testing:ZBSEyeTests/CallAudioWindowAssemblerTests
     -only-testing:ZBSEyeTests/CallCoordinatorTests
@@ -29,6 +32,7 @@ fixture_gate() {
     -only-testing:ZBSEyeTests/CallFinalPromotionTests
     -only-testing:ZBSEyeTests/CallMediaMutationRecoveryTests
     -only-testing:ZBSEyeTests/CallPresentationStateTests
+    -only-testing:ZBSEyeTests/CallRecordingStoreTests
     -only-testing:ZBSEyeTests/CallRecoveryTests
     -only-testing:ZBSEyeTests/CallRedactionTests
     -only-testing:ZBSEyeTests/CallReleaseQualificationTests
@@ -41,6 +45,11 @@ fixture_gate() {
     -only-testing:ZBSEyeTests/CallTranscriptWorkerTests
     -only-testing:ZBSEyeTests/MCPCallEvidenceRoutingTests
     -only-testing:ZBSEyeTests/MCPHistorySearchRoutingTests
+    -only-testing:ZBSEyeTests/MCPReadOnlyDatabaseTests
+    -only-testing:ZBSEyeTests/MCPReadinessServiceTests
+    -only-testing:ZBSEyeTests/ReleaseConfigurationTests
+    -only-testing:ZBSEyeTests/RetentionManagerTests
+    -only-testing:ZBSEyeTests/SystemAudioCaptureLifecycleTests
     -only-testing:ZBSEyeTests/TranscriptOverlapReconcilerTests
     -only-testing:ZBSEyeTests/WhisperHelperCommandTests
     -only-testing:ZBSEyeTests/WhisperModelLifecycleTests
@@ -60,6 +69,7 @@ fixture_gate() {
       >/dev/null || fail "call OpenAPI contract is invalid"
 
   local logging_scope=(
+    ZBSEyeApp/App/ZBSEyeMain.swift
     ZBSEyeApp/App/AppEnvironment.swift
     ZBSEyeApp/Calls
     ZBSEyeApp/Audio/AudioCoordinator.swift

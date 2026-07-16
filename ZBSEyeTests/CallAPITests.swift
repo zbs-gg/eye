@@ -1,7 +1,59 @@
+import CoreFoundation
 import GRDB
 import XCTest
 
 final class CallAPITests: XCTestCase {
+    func testOpenAPIContractDeclaresTypedCallInputsAndResponses() throws {
+        let root = try loadCallOpenAPI()
+        let info = try XCTUnwrap(root["info"] as? [String: Any])
+        XCTAssertEqual(info["version"] as? String, "0.5.0")
+        let paths = try XCTUnwrap(root["paths"] as? [String: Any])
+        let callPath = try XCTUnwrap(paths["/v1/call"] as? [String: Any])
+        let callGet = try XCTUnwrap(callPath["get"] as? [String: Any])
+        let callParameters = try XCTUnwrap(callGet["parameters"] as? [[String: Any]])
+        XCTAssertEqual(callParameters.first?["$ref"] as? String, "#/components/parameters/CallId")
+        let transcriptPath = try XCTUnwrap(paths["/v1/call/transcript"] as? [String: Any])
+        let transcriptGet = try XCTUnwrap(transcriptPath["get"] as? [String: Any])
+        let transcriptParameters = try XCTUnwrap(
+            transcriptGet["parameters"] as? [[String: Any]]
+        )
+        XCTAssertTrue(transcriptParameters.contains { $0["name"] as? String == "selector" })
+        XCTAssertTrue(transcriptParameters.contains { $0["name"] as? String == "bookmark_id" })
+        let components = try XCTUnwrap(root["components"] as? [String: Any])
+        let schemas = try XCTUnwrap(components["schemas"] as? [String: Any])
+        let expectedResponses = [
+            "/v1/calls": "CallListPage",
+            "/v1/call": "CallEnvelope",
+            "/v1/call/bookmarks": "BookmarkPage",
+            "/v1/call/transcript": "TranscriptPage",
+        ]
+        for (path, schema) in expectedResponses {
+            XCTAssertEqual(
+                try successSchemaReference(path: path, paths: paths),
+                "#/components/schemas/\(schema)"
+            )
+            XCTAssertNotNil(schemas[schema])
+            _ = try resolveOpenAPIReference("#/components/schemas/\(schema)", root: root)
+        }
+        for reference in [
+            "#/components/parameters/CallId",
+            "#/components/parameters/EvidenceId",
+            "#/components/responses/BadRequest",
+            "#/components/responses/NotFound",
+            "#/components/responses/Failure",
+        ] {
+            _ = try resolveOpenAPIReference(reference, root: root)
+        }
+        let evidencePath = try XCTUnwrap(paths["/v1/call/evidence"] as? [String: Any])
+        let evidenceGet = try XCTUnwrap(evidencePath["get"] as? [String: Any])
+        let evidenceResponses = try XCTUnwrap(evidenceGet["responses"] as? [String: Any])
+        let evidence200 = try XCTUnwrap(evidenceResponses["200"] as? [String: Any])
+        let evidenceContent = try XCTUnwrap(evidence200["content"] as? [String: Any])
+        let binary = try XCTUnwrap(evidenceContent["application/octet-stream"] as? [String: Any])
+        let binarySchema = try XCTUnwrap(binary["schema"] as? [String: Any])
+        XCTAssertEqual(binarySchema["format"] as? String, "binary")
+    }
+
     func testSharedContractListsAndReadsReadyMicOnlyCallWithoutLeakingPaths() async throws {
         let fixture = try CallAgentFixture()
         let ids = try await fixture.makeReadyCall(segmentCount: 3, micOnly: true)
@@ -43,6 +95,29 @@ final class CallAPITests: XCTestCase {
         )
         XCTAssertEqual(checkpoint.revision?.kind, .interval)
         XCTAssertEqual(checkpoint.segments.map(\.text), ["bookmark"])
+
+        let openAPI = try loadCallOpenAPI()
+        try validateOpenAPIValue(try encodedJSONObject(list), schemaName: "CallListPage", root: openAPI)
+        try validateOpenAPIValue(try encodedJSONObject(envelope), schemaName: "CallEnvelope", root: openAPI)
+        try validateOpenAPIValue(try encodedJSONObject(bookmarks), schemaName: "BookmarkPage", root: openAPI)
+        try validateOpenAPIValue(try encodedJSONObject(transcript), schemaName: "TranscriptPage", root: openAPI)
+        try validateOpenAPIValue(
+            try encodedJSONObject(
+                APIDTO.ErrorResponse(
+                    error: .init(code: "bad_request", message: "invalid")
+                )
+            ),
+            schemaName: "ErrorResponse",
+            root: openAPI
+        )
+        XCTAssertThrowsError(
+            try validateOpenAPIValue(
+                1.5,
+                schema: ["type": "integer"],
+                root: openAPI,
+                path: "fractional"
+            )
+        )
 
         let evidenceID = try XCTUnwrap(envelope.evidence.first?.evidenceId)
         let resolvedEvidence = try await fixture.service.audioEvidence(reference: evidenceID)
@@ -268,5 +343,167 @@ final class CallAgentFixture {
     func status(callID: Int64) async throws -> CallEvidenceStatus {
         let envelope = try await service.envelope(callID: callID)
         return try XCTUnwrap(envelope).status
+    }
+}
+
+private enum OpenAPITestError: Error {
+    case invalidContract(String)
+}
+
+private func loadCallOpenAPI() throws -> [String: Any] {
+    let repositoryRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: repositoryRoot.appendingPathComponent(
+            "ZBSEyeApp/Server/ZBSEyeHTTPServer.swift"
+        ),
+        encoding: .utf8
+    )
+    let prefix = "static let openAPISpec = #\"\"\"\n"
+    let suffix = "\n    \"\"\"#"
+    guard let start = source.range(of: prefix)?.upperBound,
+          let end = source.range(of: suffix, range: start..<source.endIndex)?.lowerBound,
+          let data = String(source[start..<end]).data(using: .utf8),
+          let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw OpenAPITestError.invalidContract("embedded OpenAPI JSON")
+    }
+    return root
+}
+
+private func successSchemaReference(
+    path: String,
+    paths: [String: Any]
+) throws -> String {
+    guard let pathItem = paths[path] as? [String: Any],
+          let get = pathItem["get"] as? [String: Any],
+          let responses = get["responses"] as? [String: Any],
+          let success = responses["200"] as? [String: Any],
+          let content = success["content"] as? [String: Any],
+          let json = content["application/json"] as? [String: Any],
+          let schema = json["schema"] as? [String: Any],
+          let reference = schema["$ref"] as? String else {
+        throw OpenAPITestError.invalidContract("missing 200 schema for \(path)")
+    }
+    return reference
+}
+
+private func resolveOpenAPIReference(
+    _ reference: String,
+    root: [String: Any]
+) throws -> [String: Any] {
+    guard reference.hasPrefix("#/") else {
+        throw OpenAPITestError.invalidContract("unresolved reference \(reference)")
+    }
+    var current: Any = root
+    for part in reference.dropFirst(2).split(separator: "/") {
+        guard let dictionary = current as? [String: Any] else {
+            throw OpenAPITestError.invalidContract("unresolved reference \(reference)")
+        }
+        let key = part.replacingOccurrences(of: "~1", with: "/")
+            .replacingOccurrences(of: "~0", with: "~")
+        guard let next = dictionary[key] else {
+            throw OpenAPITestError.invalidContract("unresolved reference \(reference)")
+        }
+        current = next
+    }
+    guard let resolved = current as? [String: Any] else {
+        throw OpenAPITestError.invalidContract("unresolved reference \(reference)")
+    }
+    return resolved
+}
+
+private func encodedJSONObject<Value: Encodable>(_ value: Value) throws -> Any {
+    try JSONSerialization.jsonObject(with: JSONEncoder().encode(value))
+}
+
+private func validateOpenAPIValue(
+    _ value: Any,
+    schemaName: String,
+    root: [String: Any]
+) throws {
+    try validateOpenAPIValue(
+        value,
+        schema: resolveOpenAPIReference("#/components/schemas/\(schemaName)", root: root),
+        root: root,
+        path: schemaName
+    )
+}
+
+private func validateOpenAPIValue(
+    _ value: Any,
+    schema: [String: Any],
+    root: [String: Any],
+    path: String
+) throws {
+    if value is NSNull, schema["nullable"] as? Bool == true { return }
+    if let reference = schema["$ref"] as? String {
+        return try validateOpenAPIValue(
+            value,
+            schema: resolveOpenAPIReference(reference, root: root),
+            root: root,
+            path: path
+        )
+    }
+    if let allOf = schema["allOf"] as? [[String: Any]] {
+        for child in allOf {
+            try validateOpenAPIValue(value, schema: child, root: root, path: path)
+        }
+    }
+    guard let type = schema["type"] as? String else { return }
+    switch type {
+    case "object":
+        guard let object = value as? [String: Any] else {
+            throw OpenAPITestError.invalidContract("\(path) must be object")
+        }
+        for key in schema["required"] as? [String] ?? [] where object[key] == nil {
+            throw OpenAPITestError.invalidContract("\(path).\(key) is required")
+        }
+        let properties = schema["properties"] as? [String: Any] ?? [:]
+        for (key, childValue) in object {
+            guard let childSchema = properties[key] as? [String: Any] else {
+                throw OpenAPITestError.invalidContract("\(path).\(key) is undocumented")
+            }
+            try validateOpenAPIValue(
+                childValue,
+                schema: childSchema,
+                root: root,
+                path: "\(path).\(key)"
+            )
+        }
+    case "array":
+        guard let array = value as? [Any],
+              let itemSchema = schema["items"] as? [String: Any] else {
+            throw OpenAPITestError.invalidContract("\(path) must be typed array")
+        }
+        for (index, item) in array.enumerated() {
+            try validateOpenAPIValue(
+                item,
+                schema: itemSchema,
+                root: root,
+                path: "\(path)[\(index)]"
+            )
+        }
+    case "string":
+        guard let string = value as? String else {
+            throw OpenAPITestError.invalidContract("\(path) must be string")
+        }
+        if let allowed = schema["enum"] as? [String], !allowed.contains(string) {
+            throw OpenAPITestError.invalidContract("\(path) is outside enum")
+        }
+    case "integer":
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite,
+              number.doubleValue.rounded(.towardZero) == number.doubleValue else {
+            throw OpenAPITestError.invalidContract("\(path) must be integer")
+        }
+    case "boolean":
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) == CFBooleanGetTypeID() else {
+            throw OpenAPITestError.invalidContract("\(path) must be boolean")
+        }
+    default:
+        throw OpenAPITestError.invalidContract("unsupported schema type \(type)")
     }
 }

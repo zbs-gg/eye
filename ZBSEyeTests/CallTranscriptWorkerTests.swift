@@ -17,6 +17,13 @@ final class CallTranscriptWorkerTests: XCTestCase {
             ),
             .seconds(10)
         )
+        XCTAssertEqual(
+            CallTranscriptWorker.loopDelay(
+                after: .retryScheduled(jobID: 7, errorCode: "helper_failed"),
+                finalWaiting: true
+            ),
+            .seconds(1)
+        )
     }
 
     func testMissingModelDoesNotClaimDurableWork() async throws {
@@ -110,6 +117,48 @@ final class CallTranscriptWorkerTests: XCTestCase {
         XCTAssertEqual(job.errorCode, "helper_failed")
     }
 
+    func testRepeatedHelperFailureStopsAfterBoundedAutomaticAttempts() async throws {
+        let fixture = try CallTranscriptWorkerFixture()
+        let created = try await fixture.makePendingCheckpoint()
+        let worker = fixture.makeWorker(modelReady: true) { _, _, _ in
+            throw FixtureError.helperFailed
+        }
+
+        for attempt in 1...CallRepository.maximumAutomaticTranscriptAttempts {
+            _ = await worker.runOne(nowMs: 3_000 + Int64(attempt))
+        }
+
+        let job = try await fixture.job(id: try XCTUnwrap(created.job.id))
+        XCTAssertEqual(job.state, .failed)
+        XCTAssertEqual(job.attempts, CallRepository.maximumAutomaticTranscriptAttempts)
+        XCTAssertEqual(job.errorCode, "helper_failed")
+    }
+
+    func testCheckpointPlansFrozenPrefixFromAnUnfinalizedActiveChunk() async throws {
+        let fixture = try CallTranscriptWorkerFixture()
+        let created = try await fixture.makePendingCheckpoint(finalized: false)
+        let recorder = HelperManifestRecorder()
+        let worker = fixture.makeWorker(modelReady: true) { manifest, relativePath, _ in
+            await recorder.record(manifest: manifest, relativePath: relativePath)
+            return WhisperHelperResult(
+                formatVersion: 1,
+                jobID: manifest.jobID,
+                callID: manifest.callID,
+                callGeneration: manifest.callGeneration,
+                modelSHA256: manifest.modelSHA256,
+                runtimeRelease: "fixture-runtime",
+                segments: []
+            )
+        }
+
+        let outcome = await worker.runOne(nowMs: 3_000)
+
+        XCTAssertEqual(outcome, .completed(jobID: try XCTUnwrap(created.job.id), final: false))
+        let recorded = await recorder.snapshot()
+        let manifest = try XCTUnwrap(recorded.first?.manifest)
+        XCTAssertEqual(manifest.audioRanges.map(\.lengthBytes), [32_000])
+    }
+
     func testResultFromAnotherHelperJobIsRejected() async throws {
         let fixture = try CallTranscriptWorkerFixture()
         let created = try await fixture.makePendingCheckpoint()
@@ -165,10 +214,11 @@ final class CallTranscriptWorkerTests: XCTestCase {
         )
         let job = try await fixture.job(id: try XCTUnwrap(created.job.id))
         XCTAssertEqual(job.state, .pending)
+        XCTAssertEqual(job.attempts, 0)
         XCTAssertEqual(job.errorCode, "helper_cancelled")
     }
 
-    func testSyntheticTwoHourEvidencePlansBoundedHelperBatches() throws {
+    func testSyntheticTwoHourEvidencePlansBoundedRangesForOneHelperJob() throws {
         let startMs: Int64 = 1_000
         let chunkDurationMs: Int64 = 30_000
         let samplesPerChunk: Int64 = 16_000 * 30
@@ -233,15 +283,53 @@ final class CallTranscriptWorkerTests: XCTestCase {
         )
 
         let ranges = try CallTranscriptWorker.plannedAudioRanges(evidence: evidence)
-        let batches = CallTranscriptWorker.batches(for: ranges)
 
         XCTAssertEqual(ranges.reduce(Int64(0)) { $0 + $1.lengthBytes }, 230_400_000)
-        XCTAssertGreaterThan(batches.count, 1)
-        XCTAssertTrue(batches.allSatisfy { $0.count <= 64 })
-        XCTAssertTrue(batches.allSatisfy {
-            $0.reduce(Int64(0)) { $0 + $1.lengthBytes }
-                <= Int64(CallTranscriptWorker.maximumBatchBytes)
-        })
+        XCTAssertEqual(ranges.count, 240)
+        XCTAssertTrue(ranges.allSatisfy { $0.lengthBytes <= 16 * 1_024 * 1_024 })
+    }
+
+    func testProcessRunnerLaunchesAndReadsBoundedAtomicResult() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zbseye-helper-process-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let jobID = UUID().uuidString.lowercased()
+        let resultRelativePath = "call-helper/jobs/\(jobID)/result.json"
+        let resultURL = root.appendingPathComponent(resultRelativePath)
+        try FileManager.default.createDirectory(
+            at: resultURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let expected = WhisperHelperResult(
+            formatVersion: 1,
+            jobID: jobID,
+            callID: 7,
+            callGeneration: 0,
+            modelSHA256: String(repeating: "b", count: 64),
+            runtimeRelease: "fixture-runtime",
+            segments: []
+        )
+        try JSONEncoder().encode(expected).write(to: resultURL, options: .atomic)
+        let manifest = WhisperHelperJobManifest(
+            formatVersion: 1,
+            jobID: jobID,
+            callID: 7,
+            callGeneration: 0,
+            modelRelativePath: "ai/speech/v1/model.bin",
+            modelSHA256: expected.modelSHA256,
+            resultRelativePath: resultRelativePath,
+            audioRanges: []
+        )
+
+        let actual = try await WhisperHelperProcessRunner(
+            executablePath: "/usr/bin/true"
+        ).run(
+            manifest: manifest,
+            manifestRelativePath: "call-helper/jobs/\(jobID)/manifest.json",
+            dataRoot: root
+        )
+
+        XCTAssertEqual(actual, expected)
     }
 }
 
@@ -292,7 +380,7 @@ private final class CallTranscriptWorkerFixture {
         repository = CallRepository(database: database)
     }
 
-    func makePendingCheckpoint() async throws -> CallBookmarkCreation {
+    func makePendingCheckpoint(finalized: Bool = true) async throws -> CallBookmarkCreation {
         let call = try await repository.createCall(startedAtMs: 1_000, idempotencyKey: "call")
         let callID = try XCTUnwrap(call.id)
         let span = try await repository.recordSourceSpan(
@@ -328,7 +416,7 @@ private final class CallTranscriptWorkerFixture {
                 relativePath: "calls/1/me/0000.pcm",
                 bytes: 32_000,
                 sha256: "fixture",
-                finalized: true
+                finalized: finalized
             )
         )
         let created = try await repository.createBookmark(

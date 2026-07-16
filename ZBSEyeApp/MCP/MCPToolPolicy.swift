@@ -21,6 +21,10 @@ enum MCPToolPolicy {
         "get_transcript",
         "get_context_at",
         "get_timeline",
+        "list_calls",
+        "get_call",
+        "list_call_bookmarks",
+        "read_call_transcript",
         "get_status",
         "get_diagnostics",
     ]

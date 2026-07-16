@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum CallTranscriptWorkerRunResult: Sendable, Equatable {
@@ -27,7 +28,6 @@ actor CallTranscriptWorker {
     ) async throws -> WhisperHelperResult
     typealias HelperCancellation = @Sendable () -> Void
 
-    static let maximumBatchBytes = 48 * 1_024 * 1_024
     private static let maximumRangeBytes: Int64 = 16 * 1_024 * 1_024
     private static let pcmSampleRate: Int64 = 16_000
     private static let bytesPerSample: Int64 = 2
@@ -126,7 +126,7 @@ actor CallTranscriptWorker {
         case .completed:
             return .milliseconds(100)
         case .retryScheduled:
-            return finalWaiting ? .milliseconds(100) : .seconds(10)
+            return finalWaiting ? .seconds(1) : .seconds(10)
         case .failed:
             return finalWaiting ? .milliseconds(100) : .seconds(30)
         case .idle, .modelUnavailable, .suspended:
@@ -179,32 +179,28 @@ actor CallTranscriptWorker {
             let evidence = try await repository.transcriptJobEvidence(jobID: jobID)
             let ranges = try Self.plannedAudioRanges(evidence: evidence)
 
-            var committedBySource: [CallAudioSource: [CallTranscriptSegmentDraft]] = [:]
-            for batch in Self.batches(for: ranges) {
+            let converted: [CallTranscriptSegmentDraft]
+            if ranges.isEmpty {
+                converted = []
+            } else {
                 try Task.checkCancellation()
-                let result = try await runHelperBatch(batch, evidence: evidence)
-                let converted = try Self.validateAndConvert(
+                let result = try await runHelperBatch(ranges, evidence: evidence)
+                converted = try Self.validateAndConvert(
                     result: result,
-                    ranges: batch,
+                    ranges: ranges,
                     evidence: evidence,
                     modelManifest: modelManifest
                 )
-                for source in [CallAudioSource.me, .system] {
-                    let incoming = converted.filter { $0.source == source }
-                    guard !incoming.isEmpty else { continue }
-                    let committed = committedBySource[source, default: []]
-                    let reconciled = TranscriptOverlapReconciler.reconcile(
-                        committed: committed,
-                        incoming: incoming,
-                        logicalStartMs: job.logicalStartMs,
-                        logicalEndMs: job.logicalEndMs,
-                        overlapBoundaryMs: committed.map(\.endMs).max() ?? job.logicalStartMs
-                    )
-                    committedBySource[source, default: []].append(contentsOf: reconciled)
-                }
             }
             try Task.checkCancellation()
-            let segments = committedBySource.values.flatMap { $0 }.sorted(by: Self.segmentOrder)
+            let segments = [CallAudioSource.me, .system].flatMap { source in
+                TranscriptOverlapReconciler.reconcile(
+                    committed: [],
+                    incoming: converted.filter { $0.source == source },
+                    logicalStartMs: job.logicalStartMs,
+                    logicalEndMs: job.logicalEndMs
+                )
+            }.sorted(by: Self.segmentOrder)
             let degraded = evidence.call.degradationReason != nil || ranges.isEmpty
             let commit = try await repository.commitTranscriptJob(
                 jobID: jobID,
@@ -222,18 +218,45 @@ actor CallTranscriptWorker {
             guard let jobID = claimedJobID else { return .idle }
             let disposition = Self.failureDisposition(for: error)
             let failureTime = Int64(Date().timeIntervalSince1970 * 1_000)
-            await Task.detached(priority: .utility) { [repository] in
-                try? await repository.failTranscriptJob(
-                    jobID: jobID,
-                    errorCode: disposition.code,
-                    retryable: disposition.retryable,
-                    nowMs: failureTime
-                )
-            }.value
-            return disposition.retryable
+            let persistedState = await Self.persistFailureState(
+                repository: repository,
+                jobID: jobID,
+                code: disposition.code,
+                retryable: disposition.retryable,
+                nowMs: failureTime
+            )
+            guard let persistedState else {
+                return .failed(jobID: jobID, errorCode: "state_persist_failed")
+            }
+            return persistedState == .pending
                 ? .retryScheduled(jobID: jobID, errorCode: disposition.code)
                 : .failed(jobID: jobID, errorCode: disposition.code)
         }
+    }
+
+    private nonisolated static func persistFailureState(
+        repository: CallRepository,
+        jobID: Int64,
+        code: String,
+        retryable: Bool,
+        nowMs: Int64
+    ) async -> CallTranscriptJobState? {
+        await Task.detached(priority: .utility) {
+            for attempt in 0..<3 {
+                do {
+                    return try await repository.failTranscriptJob(
+                        jobID: jobID,
+                        errorCode: code,
+                        retryable: retryable,
+                        nowMs: nowMs
+                    )
+                } catch {
+                    guard attempt < 2 else { return nil }
+                    try? await Task.sleep(for: .milliseconds(100 * (attempt + 1)))
+                }
+            }
+            return nil
+        }.value
     }
 
     private func runHelperBatch(
@@ -327,7 +350,6 @@ actor CallTranscriptWorker {
         for chunk in sortedChunks {
             guard chunk.callId == evidence.job.callId,
                   chunk.mediaGeneration == evidence.job.mediaGeneration,
-                  chunk.finalized,
                   chunk.bytes > 0,
                   chunk.relativePath.hasPrefix("calls/") else {
                 throw CallTranscriptWorkerError.invalidEvidence
@@ -382,35 +404,6 @@ actor CallTranscriptWorker {
             }
         }
         return planned
-    }
-
-    static func batches(
-        for ranges: [WhisperHelperAudioRange]
-    ) -> [[WhisperHelperAudioRange]] {
-        guard !ranges.isEmpty else { return [] }
-        let limit = Int64(maximumBatchBytes)
-        var output: [[WhisperHelperAudioRange]] = []
-        var current: [WhisperHelperAudioRange] = []
-        var bytes: Int64 = 0
-
-        for range in ranges {
-            if !current.isEmpty,
-               (bytes + range.lengthBytes > limit || current.count == 64) {
-                output.append(current)
-                let overlap = current.last.flatMap { previous in
-                    previous.source == range.source
-                        && previous.lengthBytes + range.lengthBytes <= limit
-                        ? previous
-                        : nil
-                }
-                current = overlap.map { [$0] } ?? []
-                bytes = overlap?.lengthBytes ?? 0
-            }
-            current.append(range)
-            bytes += range.lengthBytes
-        }
-        if !current.isEmpty { output.append(current) }
-        return output
     }
 
     private static func validateAndConvert(
@@ -484,7 +477,8 @@ actor CallTranscriptWorker {
 
 /// `Process` is intentionally contained behind a lock-owned, cancellable
 /// bridge. No shell is involved and stdout/stderr never carry transcript data.
-private final class WhisperHelperProcessRunner: @unchecked Sendable {
+final class WhisperHelperProcessRunner: @unchecked Sendable {
+    static let maximumRuntime: Duration = .seconds(20 * 60)
     private let executablePath: String
     private let lock = NSLock()
     private var process: Process?
@@ -508,14 +502,9 @@ private final class WhisperHelperProcessRunner: @unchecked Sendable {
                 child.standardOutput = FileHandle.nullDevice
                 child.standardError = FileHandle.nullDevice
 
-                guard install(child) else {
-                    throw CancellationError()
-                }
+                try launch(child)
                 defer { clear(child) }
-
-                do { try child.run() }
-                catch { throw CallTranscriptWorkerError.helperFailed }
-                child.waitUntilExit()
+                try await Self.waitForExit(child)
                 guard child.terminationStatus == 0 else {
                     throw CallTranscriptWorkerError.helperFailed
                 }
@@ -541,24 +530,49 @@ private final class WhisperHelperProcessRunner: @unchecked Sendable {
             cancellationRequested = true
             return process
         }
-        if child?.isRunning == true { child?.terminate() }
+        if let child { Self.forceTerminate(child) }
     }
 
     private func prepareRun() {
         lock.withLock { cancellationRequested = false }
     }
 
-    private func install(_ child: Process) -> Bool {
-        lock.withLock {
-            guard !cancellationRequested else { return false }
+    private func launch(_ child: Process) throws {
+        try lock.withLock {
+            guard !cancellationRequested else { throw CancellationError() }
             process = child
-            return true
+            do {
+                try child.run()
+            } catch {
+                process = nil
+                throw CallTranscriptWorkerError.helperFailed
+            }
         }
     }
 
     private func clear(_ child: Process) {
         lock.withLock {
             if process === child { process = nil }
+        }
+    }
+
+    private static func waitForExit(_ child: Process) async throws {
+        let deadline = ContinuousClock.now.advanced(by: maximumRuntime)
+        while child.isRunning {
+            if ContinuousClock.now >= deadline {
+                forceTerminate(child)
+                child.waitUntilExit()
+                throw CallTranscriptWorkerError.helperFailed
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    private static func forceTerminate(_ child: Process) {
+        guard child.isRunning else { return }
+        child.terminate()
+        if child.isRunning, child.processIdentifier > 0 {
+            _ = Darwin.kill(child.processIdentifier, SIGKILL)
         }
     }
 }

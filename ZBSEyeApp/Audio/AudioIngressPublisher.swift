@@ -97,12 +97,27 @@ final class AudioIngressPublisher: @unchecked Sendable {
             case .dropped(let evicted):
                 latestAccepted = sequence
                 let evictedSequence = evicted.timing.ingressSequence
+                let durationNs = Int64(
+                    (Double(evicted.timing.frameCount)
+                        / evicted.timing.captureSampleRate * 1_000_000_000).rounded()
+                )
+                let startMs = Int64(
+                    (evicted.timing.capturedAt.timeIntervalSince1970 * 1_000).rounded()
+                )
+                let endMs = max(
+                    startMs + 1,
+                    startMs + Int64((Double(durationNs) / 1_000_000).rounded())
+                )
                 let gap = AudioIngressGap(
                     source: source,
                     epoch: epoch,
                     firstIngressSequence: evictedSequence,
                     lastIngressSequence: evictedSequence,
-                    reason: .consumerOverflow
+                    reason: .consumerOverflow,
+                    startHostTimeNs: evicted.timing.normalizedHostTimeNs,
+                    endHostTimeNs: evicted.timing.normalizedHostTimeNs + max(1, durationNs),
+                    startMs: startMs,
+                    endMs: endMs
                 )
                 record(gap)
                 return .accepted(
@@ -137,7 +152,11 @@ final class AudioIngressPublisher: @unchecked Sendable {
                 epoch: epoch,
                 firstIngressSequence: last.firstIngressSequence,
                 lastIngressSequence: gap.lastIngressSequence,
-                reason: gap.reason
+                reason: gap.reason,
+                startHostTimeNs: [last.startHostTimeNs, gap.startHostTimeNs].compactMap { $0 }.min(),
+                endHostTimeNs: [last.endHostTimeNs, gap.endHostTimeNs].compactMap { $0 }.max(),
+                startMs: [last.startMs, gap.startMs].compactMap { $0 }.min(),
+                endMs: [last.endMs, gap.endMs].compactMap { $0 }.max()
             )
             return
         }
@@ -146,13 +165,18 @@ final class AudioIngressPublisher: @unchecked Sendable {
             return
         }
         let first = pendingGaps.first?.firstIngressSequence ?? gap.firstIngressSequence
+        let collapsed = pendingGaps + [gap]
         pendingGaps = [
             AudioIngressGap(
                 source: source,
                 epoch: epoch,
                 firstIngressSequence: first,
                 lastIngressSequence: gap.lastIngressSequence,
-                reason: .telemetryOverflow
+                reason: .telemetryOverflow,
+                startHostTimeNs: collapsed.compactMap(\.startHostTimeNs).min(),
+                endHostTimeNs: collapsed.compactMap(\.endHostTimeNs).max(),
+                startMs: collapsed.compactMap(\.startMs).min(),
+                endMs: collapsed.compactMap(\.endMs).max()
             )
         ]
     }

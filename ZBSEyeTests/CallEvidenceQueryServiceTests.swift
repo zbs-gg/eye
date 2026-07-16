@@ -59,6 +59,32 @@ final class CallEvidenceQueryServiceTests: XCTestCase {
         XCTAssertEqual(provisional.preferredRevision?.kind, .projection)
         XCTAssertEqual(provisional.segments.map(\.text), ["bookmark text"])
 
+        let pendingBookmark = try await fixture.repository.createBookmark(
+            callID: callID,
+            idempotencyKey: "pending-bookmark",
+            acceptedAtMs: 2_500,
+            meIngressTarget: nil,
+            systemIngressTarget: nil,
+            logicalStartMs: 2_000,
+            logicalEndMs: 2_500,
+            contextStartMs: 1_000
+        )
+        _ = try await fixture.repository.freezeBookmarkCoverage(
+            bookmarkID: try XCTUnwrap(pendingBookmark.bookmark.id),
+            jobID: try XCTUnwrap(pendingBookmark.job.id),
+            meEndSample: nil,
+            systemEndSample: nil,
+            degraded: false,
+            nowMs: 2_500
+        )
+        let pendingTranscript = try await fixture.service.transcript(
+            callID: callID,
+            selector: .bookmark,
+            bookmarkID: try XCTUnwrap(pendingBookmark.bookmark.id)
+        )
+        XCTAssertNil(pendingTranscript.revision)
+        XCTAssertTrue(pendingTranscript.segments.isEmpty)
+
         _ = try await fixture.repository.endCall(
             callID: callID,
             idempotencyKey: "end",
@@ -108,6 +134,39 @@ final class CallEvidenceQueryServiceTests: XCTestCase {
         let page = try XCTUnwrap(latestPage)
 
         XCTAssertEqual(page.call.id, latest.id)
+    }
+
+    func testBroadFTSSearchKeepsNewestMatchesBeforeSafetyCap() async throws {
+        let fixture = try QueryFixture()
+        try await fixture.database.pool.write { db in
+            for index in 1...5_001 {
+                try db.execute(
+                    sql: """
+                        INSERT INTO calls(
+                            startIdempotencyKey, endIdempotencyKey, startTs, endTs,
+                            state, interrupted, mediaGeneration, createdAtMs, updatedAtMs
+                        ) VALUES (?, ?, ?, ?, 'ready', 0, 0, ?, ?)
+                        """,
+                    arguments: ["search-\(index)", "end-\(index)", index, index, index, index]
+                )
+                let callID = db.lastInsertedRowID
+                try db.execute(
+                    sql: "INSERT INTO call_transcript_fts(revision_id, call_id, text) VALUES (?, ?, 'needle')",
+                    arguments: [callID, callID]
+                )
+            }
+        }
+
+        let page = try await fixture.service.listCalls(query: "needle", limit: 3, offset: 0)
+
+        XCTAssertEqual(page.calls.map(\.startTs), [5_001, 5_000, 4_999])
+        XCTAssertTrue(page.hasMore)
+        XCTAssertEqual(page.nextOffset, 3)
+
+        let tail = try await fixture.service.listCalls(query: "needle", limit: 1, offset: 4_999)
+        XCTAssertEqual(tail.calls.map(\.startTs), [2])
+        XCTAssertTrue(tail.hasMore)
+        XCTAssertEqual(tail.nextOffset, 5_000)
     }
 
     func testRetryRequeuesOnlyTheCurrentFailedFinalAndKeepsEvidence() async throws {

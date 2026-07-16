@@ -2,6 +2,29 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
+## [0.5.0] — 2026-07-16
+
+### Added
+- **Durable local call recording.** Start, Bookmark, and End create one Call Envelope with separately
+  attributable microphone/system PCM. Bookmark schedules a local checkpoint transcript without pausing
+  either source; End schedules one retryable whole-call transcript.
+- **Optional post-call Whisper.** A separately installed, pinned Whisper Large V3 Turbo model produces
+  checkpoint and final transcripts locally through a bounded helper process. It is not bundled, downloaded,
+  or enabled by default, and there is no cloud fallback.
+- **Frame-exact call privacy and portable export.** Deleting a time range preserves byte-identical audio
+  outside the selection, marks the gap, and invalidates stale transcript/search state. History export adds
+  stable Call Envelope manifests and optional verified current-generation audio.
+
+### Changed
+- Calls appear as compact Timeline spans and localized details. Search exposes only the preferred transcript;
+  authenticated REST and read-only MCP expose bounded typed evidence without absolute paths or invented
+  speaker identity.
+- The 5 GB Keep Media budget now includes call PCM. Active calls are protected, whole ended calls are removed
+  oldest-first when needed, and startup reconciliation fails closed on missing, stale, or orphaned call media.
+
+### Fixed
+- MCP failure responses no longer interpolate raw system errors that could disclose local paths or native details.
+
 ## [0.4.5] — 2026-07-15
 
 ### Fixed
@@ -39,20 +62,6 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 ## [0.4.0] — 2026-07-14
 
 ### Added
-- **Durable local call recording foundation.** Start, Bookmark, and End now create one Call Envelope with
-  separately attributable microphone/system PCM spools. Bookmarks persist exact source watermarks without
-  pausing capture; source restarts become explicit gaps, and End creates one retryable final-transcript job.
-- **Optional local Whisper transcription runtime.** The app pins the official `whisper.cpp` v1.9.1
-  XCFramework and can separately download, resume, verify, smoke-test, and remove the full Whisper Large V3
-  Turbo model. Transcription runs in a bounded one-job helper process; no speech model ships in the base app
-  and there is no cloud fallback.
-- **Frame-exact call privacy redaction.** Deleting a narrow history interval now preserves the Call
-  Envelope and byte-identical PCM outside the selection, removes covered microphone/system samples and
-  Bookmarks, invalidates stale transcript/search state immediately, records an explicit redacted gap,
-  and rebuilds one current-generation final transcript. The journal resumes forward after a crash.
-- **Portable Call Envelope export.** Existing history export now adds stable per-call JSON manifests with
-  source availability and gaps, Bookmarks, final/provisional status, and timed speaker-labeled transcript.
-  Optional audio copies use only verified current-generation chunks and bundle-relative paths.
 - **One-click built-in local AI.** On qualified Apple Silicon Macs, **ZBS Eye Local** downloads a pinned,
   verified MLX model after an explicit click and then powers Ask, Daily Insights, summaries, and generated
   activity labels offline — no LM Studio, Ollama, account, API key, or separate server required. Setup is
@@ -75,9 +84,6 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   explicit choices. Shrinking a limit asks before deleting old media, while low disk pauses capture and never
   silently deletes history to self-heal.
 - Microphone and System Audio can now be controlled independently, including across low-disk pause and resume.
-- Call Envelopes now appear as one compact Timeline span and one localized Call Detail view; search exposes
-  only the preferred transcript, while authenticated REST/MCP provide bounded read-only evidence with typed
-  IDs and no absolute paths.
 - Every generative consumer now goes through one cancellable router with selection revision, authorization,
   deterministic context budgets, and provider/model/locality provenance. Interactive Ask takes priority over
   background work; stale or revoked output is discarded.

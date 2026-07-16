@@ -284,9 +284,9 @@ final class ReleaseConfigurationTests: XCTestCase {
         let project = try String(contentsOf: url, encoding: .utf8)
 
         XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION:").count - 1, 2)
-        XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION: \"0.4.5\"").count - 1, 2)
+        XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION: \"0.5.0\"").count - 1, 2)
         XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION:").count - 1, 2)
-        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"10\"").count - 1, 2)
+        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"12\"").count - 1, 2)
     }
 
     func testReleaseDocumentationRequiresAnExactManifestBoundArtifactPair() throws {

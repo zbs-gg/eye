@@ -582,7 +582,7 @@ actor ZBSEyeHTTPServer {
     }
     /// Compact OpenAPI spec (a machine contract for the LAM; the contract used to live only in code).
     static let openAPISpec = #"""
-    {"openapi":"3.0.3","info":{"title":"ZBS Eye Local API","version":"0.4.0",
+    {"openapi":"3.0.3","info":{"title":"ZBS Eye Local API","version":"0.5.0",
      "description":"Local screen/audio memory. Auth: Bearer token on everything except /health. Time: epoch-ms or ISO8601."},
      "paths":{
       "/health":{"get":{"summary":"Status without auth","responses":{"200":{"description":"ok"}}}},
@@ -615,11 +615,27 @@ actor ZBSEyeHTTPServer {
           {"name":"to","in":"query","schema":{"type":"string"}},
           {"name":"limit","in":"query","schema":{"type":"integer","maximum":100}},
           {"name":"offset","in":"query","schema":{"type":"integer"}}],
-        "responses":{"200":{"description":"typed call summaries"}}}},
-      "/v1/call":{"get":{"summary":"Read one Call Envelope by typed call_id","responses":{"200":{"description":"source health, coverage, revision status, evidence refs"}}}},
-      "/v1/call/bookmarks":{"get":{"summary":"Paginate bookmarks by typed call_id","responses":{"200":{"description":"typed bookmark evidence"}}}},
-      "/v1/call/transcript":{"get":{"summary":"Paginate preferred or bookmark transcript segments","responses":{"200":{"description":"timed source-labelled segments"}}}},
-      "/v1/call/evidence":{"get":{"summary":"Resolve one typed managed audio evidence ref","responses":{"200":{"description":"bounded local PCM evidence"}}}},
+        "responses":{"200":{"description":"typed call summaries","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CallListPage"}}}},
+          "400":{"$ref":"#/components/responses/BadRequest"},"500":{"$ref":"#/components/responses/Failure"}}}},
+      "/v1/call":{"get":{"summary":"Read one Call Envelope by typed call_id","parameters":[
+          {"$ref":"#/components/parameters/CallId"}],
+        "responses":{"200":{"description":"source health, coverage, revision status, evidence refs","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CallEnvelope"}}}},
+          "400":{"$ref":"#/components/responses/BadRequest"},"404":{"$ref":"#/components/responses/NotFound"},"500":{"$ref":"#/components/responses/Failure"}}}},
+      "/v1/call/bookmarks":{"get":{"summary":"Paginate bookmarks by typed call_id","parameters":[
+          {"$ref":"#/components/parameters/CallId"},{"$ref":"#/components/parameters/Limit"},{"$ref":"#/components/parameters/Offset"}],
+        "responses":{"200":{"description":"typed bookmark evidence","content":{"application/json":{"schema":{"$ref":"#/components/schemas/BookmarkPage"}}}},
+          "400":{"$ref":"#/components/responses/BadRequest"},"404":{"$ref":"#/components/responses/NotFound"},"500":{"$ref":"#/components/responses/Failure"}}}},
+      "/v1/call/transcript":{"get":{"summary":"Paginate preferred or bookmark transcript segments","parameters":[
+          {"$ref":"#/components/parameters/CallId"},
+          {"name":"selector","in":"query","schema":{"type":"string","enum":["preferred","bookmark"],"default":"preferred"}},
+          {"name":"bookmark_id","in":"query","description":"required when selector=bookmark","schema":{"type":"string","pattern":"^bookmark:[1-9][0-9]*$"}},
+          {"$ref":"#/components/parameters/Limit"},{"$ref":"#/components/parameters/Offset"}],
+        "responses":{"200":{"description":"timed source-labelled segments","content":{"application/json":{"schema":{"$ref":"#/components/schemas/TranscriptPage"}}}},
+          "400":{"$ref":"#/components/responses/BadRequest"},"404":{"$ref":"#/components/responses/NotFound"},"500":{"$ref":"#/components/responses/Failure"}}}},
+      "/v1/call/evidence":{"get":{"summary":"Resolve one typed managed audio evidence ref","parameters":[
+          {"$ref":"#/components/parameters/EvidenceId"}],
+        "responses":{"200":{"description":"bounded local PCM evidence","content":{"application/octet-stream":{"schema":{"type":"string","format":"binary"}}}},
+          "400":{"$ref":"#/components/responses/BadRequest"},"404":{"$ref":"#/components/responses/NotFound"},"500":{"$ref":"#/components/responses/Failure"}}}},
       "/v1/timeline":{"get":{"summary":"Activity density by buckets","parameters":[
           {"name":"from","in":"query","required":true,"schema":{"type":"integer"}},
           {"name":"to","in":"query","required":true,"schema":{"type":"integer"}},
@@ -627,7 +643,31 @@ actor ZBSEyeHTTPServer {
         "responses":{"200":{"description":"buckets[{ts,count}]"}}}},
       "/v1/stats":{"get":{"summary":"Counters and history range","responses":{"200":{"description":"frames, audioChunks, mediaBytes…"}}}},
       "/v1/capture/toggle":{"post":{"summary":"Toggle recording on/off","parameters":[
-          {"name":"enable","in":"query","schema":{"type":"boolean"}}],"responses":{"200":{"description":"capturing"}}}}}}
+          {"name":"enable","in":"query","schema":{"type":"boolean"}}],"responses":{"200":{"description":"capturing"}}}}},
+     "components":{
+      "parameters":{
+       "CallId":{"name":"call_id","in":"query","required":true,"schema":{"type":"string","pattern":"^call:[1-9][0-9]*$"}},
+       "EvidenceId":{"name":"evidence_id","in":"query","required":true,"schema":{"type":"string","pattern":"^call-audio-chunk:[1-9][0-9]*$"}},
+       "Limit":{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100}},
+       "Offset":{"name":"offset","in":"query","schema":{"type":"integer","minimum":0,"maximum":1000000}}},
+      "responses":{
+       "BadRequest":{"description":"invalid typed identifier, selector, time, or pagination","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
+       "NotFound":{"description":"typed resource not found","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
+       "Failure":{"description":"local evidence unavailable","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}}},
+      "schemas":{
+       "ErrorResponse":{"type":"object","required":["error"],"properties":{"error":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string"},"message":{"type":"string"}}}}},
+       "CallSummary":{"type":"object","required":["callId","startTs","state","status","retryable"],"properties":{"callId":{"type":"string"},"startTs":{"type":"integer","format":"int64"},"endTs":{"type":"integer","format":"int64","nullable":true},"state":{"type":"string"},"status":{"type":"string","enum":["recording","processing","retryable","ready","degraded"]},"retryable":{"type":"boolean"},"preferredRevisionKind":{"type":"string","nullable":true}}},
+       "CallListPage":{"type":"object","required":["limit","offset","hasMore","calls"],"properties":{"query":{"type":"string","nullable":true},"limit":{"type":"integer"},"offset":{"type":"integer"},"hasMore":{"type":"boolean"},"nextOffset":{"type":"integer","nullable":true},"calls":{"type":"array","items":{"$ref":"#/components/schemas/CallSummary"}}}},
+       "CallCoverage":{"type":"object","required":["logicalStartMs","complete","hasExplicitGaps"],"properties":{"logicalStartMs":{"type":"integer","format":"int64"},"logicalEndMs":{"type":"integer","format":"int64","nullable":true},"complete":{"type":"boolean"},"hasExplicitGaps":{"type":"boolean"}}},
+       "CallSource":{"type":"object","required":["source","health","spanCount","gapCount"],"properties":{"source":{"type":"string","enum":["me","system"]},"health":{"type":"string","enum":["available","gapped","missing"]},"spanCount":{"type":"integer"},"gapCount":{"type":"integer"},"coveredFromMs":{"type":"integer","format":"int64","nullable":true},"coveredToMs":{"type":"integer","format":"int64","nullable":true}}},
+       "CallRevision":{"type":"object","required":["revisionId","kind","state","language","engine","modelRevision","logicalStartMs","logicalEndMs"],"properties":{"revisionId":{"type":"string"},"kind":{"type":"string"},"state":{"type":"string"},"language":{"type":"string"},"engine":{"type":"string"},"modelRevision":{"type":"string"},"logicalStartMs":{"type":"integer","format":"int64"},"logicalEndMs":{"type":"integer","format":"int64"}}},
+       "EvidenceReference":{"type":"object","required":["evidenceId","source","startMs","endMs","bytes"],"properties":{"evidenceId":{"type":"string"},"source":{"type":"string","enum":["me","system"]},"startMs":{"type":"integer","format":"int64"},"endMs":{"type":"integer","format":"int64"},"bytes":{"type":"integer","format":"int64"}}},
+       "CallEnvelope":{"type":"object","required":["callId","startTs","state","status","retryable","coverage","sources","bookmarkCount","evidence","evidenceTruncated"],"properties":{"callId":{"type":"string"},"startTs":{"type":"integer","format":"int64"},"endTs":{"type":"integer","format":"int64","nullable":true},"state":{"type":"string"},"status":{"type":"string"},"retryable":{"type":"boolean"},"degradationCode":{"type":"string","nullable":true},"coverage":{"$ref":"#/components/schemas/CallCoverage"},"sources":{"type":"array","items":{"$ref":"#/components/schemas/CallSource"}},"preferredRevision":{"allOf":[{"$ref":"#/components/schemas/CallRevision"}],"nullable":true},"bookmarkCount":{"type":"integer"},"evidence":{"type":"array","items":{"$ref":"#/components/schemas/EvidenceReference"}},"evidenceTruncated":{"type":"boolean"}}},
+       "Bookmark":{"type":"object","required":["bookmarkId","callId","ordinal","acceptedAtMs","logicalStartMs","logicalEndMs","state","retryable"],"properties":{"bookmarkId":{"type":"string"},"callId":{"type":"string"},"ordinal":{"type":"integer"},"acceptedAtMs":{"type":"integer","format":"int64"},"logicalStartMs":{"type":"integer","format":"int64"},"logicalEndMs":{"type":"integer","format":"int64"},"state":{"type":"string"},"retryable":{"type":"boolean"}}},
+       "BookmarkPage":{"type":"object","required":["callId","limit","offset","hasMore","bookmarks"],"properties":{"callId":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"},"hasMore":{"type":"boolean"},"nextOffset":{"type":"integer","nullable":true},"bookmarks":{"type":"array","items":{"$ref":"#/components/schemas/Bookmark"}}}},
+       "TranscriptSegment":{"type":"object","required":["segmentId","ordinal","source","startMs","endMs","text"],"properties":{"segmentId":{"type":"string"},"ordinal":{"type":"integer"},"source":{"type":"string","enum":["me","system"]},"startMs":{"type":"integer","format":"int64"},"endMs":{"type":"integer","format":"int64"},"text":{"type":"string"}}},
+       "TranscriptPage":{"type":"object","required":["callId","selector","limit","offset","hasMore","segments"],"properties":{"callId":{"type":"string"},"selector":{"type":"string","enum":["preferred","bookmark"]},"bookmarkId":{"type":"string","nullable":true},"revision":{"allOf":[{"$ref":"#/components/schemas/CallRevision"}],"nullable":true},"limit":{"type":"integer"},"offset":{"type":"integer"},"hasMore":{"type":"boolean"},"nextOffset":{"type":"integer","nullable":true},"segments":{"type":"array","items":{"$ref":"#/components/schemas/TranscriptSegment"}}}}
+      }}}
     """#
 
     private static func unauthorized() -> HTTPResponse { error(.unauthorized, "Bearer token required, localhost-only access", code: "unauthorized") }

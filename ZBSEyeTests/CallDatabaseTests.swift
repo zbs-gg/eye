@@ -39,7 +39,7 @@ final class CallDatabaseTests: XCTestCase {
             )
         }
         XCTAssertEqual(snapshot.appCount, 1)
-        XCTAssertEqual(snapshot.migrations.last, "v9_call_source_gaps")
+        XCTAssertEqual(snapshot.migrations.last, "v10_call_preferred_vector_guard")
         XCTAssertGreaterThanOrEqual(snapshot.triggerCount, 6)
     }
 
@@ -148,6 +148,19 @@ final class CallDatabaseTests: XCTestCase {
             try db.execute(
                 sql: "INSERT INTO vec_call_transcripts(revision_id, bucket_month, embedding) VALUES (?, 202607, ?)",
                 arguments: [ids.3, vector]
+            )
+            try db.execute(
+                sql: "UPDATE calls SET preferredRevisionId = preferredRevisionId WHERE id = ?",
+                arguments: [first.id]
+            )
+            XCTAssertEqual(
+                try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM vec_call_transcripts WHERE revision_id = ?",
+                    arguments: [ids.3]
+                ),
+                1,
+                "an unchanged preferred revision must keep its semantic vector"
             )
         }
         try await repository.setPreferredRevision(callID: try XCTUnwrap(first.id), revisionID: ids.0)

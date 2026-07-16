@@ -48,6 +48,7 @@ enum CallCoordinatorError: LocalizedError, Sendable, Equatable {
     case notRecording
     case bookmarkClosed
     case missingIdentity
+    case evidencePersistenceFailed
 
     var errorDescription: String? {
         switch self {
@@ -56,6 +57,7 @@ enum CallCoordinatorError: LocalizedError, Sendable, Equatable {
         case .notRecording: String(localized: "No call is being recorded.")
         case .bookmarkClosed: String(localized: "This call is already ending.")
         case .missingIdentity: String(localized: "The call could not create a durable identity.")
+        case .evidencePersistenceFailed: String(localized: "Call evidence could not be saved safely.")
         }
     }
 }
@@ -178,6 +180,8 @@ actor CallCoordinator {
             root: mediaRoot,
             callID: callID,
             requested: request,
+            baselines: baselines,
+            startedAtMs: startedAtMs,
             repository: repository,
             mediaGeneration: row.mediaGeneration
         )
@@ -245,7 +249,7 @@ actor CallCoordinator {
             logicalEndMs: acceptedAtMs,
             contextStartMs: max(active.startedAtMs, active.lastBookmarkEndMs - 45_000)
         )
-        let coverage = await freezeCoverage(
+        let coverage = try await freezeCoverage(
             spool: active.spool,
             targets: targets,
             baselines: active.baselines
@@ -305,25 +309,51 @@ actor CallCoordinator {
             stopReason: reason
         )
 
-        let targets = await audio.acceptedTargets()
-        let finalCoverage = await freezeCoverage(
-            spool: active.spool,
-            targets: targets,
-            baselines: active.baselines
-        )
-        await audio.installSink(nil)
-        await active.spool.closeAdmission()
-        let finished = try await active.spool.finish()
-        await audio.stop()
-        _ = try await repository.endCall(
-            callID: active.id,
-            idempotencyKey: idempotencyKey,
-            endedAtMs: milliseconds(now()),
-            meEndSample: finished.meEndSample,
-            systemEndSample: finished.systemEndSample,
-            degradationReason: reason.persistenceCode
-                ?? ((finalCoverage.degraded || finished.degraded) ? "source_gap" : nil)
-        )
+        let finalCoverage: CallSpoolCoverage
+        let finished: CallSpoolCoverage
+        do {
+            let targets = await audio.acceptedTargets()
+            finalCoverage = try await freezeCoverage(
+                spool: active.spool,
+                targets: targets,
+                baselines: active.baselines
+            )
+            await audio.installSink(nil)
+            let endedAtMs = milliseconds(now())
+            await active.spool.closeAdmission()
+            finished = try await active.spool.finish()
+            await audio.stop()
+            _ = try await repository.endCall(
+                callID: active.id,
+                idempotencyKey: idempotencyKey,
+                endedAtMs: endedAtMs,
+                meEndSample: finished.meEndSample,
+                systemEndSample: finished.systemEndSample,
+                degradationReason: reason.persistenceCode
+                    ?? ((finalCoverage.degraded || finished.degraded) ? "source_gap" : nil)
+            )
+        } catch {
+            await audio.installSink(nil)
+            await active.spool.closeAdmission()
+            await audio.stop()
+            let failedAtMs = milliseconds(now())
+            try? await repository.markCallInterrupted(
+                callID: active.id,
+                endedAtMs: failedAtMs,
+                reason: "evidence_persistence_failed",
+                nowMs: failedAtMs
+            )
+            self.active = nil
+            current = CallCoordinatorSnapshot(
+                phase: .failed,
+                callID: active.id,
+                me: current.me == .disabled ? .disabled : .gap,
+                system: current.system == .disabled ? .disabled : .gap,
+                bookmarkCount: active.bookmarkCount,
+                stopReason: reason
+            )
+            throw error
+        }
         self.active = nil
         current = CallCoordinatorSnapshot(
             phase: .pendingTranscription,
@@ -348,20 +378,20 @@ actor CallCoordinator {
         spool: CallAudioSpoolSession,
         targets: AudioIngressTargets,
         baselines: AudioIngressTargets
-    ) async -> CallSpoolCoverage {
+    ) async throws -> CallSpoolCoverage {
         let initialGaps = await audio.drainGaps()
-        await spool.record(gaps: initialGaps)
+        try await spool.record(gaps: initialGaps)
         let deadline = ContinuousClock.now.advanced(by: barrierTimeout)
         while ContinuousClock.now < deadline,
               !(await spool.hasCoverage(targets: targets, baselines: baselines)) {
             try? await Task.sleep(for: .milliseconds(10))
-            await spool.record(gaps: await audio.drainGaps())
+            try await spool.record(gaps: await audio.drainGaps())
         }
-        await spool.record(gaps: await audio.drainGaps())
-        return (try? await spool.flush(
+        try await spool.record(gaps: await audio.drainGaps())
+        return try await spool.flush(
             targets: targets,
             baselines: baselines
-        )) ?? .empty
+        )
     }
 
     private func enqueue<T: Sendable>(
@@ -421,17 +451,24 @@ struct CallSpoolCoverage: Sendable, Equatable {
 private actor CallAudioSpoolSession {
     private let me: CallSpoolLeg?
     private let system: CallSpoolLeg?
+    private let baselines: AudioIngressTargets
+    private let startedAtMs: Int64
     private var owned: CallSourceSelection
     private var accepting = true
+    private var boundaryRejected = AudioIngressTargets(me: nil, system: nil)
 
     init(
         root: URL,
         callID: Int64,
         requested: CallSourceSelection,
+        baselines: AudioIngressTargets,
+        startedAtMs: Int64,
         repository: CallRepository,
         mediaGeneration: Int
     ) throws {
         owned = requested
+        self.baselines = baselines
+        self.startedAtMs = startedAtMs
         me = requested.me ? try CallSpoolLeg(
             root: root,
             callID: callID,
@@ -453,39 +490,113 @@ private actor CallAudioSpoolSession {
 
     func consume(_ frame: AudioFrame) async -> Bool {
         guard accepting else { return false }
+        let capturedAtMs = Int64(
+            (frame.timing.capturedAt.timeIntervalSince1970 * 1_000).rounded()
+        )
         switch frame.timing.source {
         case .me:
             guard owned.me, let me else { return false }
+            if let baseline = baselines.me,
+               frame.timing.ingressSequence <= baseline { return false }
+            if capturedAtMs < startedAtMs {
+                boundaryRejected = AudioIngressTargets(
+                    me: max(boundaryRejected.me ?? Int64.min, frame.timing.ingressSequence),
+                    system: boundaryRejected.system
+                )
+                return false
+            }
             return await me.consume(frame)
         case .system:
             guard owned.system, let system else { return false }
+            if let baseline = baselines.system,
+               frame.timing.ingressSequence <= baseline { return false }
+            if capturedAtMs < startedAtMs {
+                boundaryRejected = AudioIngressTargets(
+                    me: boundaryRejected.me,
+                    system: max(
+                        boundaryRejected.system ?? Int64.min,
+                        frame.timing.ingressSequence
+                    )
+                )
+                return false
+            }
             return await system.consume(frame)
         }
     }
 
-    func record(gaps: [AudioIngressGap]) async {
-        for gap in gaps {
+    func record(gaps: [AudioIngressGap]) async throws {
+        for rawGap in gaps {
+            guard let gap = admittedGap(rawGap) else { continue }
             switch gap.source {
-            case .me: await me?.record(gap: gap)
-            case .system: await system?.record(gap: gap)
+            case .me: try await me?.record(gap: gap)
+            case .system: try await system?.record(gap: gap)
             }
         }
     }
 
+    private func admittedGap(_ gap: AudioIngressGap) -> AudioIngressGap? {
+        let baseline = switch gap.source {
+        case .me: baselines.me
+        case .system: baselines.system
+        }
+        if let baseline, gap.lastIngressSequence <= baseline { return nil }
+        if let endMs = gap.endMs, endMs <= startedAtMs { return nil }
+        let firstSequence = baseline.map {
+            max(gap.firstIngressSequence, $0 == Int64.max ? $0 : $0 + 1)
+        } ?? gap.firstIngressSequence
+        guard firstSequence <= gap.lastIngressSequence else { return nil }
+        guard let originalStart = gap.startMs, let originalEnd = gap.endMs else {
+            return AudioIngressGap(
+                source: gap.source,
+                epoch: gap.epoch,
+                firstIngressSequence: firstSequence,
+                lastIngressSequence: gap.lastIngressSequence,
+                reason: gap.reason,
+                startHostTimeNs: firstSequence == gap.firstIngressSequence
+                    ? gap.startHostTimeNs : nil,
+                endHostTimeNs: gap.endHostTimeNs,
+                startMs: nil,
+                endMs: nil
+            )
+        }
+        let startMs = max(startedAtMs, originalStart)
+        return AudioIngressGap(
+            source: gap.source,
+            epoch: gap.epoch,
+            firstIngressSequence: firstSequence,
+            lastIngressSequence: gap.lastIngressSequence,
+            reason: gap.reason,
+            startHostTimeNs: startMs == originalStart
+                && firstSequence == gap.firstIngressSequence ? gap.startHostTimeNs : nil,
+            endHostTimeNs: gap.endHostTimeNs,
+            startMs: startMs,
+            endMs: max(startMs + 1, originalEnd)
+        )
+    }
+
     func hasCoverage(targets: AudioIngressTargets, baselines: AudioIngressTargets) async -> Bool {
-        let meReady = await me?.covers(targets.me, baseline: baselines.me) ?? true
-        let systemReady = await system?.covers(targets.system, baseline: baselines.system) ?? true
+        let effective = effectiveBaselines(baselines)
+        let meReady = await me?.covers(targets.me, baseline: effective.me) ?? true
+        let systemReady = await system?.covers(targets.system, baseline: effective.system) ?? true
         return meReady && systemReady
     }
 
     func flush(targets: AudioIngressTargets, baselines: AudioIngressTargets) async throws -> CallSpoolCoverage {
-        let meState = try await me?.flush(target: targets.me, baseline: baselines.me)
-        let systemState = try await system?.flush(target: targets.system, baseline: baselines.system)
+        let effective = effectiveBaselines(baselines)
+        let meState = try await me?.flush(target: targets.me, baseline: effective.me)
+        let systemState = try await system?.flush(target: targets.system, baseline: effective.system)
         return CallSpoolCoverage(
             meEndSample: meState?.endSample,
             systemEndSample: systemState?.endSample,
             meGap: meState?.gap ?? false,
             systemGap: systemState?.gap ?? false
+        )
+    }
+
+    private func effectiveBaselines(_ original: AudioIngressTargets) -> AudioIngressTargets {
+        AudioIngressTargets(
+            me: [original.me, boundaryRejected.me].compactMap { $0 }.max(),
+            system: [original.system, boundaryRejected.system].compactMap { $0 }.max()
         )
     }
 
@@ -504,11 +615,18 @@ private actor CallAudioSpoolSession {
 private actor CallSpoolLeg {
     private let spool: CallSpool
     private let source: CallAudioSource
+    private let repository: CallRepository
+    private let callID: Int64
+    private let mediaGeneration: Int
     private var resampler: CallPCM16Resampler?
-    private var epoch: Int?
+    private var captureEpoch: Int?
+    private var spoolEpoch = -1
+    private var needsNewEpoch = false
     private var lastFrame: AudioFrameTiming?
     private var lastConsumedSequence: Int64?
     private var gaps = BoundedAudioIngressGaps()
+    private var unresolvedDurableGaps: [AudioIngressGap] = []
+    private var fatalPersistenceFailure = false
 
     init(
         root: URL,
@@ -518,6 +636,9 @@ private actor CallSpoolLeg {
         mediaGeneration: Int
     ) throws {
         self.source = source
+        self.repository = repository
+        self.callID = callID
+        self.mediaGeneration = mediaGeneration
         spool = try CallSpool(
             root: root,
             callID: callID,
@@ -531,23 +652,38 @@ private actor CallSpoolLeg {
     func consume(_ frame: AudioFrame) async -> Bool {
         guard frame.timing.source == source else { return false }
         do {
-            if epoch != frame.timing.epoch {
+            if captureEpoch != frame.timing.epoch || needsNewEpoch {
+                if let captureEpoch,
+                   captureEpoch != frame.timing.epoch,
+                   let lastFrame {
+                    try await record(
+                        gap: Self.restartGap(
+                            from: lastFrame,
+                            previousEpoch: captureEpoch,
+                            to: frame.timing
+                        )
+                    )
+                }
                 try await finishResamplerTail()
                 let previousEnd = await spool.snapshot().watermark?.endSample ?? 0
+                spoolEpoch += 1
+                let epochStartMs = Self.startMs(for: frame.timing)
                 try await spool.beginEpoch(
                     CallSpoolEpochDescriptor(
-                        epoch: frame.timing.epoch,
+                        epoch: spoolEpoch,
                         captureSampleRate: Int(frame.timing.captureSampleRate.rounded()),
                         startSample: previousEnd,
                         startHostTimeNs: frame.timing.normalizedHostTimeNs,
-                        startedAtMs: Int64((frame.timing.capturedAt.timeIntervalSince1970 * 1_000).rounded())
+                        startedAtMs: epochStartMs
                     )
                 )
                 resampler = CallPCM16Resampler(
                     inputSampleRate: frame.timing.captureSampleRate,
                     outputSampleRate: 16_000
                 )
-                epoch = frame.timing.epoch
+                captureEpoch = frame.timing.epoch
+                needsNewEpoch = false
+                try await resolveUnboundedGaps(endingAtMs: epochStartMs)
             }
             guard var resampler else { return false }
             let data = resampler.append(frame.samples)
@@ -562,23 +698,27 @@ private actor CallSpoolLeg {
             lastConsumedSequence = frame.timing.ingressSequence
             return true
         } catch {
-            gaps.record(
-                AudioIngressGap(
-                    source: source,
-                    epoch: frame.timing.epoch,
-                    firstIngressSequence: frame.timing.ingressSequence,
-                    lastIngressSequence: frame.timing.ingressSequence,
-                    reason: .sourceUnavailable
+            do {
+                try await record(
+                    gap: Self.gap(for: frame.timing, reason: .sourceUnavailable)
                 )
-            )
+            } catch {
+                fatalPersistenceFailure = true
+            }
             return true
         }
     }
 
-    func record(gap: AudioIngressGap) async {
+    func record(gap: AudioIngressGap) async throws {
         guard gap.source == source else { return }
         gaps.record(gap)
-        try? await spool.recordGap(gap)
+        needsNewEpoch = true
+        if let startMs = gap.startMs, let endMs = gap.endMs, endMs > startMs {
+            try await persistGap(gap, startMs: startMs, endMs: endMs)
+        } else {
+            unresolvedDurableGaps.append(gap)
+        }
+        try await spool.recordGap(gap)
     }
 
     func covers(_ target: Int64?, baseline: Int64?) -> Bool {
@@ -589,6 +729,9 @@ private actor CallSpoolLeg {
     }
 
     func flush(target: Int64?, baseline: Int64?) async throws -> (endSample: Int64?, gap: Bool) {
+        guard !fatalPersistenceFailure else {
+            throw CallCoordinatorError.evidencePersistenceFailed
+        }
         let reached = covers(target, baseline: baseline)
         let watermark = try await spool.flushDurableWatermark()
         if let target { gaps.prune(source: source, through: target) }
@@ -596,9 +739,94 @@ private actor CallSpoolLeg {
     }
 
     func finish() async throws -> (endSample: Int64?, gap: Bool) {
+        guard !fatalPersistenceFailure else {
+            throw CallCoordinatorError.evidencePersistenceFailed
+        }
         try await finishResamplerTail()
+        let terminal = lastFrame.map(Self.endMs(for:))
+            ?? Int64((Date().timeIntervalSince1970 * 1_000).rounded())
+        try await resolveUnboundedGaps(endingAtMs: terminal + 1)
         let snapshot = try await spool.finish()
         return (snapshot.watermark?.endSample, gaps.hadAnyGap)
+    }
+
+    private func resolveUnboundedGaps(endingAtMs: Int64) async throws {
+        guard !unresolvedDurableGaps.isEmpty else { return }
+        let inferredStart = lastFrame.map(Self.endMs(for:)) ?? endingAtMs - 1
+        let startMs = min(inferredStart, endingAtMs - 1)
+        let pending = unresolvedDurableGaps
+        for gap in pending {
+            try await persistGap(gap, startMs: startMs, endMs: max(startMs + 1, endingAtMs))
+        }
+        unresolvedDurableGaps.removeAll(keepingCapacity: true)
+    }
+
+    private func persistGap(_ gap: AudioIngressGap, startMs: Int64, endMs: Int64) async throws {
+        try await repository.recordSourceGap(
+            callID: callID,
+            mediaGeneration: mediaGeneration,
+            source: source,
+            startMs: startMs,
+            endMs: endMs,
+            reason: gap.reason.rawValue,
+            nowMs: endMs
+        )
+    }
+
+    private static func gap(
+        for timing: AudioFrameTiming,
+        reason: AudioIngressGapReason
+    ) -> AudioIngressGap {
+        let durationNs = Int64(
+            (Double(timing.frameCount) / timing.captureSampleRate * 1_000_000_000).rounded()
+        )
+        let startMs = Self.startMs(for: timing)
+        return AudioIngressGap(
+            source: timing.source,
+            epoch: timing.epoch,
+            firstIngressSequence: timing.ingressSequence,
+            lastIngressSequence: timing.ingressSequence,
+            reason: reason,
+            startHostTimeNs: timing.normalizedHostTimeNs,
+            endHostTimeNs: timing.normalizedHostTimeNs + max(1, durationNs),
+            startMs: startMs,
+            endMs: max(startMs + 1, Self.endMs(for: timing))
+        )
+    }
+
+    private static func restartGap(
+        from previous: AudioFrameTiming,
+        previousEpoch: Int,
+        to next: AudioFrameTiming
+    ) -> AudioIngressGap {
+        let startMs = endMs(for: previous)
+        let endMs = max(startMs + 1, Self.startMs(for: next))
+        let previousDurationNs = Int64(
+            (Double(previous.frameCount) / previous.captureSampleRate * 1_000_000_000).rounded()
+        )
+        let startHost = previous.normalizedHostTimeNs + max(1, previousDurationNs)
+        return AudioIngressGap(
+            source: next.source,
+            epoch: previousEpoch,
+            firstIngressSequence: next.ingressSequence,
+            lastIngressSequence: next.ingressSequence,
+            reason: .sourceRestart,
+            startHostTimeNs: startHost,
+            endHostTimeNs: max(startHost + 1, next.normalizedHostTimeNs),
+            startMs: startMs,
+            endMs: endMs
+        )
+    }
+
+    private static func startMs(for timing: AudioFrameTiming) -> Int64 {
+        Int64((timing.capturedAt.timeIntervalSince1970 * 1_000).rounded())
+    }
+
+    private static func endMs(for timing: AudioFrameTiming) -> Int64 {
+        startMs(for: timing) + max(
+            1,
+            Int64((Double(timing.frameCount) / timing.captureSampleRate * 1_000).rounded())
+        )
     }
 
     private func finishResamplerTail() async throws {

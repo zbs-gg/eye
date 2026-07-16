@@ -131,15 +131,6 @@ final class CallCoordinatorTests: XCTestCase {
             let callID = try XCTUnwrap(started.callID)
 
             await fixture.audio.emit(frame(source: .system, epoch: 0, sequence: 0))
-            await fixture.audio.recordGap(
-                AudioIngressGap(
-                    source: .system,
-                    epoch: 0,
-                    firstIngressSequence: 1,
-                    lastIngressSequence: 1,
-                    reason: .sourceRestart
-                )
-            )
             await fixture.audio.emit(frame(source: .system, epoch: 1, sequence: 2))
             let duplicate = try await fixture.coordinator.start(
                 request: .init(me: false, system: true),
@@ -157,11 +148,16 @@ final class CallCoordinatorTests: XCTestCase {
                     spans: try CallSourceSpanRow
                         .filter(Column("callId") == callID)
                         .order(Column("epoch"))
+                        .fetchAll(db),
+                    gaps: try CallSourceGapRow
+                        .filter(Column("callId") == callID)
                         .fetchAll(db)
                 )
             }
             XCTAssertEqual(persisted.call?.degradationReason, reason.persistenceCode)
             XCTAssertEqual(persisted.spans.map(\.epoch), [0, 1])
+            XCTAssertEqual(persisted.gaps.map(\.reason), [AudioIngressGapReason.sourceRestart.rawValue])
+            XCTAssertTrue(persisted.gaps.allSatisfy { $0.endMs > $0.startMs })
         }
 
         let gapOnly = try CallCoordinatorFixture(actual: .init(me: false, system: true))
@@ -188,12 +184,93 @@ final class CallCoordinatorTests: XCTestCase {
             try CallRow.fetchOne($0, key: callID)
         }
         XCTAssertEqual(gapCall?.degradationReason, "source_gap")
+
+        let restarted = try CallCoordinatorFixture(actual: .init(me: false, system: true))
+        defer { restarted.cleanup() }
+        let restartStart = try await restarted.coordinator.start(
+            request: .init(me: false, system: true),
+            idempotencyKey: "start-restart-user"
+        )
+        let restartCallID = try XCTUnwrap(restartStart.callID)
+        await restarted.audio.emit(frame(source: .system, epoch: 0, sequence: 0))
+        await restarted.audio.emit(frame(source: .system, epoch: 1, sequence: 2))
+        _ = try await restarted.coordinator.end(
+            idempotencyKey: "stop-restart-user",
+            reason: .user
+        )
+        let restartEvidence = try await restarted.database.pool.read { db in
+            (
+                call: try XCTUnwrap(CallRow.fetchOne(db, key: restartCallID)),
+                gaps: try CallSourceGapRow.fetchAll(
+                    db,
+                    sql: "SELECT * FROM call_source_gaps WHERE callId = ?",
+                    arguments: [restartCallID]
+                )
+            )
+        }
+        XCTAssertEqual(restartEvidence.call.degradationReason, "source_gap")
+        XCTAssertEqual(restartEvidence.gaps.map(\.reason), [AudioIngressGapReason.sourceRestart.rawValue])
+    }
+
+    func testStartBoundaryRejectsBufferedFrameAndPreCallGap() async throws {
+        let fixture = try CallCoordinatorFixture(actual: .init(me: true, system: false))
+        defer { fixture.cleanup() }
+        await fixture.audio.seed(
+            targets: AudioIngressTargets(me: 5, system: nil),
+            gaps: [
+                AudioIngressGap(
+                    source: .me,
+                    epoch: 0,
+                    firstIngressSequence: 4,
+                    lastIngressSequence: 5,
+                    reason: .consumerOverflow,
+                    startMs: 9_000,
+                    endMs: 9_500
+                ),
+            ]
+        )
+        let started = try await fixture.coordinator.start(
+            request: .init(me: true, system: false),
+            idempotencyKey: "boundary-start"
+        )
+        let callID = try XCTUnwrap(started.callID)
+
+        await fixture.audio.emit(frame(source: .me, epoch: 0, sequence: 5, capturedAt: 9.99))
+        await fixture.audio.emit(frame(source: .me, epoch: 0, sequence: 6, capturedAt: 9.98))
+        await fixture.audio.emit(frame(source: .me, epoch: 0, sequence: 7, capturedAt: 10.01))
+        _ = try await fixture.coordinator.end(idempotencyKey: "boundary-end", reason: .user)
+
+        let persisted = try await fixture.database.pool.read { db in
+            (
+                call: try XCTUnwrap(CallRow.fetchOne(db, key: callID)),
+                samples: try Int64.fetchOne(
+                    db,
+                    sql: "SELECT COALESCE(SUM(endSample - startSample), 0) FROM call_audio_chunks WHERE callId = ?",
+                    arguments: [callID]
+                ) ?? -1,
+                earliestChunk: try Int64.fetchOne(
+                    db,
+                    sql: "SELECT MIN(startMs) FROM call_audio_chunks WHERE callId = ?",
+                    arguments: [callID]
+                ),
+                gaps: try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM call_source_gaps WHERE callId = ?",
+                    arguments: [callID]
+                ) ?? -1
+            )
+        }
+        XCTAssertEqual(persisted.samples, 160)
+        XCTAssertGreaterThanOrEqual(persisted.earliestChunk ?? -1, persisted.call.startTs)
+        XCTAssertEqual(persisted.gaps, 0)
+        XCTAssertNil(persisted.call.degradationReason)
     }
 
     private func frame(
         source: CallAudioSource,
         epoch: Int,
-        sequence: Int64
+        sequence: Int64,
+        capturedAt: Double? = nil
     ) -> AudioFrame {
         AudioFrame(
             samples: Array(repeating: 0.25, count: 480),
@@ -206,7 +283,9 @@ final class CallCoordinatorTests: XCTestCase {
                 sourceSampleTime: sequence * 480,
                 captureSampleRate: 48_000,
                 frameCount: 480,
-                capturedAt: Date(timeIntervalSince1970: 1 + Double(sequence) / 100),
+                capturedAt: Date(
+                    timeIntervalSince1970: capturedAt ?? (10 + Double(sequence) / 100)
+                ),
                 provenance: source == .me ? .microphone : .screenCaptureKit
             )
         )
@@ -263,15 +342,18 @@ private actor FakeCallAudio {
     }
 
     func emit(_ frame: AudioFrame) async {
-        let owned = await sink?(frame) ?? false
-        guard owned else { return }
         switch frame.timing.source {
         case .me: targets = AudioIngressTargets(me: frame.timing.ingressSequence, system: targets.system)
         case .system: targets = AudioIngressTargets(me: targets.me, system: frame.timing.ingressSequence)
         }
+        _ = await sink?(frame)
     }
 
     func recordGap(_ gap: AudioIngressGap) { gaps.append(gap) }
+    func seed(targets: AudioIngressTargets, gaps: [AudioIngressGap]) {
+        self.targets = targets
+        self.gaps = gaps
+    }
     func startCount() -> Int { starts }
     func stopCount() -> Int { stops }
 

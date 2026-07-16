@@ -192,6 +192,113 @@ final class CallRedactionTests: XCTestCase {
         XCTAssertEqual(remaining, fixture.pcm(samples: [0, 1, 2, 3, 6, 7, 8, 9]))
     }
 
+    func testRangeRedactionJournalsEveryIntersectingCallBeforeFileWork() async throws {
+        let fixture = try CallRedactionFixture()
+        let firstID = try await fixture.makeEndedCall(key: "range-first", startMs: 1_000)
+        let secondID = try await fixture.makeEndedCall(key: "range-second", startMs: 1_200)
+        let planner = try CallRedactionPlanner(mediaRoot: fixture.mediaRoot)
+        var manifests: [CallRedactionManifestV1] = []
+        for callID in [firstID, secondID] {
+            let snapshot = try await fixture.repository.redactionSnapshot(callID: callID)
+            manifests.append(
+                try planner.makeManifest(
+                    snapshot: snapshot,
+                    fromMs: 1_400,
+                    toMs: 1_600
+                )
+            )
+        }
+
+        let accepted = try await fixture.repository.beginRedactions(
+            manifests: manifests,
+            nowMs: 3_000
+        )
+        XCTAssertEqual(accepted.count, 2)
+
+        let report = try await CallRecoveryService(
+            repository: fixture.repository,
+            mediaRoot: fixture.mediaRoot
+        ).recover(nowMs: 4_000)
+
+        XCTAssertEqual(report.mutationsCompleted, 2)
+        let state = try await fixture.database.pool.read { db in
+            (
+                mutations: try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM call_media_mutations WHERE state = 'completed'"
+                ) ?? 0,
+                generations: try Int.fetchAll(
+                    db,
+                    sql: "SELECT mediaGeneration FROM calls ORDER BY startTs, id"
+                )
+            )
+        }
+        XCTAssertEqual(state.mutations, 2)
+        XCTAssertEqual(state.generations, [1, 1])
+        for manifest in manifests {
+            for path in manifest.obsoleteRelativePaths {
+                XCTAssertFalse(
+                    FileManager.default.fileExists(
+                        atPath: fixture.mediaRoot.appendingPathComponent(path).path
+                    )
+                )
+            }
+        }
+    }
+
+    func testRangeRedactionBatchRollsBackWhenAnyManifestIsInvalid() async throws {
+        let fixture = try CallRedactionFixture()
+        let firstID = try await fixture.makeEndedCall(key: "rollback-first", startMs: 1_000)
+        let secondID = try await fixture.makeEndedCall(key: "rollback-second", startMs: 1_200)
+        let planner = try CallRedactionPlanner(mediaRoot: fixture.mediaRoot)
+        let first = try planner.makeManifest(
+            snapshot: await fixture.repository.redactionSnapshot(callID: firstID),
+            fromMs: 1_400,
+            toMs: 1_600
+        )
+        let validSecond = try planner.makeManifest(
+            snapshot: await fixture.repository.redactionSnapshot(callID: secondID),
+            fromMs: 1_400,
+            toMs: 1_600
+        )
+        let invalidSecond = CallRedactionManifestV1(
+            formatVersion: validSecond.formatVersion,
+            callID: validSecond.callID,
+            fromGeneration: validSecond.fromGeneration,
+            toGeneration: validSecond.toGeneration + 1,
+            fromMs: validSecond.fromMs,
+            toMs: validSecond.toMs,
+            bytesRemoved: validSecond.bytesRemoved,
+            obsoleteRelativePaths: validSecond.obsoleteRelativePaths,
+            redactedGaps: validSecond.redactedGaps,
+            survivors: validSecond.survivors
+        )
+
+        do {
+            _ = try await fixture.repository.beginRedactions(
+                manifests: [first, invalidSecond],
+                nowMs: 3_000
+            )
+            XCTFail("Expected the whole batch to roll back")
+        } catch {
+            XCTAssertEqual(
+                error as? CallRepositoryError,
+                .invalidMediaMutation(secondID)
+            )
+        }
+        let state = try await fixture.database.pool.read { db in
+            (
+                mutations: try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM call_media_mutations") ?? -1,
+                generations: try Int.fetchAll(
+                    db,
+                    sql: "SELECT mediaGeneration FROM calls ORDER BY startTs, id"
+                )
+            )
+        }
+        XCTAssertEqual(state.mutations, 0)
+        XCTAssertEqual(state.generations, [0, 0])
+    }
+
     func testRedactionDeletesInsideBookmarkAndCarriesOutsideBookmarkToNewGeneration() async throws {
         let fixture = try CallRedactionFixture()
         let callID = try await fixture.makeRecordingCall()
@@ -598,8 +705,11 @@ private final class CallRedactionFixture {
         try? FileManager.default.removeItem(at: root)
     }
 
-    func makeRecordingCall() async throws -> Int64 {
-        let call = try await repository.createCall(startedAtMs: 1_000, idempotencyKey: "redaction")
+    func makeRecordingCall(
+        key: String = "redaction",
+        startMs: Int64 = 1_000
+    ) async throws -> Int64 {
+        let call = try await repository.createCall(startedAtMs: startMs, idempotencyKey: key)
         let callID = try XCTUnwrap(call.id)
         self.callID = callID
         let span = try await repository.recordSourceSpan(
@@ -608,7 +718,7 @@ private final class CallRedactionFixture {
                 source: .me,
                 epoch: 0,
                 sampleRate: 10,
-                startedAtMs: 1_000,
+                startedAtMs: startMs,
                 startSample: 0,
                 startHostTimeNs: 0,
                 availability: .available
@@ -633,8 +743,8 @@ private final class CallRedactionFixture {
                 mediaGeneration: 0,
                 startSample: 0,
                 endSample: 10,
-                startMs: 1_000,
-                endMs: 2_000,
+                startMs: startMs,
+                endMs: startMs + 1_000,
                 relativePath: relativePath,
                 bytes: Int64(audio.count),
                 sha256: digest,
@@ -644,12 +754,15 @@ private final class CallRedactionFixture {
         return callID
     }
 
-    func makeEndedCall() async throws -> Int64 {
-        let callID = try await makeRecordingCall()
+    func makeEndedCall(
+        key: String = "redaction",
+        startMs: Int64 = 1_000
+    ) async throws -> Int64 {
+        let callID = try await makeRecordingCall(key: key, startMs: startMs)
         _ = try await repository.endCall(
             callID: callID,
-            idempotencyKey: "redaction-end",
-            endedAtMs: 2_000,
+            idempotencyKey: "\(key)-end",
+            endedAtMs: startMs + 1_000,
             meEndSample: 10
         )
         return callID

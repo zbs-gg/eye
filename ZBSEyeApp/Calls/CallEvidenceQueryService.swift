@@ -253,18 +253,20 @@ actor CallEvidenceQueryService {
                     db,
                     sql: """
                         WITH hits AS (
-                            SELECT DISTINCT call_id
+                            SELECT DISTINCT c.id AS call_id, c.startTs
                             FROM call_transcript_fts
+                            JOIN calls c ON c.id = call_transcript_fts.call_id
                             WHERE call_transcript_fts MATCH ?
-                            LIMIT 5000
+                              AND c.startTs <= ?
+                              AND COALESCE(c.endTs, c.startTs) >= ?
+                            ORDER BY c.startTs DESC, c.id DESC
+                            LIMIT ? OFFSET ?
                         )
                         \(commonProjection)
                         FROM hits h
                         JOIN calls c ON c.id = h.call_id
                         LEFT JOIN call_transcript_revisions r ON r.id = c.preferredRevisionId
-                        WHERE c.startTs <= ? AND COALESCE(c.endTs, c.startTs) >= ?
                         ORDER BY c.startTs DESC, c.id DESC
-                        LIMIT ? OFFSET ?
                         """,
                     arguments: [match, to, from, page.limit + 1, page.offset]
                 )
@@ -414,7 +416,7 @@ actor CallEvidenceQueryService {
                     throw CallEvidenceRequestError.bookmarkDoesNotBelongToCall
                 }
                 selectedBookmark = bookmark
-                revisionID = try Int64.fetchOne(
+                let checkpointRevisionID = try Int64.fetchOne(
                     db,
                     sql: """
                         SELECT r.id
@@ -425,7 +427,22 @@ actor CallEvidenceQueryService {
                         ORDER BY r.createdAtMs DESC, r.id DESC LIMIT 1
                         """,
                     arguments: [callID, call.mediaGeneration, bookmarkID]
-                ) ?? call.preferredRevisionId
+                )
+                if let checkpointRevisionID {
+                    revisionID = checkpointRevisionID
+                } else if let preferredRevisionID = call.preferredRevisionId,
+                          try String.fetchOne(
+                              db,
+                              sql: """
+                                  SELECT kind FROM call_transcript_revisions
+                                  WHERE id = ? AND callId = ? AND mediaGeneration = ?
+                                  """,
+                              arguments: [preferredRevisionID, callID, call.mediaGeneration]
+                          ) == CallTranscriptRevisionKind.final.rawValue {
+                    revisionID = preferredRevisionID
+                } else {
+                    revisionID = nil
+                }
             }
             let revision = try revisionID.flatMap { try CallTranscriptRevisionRow.fetchOne(db, key: $0) }
             guard let revision else {

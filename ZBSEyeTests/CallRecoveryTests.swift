@@ -30,6 +30,73 @@ final class CallRecoveryTests: XCTestCase {
         XCTAssertEqual(report.jobsReset, 0)
     }
 
+    func testUnreadableChunkBecomesDurableGapWithoutBlockingOtherRecovery() async throws {
+        let store = try CallRecoveryTestStore()
+        let repository = CallRepository(database: store.database)
+        let call = try await repository.createCall(startedAtMs: 1_000, idempotencyKey: "unreadable")
+        let callID = try XCTUnwrap(call.id)
+        let span = try await repository.recordSourceSpan(
+            CallSourceSpanDraft(
+                callId: callID,
+                source: .me,
+                epoch: 0,
+                sampleRate: 16_000,
+                startedAtMs: 1_000,
+                startSample: 0,
+                startHostTimeNs: 0,
+                availability: .available
+            )
+        )
+        let spanID = try XCTUnwrap(span.id)
+        let unreadablePath = "calls/\(callID)/me/unreadable.pcm"
+        try FileManager.default.createDirectory(
+            at: store.url(for: unreadablePath),
+            withIntermediateDirectories: true
+        )
+        let goodPath = "calls/\(callID)/me/good.pcm"
+        try store.write(Data([1, 2, 3, 4]), relativePath: goodPath)
+        for (sequence, path) in [(0, unreadablePath), (1, goodPath)] {
+            _ = try await repository.recordAudioChunk(
+                CallAudioChunkDraft(
+                    callId: callID,
+                    sourceSpanId: spanID,
+                    source: .me,
+                    epoch: 0,
+                    sequence: sequence,
+                    mediaGeneration: 0,
+                    startSample: Int64(sequence * 2),
+                    endSample: Int64(sequence * 2 + 2),
+                    startMs: 1_000 + Int64(sequence * 1_000),
+                    endMs: 2_000 + Int64(sequence * 1_000),
+                    relativePath: path,
+                    bytes: 4,
+                    sha256: nil,
+                    finalized: false
+                )
+            )
+        }
+
+        let report = try await CallRecoveryService(
+            repository: repository,
+            mediaRoot: store.mediaRoot
+        ).recover(nowMs: 4_000)
+
+        let snapshot = try await store.database.pool.read { db in
+            (
+                chunks: try CallAudioChunkRow
+                    .filter(Column("callId") == callID)
+                    .fetchAll(db),
+                gaps: try CallSourceGapRow
+                    .filter(Column("callId") == callID)
+                    .fetchAll(db)
+            )
+        }
+        XCTAssertEqual(report.chunksDiscarded, 1)
+        XCTAssertEqual(report.chunksFinalized, 1)
+        XCTAssertEqual(snapshot.chunks.map(\.relativePath), [goodPath])
+        XCTAssertEqual(snapshot.gaps.map(\.reason), ["unreadable_recovered_chunk"])
+    }
+
     func testRecoveryReappliesCheckpointAdmissionBudgetsAndKeepsFinalPriority() async throws {
         let store = try CallRecoveryTestStore()
         let repository = CallRepository(database: store.database)
@@ -157,7 +224,7 @@ final class CallRecoveryTests: XCTestCase {
                 startSample: 2,
                 endSample: 5,
                 startMs: 2_000,
-                endMs: 3_000,
+                endMs: 2_000,
                 relativePath: trailingPath,
                 bytes: 5,
                 sha256: nil,
@@ -189,6 +256,7 @@ final class CallRecoveryTests: XCTestCase {
             (
                 call: try XCTUnwrap(CallRow.fetchOne(db, key: callID)),
                 trailing: try XCTUnwrap(CallAudioChunkRow.fetchOne(db, key: trailing.id)),
+                span: try XCTUnwrap(CallSourceSpanRow.fetchOne(db, key: spanID)),
                 checkpointState: try String.fetchOne(
                     db,
                     sql: "SELECT state FROM call_transcript_jobs WHERE id = ?",
@@ -203,10 +271,13 @@ final class CallRecoveryTests: XCTestCase {
         }
         XCTAssertEqual(snapshot.call.state, .interrupted)
         XCTAssertTrue(snapshot.call.interrupted)
-        XCTAssertEqual(snapshot.call.endTs, 3_000)
+        XCTAssertEqual(snapshot.call.endTs, 2_001)
         XCTAssertTrue(snapshot.trailing.finalized)
         XCTAssertEqual(snapshot.trailing.bytes, 4)
         XCTAssertEqual(snapshot.trailing.endSample, 4)
+        XCTAssertEqual(snapshot.trailing.endMs, 2_001)
+        XCTAssertEqual(snapshot.span.endedAtMs, 2_001)
+        XCTAssertEqual(snapshot.span.endSample, 4)
         XCTAssertEqual(try Data(contentsOf: store.url(for: trailingPath)).count, 4)
         XCTAssertEqual(snapshot.checkpointState, CallTranscriptJobState.pending.rawValue)
         XCTAssertEqual(snapshot.finalJobs, 1)

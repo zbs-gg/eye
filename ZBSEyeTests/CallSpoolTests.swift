@@ -28,6 +28,7 @@ final class CallSpoolTests: XCTestCase {
 
         XCTAssertEqual(watermark.endSample, 7)
         XCTAssertEqual(watermark.ingressSequence, 1)
+        XCTAssertEqual(watermark.committedBytes, 14)
         XCTAssertEqual(snapshot.callID, 42)
         XCTAssertEqual(snapshot.source, .me)
         XCTAssertEqual(snapshot.chunks.count, 2)

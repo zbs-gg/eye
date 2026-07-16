@@ -34,6 +34,44 @@ struct AudioIngressGap: Codable, Sendable, Equatable {
     let firstIngressSequence: Int64
     let lastIngressSequence: Int64
     let reason: AudioIngressGapReason
+    let startHostTimeNs: Int64?
+    let endHostTimeNs: Int64?
+    let startMs: Int64?
+    let endMs: Int64?
+
+    init(
+        source: CallAudioSource,
+        epoch: Int,
+        firstIngressSequence: Int64,
+        lastIngressSequence: Int64,
+        reason: AudioIngressGapReason,
+        startHostTimeNs: Int64? = nil,
+        endHostTimeNs: Int64? = nil,
+        startMs: Int64? = nil,
+        endMs: Int64? = nil
+    ) {
+        self.source = source
+        self.epoch = epoch
+        self.firstIngressSequence = firstIngressSequence
+        self.lastIngressSequence = lastIngressSequence
+        self.reason = reason
+        self.startHostTimeNs = startHostTimeNs
+        self.endHostTimeNs = endHostTimeNs
+        self.startMs = startMs
+        self.endMs = endMs
+    }
+}
+
+enum AudioHostClockWallMapper {
+    static func date(
+        for normalizedHostTimeNs: Int64,
+        callbackHostTimeNs: Int64,
+        callbackWallDate: Date
+    ) -> Date {
+        callbackWallDate.addingTimeInterval(
+            Double(normalizedHostTimeNs - callbackHostTimeNs) / 1_000_000_000
+        )
+    }
 }
 
 struct BoundedAudioIngressGaps: Sendable {
@@ -58,7 +96,11 @@ struct BoundedAudioIngressGaps: Sendable {
                 epoch: gap.epoch,
                 firstIngressSequence: min(last.firstIngressSequence, gap.firstIngressSequence),
                 lastIngressSequence: max(last.lastIngressSequence, gap.lastIngressSequence),
-                reason: gap.reason
+                reason: gap.reason,
+                startHostTimeNs: [last.startHostTimeNs, gap.startHostTimeNs].compactMap { $0 }.min(),
+                endHostTimeNs: [last.endHostTimeNs, gap.endHostTimeNs].compactMap { $0 }.max(),
+                startMs: [last.startMs, gap.startMs].compactMap { $0 }.min(),
+                endMs: [last.endMs, gap.endMs].compactMap { $0 }.max()
             )
             return
         }

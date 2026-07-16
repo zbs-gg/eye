@@ -45,22 +45,36 @@ actor CallRecoveryService {
                 chunksDiscarded += 1
                 continue
             }
-            if alignedBytes != fileBytes {
-                let handle = try FileHandle(forWritingTo: url)
-                try handle.truncate(atOffset: UInt64(alignedBytes))
-                try handle.synchronize()
-                try handle.close()
+            do {
+                if alignedBytes != fileBytes {
+                    let handle = try FileHandle(forWritingTo: url)
+                    try handle.truncate(atOffset: UInt64(alignedBytes))
+                    try handle.synchronize()
+                    try handle.close()
+                }
+                let digest = SHA256.hash(data: try Data(contentsOf: url, options: .mappedIfSafe))
+                    .map { String(format: "%02x", $0) }
+                    .joined()
+                try await repository.finalizeRecoveredChunk(
+                    id: chunkID,
+                    bytes: alignedBytes,
+                    endSample: chunk.startSample + (alignedBytes / 2),
+                    sha256: digest
+                )
+                chunksFinalized += 1
+            } catch {
+                try await repository.recordSourceGap(
+                    callID: chunk.callId,
+                    mediaGeneration: chunk.mediaGeneration,
+                    source: chunk.source,
+                    startMs: chunk.startMs,
+                    endMs: max(chunk.startMs + 1, chunk.endMs),
+                    reason: "unreadable_recovered_chunk",
+                    nowMs: nowMs
+                )
+                try await repository.discardRecoveredChunk(id: chunkID)
+                chunksDiscarded += 1
             }
-            let digest = SHA256.hash(data: try Data(contentsOf: url, options: .mappedIfSafe))
-                .map { String(format: "%02x", $0) }
-                .joined()
-            try await repository.finalizeRecoveredChunk(
-                id: chunkID,
-                bytes: alignedBytes,
-                endSample: chunk.startSample + (alignedBytes / 2),
-                sha256: digest
-            )
-            chunksFinalized += 1
         }
 
         let mutationReport = try await replayMutationJournal(nowMs: nowMs)

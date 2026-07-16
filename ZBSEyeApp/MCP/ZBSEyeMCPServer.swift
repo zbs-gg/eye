@@ -277,7 +277,7 @@ enum ZBSEyeMCPServer {
                     let frame = try await timeline.frameAt(date)
                     return .init(content: [.text(Self.formatFrame(frame))])
                 } catch {
-                    return .init(content: [.text("DB read failed: \(error)")], isError: true)
+                    return .init(content: [.text("DB read failed (db_read_failed).")], isError: true)
                 }
 
             case "get_timeline":
@@ -292,7 +292,7 @@ enum ZBSEyeMCPServer {
                     let buckets = try await timeline.density(from: from, to: to, bucketMs: 300_000)
                     return .init(content: [.text(Self.formatTimeline(from, to, buckets))])
                 } catch {
-                    return .init(content: [.text("DB read failed: \(error)")], isError: true)
+                    return .init(content: [.text("DB read failed (db_read_failed).")], isError: true)
                 }
 
             case "get_frame_image":
@@ -306,7 +306,7 @@ enum ZBSEyeMCPServer {
                 let detail: FrameDetail?
                 do { detail = try await timeline.frameDetail(id: Int64(id)) }
                 catch {
-                    return .init(content: [.text("DB read failed: \(error)")], isError: true)
+                    return .init(content: [.text("DB read failed (db_read_failed).")], isError: true)
                 }
                 guard let d = detail, let rel = d.relativePath else {
                     return .init(content: [.text("Frame #\(id) not found or has no image (context-only).")], isError: true)
@@ -325,7 +325,7 @@ enum ZBSEyeMCPServer {
                         .text(try await Self.formatStatus(db: db, dataRoot: dataRoot))
                     ])
                 } catch {
-                    return .init(content: [.text("Status failed: \(error)")], isError: true)
+                    return .init(content: [.text("Status unavailable (status_unavailable).")], isError: true)
                 }
 
             case "get_diagnostics":
@@ -334,7 +334,7 @@ enum ZBSEyeMCPServer {
                         .text(try await Self.formatDiagnostics(db: db, dataRoot: dataRoot))
                     ])
                 } catch {
-                    return .init(content: [.text("Diagnostics failed: \(error)")], isError: true)
+                    return .init(content: [.text("Diagnostics unavailable (diagnostics_unavailable).")], isError: true)
                 }
 
             case "toggle_recording":
@@ -343,7 +343,7 @@ enum ZBSEyeMCPServer {
                     let now = try await Self.proxyToggle(enable: enable, dataRoot: dataRoot)
                     return .init(content: [.text("Recording \(now ? "on" : "off").")])
                 } catch {
-                    return .init(content: [.text("Recording control failed: \(error)")], isError: true)
+                    return .init(content: [.text("Recording control failed (recording_control_failed).")], isError: true)
                 }
 
             default:

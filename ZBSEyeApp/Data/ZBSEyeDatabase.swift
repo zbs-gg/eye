@@ -83,6 +83,7 @@ final class ZBSEyeDatabase: Sendable {
             "v1", "v2_vector", "v3_vec_e5_384", "v4_vec_transcripts",
             "v5_browser_visits", "v6_embed_queue", "v7_call_envelopes",
             "v8_call_transcript_projection_gaps", "v9_call_source_gaps",
+            "v10_call_preferred_vector_guard",
         ]
     private static func warnIfNewerSchema(_ pool: DatabasePool) {
         let applied = (try? pool.read { db in
@@ -562,7 +563,8 @@ final class ZBSEyeDatabase: Sendable {
                 END;
 
                 CREATE TRIGGER calls_preferred_fts_au
-                AFTER UPDATE OF preferredRevisionId ON calls BEGIN
+                AFTER UPDATE OF preferredRevisionId ON calls
+                WHEN OLD.preferredRevisionId IS NOT NEW.preferredRevisionId BEGIN
                     DELETE FROM call_transcript_fts WHERE revision_id = old.preferredRevisionId;
                     DELETE FROM vec_call_transcripts WHERE revision_id = old.preferredRevisionId;
                     INSERT INTO call_transcript_fts(revision_id, call_id, text)
@@ -623,6 +625,23 @@ final class ZBSEyeDatabase: Sendable {
                     SELECT CASE WHEN NEW.mediaGeneration != (
                         SELECT mediaGeneration FROM calls WHERE id = NEW.callId
                     ) THEN RAISE(ABORT, 'call source gap generation is stale') END;
+                END;
+                """)
+        }
+        // v10: GRDB updates whole rows, so an unchanged preferredRevisionId can
+        // still appear in an UPDATE column list. Preserve its semantic vector
+        // unless the identity actually changes.
+        m.registerMigration("v10_call_preferred_vector_guard") { db in
+            try db.execute(sql: """
+                DROP TRIGGER IF EXISTS calls_preferred_fts_au;
+                CREATE TRIGGER calls_preferred_fts_au
+                AFTER UPDATE OF preferredRevisionId ON calls
+                WHEN OLD.preferredRevisionId IS NOT NEW.preferredRevisionId BEGIN
+                    DELETE FROM call_transcript_fts WHERE revision_id = old.preferredRevisionId;
+                    DELETE FROM vec_call_transcripts WHERE revision_id = old.preferredRevisionId;
+                    INSERT INTO call_transcript_fts(revision_id, call_id, text)
+                    SELECT id, callId, text FROM call_transcript_revisions
+                    WHERE id = new.preferredRevisionId;
                 END;
                 """)
         }

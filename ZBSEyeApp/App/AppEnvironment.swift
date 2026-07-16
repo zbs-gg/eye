@@ -303,7 +303,10 @@ final class AppEnvironment {
     private func bootstrapOnce() async {
         ZBSEyeHTTPServer.log("bootstrap: begin")
         calls.admissionAllowed = { [weak self] in
-            self?.storageSettings.relocationInProgress == false
+            guard let self else { return false }
+            return !self.storageSettings.relocationInProgress
+                && self.recording.pausedUntil == nil
+                && !self.recording.lowDiskPaused
         }
         rewards.applyAppIcon()   // the chosen alternate app icon (dock) — apply on startup
         // Crash marker: if the clean-exit flag wasn't set on the previous launch → the session died
