@@ -211,6 +211,8 @@ targets:
       - path: ZBSEyeApp/Calls/TranscriptOverlapReconciler.swift
       - path: ZBSEyeApp/Calls/CallTranscriptProjection.swift
       - path: ZBSEyeApp/Calls/CallTranscriptWorker.swift
+      - path: ZBSEyeApp/Calls/CallEvidenceQueryService.swift
+      - path: ZBSEyeApp/Calls/CallPresentationState.swift
       - path: ZBSEyeApp/Calls/WhisperModelManifest.swift
       - path: ZBSEyeApp/Calls/WhisperModelStore.swift
       - path: ZBSEyeApp/Calls/WhisperHelperCommand.swift

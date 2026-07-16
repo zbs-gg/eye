@@ -17,7 +17,7 @@ struct RecordingStatusView: View {
     @ViewBuilder
     private func statusBody(now: Date) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            callControls
+            CallControlView(compact: compact)
             if env.calls.isActive {
                 callSourceRows
                 if env.recording.isCapturing {
@@ -73,38 +73,6 @@ struct RecordingStatusView: View {
                     .foregroundStyle(.orange)
                     .lineLimit(3)
             }
-        }
-    }
-
-    @ViewBuilder
-    private var callControls: some View {
-        switch env.calls.snapshot.phase {
-        case .starting:
-            Label("Starting call…", systemImage: "waveform")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        case .recording:
-            HStack(spacing: 6) {
-                Button("Bookmark") { env.calls.bookmark() }
-                    .controlSize(.small)
-                Button("End call") { env.calls.end() }
-                    .controlSize(.small)
-            }
-        case .finalizing:
-            Label("Saving call…", systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        case .pendingTranscription:
-            HStack(spacing: 6) {
-                Label("Call saved", systemImage: "checkmark.circle")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button("Start another") { env.calls.start() }
-                    .controlSize(.small)
-            }
-        case .idle, .ready, .readyDegraded, .failed:
-            Button("Start call") { env.calls.start() }
-                .controlSize(.small)
         }
     }
 

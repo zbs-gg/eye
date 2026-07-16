@@ -153,6 +153,9 @@ struct AISettingsView: View {
                         Button("Turn AI off", role: .destructive) { env.ai.deactivate() }
                     }
                 }
+                SettingsGroup("Call transcription") {
+                    WhisperModelSettingsView()
+                }
                 if let provider = env.ai.activeProvider, provider.isCloud {
                     SettingsGroup("Background AI") {
                         automaticConsumerToggle(

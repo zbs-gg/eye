@@ -19,6 +19,7 @@ final class AppEnvironment {
     let mcpReadiness = MCPReadinessService()
     let audioSettings = AudioSettingsStore()
     let calls = CallRecordingStore()
+    let speechModel = WhisperModelSettingsStore()
     let storageSettings: StorageSettingsStore
     let storageOperations = StorageOperationsStore()
     let resourceUsage: ResourceUsageStore
@@ -39,6 +40,7 @@ final class AppEnvironment {
             self?.recording.syncAudio()
         }
     }
+    var presentedCallID: Int64?
     /// First launch → onboarding (consent "everything gets recorded" + permissions). Persist: shown until completed.
     var showOnboarding = !UserDefaults.standard.bool(forKey: "zbseye.onboarding.done")
     /// Self-repair sheet trigger — shared by the main-window toolbar button and the menu-bar item.
@@ -60,6 +62,7 @@ final class AppEnvironment {
     private(set) var database: ZBSEyeDatabase?
     private(set) var ingest: IngestService?
     private(set) var callRepository: CallRepository?
+    private(set) var callEvidenceQueryService: CallEvidenceQueryService?
     private(set) var callRecovery: CallRecoveryService?
     private(set) var retention: RetentionManager?
     @ObservationIgnored private var automaticRetentionAdmission: AutomaticRetentionAdmission?
@@ -494,6 +497,7 @@ final class AppEnvironment {
             self.ingest = ingestService
             let callRepository = CallRepository(database: db)
             self.callRepository = callRepository
+            self.callEvidenceQueryService = CallEvidenceQueryService(database: db)
             let callRecovery = CallRecoveryService(
                 repository: callRepository,
                 mediaRoot: storage.mediaDirectory
@@ -539,14 +543,25 @@ final class AppEnvironment {
                     modelStore: whisperModelStore
                 )
                 self.callTranscriptWorker = callTranscriptWorker
+                speechModel.attach(
+                    whisperModelStore,
+                    suspendWorker: { await callTranscriptWorker.suspendAndDrain() },
+                    resumeWorker: { [weak self] in
+                        let allowed = await MainActor.run {
+                            self?.recording.lowDiskPaused == false
+                                && self?.storageSettings.relocationInProgress == false
+                        }
+                        if allowed { await callTranscriptWorker.resume() }
+                    }
+                )
                 if storage.freeBytes() < DiskReservePolicy.standard.pauseBytes {
                     await callTranscriptWorker.suspendAndDrain()
                 }
                 callTranscriptWorkerTask = Task.detached(priority: .utility) {
                     await callTranscriptWorker.runLoop()
                 }
-                Task.detached(priority: .utility) {
-                    _ = await whisperModelStore.refresh()
+                Task { @MainActor [speechModel] in
+                    await speechModel.refresh()
                 }
             } catch {
                 Log.audio.error("optional Whisper model storage unavailable")
@@ -1260,6 +1275,25 @@ final class AppEnvironment {
             }
             recording.resumeAfterLowDisk()
             await callTranscriptWorker?.resume()
+        }
+    }
+
+    func retryCallTranscription(callID: Int64) async -> String? {
+        guard let callRepository else {
+            return String(localized: "Call service is still starting. Try again in a moment.")
+        }
+        calls.setExternalError(nil)
+        do {
+            try await callRepository.retryFinalTranscript(
+                callID: callID,
+                nowMs: Int64(Date().timeIntervalSince1970 * 1_000)
+            )
+            calls.setExternalError(nil)
+            return nil
+        } catch {
+            let message = error.localizedDescription
+            calls.setExternalError(message)
+            return message
         }
     }
 }

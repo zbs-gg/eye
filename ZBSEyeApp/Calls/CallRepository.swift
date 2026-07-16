@@ -369,6 +369,41 @@ actor CallRepository {
         }) ?? false
     }
 
+    func retryFinalTranscript(callID: Int64, nowMs: Int64) async throws {
+        try await database.pool.write { db in
+            guard var call = try CallRow.fetchOne(db, key: callID) else {
+                throw CallRepositoryError.callNotFound(callID)
+            }
+            guard var job = try CallTranscriptJobRow.fetchOne(
+                db,
+                sql: """
+                    SELECT * FROM call_transcript_jobs
+                    WHERE callId = ? AND mediaGeneration = ? AND kind = ?
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                arguments: [
+                    callID,
+                    call.mediaGeneration,
+                    CallTranscriptJobKind.final.rawValue,
+                ]
+            ) else {
+                throw CallRepositoryError.inconsistentFinalJob(callID)
+            }
+            guard job.state == .failed || job.state == .cancelled else { return }
+            let transientFailure = job.errorCode
+            job.state = .pending
+            job.errorCode = nil
+            job.updatedAtMs = nowMs
+            try job.update(db)
+            call.state = .finalizing
+            if call.degradationReason == transientFailure {
+                call.degradationReason = nil
+            }
+            call.updatedAtMs = nowMs
+            try call.update(db)
+        }
+    }
+
     func transcriptJobEvidence(jobID: Int64) async throws -> CallTranscriptJobEvidence {
         try await database.pool.read { db in
             guard let job = try CallTranscriptJobRow.fetchOne(db, key: jobID) else {

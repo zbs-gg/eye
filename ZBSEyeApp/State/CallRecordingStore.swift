@@ -21,6 +21,10 @@ final class CallRecordingStore {
         self.coordinator = coordinator
     }
 
+    func setExternalError(_ message: String?) {
+        errorMessage = message
+    }
+
     func start() {
         guard let coordinator else { return }
         errorMessage = nil
