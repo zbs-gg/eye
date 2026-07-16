@@ -9,13 +9,6 @@ struct AudioDrainAcknowledgement: Sendable, Equatable {
     let systemCaptureOutcome: SystemAudioCaptureTeardownOutcome
 }
 
-typealias CallAudioFrameSink = @Sendable (AudioFrame) async -> Bool
-
-struct AudioIngressTargets: Sendable, Equatable {
-    let me: Int64?
-    let system: Int64?
-}
-
 /// Audio-recording orchestrator (@MainActor): two independent legs — microphone (AVAudioEngine) and system
 /// audio (ScreenCaptureKit). Different permissions (mic vs screen recording), a shared TranscriptionService.
 /// The gates (what to enable) live outside (RecordingStore/AppEnvironment). @Observable — per-source flags
@@ -52,6 +45,16 @@ final class AudioCoordinator {
     /// it could enqueue a transcript after the audio legs had acknowledged.
     @ObservationIgnored private var maintenanceSuspended = false
     @ObservationIgnored private var callFrameSink: CallAudioFrameSink?
+    @ObservationIgnored private var legacyIntent = CallSourceSelection.none
+    @ObservationIgnored private var explicitCallIntent = CallSourceSelection.none
+    @ObservationIgnored private var systemStarting = false
+
+    private var desiredSources: CallSourceSelection {
+        CallSourceSelection(
+            me: legacyIntent.me || explicitCallIntent.me,
+            system: legacyIntent.system || explicitCallIntent.system
+        )
+    }
 
     init(storage: StorageManager, ingest: IngestService, config: AudioConfig = AudioConfig()) {
         let backend = SFSpeechBackend()
@@ -79,11 +82,13 @@ final class AudioCoordinator {
     /// a permanent leg death until manual intervention is unacceptable for a 24/7 recorder).
     /// generation guard: a manual stop()/start() during the pause makes this loop stale.
     private func restartLeg(mic: Bool) async {
-        guard isRunning else { return }
+        guard isRunning, mic ? desiredSources.me : desiredSources.system else { return }
         let gen = legGeneration
         if mic { micRunning = false } else { systemRunning = false }
         Log.audio.info("\(mic ? "mic" : "system", privacy: .public) leg died — entering restart loop")
-        while isRunning && legGeneration == gen && !Task.isCancelled {
+        while isRunning && legGeneration == gen
+                && (mic ? desiredSources.me : desiredSources.system)
+                && !Task.isCancelled {
             let budgetOK = mic ? micRestarts.allow() : systemRestarts.allow()
             if !budgetOK {
                 if mic { micStartFailed = true } else { systemStartFailed = true }
@@ -101,15 +106,15 @@ final class AudioCoordinator {
     }
 
     func start(mic: Bool, system: Bool) {
-        guard !isRunning, mic || system else { return }
+        legacyIntent = CallSourceSelection(me: mic, system: system)
+        guard mic || system else { return }
         maintenanceSuspended = false
-        isRunning = true
-        legGeneration += 1
-        if mic { _ = startMicLeg() }
-        if system { startSystemLeg() }
+        ensurePhysicalSources()
     }
 
     func stop() {
+        legacyIntent = .none
+        guard explicitCallIntent.isEmpty else { return }
         guard isRunning else { return }
         let tasks = stopAdmission()
         let transcription = self.transcription
@@ -129,6 +134,7 @@ final class AudioCoordinator {
         systemCaptureTimeout: Duration? = nil
     ) async -> AudioDrainAcknowledgement {
         maintenanceSuspended = true
+        explicitCallIntent = .none
         let wasRunning = isRunning
         let tasks = stopAdmission()
         let hardwareDrain = Task { @MainActor in
@@ -169,6 +175,7 @@ final class AudioCoordinator {
     ) {
         isRunning = false
         legGeneration += 1
+        systemStarting = false
         micRunning = false
         systemRunning = false
         micEngine.stop()
@@ -193,6 +200,57 @@ final class AudioCoordinator {
 
     func installCallFrameSink(_ sink: CallAudioFrameSink?) {
         callFrameSink = sink
+    }
+
+    func beginExplicitCall(_ requested: CallSourceSelection) async -> CallSourceSelection {
+        guard !requested.isEmpty, !maintenanceSuspended else { return .none }
+        explicitCallIntent = requested
+        ensurePhysicalSources()
+
+        if requested.system, !systemRunning, !systemStartFailed {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while ContinuousClock.now < deadline,
+                  isRunning, desiredSources.system,
+                  !systemRunning, !systemStartFailed {
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+        }
+        let actual = CallSourceSelection(
+            me: requested.me && micRunning,
+            system: requested.system && systemRunning
+        )
+        if actual.isEmpty {
+            explicitCallIntent = .none
+            if legacyIntent.isEmpty { stop() }
+        }
+        return actual
+    }
+
+    func endExplicitCall() async {
+        explicitCallIntent = .none
+        guard isRunning else { return }
+        if legacyIntent.isEmpty {
+            let tasks = stopAdmission()
+            _ = await tasks.systemCapture?.value
+            await tasks.mic?.value
+            _ = await tasks.system?.value
+            await transcription.quiesce()
+            maintenanceSuspended = false
+            return
+        }
+
+        let needsReconcile = (micRunning && !legacyIntent.me)
+            || (systemRunning && !legacyIntent.system)
+        if needsReconcile {
+            let retained = legacyIntent
+            let tasks = stopAdmission()
+            _ = await tasks.systemCapture?.value
+            await tasks.mic?.value
+            _ = await tasks.system?.value
+            maintenanceSuspended = false
+            legacyIntent = retained
+            ensurePhysicalSources()
+        }
     }
 
     func acceptedIngressTargets() -> AudioIngressTargets {
@@ -248,6 +306,7 @@ final class AudioCoordinator {
 
     @discardableResult
     private func startMicLeg() -> Bool {
+        if micRunning { return true }
         micStartFailed = false
         let stream: AsyncStream<AudioFrame>
         do { stream = try micEngine.start() }
@@ -264,6 +323,8 @@ final class AudioCoordinator {
 
     /// System leg: engine.start() is async (SCStream.startCapture), so the whole leg lives inside a Task.
     private func startSystemLeg() {
+        guard !systemRunning, !systemStarting else { return }
+        systemStarting = true
         systemStartFailed = false
         let previous = systemTask
         let engine = systemEngine
@@ -277,13 +338,16 @@ final class AudioCoordinator {
             do {
                 stream = try await engine.start()
             } catch let cancellation as SystemAudioCaptureStartCancelled {
+                self?.systemStarting = false
                 return cancellation.teardownOutcome
             } catch is CancellationError {
+                self?.systemStarting = false
                 return nil
             } catch {
                 Log.audio.error("system audio start failed: \(String(describing: error), privacy: .public)")
                 guard let self, self.isRunning,
                       self.legGeneration == generation else { return nil }
+                self.systemStarting = false
                 self.systemStartFailed = true
                 // a transient start failure (displays reconfiguring) must not be terminal
                 Task { @MainActor in await self.restartLeg(mic: false) }
@@ -291,8 +355,10 @@ final class AudioCoordinator {
             }
             guard let self, self.isRunning,
                   self.legGeneration == generation else {
+                self?.systemStarting = false
                 return await engine.stopAndDrain()
             }
+            self.systemStarting = false
             self.systemRunning = true
             await pipeline.reset()
             for await frame in stream {
@@ -304,6 +370,17 @@ final class AudioCoordinator {
             if self.systemEpoch == epoch { self.systemRunning = false }
             return nil
         }
+    }
+
+    private func ensurePhysicalSources() {
+        let union = desiredSources
+        guard !union.isEmpty else { return }
+        if !isRunning {
+            isRunning = true
+            legGeneration += 1
+        }
+        if union.me, !micRunning { _ = startMicLeg() }
+        if union.system, !systemRunning { startSystemLeg() }
     }
 
     /// Shared leg consumer: waits for the previous cycle to finish, reset, drain, flushFinal (all on one

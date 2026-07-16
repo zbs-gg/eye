@@ -53,6 +53,7 @@ enum CallSpoolError: LocalizedError, Sendable, Equatable {
     case invalidPolicy
     case noActiveEpoch
     case invalidEpoch
+    case invalidPCM
     case unsafePath
     case fileAlreadyExists
     case shortRead
@@ -62,6 +63,7 @@ enum CallSpoolError: LocalizedError, Sendable, Equatable {
         case .invalidPolicy: "Invalid call spool policy."
         case .noActiveEpoch: "The call source has no active epoch."
         case .invalidEpoch: "The call source epoch is not monotonic."
+        case .invalidPCM: "The call spool received malformed PCM16LE bytes."
         case .unsafePath: "The call spool path is outside its managed root."
         case .fileAlreadyExists: "The call spool file already exists."
         case .shortRead: "The call spool contains fewer committed bytes than expected."

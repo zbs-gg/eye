@@ -143,7 +143,7 @@ actor CallSpool {
     private let repository: CallRepository?
     private let mediaGeneration: Int
     private var epochs: [CallSpoolEpochDescriptor] = []
-    private var gaps: [AudioIngressGap] = []
+    private var gaps = BoundedAudioIngressGaps()
     private var chunks: [CallSpoolChunk] = []
     private var activeHandle: FileHandle?
     private var activeChunkID: Int64?
@@ -217,23 +217,42 @@ actor CallSpool {
         ingressSequence: Int64,
         normalizedHostTimeNs: Int64
     ) async throws -> CallSpoolWatermark {
+        try await appendPCM16LE(
+            pcm16LE(samples),
+            sampleCount: samples.count,
+            ingressSequence: ingressSequence,
+            normalizedHostTimeNs: normalizedHostTimeNs
+        )
+    }
+
+    @discardableResult
+    func appendPCM16LE(
+        _ data: Data,
+        sampleCount: Int,
+        ingressSequence: Int64,
+        normalizedHostTimeNs: Int64
+    ) async throws -> CallSpoolWatermark {
         try await retryPendingFinalizations()
+        guard sampleCount >= 0, data.count == sampleCount * 2 else {
+            throw CallSpoolError.invalidPCM
+        }
         guard let epoch = epochs.last else { throw CallSpoolError.noActiveEpoch }
-        var cursor = 0
-        while cursor < samples.count {
+        var sampleCursor = 0
+        while sampleCursor < sampleCount {
             try await ensureActiveChunk(epoch: epoch)
             guard let index = chunks.indices.last else { throw CallSpoolError.noActiveEpoch }
             let used = chunks[index].endSample - chunks[index].startSample
             let available = policy.maxSamplesPerChunk - used
-            let count = min(Int(available), samples.count - cursor)
-            let data = pcm16LE(Array(samples[cursor..<(cursor + count)]))
+            let count = min(Int(available), sampleCount - sampleCursor)
+            let byteStart = sampleCursor * 2
+            let byteEnd = byteStart + count * 2
             guard let activeHandle else { throw CallSpoolError.noActiveEpoch }
             try activeHandle.seekToEnd()
-            try activeHandle.write(contentsOf: data)
+            try activeHandle.write(contentsOf: data[byteStart..<byteEnd])
             chunks[index].endSample += Int64(count)
-            chunks[index].committedBytes += Int64(data.count)
+            chunks[index].committedBytes += Int64(count * 2)
             currentSample += Int64(count)
-            cursor += count
+            sampleCursor += count
             if chunks[index].endSample - chunks[index].startSample >= policy.maxSamplesPerChunk {
                 try await finalizeActiveChunk()
             }
@@ -250,7 +269,7 @@ actor CallSpool {
 
     func recordGap(_ gap: AudioIngressGap) throws {
         guard gap.source == source else { throw CallSpoolError.invalidEpoch }
-        gaps.append(gap)
+        gaps.record(gap)
     }
 
     func snapshot() -> CallSpoolSnapshot {
@@ -259,7 +278,7 @@ actor CallSpool {
             source: source,
             sampleRate: policy.sampleRate,
             epochs: epochs,
-            gaps: gaps,
+            gaps: gaps.intervals,
             chunks: chunks,
             watermark: watermark
         )

@@ -166,6 +166,33 @@ final class CallSpoolTests: XCTestCase {
         XCTAssertTrue(afterFinish.allSatisfy { $0.sha256?.count == 64 })
     }
 
+    func testPCM16LEAppendPreservesExactBytesAcrossChunkBoundaries() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let spool = try CallSpool(
+            root: root,
+            callID: 77,
+            source: .me,
+            policy: CallSpoolPolicy(sampleRate: 16_000, maxSamplesPerChunk: 2)
+        )
+        try await spool.beginEpoch(epoch(startSample: 0))
+        let expected = Data([0x34, 0x12, 0x00, 0x80, 0xff, 0x7f])
+
+        _ = try await spool.appendPCM16LE(
+            expected,
+            sampleCount: 3,
+            ingressSequence: 9,
+            normalizedHostTimeNs: 10_000
+        )
+        let snapshot = try await spool.finish()
+        let actual = try snapshot.chunks.reduce(into: Data()) { bytes, chunk in
+            bytes.append(try Data(contentsOf: root.appendingPathComponent(chunk.relativePath)))
+        }
+
+        XCTAssertEqual(actual, expected)
+        XCTAssertEqual(snapshot.watermark?.endSample, 3)
+    }
+
     private func epoch(
         index: Int = 0,
         captureSampleRate: Int = 16_000,

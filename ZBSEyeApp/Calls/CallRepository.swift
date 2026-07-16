@@ -56,6 +56,38 @@ actor CallRepository {
         }
     }
 
+    func discardEmptyCall(id: Int64) async throws {
+        try await database.pool.write { db in
+            let evidenceCount = try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT
+                        (SELECT COUNT(*) FROM call_audio_chunks WHERE callId = ?) +
+                        (SELECT COUNT(*) FROM call_bookmarks WHERE callId = ?)
+                    """,
+                arguments: [id, id]
+            ) ?? 0
+            guard evidenceCount == 0 else { return }
+            try db.execute(
+                sql: "DELETE FROM calls WHERE id = ? AND state = ?",
+                arguments: [id, CallLifecycleState.recording.rawValue]
+            )
+        }
+    }
+
+    func markCallDegraded(callID: Int64, reason: String?, nowMs: Int64) async throws {
+        try await database.pool.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE calls
+                    SET degradationReason = COALESCE(?, degradationReason), updatedAtMs = ?
+                    WHERE id = ?
+                    """,
+                arguments: [reason, nowMs, callID]
+            )
+        }
+    }
+
     func createBookmark(
         callID: Int64,
         idempotencyKey: String,
@@ -132,7 +164,74 @@ actor CallRepository {
         }
     }
 
-    func endCall(callID: Int64, idempotencyKey: String, endedAtMs: Int64) async throws -> CallTranscriptJobRow {
+    func freezeBookmarkCoverage(
+        bookmarkID: Int64,
+        jobID: Int64,
+        meEndSample: Int64?,
+        systemEndSample: Int64?,
+        degraded: Bool,
+        nowMs: Int64
+    ) async throws -> CallBookmarkRow {
+        try await database.pool.write { db in
+            guard var bookmark = try CallBookmarkRow.fetchOne(db, key: bookmarkID),
+                  var job = try CallTranscriptJobRow.fetchOne(db, key: jobID),
+                  bookmark.callId == job.callId,
+                  job.bookmarkId == bookmarkID else {
+                throw CallRepositoryError.inconsistentBookmark(bookmarkID)
+            }
+            if job.coverageFrozen {
+                return bookmark
+            }
+
+            let perCall = try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT COUNT(*) FROM call_transcript_jobs
+                    WHERE callId = ? AND kind = ?
+                      AND state IN (?, ?)
+                    """,
+                arguments: [
+                    job.callId,
+                    CallTranscriptJobKind.checkpoint.rawValue,
+                    CallTranscriptJobState.pending.rawValue,
+                    CallTranscriptJobState.running.rawValue,
+                ]
+            ) ?? 0
+            let global = try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT COUNT(*) FROM call_transcript_jobs
+                    WHERE kind = ? AND state IN (?, ?)
+                    """,
+                arguments: [
+                    CallTranscriptJobKind.checkpoint.rawValue,
+                    CallTranscriptJobState.pending.rawValue,
+                    CallTranscriptJobState.running.rawValue,
+                ]
+            ) ?? 0
+            let admitted = perCall < 32 && global < 64
+            job.meEndSample = meEndSample
+            job.systemEndSample = systemEndSample
+            job.coverageFrozen = true
+            job.state = admitted ? .pending : .deferredCapacity
+            job.errorCode = degraded ? "source_gap" : (admitted ? nil : "deferred_capacity")
+            job.updatedAtMs = nowMs
+            try job.update(db)
+
+            bookmark.state = admitted ? .pending : .deferredCapacity
+            try bookmark.update(db)
+            return bookmark
+        }
+    }
+
+    func endCall(
+        callID: Int64,
+        idempotencyKey: String,
+        endedAtMs: Int64,
+        meEndSample: Int64? = nil,
+        systemEndSample: Int64? = nil,
+        degradationReason: String? = nil
+    ) async throws -> CallTranscriptJobRow {
         try await database.pool.write { db in
             guard var call = try CallRow.fetchOne(db, key: callID) else {
                 throw CallRepositoryError.callNotFound(callID)
@@ -141,16 +240,24 @@ actor CallRepository {
                 call.state = .finalizing
                 call.endTs = max(call.startTs, endedAtMs)
                 call.endIdempotencyKey = idempotencyKey
+                if let degradationReason {
+                    call.degradationReason = degradationReason
+                }
                 call.updatedAtMs = endedAtMs
                 try call.update(db)
             }
-            if let existing = try CallTranscriptJobRow
+            if var existing = try CallTranscriptJobRow
                 .filter(
                     Column("callId") == callID
                         && Column("mediaGeneration") == call.mediaGeneration
                         && Column("kind") == CallTranscriptJobKind.final.rawValue
                 )
                 .fetchOne(db) {
+                if existing.meEndSample == nil { existing.meEndSample = meEndSample }
+                if existing.systemEndSample == nil { existing.systemEndSample = systemEndSample }
+                existing.coverageFrozen = true
+                existing.updatedAtMs = max(existing.updatedAtMs, endedAtMs)
+                try existing.update(db)
                 return existing
             }
             let logicalEnd = call.endTs ?? max(call.startTs, endedAtMs)
@@ -166,8 +273,8 @@ actor CallRepository {
                 logicalStartMs: call.startTs,
                 logicalEndMs: logicalEnd,
                 contextStartMs: call.startTs,
-                meEndSample: nil,
-                systemEndSample: nil,
+                meEndSample: meEndSample,
+                systemEndSample: systemEndSample,
                 coverageFrozen: true,
                 attempts: 0,
                 errorCode: nil,

@@ -203,6 +203,7 @@ targets:
       - path: ZBSEyeApp/Calls/CallSpoolPolicy.swift
       - path: ZBSEyeApp/Calls/CallSpool.swift
       - path: ZBSEyeApp/Calls/CallAudioWindowAssembler.swift
+      - path: ZBSEyeApp/Calls/CallCoordinator.swift
       - path: ZBSEyeApp/Audio/AudioModels.swift
       - path: ZBSEyeApp/Data/StorageRelocationPolicy.swift
       - path: ZBSEyeApp/Support/Log.swift

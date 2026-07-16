@@ -2,6 +2,28 @@ import Foundation
 import XCTest
 
 final class AudioIngressPublisherTests: XCTestCase {
+    func testBoundedGapBufferCoalescesBoundsAndPrunesCoveredIntervals() {
+        var buffer = BoundedAudioIngressGaps(capacity: 2)
+        for sequence in [1, 2, 10, 20] {
+            buffer.record(
+                AudioIngressGap(
+                    source: .me,
+                    epoch: 0,
+                    firstIngressSequence: Int64(sequence),
+                    lastIngressSequence: Int64(sequence),
+                    reason: .consumerOverflow
+                )
+            )
+        }
+
+        XCTAssertTrue(buffer.hadAnyGap)
+        XCTAssertEqual(buffer.intervals.count, 2)
+        XCTAssertTrue(buffer.covers(source: .me, sequence: 20))
+        buffer.prune(source: .me, through: 20)
+        XCTAssertTrue(buffer.intervals.isEmpty)
+        XCTAssertTrue(buffer.hadAnyGap)
+    }
+
     func testBufferingNewestAcceptsNewFrameAndReportsDroppedOldFrameAsGap() async throws {
         let publisher = AudioIngressPublisher(source: .me, epoch: 3, capacity: 1)
         let first = publisher.yield(

@@ -58,7 +58,7 @@ struct MenuBarContent: View {
             }
             if env.recording.isCapturing {
                 // privacy micro-pause: «something sensitive is coming — don't record for 15 minutes»
-                Button("Don't record for 15 minutes") { env.recording.pauseFor(minutes: 15) }
+                Button("Don't record for 15 minutes") { env.pauseForPrivacy(minutes: 15) }
                 // manual audio override — force ON/OFF at any moment (wins over the mode for this session)
                 if env.audioSettings.audioMode != .off {
                     Button(audioOverrideTitle) {

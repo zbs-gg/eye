@@ -18,6 +18,7 @@ final class AppEnvironment {
     let aiSetup = AISetupPresentation()
     let mcpReadiness = MCPReadinessService()
     let audioSettings = AudioSettingsStore()
+    let calls = CallRecordingStore()
     let storageSettings: StorageSettingsStore
     let storageOperations = StorageOperationsStore()
     let resourceUsage: ResourceUsageStore
@@ -389,6 +390,7 @@ final class AppEnvironment {
                         // The outer critical phase owns the only caller
                         // deadline. The underlying hardware teardown remains
                         // retained to real completion before recovery resumes.
+                        await self.calls.endAndWait(reason: .maintenance)
                         let recordingDrain = await self.recording.pauseForMaintenanceAndDrain(
                             waitForTranscription: false
                         )
@@ -653,6 +655,51 @@ final class AppEnvironment {
                     && self.permissions.snapshot.screenRecording == .granted
             }
             self.audio = audioCoordinator
+            let callAudio = CallAudioControl(
+                installSink: { [weak audioCoordinator] sink in
+                    await audioCoordinator?.installCallFrameSink(sink)
+                },
+                start: { [weak self, weak audioCoordinator] requested in
+                    guard let audioCoordinator else { return .none }
+                    let permitted = await MainActor.run { [weak self] in
+                        guard let self else { return CallSourceSelection.none }
+                        let diskOK = storage.freeBytes() > Self.minFreeBytes
+                        if !diskOK {
+                            self.recording.setLowDisk(true)
+                            self.emergencyPrune()
+                        }
+                        guard !self.recording.lowDiskPaused, diskOK else {
+                            return CallSourceSelection.none
+                        }
+                        return CallSourceSelection(
+                            me: requested.me && self.permissions.snapshot.microphone == .granted,
+                            system: requested.system
+                                && self.permissions.snapshot.screenRecording == .granted
+                        )
+                    }
+                    return await audioCoordinator.beginExplicitCall(permitted)
+                },
+                acceptedTargets: { [weak audioCoordinator] in
+                    await audioCoordinator?.acceptedIngressTargets()
+                        ?? AudioIngressTargets(me: nil, system: nil)
+                },
+                drainGaps: { [weak audioCoordinator] in
+                    await audioCoordinator?.drainIngressGaps() ?? []
+                },
+                stop: { [weak audioCoordinator] in
+                    await audioCoordinator?.endExplicitCall()
+                }
+            )
+            let callCoordinator = CallCoordinator(
+                repository: callRepository,
+                mediaRoot: storage.mediaDirectory,
+                audio: callAudio
+            )
+            calls.requestedSources = { [weak self] in
+                guard let self, self.audioSettings.audioMode != .off else { return .none }
+                return CallSourceSelection(me: true, system: self.audioSettings.recordSystemAudio)
+            }
+            calls.attach(callCoordinator)
             // Clear the session-scoped manual audio override when recording truly stops (NOT on every
             // syncAudio re-sync — that fires each meeting edge and would wipe the override).
             recording.onSessionStop = { [weak self] in self?.audioSettings.clearManualOverride() }
@@ -918,6 +965,13 @@ final class AppEnvironment {
                 try? await Task.sleep(for: .seconds(4))
                 guard let self else { return }
                 self.recording.startIfWanted()
+                if self.calls.isActive,
+                   let storage = self.storage,
+                   storage.freeBytes() <= Self.minFreeBytes {
+                    self.recording.setLowDisk(true)
+                    self.emergencyPrune()
+                    await self.calls.endAndWait(reason: .lowDisk)
+                }
                 // permission revoked mid-run → honest degradation in the UI (instead of a forever-green dot)
                 if self.recording.isCapturing {
                     if !self.permissions.allCriticalGranted {
@@ -964,6 +1018,14 @@ final class AppEnvironment {
             return .uncertain(mediaIsEmpty == nil ? .filesystemReadFailed : .existingProfileNeedsReconciliation)
         }
         return .positivelyEmpty
+    }
+
+    func pauseForPrivacy(minutes: Int) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.calls.endAndWait(reason: .privacy)
+            self.recording.pauseFor(minutes: minutes)
+        }
     }
 
     /// History deletion (privacy): lastSeconds=nil → everything. Returns a report for the UI.
@@ -1029,6 +1091,7 @@ final class AppEnvironment {
         storageSettings.relocationError = nil
         storageSettings.relocationProgress = 0
         storageSettings.relocationStatus = "Stopping recording…"
+        await calls.endAndWait(reason: .maintenance)
         let recordingDrainTask = Task { @MainActor [recording] in
             await recording.pauseForMaintenanceAndDrain()
         }

@@ -9228,6 +9228,356 @@
           }
         }
       }
+    },
+    "AI Models": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модели ИИ"
+          }
+        }
+      }
+    },
+    "Collects the day's activity from your history, runs it through your processing model (AI Models — local by default), and writes a Markdown digest to a folder of your choice.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Собирает активность дня из вашей истории, прогоняет её через выбранную модель обработки («Модели ИИ», по умолчанию локальную) и записывает Markdown-дайджест в выбранную папку."
+          }
+        }
+      }
+    },
+    "Connections": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключения"
+          }
+        }
+      }
+    },
+    "Connections need to be set up": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нужно настроить подключения"
+          }
+        }
+      }
+    },
+    "First pick a processing model in AI Models": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сначала выберите модель обработки в «Моделях ИИ»"
+          }
+        }
+      }
+    },
+    "First set up a local LLM in Connections": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сначала настройте локальную LLM в Подключениях"
+          }
+        }
+      }
+    },
+    "Looks at your activity for the day and gives 2–3 concrete observations: where your time goes, where you could focus better. Daily fragments go only to the processing model you chose in AI Models — local by default.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Смотрит на активность за день и даёт 2–3 конкретных наблюдения: куда уходит время, где можно лучше сфокусироваться. Фрагменты дня уходят только в модель, выбранную в «Моделях ИИ», — по умолчанию локальную."
+          }
+        }
+      }
+    },
+    "Open AI Models": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть «Модели ИИ»"
+          }
+        }
+      }
+    },
+    "Open Connections": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть подключения"
+          }
+        }
+      }
+    },
+    "To produce insights, Daily Insights will send compact fragments of activity for the chosen day (app names, window titles, short snippets of on-screen text) to the processing model you chose in AI Models. Nothing is written to disk — only a request to that model.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для инсайтов «Инсайты дня» отправят компактные фрагменты активности выбранного дня (названия приложений, заголовки окон, короткие фрагменты текста с экрана) в модель, выбранную в «Моделях ИИ». На диск ничего не пишется — только запрос в эту модель."
+          }
+        }
+      }
+    },
+    "Answers use the model you choose in AI Models. ZBS Eye Local works on this Mac; cloud providers receive excerpts only after your explicit consent.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответы создаёт модель, выбранная в «Моделях ИИ». ZBS Eye Local работает на этом Mac; облачные провайдеры получают фрагменты только с вашего явного согласия."
+          }
+        }
+      }
+    },
+    "Choose a model in AI Models. ZBS Eye Local works on this Mac; cloud providers receive excerpts only after your explicit consent. Recordings and the index stay local.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите модель в «Моделях ИИ». ZBS Eye Local работает на этом Mac; облачные провайдеры получают фрагменты только с вашего явного согласия. Записи и индекс остаются локально."
+          }
+        }
+      }
+    },
+    "Choose a model in AI Models. ZBS Eye Local works without another app or account; the automation won't run until a model is active.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите модель в «Моделях ИИ». ZBS Eye Local работает без другого приложения и аккаунта; автоматизация не запустится, пока модель не будет активна."
+          }
+        }
+      }
+    },
+    "Pick a processing model in AI Models before asking your history.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перед вопросом к истории выберите модель обработки в «Моделях ИИ»."
+          }
+        }
+      }
+    },
+    "To answer from your history I need a processing model — pick one in AI Models. Local models keep excerpts on this Mac; cloud providers receive excerpts only with your explicit consent. 👁": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чтобы отвечать по вашей истории, нужна модель обработки — выберите её в «Моделях ИИ». Локальные модели оставляют фрагменты на этом Mac; облачные провайдеры получают их только с вашего явного согласия. 👁"
+          }
+        }
+      }
+    },
+    "%lld bookmarks saved": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld закладок сохранено"
+          }
+        }
+      }
+    },
+    "Bookmark": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Закладка"
+          }
+        }
+      }
+    },
+    "Call saved": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Звонок сохранён"
+          }
+        }
+      }
+    },
+    "Choose at least one audio source.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите хотя бы один источник звука."
+          }
+        }
+      }
+    },
+    "End call": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Завершить звонок"
+          }
+        }
+      }
+    },
+    "Microphone: gap recorded": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон: разрыв отмечен"
+          }
+        }
+      }
+    },
+    "Microphone: off": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон: выключен"
+          }
+        }
+      }
+    },
+    "Microphone: unavailable": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон: недоступен"
+          }
+        }
+      }
+    },
+    "No call is being recorded.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сейчас звонок не записывается."
+          }
+        }
+      }
+    },
+    "No requested audio source could start.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось запустить ни один выбранный источник звука."
+          }
+        }
+      }
+    },
+    "Saving call…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохраняем звонок…"
+          }
+        }
+      }
+    },
+    "Screen: off": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экран: выключен"
+          }
+        }
+      }
+    },
+    "Start another": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записать ещё"
+          }
+        }
+      }
+    },
+    "Start call": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записать звонок"
+          }
+        }
+      }
+    },
+    "Starting call…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запускаем запись звонка…"
+          }
+        }
+      }
+    },
+    "System audio: gap recorded": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук: разрыв отмечен"
+          }
+        }
+      }
+    },
+    "System audio: off": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук: выключен"
+          }
+        }
+      }
+    },
+    "System audio: unavailable": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук: недоступен"
+          }
+        }
+      }
+    },
+    "The call could not create a durable identity.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось создать надёжную запись звонка."
+          }
+        }
+      }
+    },
+    "This call is already ending.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот звонок уже завершается."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

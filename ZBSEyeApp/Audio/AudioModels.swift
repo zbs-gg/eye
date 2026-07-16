@@ -36,6 +36,60 @@ struct AudioIngressGap: Codable, Sendable, Equatable {
     let reason: AudioIngressGapReason
 }
 
+struct BoundedAudioIngressGaps: Sendable {
+    private(set) var intervals: [AudioIngressGap] = []
+    private(set) var hadAnyGap = false
+    private let capacity: Int
+
+    init(capacity: Int = 64) {
+        self.capacity = max(1, capacity)
+        intervals.reserveCapacity(self.capacity)
+    }
+
+    mutating func record(_ gap: AudioIngressGap) {
+        hadAnyGap = true
+        if let last = intervals.last,
+           last.source == gap.source,
+           last.epoch == gap.epoch,
+           last.reason == gap.reason,
+           gap.firstIngressSequence <= last.lastIngressSequence + 1 {
+            intervals[intervals.count - 1] = AudioIngressGap(
+                source: gap.source,
+                epoch: gap.epoch,
+                firstIngressSequence: min(last.firstIngressSequence, gap.firstIngressSequence),
+                lastIngressSequence: max(last.lastIngressSequence, gap.lastIngressSequence),
+                reason: gap.reason
+            )
+            return
+        }
+        intervals.append(gap)
+        if intervals.count > capacity {
+            intervals.removeFirst(intervals.count - capacity)
+        }
+    }
+
+    func covers(source: CallAudioSource, sequence: Int64) -> Bool {
+        intervals.contains {
+            $0.source == source
+                && $0.firstIngressSequence <= sequence
+                && $0.lastIngressSequence >= sequence
+        }
+    }
+
+    mutating func prune(source: CallAudioSource, through sequence: Int64) {
+        intervals.removeAll {
+            $0.source == source && $0.lastIngressSequence <= sequence
+        }
+    }
+}
+
+typealias CallAudioFrameSink = @Sendable (AudioFrame) async -> Bool
+
+struct AudioIngressTargets: Sendable, Equatable {
+    let me: Int64?
+    let system: Int64?
+}
+
 /// One frame from an audio callback. Hardware objects never cross this boundary;
 /// capture timing is explicit so a Bookmark can freeze accepted ingress rather
 /// than guessing from wall-clock time.

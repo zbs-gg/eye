@@ -39,6 +39,9 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 ## [0.4.0] — 2026-07-14
 
 ### Added
+- **Durable local call recording foundation.** Start, Bookmark, and End now create one Call Envelope with
+  separately attributable microphone/system PCM spools. Bookmarks persist exact source watermarks without
+  pausing capture; source restarts become explicit gaps, and End creates one retryable final-transcript job.
 - **One-click built-in local AI.** On qualified Apple Silicon Macs, **ZBS Eye Local** downloads a pinned,
   verified MLX model after an explicit click and then powers Ask, Daily Insights, summaries, and generated
   activity labels offline — no LM Studio, Ollama, account, API key, or separate server required. Setup is
