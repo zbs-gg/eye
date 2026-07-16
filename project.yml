@@ -241,6 +241,8 @@ targets:
       - path: ZBSEyeApp/MCP/MCPToolPolicy.swift
       - path: ZBSEyeApp/Connections/MCPSetupPresentation.swift
       - path: ZBSEyeApp/Connections/MCPReadinessService.swift
+      - path: ZBSEyeApp/MCP/MCPCallEvidenceRouting.swift
+      - path: ZBSEyeApp/Server/ZBSEyeAPIDTO.swift
       - path: ZBSEyeApp/Search/AskService.swift
       - path: ZBSEyeApp/State/AskStore.swift
       - path: ZBSEyeApp/State/WorkspaceStore.swift

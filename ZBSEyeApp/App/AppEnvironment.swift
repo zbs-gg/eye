@@ -501,7 +501,8 @@ final class AppEnvironment {
             self.ingest = ingestService
             let callRepository = CallRepository(database: db)
             self.callRepository = callRepository
-            self.callEvidenceQueryService = CallEvidenceQueryService(database: db)
+            let callEvidenceQueryService = CallEvidenceQueryService(database: db)
+            self.callEvidenceQueryService = callEvidenceQueryService
             let callEvidenceDeletionService = CallEvidenceDeletionService(
                 repository: callRepository,
                 mediaRoot: storage.mediaDirectory
@@ -919,7 +920,8 @@ final class AppEnvironment {
             let token = KeychainStore.apiToken()
             let rec = recording
             let deps = ZBSEyeHTTPServer.Deps(
-                search: searchSvc, timeline: timelineSvc, db: db, mediaDir: storage.mediaDirectory,
+                search: searchSvc, timeline: timelineSvc, calls: callEvidenceQueryService,
+                db: db, mediaDir: storage.mediaDirectory,
                 token: token, version: AppVersion.current,
                 isCapturing: { await MainActor.run { rec.isCapturing } },
                 toggleCapture: { enable in

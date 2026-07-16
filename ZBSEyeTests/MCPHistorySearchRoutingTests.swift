@@ -1,6 +1,45 @@
 import XCTest
 
 final class MCPHistorySearchRoutingTests: XCTestCase {
+    func testCallSearchHitPreservesTypedKindAndRangeForEvidenceFollowUp() async throws {
+        let response = Data(#"""
+        {
+          "query": "budget",
+          "total": 1,
+          "limit": 10,
+          "offset": 0,
+          "semanticMode": "hybrid",
+          "semanticFallbackReason": null,
+          "results": [{
+            "id": 42,
+            "kind": "call",
+            "ts": 1752300000000,
+            "endTs": 1752300600000,
+            "tsISO": "2025-07-12T07:20:00Z",
+            "app": {"bundleId": null, "name": "Call"},
+            "windowTitle": "Final transcript",
+            "browserUrl": null,
+            "snippet": "launch budget",
+            "media": {"callUrl": "/v1/call?call_id=call:42"}
+          }]
+        }
+        """#.utf8)
+        let client = MCPGUIHistorySearchClient { _ in
+            MCPGUIHistorySearchHTTPResponse(statusCode: 200, data: response)
+        }
+
+        let execution = try await client.search(
+            port: 8_731,
+            token: "token",
+            query: "budget",
+            filters: SearchFilters(kind: .call, limit: 10)
+        )
+
+        XCTAssertEqual(execution.results.first?.kind, .call)
+        XCTAssertEqual(execution.results.first?.id, 42)
+        XCTAssertEqual(execution.results.first?.endTs.map(msFromDate), 1_752_300_600_000)
+    }
+
     func testCrossLanguageQueryUsesAuthenticatedGUIHybridPathWithoutFallback() async throws {
         let requestProbe = MCPRequestProbe()
         let fallbackCalls = MCPCallCounter()

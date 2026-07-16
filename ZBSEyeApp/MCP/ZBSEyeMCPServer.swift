@@ -74,6 +74,9 @@ enum ZBSEyeMCPServer {
                 return try await search.searchWithMetadata(query: query, filters: filters)
             }
         )
+        let callEvidence = db.map {
+            MCPCallEvidenceCoordinator(service: CallEvidenceQueryService(database: $0))
+        }
 
         let server = Server(
             name: "zbseye",
@@ -101,7 +104,7 @@ enum ZBSEyeMCPServer {
                 var kind: SearchKind? = nil
                 if let k = args["kind"]?.stringValue {
                     guard let parsed = SearchKind(rawValue: k) else {
-                        return .init(content: [.text("kind: screen | audio")], isError: true)
+                        return .init(content: [.text("kind: screen | audio | call")], isError: true)
                     }
                     kind = parsed
                 }
@@ -135,6 +138,110 @@ enum ZBSEyeMCPServer {
                 } catch {
                     // honest error: the agent must distinguish "nothing found" from "DB broken"
                     return .init(content: [.text("Search failed: \(error)")], isError: true)
+                }
+
+            case "list_calls":
+                guard let callEvidence else {
+                    return .init(content: [.text("Call evidence is unavailable.")], isError: true)
+                }
+                guard !MCPCallEvidenceCoordinator.requestsAlternateStorage(argumentKeys: Set(args.keys)) else {
+                    return .init(content: [.text("Alternate database or storage roots are not accepted.")], isError: true)
+                }
+                guard let pagination = Self.callPagination(args, defaultLimit: 25) else {
+                    return .init(content: [.text("limit must be 1...100 and offset must be >= 0")], isError: true)
+                }
+                let fromMs: Int64?
+                if let value = args["from"] {
+                    guard let raw = Self.timeString(value), let date = Self.parseTime(raw) else {
+                        return .init(content: [.text("from failed to parse: needs ISO8601 or epoch-ms")], isError: true)
+                    }
+                    fromMs = msFromDate(date)
+                } else {
+                    fromMs = nil
+                }
+                let toMs: Int64?
+                if let value = args["to"] {
+                    guard let raw = Self.timeString(value), let date = Self.parseTime(raw) else {
+                        return .init(content: [.text("to failed to parse: needs ISO8601 or epoch-ms")], isError: true)
+                    }
+                    toMs = msFromDate(date)
+                } else {
+                    toMs = nil
+                }
+                do {
+                    let page = try await callEvidence.listCalls(
+                        query: args["query"]?.stringValue,
+                        fromMs: fromMs,
+                        toMs: toMs,
+                        limit: pagination.limit,
+                        offset: pagination.offset
+                    )
+                    return .init(content: [.text(try MCPCallEvidenceCoordinator.json(page))])
+                } catch {
+                    return .init(content: [.text("Invalid or unavailable call evidence request.")], isError: true)
+                }
+
+            case "get_call":
+                guard let callEvidence else {
+                    return .init(content: [.text("Call evidence is unavailable.")], isError: true)
+                }
+                guard !MCPCallEvidenceCoordinator.requestsAlternateStorage(argumentKeys: Set(args.keys)),
+                      let callID = args["call_id"]?.stringValue else {
+                    return .init(content: [.text("Typed call_id required; alternate roots are not accepted.")], isError: true)
+                }
+                do {
+                    guard let envelope = try await callEvidence.envelope(callID: callID) else {
+                        return .init(content: [.text("Call not found.")], isError: true)
+                    }
+                    return .init(content: [.text(try MCPCallEvidenceCoordinator.json(envelope))])
+                } catch {
+                    return .init(content: [.text("Invalid or unavailable call evidence request.")], isError: true)
+                }
+
+            case "list_call_bookmarks":
+                guard let callEvidence else {
+                    return .init(content: [.text("Call evidence is unavailable.")], isError: true)
+                }
+                guard !MCPCallEvidenceCoordinator.requestsAlternateStorage(argumentKeys: Set(args.keys)),
+                      let callID = args["call_id"]?.stringValue else {
+                    return .init(content: [.text("Typed call_id required; alternate roots are not accepted.")], isError: true)
+                }
+                guard let pagination = Self.callPagination(args, defaultLimit: 50) else {
+                    return .init(content: [.text("limit must be 1...100 and offset must be >= 0")], isError: true)
+                }
+                do {
+                    let page = try await callEvidence.bookmarks(
+                        callID: callID,
+                        limit: pagination.limit,
+                        offset: pagination.offset
+                    )
+                    return .init(content: [.text(try MCPCallEvidenceCoordinator.json(page))])
+                } catch {
+                    return .init(content: [.text("Invalid or unavailable call evidence request.")], isError: true)
+                }
+
+            case "read_call_transcript":
+                guard let callEvidence else {
+                    return .init(content: [.text("Call evidence is unavailable.")], isError: true)
+                }
+                guard !MCPCallEvidenceCoordinator.requestsAlternateStorage(argumentKeys: Set(args.keys)),
+                      let callID = args["call_id"]?.stringValue else {
+                    return .init(content: [.text("Typed call_id required; alternate roots are not accepted.")], isError: true)
+                }
+                guard let pagination = Self.callPagination(args, defaultLimit: 80) else {
+                    return .init(content: [.text("limit must be 1...100 and offset must be >= 0")], isError: true)
+                }
+                do {
+                    let page = try await callEvidence.transcript(
+                        callID: callID,
+                        selector: args["selector"]?.stringValue ?? "preferred",
+                        bookmarkID: args["bookmark_id"]?.stringValue,
+                        limit: pagination.limit,
+                        offset: pagination.offset
+                    )
+                    return .init(content: [.text(try MCPCallEvidenceCoordinator.json(page))])
+                } catch {
+                    return .init(content: [.text("Invalid or unavailable call evidence request.")], isError: true)
                 }
 
             case "get_transcript":
@@ -263,18 +370,57 @@ enum ZBSEyeMCPServer {
         }
         let tools = [
             Tool(name: "search_history",
-                 description: "Hybrid search over the user's screen and audio history, including cross-language matches. Uses the running GUI's semantic search, with an exact-word FTS fallback when the GUI is absent.",
+                 description: "Hybrid search over the user's screen, audio, and preferred call transcript history, including cross-language matches. Uses the running GUI's semantic search, with an exact-word FTS fallback when the GUI is absent.",
                  inputSchema: .object(["type": .string("object"),
                                        "properties": .object([
                                            "query": strProp("search query"),
                                            "from": strProp("optional: range start, ISO8601 or epoch-ms"),
                                            "to": strProp("optional: range end, ISO8601 or epoch-ms"),
                                            "app": strProp("optional: substring of bundleId/app name (screen only)"),
-                                           "kind": strProp("optional: screen | audio"),
+                                           "kind": strProp("optional: screen | audio | call"),
                                            "limit": .object(["type": .string("integer"),
                                                              "description": .string("max results (default 25)")]),
                                        ]),
                                        "required": .array([.string("query")])])),
+            Tool(name: "list_calls",
+                 description: "Read-only paginated list or exact-word search of Call Envelopes. Stdio access is the capability of the configured owner-launched ZBS Eye binary; no alternate database/root is accepted.",
+                 inputSchema: .object(["type": .string("object"),
+                                       "additionalProperties": .bool(false),
+                                       "properties": .object([
+                                           "query": strProp("optional transcript query"),
+                                           "from": strProp("optional range start, ISO8601 or epoch-ms"),
+                                           "to": strProp("optional range end, ISO8601 or epoch-ms"),
+                                           "limit": .object(["type": .string("integer"), "maximum": .int(100)]),
+                                           "offset": .object(["type": .string("integer"), "minimum": .int(0)]),
+                                       ])])),
+            Tool(name: "get_call",
+                 description: "Read one Call Envelope: source health, logical coverage, transcript status, bookmarks count, and typed evidence references.",
+                 inputSchema: .object(["type": .string("object"),
+                                       "additionalProperties": .bool(false),
+                                       "properties": .object(["call_id": strProp("typed id such as call:42")]),
+                                       "required": .array([.string("call_id")])])),
+            Tool(name: "list_call_bookmarks",
+                 description: "Read-only paginated bookmark evidence for one Call Envelope.",
+                 inputSchema: .object(["type": .string("object"),
+                                       "additionalProperties": .bool(false),
+                                       "properties": .object([
+                                           "call_id": strProp("typed id such as call:42"),
+                                           "limit": .object(["type": .string("integer"), "maximum": .int(100)]),
+                                           "offset": .object(["type": .string("integer"), "minimum": .int(0)]),
+                                       ]),
+                                       "required": .array([.string("call_id")])])),
+            Tool(name: "read_call_transcript",
+                 description: "Read-only paginated timed transcript segments from the preferred call revision or one bookmark checkpoint. Source labels are mic/system evidence, not inferred speaker identity.",
+                 inputSchema: .object(["type": .string("object"),
+                                       "additionalProperties": .bool(false),
+                                       "properties": .object([
+                                           "call_id": strProp("typed id such as call:42"),
+                                           "selector": strProp("preferred | bookmark"),
+                                           "bookmark_id": strProp("required for selector=bookmark; typed id such as bookmark:7"),
+                                           "limit": .object(["type": .string("integer"), "maximum": .int(100)]),
+                                           "offset": .object(["type": .string("integer"), "minimum": .int(0)]),
+                                       ]),
+                                       "required": .array([.string("call_id")])])),
             Tool(name: "get_transcript",
                  description: "Transcript of an audio segment by audio_id from the search results (what was said on the call).",
                  inputSchema: .object(["type": .string("object"),
@@ -339,11 +485,15 @@ enum ZBSEyeMCPServer {
             let when = r.ts.formatted(date: .abbreviated, time: .shortened)
             let snip = r.snippet.replacingOccurrences(of: "\n", with: " ")
             // id in the response: the agent can reference a specific frame/audio in a follow-up
-            let ref = r.kind == .audio ? "audio_id=\(r.id)" : "frame_id=\(r.id)"
+            let ref = switch r.kind {
+            case .screen: "frame_id=\(r.id)"
+            case .audio: "audio_id=\(r.id)"
+            case .call: "call_id=call:\(r.id)"
+            }
             out += "\n• [\(when)] \(app)\(r.windowTitle.map { " · \($0)" } ?? "") (\(ref)): \(snip)"
         }
         if !results.isEmpty {
-            out += "\n\nFor audio: get_transcript(audio_id). For a screen moment: get_context_at(time)."
+            out += "\n\nFor a call: get_call(call_id), then read_call_transcript(call_id). For audio: get_transcript(audio_id). For a screen moment: get_context_at(time)."
         }
         return out
     }
@@ -605,4 +755,26 @@ enum ZBSEyeMCPServer {
         if let d = v.doubleValue { return String(Int64(d)) }
         return nil
     }
+
+    private static func callPagination(
+        _ arguments: [String: Value],
+        defaultLimit: Int
+    ) -> CallEvidencePageRequest? {
+        let limit: Int
+        if let value = arguments["limit"] {
+            guard let parsed = value.intValue ?? value.stringValue.flatMap(Int.init) else { return nil }
+            limit = parsed
+        } else {
+            limit = defaultLimit
+        }
+        let offset: Int
+        if let value = arguments["offset"] {
+            guard let parsed = value.intValue ?? value.stringValue.flatMap(Int.init) else { return nil }
+            offset = parsed
+        } else {
+            offset = 0
+        }
+        return try? CallEvidencePageRequest(limit: limit, offset: offset)
+    }
+
 }

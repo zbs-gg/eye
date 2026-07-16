@@ -79,6 +79,7 @@ struct MCPGUIHistorySearchClient: Sendable {
         let id: Int64
         let kind: String
         let ts: Int64
+        let endTs: Int64?
         let app: App
         let windowTitle: String?
         let browserUrl: String?
@@ -151,6 +152,7 @@ struct MCPGUIHistorySearchClient: Sendable {
                 id: hit.id,
                 kind: kind,
                 ts: dateFromMs(hit.ts),
+                endTs: hit.endTs.map(dateFromMs),
                 bundleId: hit.app.bundleId,
                 appName: hit.app.name,
                 windowTitle: hit.windowTitle,

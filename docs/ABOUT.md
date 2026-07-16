@@ -34,7 +34,10 @@ enable an external provider, only the text excerpts needed for that action leave
   renderers, canvas, some Electron); frames in HEIC with perceptual-hash dedup (identical screens aren't
   duplicated). Adaptive per-app: AX where the app exposes semantics, OCR where it doesn't; decided at runtime by content quality.
 - **Audio** → system audio (calls, meetings, video) and microphone → **on-device** transcription (SFSpeech),
-  with VAD (we don't transcribe silence/music).
+  with VAD (we don't transcribe silence/music). An explicit **Call** mode keeps microphone and system audio
+  as separate durable sources until End Call. Bookmark never stops recording: it schedules a local checkpoint
+  transcript, while the preferred whole-call transcript is produced after the call by the optional one-click
+  Whisper Large V3 Turbo model. The UI intentionally does not become a live meeting workspace.
 
 ### Sense-making (not just raw data, but structure)
 - **Scenes / "Day in activities"** — frames are grouped into **activity scenes**: "VS Code, 14:00–14:25,
@@ -74,7 +77,13 @@ enable an external provider, only the text excerpts needed for that action leave
 ### Access for AI agents
 - **Local REST** (127.0.0.1, a Bearer token on everything except `/health`) + **MCP** (stdio) — so Codex,
   Claude Code, and Claude Desktop can work with your memory as a local tool. Generated setup is read-only
-  by default and uses no bearer token.
+  by default, uses no bearer token, and sends nothing outside the Mac.
+- Call evidence uses one bounded read model on both surfaces: list/search Call Envelopes, read one envelope,
+  paginate bookmarks, and paginate the preferred or bookmark transcript. IDs are typed (`call:…`,
+  `bookmark:…`, `call-audio-chunk:…`); responses expose source health, coverage, revision state, and retryability,
+  but never absolute paths or invented speaker identity. REST requires the existing Bearer token. Stdio MCP is
+  an owner-launched signed-binary capability, resolves only the configured `StorageLocation`, and opens the
+  database in enforced read-only mode; callers cannot provide another database or storage root.
 
 ### Storage and data
 - **Keep Media is 5 GB on a fresh install.** 10/20/50 GB and **Forever** are explicit choices. Low disk
