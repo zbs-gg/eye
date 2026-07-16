@@ -286,7 +286,7 @@ actor VectorBackfill {
                     SELECT r.text
                     FROM call_transcript_revisions r
                     JOIN calls c ON c.preferredRevisionId = r.id
-                    WHERE r.id = ? AND r.kind = 'final' AND r.state = 'ready'
+                    WHERE r.id = ? AND r.state = 'ready'
                     """, arguments: [item.rowId])
             default:
                 return nil
@@ -320,7 +320,7 @@ actor VectorBackfill {
                     SELECT EXISTS(
                         SELECT 1 FROM call_transcript_revisions r
                         JOIN calls c ON c.preferredRevisionId = r.id
-                        WHERE r.id = ? AND r.kind = 'final' AND r.state = 'ready'
+                        WHERE r.id = ? AND r.state = 'ready'
                     )
                     """, arguments: [item.rowId]) ?? false {
                     try dbc.execute(
@@ -363,7 +363,7 @@ actor VectorBackfill {
             SELECT r.id AS id, c.startTs AS ts
             FROM calls c
             JOIN call_transcript_revisions r ON r.id = c.preferredRevisionId
-            WHERE r.kind = 'final' AND r.state = 'ready'
+            WHERE r.state = 'ready'
               AND r.id NOT IN (SELECT revision_id FROM vec_call_transcripts)
               AND r.id NOT IN (SELECT row_id FROM embed_queue WHERE kind = 2)
             """)

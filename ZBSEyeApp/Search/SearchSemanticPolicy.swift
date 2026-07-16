@@ -1,5 +1,9 @@
 import Foundation
 
+protocol SearchEmbeddingProviding: Sendable {
+    func embed(query: String) async -> [Float]?
+}
+
 enum SearchSemanticMode: Sendable, Equatable {
     case hybrid
     case embeddingUnavailable

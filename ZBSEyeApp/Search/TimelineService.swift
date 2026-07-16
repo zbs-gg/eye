@@ -6,7 +6,7 @@ actor TimelineService {
     private let db: ZBSEyeDatabase
     init(db: ZBSEyeDatabase) { self.db = db }
 
-    /// History bounds across BOTH sources (screen + audio): live audio over a static screen also
+    /// History bounds across screen, legacy audio, and explicit calls: live audio over a static screen also
     /// moves the timeline tail (otherwise a call recording wouldn't appear on the strip until a new frame).
     func bounds() async throws -> TimeBounds {
         try await db.pool.read { db in
@@ -16,11 +16,99 @@ actor TimelineService {
                     UNION ALL SELECT MAX(ts) FROM screen_captures
                     UNION ALL SELECT MIN(ts) FROM audio_captures
                     UNION ALL SELECT MAX(ts) FROM audio_captures
+                    UNION ALL SELECT MIN(startTs) FROM calls
+                    UNION ALL SELECT MAX(COALESCE(endTs, startTs)) FROM calls
+                    UNION ALL SELECT MAX(endMs) FROM call_audio_chunks
                 ) WHERE t IS NOT NULL
                 """)
             let lo: Int64? = row?["lo"]
             let hi: Int64? = row?["hi"]
             return TimeBounds(oldest: lo.map(dateFromMs), newest: hi.map(dateFromMs))
+        }
+    }
+
+    /// Bounded first-class call spans for the timeline. Bookmarks are markers, never separate fake audio hits.
+    /// State is derived from durable evidence and deliberately exposes only the four promises the strip can keep.
+    func callSpans(from: Date, to: Date, limit: Int = 200) async throws -> [CallTimelineSpan] {
+        let fromMs = msFromDate(from)
+        let toMs = msFromDate(to)
+        let boundedLimit = max(1, min(limit, 200))
+        return try await db.pool.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT c.id AS id, c.startTs AS startTs, c.endTs AS endTs,
+                       c.state AS callState, c.degradationReason AS degradationReason,
+                       c.mediaGeneration AS mediaGeneration,
+                       r.kind AS preferredKind, r.state AS preferredState,
+                       (
+                           SELECT j.state FROM call_transcript_jobs j
+                           WHERE j.callId = c.id AND j.mediaGeneration = c.mediaGeneration AND j.kind = 'final'
+                           ORDER BY j.id DESC LIMIT 1
+                       ) AS finalJobState,
+                       EXISTS(
+                           SELECT 1 FROM call_source_gaps g
+                           WHERE g.callId = c.id AND g.mediaGeneration = c.mediaGeneration
+                       ) AS hasSourceGaps
+                FROM calls c
+                LEFT JOIN call_transcript_revisions r ON r.id = c.preferredRevisionId
+                WHERE c.startTs <= ? AND COALESCE(c.endTs, ?) >= ?
+                ORDER BY c.startTs DESC, c.id DESC
+                LIMIT ?
+                """, arguments: [toMs, toMs, fromMs, boundedLimit])
+
+            let callIDs: [Int64] = rows.map { $0["id"] }
+            let bookmarksByCall: [Int64: [CallBookmarkRow]]
+            if callIDs.isEmpty {
+                bookmarksByCall = [:]
+            } else {
+                let placeholders = Array(repeating: "?", count: callIDs.count).joined(separator: ",")
+                let bookmarkRows = try CallBookmarkRow.fetchAll(db, sql: """
+                    SELECT b.* FROM call_bookmarks b
+                    JOIN calls c ON c.id = b.callId AND c.mediaGeneration = b.mediaGeneration
+                    WHERE b.callId IN (\(placeholders)) AND b.acceptedAtMs BETWEEN ? AND ?
+                    ORDER BY b.callId, b.ordinal, b.id
+                    """, arguments: StatementArguments(callIDs + [fromMs, toMs]))
+                bookmarksByCall = Dictionary(grouping: bookmarkRows, by: \.callId)
+            }
+
+            return rows.map { row in
+                let callID: Int64 = row["id"]
+                let bookmarkRows = Array((bookmarksByCall[callID] ?? []).prefix(1_000))
+                let callState = CallLifecycleState(rawValue: row["callState"] as String) ?? .failed
+                let preferredKind = (row["preferredKind"] as String?).flatMap(CallTranscriptRevisionKind.init(rawValue:))
+                let preferredState = (row["preferredState"] as String?).flatMap(CallTranscriptRevisionState.init(rawValue:))
+                let finalJobState = (row["finalJobState"] as String?).flatMap(CallTranscriptJobState.init(rawValue:))
+                let degraded = (row["degradationReason"] as String?) != nil
+                    || (row["hasSourceGaps"] as Int) != 0
+                    || finalJobState == .readyDegraded
+                let status: CallTimelineStatus
+                if callState == .failed || finalJobState == .failed {
+                    status = .retryable
+                } else if degraded {
+                    status = .degraded
+                } else if callState == .ready,
+                          preferredKind == .final,
+                          preferredState == .ready {
+                    status = .ready
+                } else {
+                    status = .processing
+                }
+                let startMs: Int64 = row["startTs"]
+                let endMs: Int64 = (row["endTs"] as Int64?) ?? toMs
+                return CallTimelineSpan(
+                    id: callID,
+                    start: dateFromMs(startMs),
+                    end: dateFromMs(max(startMs, endMs)),
+                    status: status,
+                    bookmarks: bookmarkRows.compactMap { bookmark in
+                        guard let id = bookmark.id else { return nil }
+                        return CallTimelineBookmark(
+                            id: id,
+                            acceptedAt: dateFromMs(bookmark.acceptedAtMs),
+                            state: bookmark.state
+                        )
+                    }
+                )
+            }
         }
     }
 

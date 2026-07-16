@@ -572,6 +572,16 @@ actor CallRepository {
             try job.update(db)
 
             if job.kind == .final {
+                try db.execute(
+                    sql: """
+                        DELETE FROM embed_queue
+                        WHERE kind = 2 AND row_id IN (
+                            SELECT id FROM call_transcript_revisions
+                            WHERE callId = ? AND id != ?
+                        )
+                        """,
+                    arguments: [job.callId, revisionID]
+                )
                 call.preferredRevisionId = revisionID
                 call.state = .ready
                 call.updatedAtMs = nowMs
@@ -708,9 +718,23 @@ actor CallRepository {
                 arguments: [job.callId]
             )
             if preferredKind != CallTranscriptRevisionKind.final.rawValue {
+                try db.execute(
+                    sql: """
+                        DELETE FROM embed_queue
+                        WHERE kind = 2 AND row_id IN (
+                            SELECT id FROM call_transcript_revisions
+                            WHERE callId = ? AND id != ?
+                        )
+                        """,
+                    arguments: [job.callId, preferredID]
+                )
                 call.preferredRevisionId = preferredID
                 call.updatedAtMs = nowMs
                 try call.update(db)
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO embed_queue(row_id, kind, ts, attempts) VALUES (?, 2, ?, 0)",
+                    arguments: [preferredID, call.startTs]
+                )
             }
             try Self.admitDeferredCheckpoints(db: db, nowMs: nowMs)
             return CallTranscriptCommitResult(

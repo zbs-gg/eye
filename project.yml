@@ -228,6 +228,8 @@ targets:
       - path: ZBSEyeApp/Data/StorageRelocationPolicy.swift
       - path: ZBSEyeApp/Support/Log.swift
       - path: ZBSEyeApp/Search/SearchModels.swift
+      - path: ZBSEyeApp/Search/SearchService.swift
+      - path: ZBSEyeApp/Search/TimelineService.swift
       - path: ZBSEyeApp/Search/SceneModels.swift
       - path: ZBSEyeApp/Search/SystemAppFilter.swift
       - path: ZBSEyeApp/Search/DayActivityRepository.swift
