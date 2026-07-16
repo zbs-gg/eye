@@ -30,6 +30,24 @@ struct ZBSEyeApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1100, height: 720)
+        .commands { CallCommands(env: env) }
+
+        Window("Call", id: "call-detail") {
+            Group {
+                if let callID = env.presentedCallID {
+                    CallDetailView(callID: callID)
+                } else {
+                    ContentUnavailableView(
+                        "No call selected",
+                        systemImage: "phone.badge.waveform"
+                    )
+                }
+            }
+            .frame(minWidth: 520, minHeight: 420)
+            .environment(env)
+        }
+        .defaultSize(width: 680, height: 640)
+        .windowResizability(.contentMinSize)
 
         MenuBarExtra {
             MenuBarContent().environment(env)

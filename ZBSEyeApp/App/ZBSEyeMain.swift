@@ -18,7 +18,35 @@ struct ZBSEyeMain {
                 )
                 exit(0)
             } catch {
-                FileHandle.standardError.write(Data("Relaunch failed: \(error)\n".utf8))
+                FileHandle.standardError.write(Data("Relaunch failed (relaunch_failed).\n".utf8))
+                exit(1)
+            }
+        }
+        if CommandLine.arguments.contains(WhisperHelperCommand.flag) {
+            do {
+                let root = try StorageLocation.requireAvailableDataRoot()
+                let command = try WhisperHelperCommand(
+                    arguments: CommandLine.arguments,
+                    dataRoot: root
+                )
+                try command.execute()
+                exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("Whisper helper failed.\n".utf8))
+                exit(1)
+            }
+        }
+        if CommandLine.arguments.contains(WhisperModelSmokeCommand.flag) {
+            do {
+                let root = try StorageLocation.requireAvailableDataRoot()
+                let command = try WhisperModelSmokeCommand(
+                    arguments: CommandLine.arguments,
+                    dataRoot: root
+                )
+                try command.execute()
+                exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("Whisper smoke test failed.\n".utf8))
                 exit(1)
             }
         }
@@ -48,7 +76,7 @@ struct ZBSEyeMain {
                     }
                 }
             } catch {
-                FileHandle.standardError.write("MCP failed: \(error)\n".data(using: .utf8)!)
+                FileHandle.standardError.write(Data("MCP failed: data_root_unavailable\n".utf8))
                 exit(1)
             }
             // MCP stdio: dispatchMain() keeps the process alive and lets the concurrency pool work
@@ -76,7 +104,7 @@ struct ZBSEyeMain {
                     print("Done: +\(report.frames) frames, +\(report.audio) audio.")
                     exit(0)
                 } catch {
-                    FileHandle.standardError.write("Import failed: \(error)\n".data(using: .utf8)!)
+                    FileHandle.standardError.write(Data("Import failed (import_failed).\n".utf8))
                     exit(1)
                 }
             }
@@ -109,7 +137,7 @@ struct ZBSEyeMain {
                     withExtendedLifetime(relocationProcessLock) {}
                     exit(0)
                 } catch {
-                    FileHandle.standardError.write("Relocation failed: \(error)\n".data(using: .utf8)!)
+                    FileHandle.standardError.write(Data("Relocation failed (relocation_failed).\n".utf8))
                     exit(1)
                 }
             }
@@ -128,7 +156,7 @@ struct ZBSEyeMain {
                     print("  \(r.compressedBytes) bytes (from \(r.sourceBytes)), \(r.frames) frames")
                     exit(0)
                 } catch {
-                    FileHandle.standardError.write("Backup failed: \(error)\n".data(using: .utf8)!)
+                    FileHandle.standardError.write(Data("Backup failed (backup_failed).\n".utf8))
                     exit(1)
                 }
             }
@@ -142,7 +170,7 @@ struct ZBSEyeMain {
                 print("integrity_check=\(ok ? "ok" : "FAIL"), frames=\(frames)")
                 exit(ok ? 0 : 2)
             } catch {
-                FileHandle.standardError.write("Verify failed: \(error)\n".data(using: .utf8)!)
+                FileHandle.standardError.write(Data("Verify failed (backup_verify_failed).\n".utf8))
                 exit(1)
             }
         } else {

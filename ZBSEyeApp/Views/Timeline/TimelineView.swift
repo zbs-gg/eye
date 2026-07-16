@@ -66,6 +66,16 @@ private struct TimelineBody: View {
             .animation(reduceMotion ? .none : .easeInOut(duration: 0.18), value: showResults)
         }
         .background { shortcuts }
+        .sheet(isPresented: Binding(
+            get: { store.selectedCallID != nil },
+            set: { if !$0 { store.closeCall() } }
+        )) {
+            if let callID = store.selectedCallID {
+                CallDetailView(callID: callID)
+                    .environment(env)
+                    .frame(minWidth: 560, minHeight: 520)
+            }
+        }
     }
 
     /// Hotkeys: Space (player), ←/→ (step by frames), Cmd+F (search), Esc (close search).
@@ -99,7 +109,7 @@ private struct TimelineBody: View {
         HStack(spacing: 12) {
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search across screen and audio…", text: $store.searchQuery)
+                TextField("Search across screen, audio, and calls…", text: $store.searchQuery)
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
                     .onSubmit { searchFocused = true; Task { await store.runSearch() } }  // focus stays → type-to-refine
@@ -205,7 +215,7 @@ private struct TimelineBody: View {
         Button { Task { await store.select(r) } } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Image(systemName: r.kind == .audio ? "waveform" : "macwindow")
+                    Image(systemName: resultIcon(r.kind))
                     Text(r.appName ?? r.bundleId ?? "—").font(.subheadline.weight(.medium))
                     if let w = r.windowTitle { Text("· \(w)").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                     Spacer()
@@ -219,6 +229,14 @@ private struct TimelineBody: View {
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
+    }
+
+    private func resultIcon(_ kind: SearchKind) -> String {
+        switch kind {
+        case .screen: "macwindow"
+        case .audio: "waveform"
+        case .call: "phone.fill"
+        }
     }
 
     // MARK: scrubber
@@ -380,6 +398,16 @@ private struct TimelineBody: View {
 
     private var controls: some View {
         VStack(spacing: 8) {
+            if !store.callSpans.isEmpty {
+                CallSpanStrip(
+                    spans: store.callSpans,
+                    start: store.rangeStart,
+                    end: store.rangeEnd,
+                    onOpen: store.openCall
+                )
+                .frame(height: 16)
+            }
+
             DensityStrip(buckets: store.density, audioBuckets: store.audioDensity,
                          start: store.rangeStart, end: store.rangeEnd,
                          cursor: store.cursor, playing: store.isPlaying,
@@ -392,6 +420,9 @@ private struct TimelineBody: View {
                 LegendSwatch(color: .accentColor, label: "screen")
                 if !store.audioDensity.isEmpty {
                     LegendSwatch(color: .orange, label: "audio")
+                }
+                if !store.callSpans.isEmpty {
+                    LegendSwatch(color: .purple, label: "calls · markers are bookmarks")
                 }
                 Spacer()
             }
@@ -503,6 +534,68 @@ private struct TimelineBody: View {
         case (true, false): return ("AX", .green, "macwindow")
         case (false, true): return ("OCR", .orange, "text.viewfinder")
         default:            return nil
+        }
+    }
+}
+
+/// One quiet call lane above the existing density graph. A call is one span; bookmark checkpoints are ticks.
+/// Clicking anywhere on the span opens the existing compact Call Detail — no second workspace or live transcript.
+private struct CallSpanStrip: View {
+    let spans: [CallTimelineSpan]
+    let start: Date
+    let end: Date
+    let onOpen: (CallTimelineSpan) -> Void
+
+    var body: some View {
+        GeometryReader { geo in
+            let total = max(1, end.timeIntervalSince(start))
+            ZStack(alignment: .leading) {
+                ForEach(spans) { span in
+                    let clippedStart = max(start, span.start)
+                    let clippedEnd = min(end, span.end)
+                    let x = clippedStart.timeIntervalSince(start) / total * geo.size.width
+                    let width = max(4, clippedEnd.timeIntervalSince(clippedStart) / total * geo.size.width)
+                    Button { onOpen(span) } label: {
+                        ZStack(alignment: .leading) {
+                            Capsule()
+                                .fill(color(span.status).opacity(0.78))
+                                .frame(width: width, height: 10)
+                            ForEach(span.bookmarks) { bookmark in
+                                let marker = min(max(0, bookmark.acceptedAt.timeIntervalSince(clippedStart) / total * geo.size.width), width)
+                                Rectangle()
+                                    .fill(.white.opacity(0.95))
+                                    .frame(width: 2, height: 12)
+                                    .offset(x: marker)
+                            }
+                        }
+                        .frame(width: width, height: 14, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: x)
+                    .help(String(localized: "Call · \(label(span.status)) · \(span.bookmarks.count) bookmarks"))
+                    .accessibilityLabel(Text(String(localized: "Call from \(span.start.formatted(date: .abbreviated, time: .shortened))")))
+                    .accessibilityValue(Text(String(localized: "\(label(span.status)), \(span.bookmarks.count) bookmarks")))
+                }
+            }
+        }
+        .accessibilityLabel("Calls and bookmark markers")
+    }
+
+    private func color(_ status: CallTimelineStatus) -> Color {
+        switch status {
+        case .processing: .blue
+        case .retryable: .orange
+        case .ready: .purple
+        case .degraded: .yellow
+        }
+    }
+
+    private func label(_ status: CallTimelineStatus) -> String {
+        switch status {
+        case .processing: String(localized: "processing")
+        case .retryable: String(localized: "retry available")
+        case .ready: String(localized: "ready")
+        case .degraded: String(localized: "ready with gaps")
         }
     }
 }

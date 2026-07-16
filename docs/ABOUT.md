@@ -23,7 +23,7 @@ enable an external provider, only the text excerpts needed for that action leave
 
 **Two product goals:**
 1. **Memory after the fact** — record everything, search like a human, review, make sense of it. The core (here now).
-2. **A live prompter** — real-time hints over a call/work. A future layer on top of the existing pipeline.
+2. **Evidence interoperability** — let local agents retrieve trustworthy bounded evidence without turning Eye into a CRM or live meeting workspace.
 
 ---
 
@@ -34,7 +34,10 @@ enable an external provider, only the text excerpts needed for that action leave
   renderers, canvas, some Electron); frames in HEIC with perceptual-hash dedup (identical screens aren't
   duplicated). Adaptive per-app: AX where the app exposes semantics, OCR where it doesn't; decided at runtime by content quality.
 - **Audio** → system audio (calls, meetings, video) and microphone → **on-device** transcription (SFSpeech),
-  with VAD (we don't transcribe silence/music).
+  with VAD (we don't transcribe silence/music). An explicit **Call** mode keeps microphone and system audio
+  as separate durable sources until End Call. Bookmark never stops recording: it schedules a local checkpoint
+  transcript, while the preferred whole-call transcript is produced after the call by the optional one-click
+  Whisper Large V3 Turbo model. The UI intentionally does not become a live meeting workspace.
 
 ### Sense-making (not just raw data, but structure)
 - **Scenes / "Day in activities"** — frames are grouped into **activity scenes**: "VS Code, 14:00–14:25,
@@ -74,10 +77,16 @@ enable an external provider, only the text excerpts needed for that action leave
 ### Access for AI agents
 - **Local REST** (127.0.0.1, a Bearer token on everything except `/health`) + **MCP** (stdio) — so Codex,
   Claude Code, and Claude Desktop can work with your memory as a local tool. Generated setup is read-only
-  by default and uses no bearer token.
+  by default, uses no bearer token, and sends nothing outside the Mac.
+- Call evidence uses one bounded read model on both surfaces: list/search Call Envelopes, read one envelope,
+  paginate bookmarks, and paginate the preferred or bookmark transcript. IDs are typed (`call:…`,
+  `bookmark:…`, `call-audio-chunk:…`); responses expose source health, coverage, revision state, and retryability,
+  but never absolute paths or invented speaker identity. REST requires the existing Bearer token. Stdio MCP is
+  an owner-launched signed-binary capability, resolves only the configured `StorageLocation`, and opens the
+  database in enforced read-only mode; callers cannot provide another database or storage root.
 
 ### Storage and data
-- **Keep Media is 5 GB on a fresh install.** 10/20/50 GB and **Forever** are explicit choices. Low disk
+- **Keep Media has no age cutoff and is 5 GB on a fresh install.** 10/20/50 GB and **Forever** are explicit choices. Low disk
   pauses capture instead of silently deleting history.
 - **Move to an external SSD** in one click (relocatable; the live DB is moved via an online backup, with no frame loss).
 - **iCloud auto-backup** — a compressed snapshot (you must not put a live SQLite into iCloud — corruption).
@@ -149,10 +158,14 @@ staying faithful to the "everything on-device" principle.
 **Working and verified live:** capture (screen + audio), hybrid search (cross-lingual), timeline (smooth),
 scenes/"Day in activities", "Ask" (RAG over the global provider/model pair), Daily Insights,
 progress/milestones, REST + MCP, history
-import, size-based or Forever retention, relocatable storage, iCloud backup, daily summary, export. A notarized
+import, retention (5 GB media default with explicit Forever), relocatable storage, iCloud backup, daily summary, export. A notarized
 Developer ID release exists.
 
-**Deferred:** Sparkle auto-updates, deep integration of Cartographer with Pulse/Atlas,
-the v1.5 "live prompter" (a real-time overlay).
+**Implemented and deterministic-fixture qualified:** explicit Call Envelopes, uninterrupted Bookmark
+checkpoints, optional post-call Whisper, preferred-only call search, and read-only REST/MCP evidence.
+Installed-app short, 60-minute, and 120-minute physical gates remain before field qualification.
+
+**Deferred:** Sparkle auto-updates and deep integration of Cartographer with Pulse/Atlas. Live transcription,
+calendar automation, call maps, and CRM/call intelligence belong in another product, not Eye.
 
 Strategy and priorities — in [`ROADMAP.md`](../ROADMAP.md). Architecture and the contributor guide — in [`AGENTS.md`](../AGENTS.md).

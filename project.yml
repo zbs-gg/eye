@@ -25,6 +25,8 @@ packages:
     exactVersion: "0.12.1"
   ZBSEyeVec:
     path: Packages/ZBSEyeVec
+  ZBSEyeWhisper:
+    path: Packages/ZBSEyeWhisper
   Embeddings:
     url: https://github.com/jkrukowski/swift-embeddings
     from: "0.0.16"
@@ -76,6 +78,8 @@ targets:
         product: MCP
       - package: ZBSEyeVec
         product: CSqliteVec
+      - package: ZBSEyeWhisper
+        product: ZBSEyeWhisper
       - package: Embeddings
         product: Embeddings
       - package: MLXSwiftLM
@@ -93,8 +97,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: "ZBS Eye"
         INFOPLIST_KEY_CFBundleName: "ZBS Eye"
         GENERATE_INFOPLIST_FILE: YES
-        MARKETING_VERSION: "0.4.5"          # CFBundleShortVersionString
-        CURRENT_PROJECT_VERSION: "10"       # CFBundleVersion
+        MARKETING_VERSION: "0.5.0"          # CFBundleShortVersionString
+        CURRENT_PROJECT_VERSION: "12"       # CFBundleVersion
         CODE_SIGN_ENTITLEMENTS: ZBSEyeApp/ZBSEye.entitlements
         # Default — ad-hoc for development. scripts/build-release.sh can use the legacy self-signed
         # "ZBS Eye Dev" identity; distributable releases must use scripts/build-notarized.sh with the
@@ -145,6 +149,7 @@ targets:
       - path: ZBSEyeApp/Connections/LocalAIContextPolicy.swift
       - path: ZBSEyeApp/Connections/LocalAIOutputContract.swift
       - path: ZBSEyeApp/Connections/LocalAIAnswerToolContract.swift
+      - path: ZBSEyeApp/Automations/ExportService.swift
       - path: ZBSEyeApp/Connections/BuiltInModelManifest.swift
       - path: ZBSEyeApp/Connections/BuiltInModelVerifier.swift
       - path: ZBSEyeApp/Connections/BuiltInModelLifecycle.swift
@@ -160,6 +165,8 @@ targets:
       - path: ZBSEyeApp/Connections/LocalTokenizerLoader.swift
       - path: ZBSEyeApp/Search/SearchSemanticPolicy.swift
       - path: ZBSEyeApp/Data/RelocatableAssetTree.swift
+      - path: ZBSEyeApp/Data/StorageRelocation.swift
+      - path: ZBSEyeApp/Data/BackupManager.swift
       - path: ZBSEyeApp/Data/IngestWriteBarrier.swift
       - path: ZBSEyeApp/Data/DatabaseWriterMaintenanceGate.swift
       - path: ZBSEyeApp/Connections/BuiltInModelRuntimeSupport.swift
@@ -195,11 +202,35 @@ targets:
       - path: ZBSEyeApp/Data/Models.swift
       - path: ZBSEyeApp/Data/ZBSEyeDatabase.swift
       - path: ZBSEyeApp/Data/StorageManager.swift
+      - path: ZBSEyeApp/Data/RetentionManager.swift
       - path: ZBSEyeApp/Data/IngestService.swift
+      - path: ZBSEyeApp/Calls/CallModels.swift
+      - path: ZBSEyeApp/Calls/CallRepository.swift
+      - path: ZBSEyeApp/Calls/CallRepository+EvidenceStorage.swift
+      - path: ZBSEyeApp/Calls/CallRecoveryService.swift
+      - path: ZBSEyeApp/Calls/CallMediaMutationJournal.swift
+      - path: ZBSEyeApp/Calls/CallEvidenceDeletionService.swift
+      - path: ZBSEyeApp/Audio/AudioIngressPublisher.swift
+      - path: ZBSEyeApp/Calls/CallSpoolPolicy.swift
+      - path: ZBSEyeApp/Calls/CallSpool.swift
+      - path: ZBSEyeApp/Calls/CallAudioWindowAssembler.swift
+      - path: ZBSEyeApp/Calls/CallCoordinator.swift
+      - path: ZBSEyeApp/Calls/TranscriptOverlapReconciler.swift
+      - path: ZBSEyeApp/Calls/CallTranscriptProjection.swift
+      - path: ZBSEyeApp/Calls/CallTranscriptWorker.swift
+      - path: ZBSEyeApp/Calls/CallEvidenceQueryService.swift
+      - path: ZBSEyeApp/Calls/CallPresentationState.swift
+      - path: ZBSEyeApp/Calls/WhisperModelManifest.swift
+      - path: ZBSEyeApp/Calls/WhisperModelStore.swift
+      - path: ZBSEyeApp/Calls/WhisperHelperCommand.swift
+      - path: ZBSEyeApp/Connections/ManagedAssetDownloadClient.swift
+      - path: ZBSEyeApp/Connections/ManagedAssetVerifier.swift
       - path: ZBSEyeApp/Audio/AudioModels.swift
       - path: ZBSEyeApp/Data/StorageRelocationPolicy.swift
       - path: ZBSEyeApp/Support/Log.swift
       - path: ZBSEyeApp/Search/SearchModels.swift
+      - path: ZBSEyeApp/Search/SearchService.swift
+      - path: ZBSEyeApp/Search/TimelineService.swift
       - path: ZBSEyeApp/Search/SceneModels.swift
       - path: ZBSEyeApp/Search/SystemAppFilter.swift
       - path: ZBSEyeApp/Search/DayActivityRepository.swift
@@ -211,8 +242,11 @@ targets:
       - path: ZBSEyeApp/MCP/MCPToolPolicy.swift
       - path: ZBSEyeApp/Connections/MCPSetupPresentation.swift
       - path: ZBSEyeApp/Connections/MCPReadinessService.swift
+      - path: ZBSEyeApp/MCP/MCPCallEvidenceRouting.swift
+      - path: ZBSEyeApp/Server/ZBSEyeAPIDTO.swift
       - path: ZBSEyeApp/Search/AskService.swift
       - path: ZBSEyeApp/State/AskStore.swift
+      - path: ZBSEyeApp/State/CallRecordingStore.swift
       - path: ZBSEyeApp/State/WorkspaceStore.swift
       - path: ZBSEyeApp/State/StorageSettingsStore.swift
       - path: ZBSEyeApp/State/KeepMediaPolicyCoordinator.swift
@@ -233,11 +267,13 @@ targets:
         product: GRDB
       - package: ZBSEyeVec
         product: CSqliteVec
+      - package: ZBSEyeWhisper
+        product: ZBSEyeWhisper
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye.tests
-        MARKETING_VERSION: "0.4.5"
-        CURRENT_PROJECT_VERSION: "10"
+        MARKETING_VERSION: "0.5.0"
+        CURRENT_PROJECT_VERSION: "12"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: ZBSEyeTests/Info.plist
         ZBS_EYE_MODEL_DIR: ""

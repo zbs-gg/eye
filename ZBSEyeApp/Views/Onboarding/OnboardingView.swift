@@ -43,8 +43,7 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Everything stays on this Mac: no cloud, accounts, or subscriptions.",
                       systemImage: "lock.shield.fill").font(.callout).bold()
-                Text("History is kept for 7 days or up to 20 GB (configurable). Recording other people in calls is "
-                     + "your responsibility: macOS shows them no indicator.")
+                Text(String(localized: "History has no age cutoff and uses up to 5 GB by default; Settings can keep media forever with no limit. Recording other people in calls is your responsibility: macOS shows them no indicator."))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()

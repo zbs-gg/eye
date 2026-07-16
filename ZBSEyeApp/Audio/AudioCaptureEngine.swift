@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import Darwin
 
 enum AudioEngineError: LocalizedError {
     case noInputDevice
@@ -19,15 +20,29 @@ enum AudioEngineError: LocalizedError {
 final class AudioCaptureEngine: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let config: AudioConfig
-    private var continuation: AsyncStream<AudioFrame>.Continuation?
+    private var publisher: AudioIngressPublisher?
     private var running = false
     private var configObserver: NSObjectProtocol?
+    private var epoch = -1
+    private var nextIngressSequence: Int64 = 0
+    private var lastAcceptedIngressSequence: Int64?
+    private var completedGaps: [AudioIngressGap] = []
 
     /// Audio configuration change (AirPods plugged/unplugged, default input switched) — the engine stopped,
     /// the stream closed. The coordinator restarts the leg; without this, half a day of calls would vanish silently.
     var onConfigurationChange: (@Sendable () -> Void)?
 
     init(config: AudioConfig) { self.config = config }
+
+    var latestAcceptedIngressSequence: Int64? {
+        publisher?.latestAcceptedIngressSequence ?? lastAcceptedIngressSequence
+    }
+
+    func drainIngressGaps() -> [AudioIngressGap] {
+        let result = completedGaps + (publisher?.drainGaps() ?? [])
+        completedGaps.removeAll(keepingCapacity: true)
+        return result
+    }
 
     /// Start. Returns the frame stream. Throws if there's no device / the engine didn't start.
     func start() throws -> AsyncStream<AudioFrame> {
@@ -38,14 +53,19 @@ final class AudioCaptureEngine: @unchecked Sendable {
         let ch = Int(format.channelCount)
         guard sr > 0, ch > 0 else { throw AudioEngineError.noInputDevice }
 
-        let (stream, cont) = AsyncStream.makeStream(of: AudioFrame.self,
-                                                    bufferingPolicy: .bufferingNewest(64))
-        self.continuation = cont
+        epoch += 1
+        let publisher = AudioIngressPublisher(
+            source: .me,
+            epoch: epoch,
+            capacity: 64,
+            initialSequence: nextIngressSequence
+        )
+        self.publisher = publisher
 
         // We capture cont/ch/sr LOCALLY (not self.continuation): each cycle's tap writes into ITS OWN
         // continuation — re-installing self won't redirect the tail into a foreign stream, and there's no race reading
         // self.continuation from the real-time thread (fixes a data race on the @unchecked Sendable field).
-        input.installTap(onBus: 0, bufferSize: config.tapBufferSize, format: format) { [cont, ch, sr] buffer, _ in
+        input.installTap(onBus: 0, bufferSize: config.tapBufferSize, format: format) { [publisher, ch, sr] buffer, time in
             guard let chData = buffer.floatChannelData else { return }
             let n = Int(buffer.frameLength)
             guard n > 0 else { return }
@@ -64,7 +84,29 @@ final class AudioCaptureEngine: @unchecked Sendable {
             var sum: Float = 0
             for v in mono { sum += v * v }
             let rms = (sum / Float(n)).squareRoot()
-            cont.yield(AudioFrame(samples: mono, rms: rms, sampleRate: sr, ts: Date()))
+            let hostTimeNs: Int64
+            if time.isHostTimeValid {
+                hostTimeNs = Int64(AVAudioTime.seconds(forHostTime: time.hostTime) * 1_000_000_000)
+            } else {
+                hostTimeNs = Int64(AVAudioTime.seconds(forHostTime: mach_absolute_time()) * 1_000_000_000)
+            }
+            let callbackHostTimeNs = Int64(
+                AVAudioTime.seconds(forHostTime: mach_absolute_time()) * 1_000_000_000
+            )
+            let capturedAt = AudioHostClockWallMapper.date(
+                for: hostTimeNs,
+                callbackHostTimeNs: callbackHostTimeNs,
+                callbackWallDate: Date()
+            )
+            _ = publisher.yield(
+                samples: mono,
+                rms: rms,
+                captureSampleRate: sr,
+                sourceSampleTime: time.isSampleTimeValid ? time.sampleTime : nil,
+                normalizedHostTimeNs: hostTimeNs,
+                capturedAt: capturedAt,
+                provenance: time.isHostTimeValid ? .microphone : .callbackFallback
+            )
         }
 
         engine.prepare()
@@ -72,8 +114,9 @@ final class AudioCaptureEngine: @unchecked Sendable {
             try engine.start()
         } catch {
             input.removeTap(onBus: 0)
-            cont.finish()
-            self.continuation = nil
+            archive(publisher)
+            publisher.finish()
+            self.publisher = nil
             throw AudioEngineError.engineStartFailed(error.localizedDescription)
         }
         // Audio device connected/changed: we stop the leg cleanly (flushFinal arrives via
@@ -87,7 +130,7 @@ final class AudioCaptureEngine: @unchecked Sendable {
             self.onConfigurationChange?()
         }
         running = true
-        return stream
+        return publisher.stream
     }
 
     func stop() {
@@ -96,7 +139,17 @@ final class AudioCaptureEngine: @unchecked Sendable {
         if let o = configObserver { NotificationCenter.default.removeObserver(o); configObserver = nil }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        continuation?.finish()
-        continuation = nil   // don't hold the previous cycle's cont between stop and the next start
+        if let publisher {
+            archive(publisher)
+            publisher.finish()
+        }
+        publisher = nil   // don't hold the previous cycle's publisher between stop and the next start
+    }
+
+    private func archive(_ publisher: AudioIngressPublisher) {
+        lastAcceptedIngressSequence = publisher.latestAcceptedIngressSequence
+            ?? lastAcceptedIngressSequence
+        nextIngressSequence = publisher.nextAttemptedIngressSequence
+        completedGaps.append(contentsOf: publisher.drainGaps())
     }
 }

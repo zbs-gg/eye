@@ -2,6 +2,29 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
+## [0.5.0] — 2026-07-16
+
+### Added
+- **Durable local call recording.** Start, Bookmark, and End create one Call Envelope with separately
+  attributable microphone/system PCM. Bookmark schedules a local checkpoint transcript without pausing
+  either source; End schedules one retryable whole-call transcript.
+- **Optional post-call Whisper.** A separately installed, pinned Whisper Large V3 Turbo model produces
+  checkpoint and final transcripts locally through a bounded helper process. It is not bundled, downloaded,
+  or enabled by default, and there is no cloud fallback.
+- **Frame-exact call privacy and portable export.** Deleting a time range preserves byte-identical audio
+  outside the selection, marks the gap, and invalidates stale transcript/search state. History export adds
+  stable Call Envelope manifests and optional verified current-generation audio.
+
+### Changed
+- Calls appear as compact Timeline spans and localized details. Search exposes only the preferred transcript;
+  authenticated REST and read-only MCP expose bounded typed evidence without absolute paths or invented
+  speaker identity.
+- The 5 GB Keep Media budget now includes call PCM. Active calls are protected, whole ended calls are removed
+  oldest-first when needed, and startup reconciliation fails closed on missing, stale, or orphaned call media.
+
+### Fixed
+- MCP failure responses no longer interpolate raw system errors that could disclose local paths or native details.
+
 ## [0.4.5] — 2026-07-15
 
 ### Fixed

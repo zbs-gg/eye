@@ -34,7 +34,11 @@ actor VectorBackfill {
     /// instead of bumping every row out of rotation.
     private let readErrorBlockThreshold = 20
 
-    private enum Kind: Int64 { case screen = 0, transcript = 1 }
+    private enum Kind: Int64 {
+        case screen = 0
+        case transcript = 1
+        case callTranscript = 2
+    }
     private enum DrainStatus { case embedded, idle, blocked, suspended }
     private enum EmbedOutcome { case value([Float]?), deferred }
     private struct QueueItem: Sendable { let rowId: Int64; let kind: Int64; let ts: Int64 }
@@ -271,11 +275,21 @@ actor VectorBackfill {
 
     private func textFor(_ item: QueueItem) async throws -> String? {
         try await db.pool.read { dbc in
-            if item.kind == Kind.screen.rawValue {
+            switch item.kind {
+            case Kind.screen.rawValue:
                 return try String.fetchOne(dbc, sql:
                     "SELECT group_concat(text, ' ') FROM text_blocks WHERE captureId = ?", arguments: [item.rowId])
-            } else {
+            case Kind.transcript.rawValue:
                 return try String.fetchOne(dbc, sql: "SELECT text FROM transcriptions WHERE id = ?", arguments: [item.rowId])
+            case Kind.callTranscript.rawValue:
+                return try String.fetchOne(dbc, sql: """
+                    SELECT r.text
+                    FROM call_transcript_revisions r
+                    JOIN calls c ON c.preferredRevisionId = r.id
+                    WHERE r.id = ? AND r.state = 'ready'
+                    """, arguments: [item.rowId])
+            default:
+                return nil
             }
         }
     }
@@ -286,20 +300,40 @@ actor VectorBackfill {
     private func writeVector(_ item: QueueItem, blob: Data) async throws {
         let bucket = monthBucket(dateFromMs(item.ts))
         try await db.pool.write { dbc in
-            if item.kind == Kind.screen.rawValue {
+            switch item.kind {
+            case Kind.screen.rawValue:
                 if try Bool.fetchOne(dbc, sql: "SELECT EXISTS(SELECT 1 FROM screen_captures WHERE id = ?)",
                                      arguments: [item.rowId]) ?? false {
                     try dbc.execute(sql: "DELETE FROM vec_screen WHERE capture_id = ?", arguments: [item.rowId])
                     try dbc.execute(sql: "INSERT INTO vec_screen(capture_id, bucket_month, embedding) VALUES (?, ?, ?)",
                                     arguments: [item.rowId, bucket, blob])
                 }
-            } else {
+            case Kind.transcript.rawValue:
                 if try Bool.fetchOne(dbc, sql: "SELECT EXISTS(SELECT 1 FROM transcriptions WHERE id = ?)",
                                      arguments: [item.rowId]) ?? false {
                     try dbc.execute(sql: "DELETE FROM vec_transcripts WHERE transcription_id = ?", arguments: [item.rowId])
                     try dbc.execute(sql: "INSERT INTO vec_transcripts(transcription_id, bucket_month, embedding) VALUES (?, ?, ?)",
                                     arguments: [item.rowId, bucket, blob])
                 }
+            case Kind.callTranscript.rawValue:
+                if try Bool.fetchOne(dbc, sql: """
+                    SELECT EXISTS(
+                        SELECT 1 FROM call_transcript_revisions r
+                        JOIN calls c ON c.preferredRevisionId = r.id
+                        WHERE r.id = ? AND r.state = 'ready'
+                    )
+                    """, arguments: [item.rowId]) ?? false {
+                    try dbc.execute(
+                        sql: "DELETE FROM vec_call_transcripts WHERE revision_id = ?",
+                        arguments: [item.rowId]
+                    )
+                    try dbc.execute(
+                        sql: "INSERT INTO vec_call_transcripts(revision_id, bucket_month, embedding) VALUES (?, ?, ?)",
+                        arguments: [item.rowId, bucket, blob]
+                    )
+                }
+            default:
+                break
             }
             try dbc.execute(sql: "DELETE FROM embed_queue WHERE row_id = ? AND kind = ?",
                             arguments: [item.rowId, item.kind])
@@ -323,6 +357,15 @@ actor VectorBackfill {
             SELECT t.id AS id, a.ts AS ts FROM transcriptions t JOIN audio_captures a ON a.id = t.audioId
             WHERE t.id NOT IN (SELECT transcription_id FROM vec_transcripts)
               AND t.id NOT IN (SELECT row_id FROM embed_queue WHERE kind = 1)
+            """)
+        guard !suspended else { return }
+        await reconcileGaps(kind: Kind.callTranscript.rawValue, sql: """
+            SELECT r.id AS id, c.startTs AS ts
+            FROM calls c
+            JOIN call_transcript_revisions r ON r.id = c.preferredRevisionId
+            WHERE r.state = 'ready'
+              AND r.id NOT IN (SELECT revision_id FROM vec_call_transcripts)
+              AND r.id NOT IN (SELECT row_id FROM embed_queue WHERE kind = 2)
             """)
     }
 

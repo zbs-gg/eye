@@ -152,6 +152,51 @@ actor AskDatabaseRetrieval: AskRetrievalProviding {
                             formatter: formatter
                         )
                     )
+
+                case .call:
+                    guard let row = try Row.fetchOne(
+                        dbc,
+                        sql: """
+                            SELECT c.id, c.startTs, c.endTs, r.kind, r.text
+                            FROM calls c
+                            JOIN call_transcript_revisions r ON r.id = c.preferredRevisionId
+                            WHERE c.id = ? AND r.state = 'ready'
+                            """,
+                        arguments: [hit.id]
+                    ) else { return nil }
+                    let timestamp = dateFromMs(row["startTs"] as Int64)
+                    let endTimestamp = (row["endTs"] as Int64?).map(dateFromMs)
+                    if let from = filters.from, (endTimestamp ?? timestamp) < from { return nil }
+                    if let to = filters.to, timestamp > to { return nil }
+                    let raw: String = row["text"]
+                    guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        return nil
+                    }
+                    let revisionKind: String = row["kind"]
+                    let label = revisionKind == CallTranscriptRevisionKind.final.rawValue
+                        ? "Call — Final transcript"
+                        : "Call — Provisional transcript"
+                    let current = SearchResult(
+                        id: row["id"],
+                        kind: .call,
+                        ts: timestamp,
+                        endTs: endTimestamp,
+                        bundleId: nil,
+                        appName: "Call",
+                        windowTitle: label,
+                        browserURL: nil,
+                        snippet: Self.snippet(raw),
+                        relativePath: nil
+                    )
+                    return AskRetrievedEvidence(
+                        source: current,
+                        text: Self.evidenceText(
+                            timestamp: timestamp,
+                            label: label,
+                            raw: raw,
+                            formatter: formatter
+                        )
+                    )
                 }
             }
         }

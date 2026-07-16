@@ -17,7 +17,15 @@ struct RecordingStatusView: View {
     @ViewBuilder
     private func statusBody(now: Date) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            if env.recording.isCapturing {
+            CallControlView(compact: compact)
+            if env.calls.isActive {
+                callSourceRows
+                if env.recording.isCapturing {
+                    screenRow(now: now)
+                } else {
+                    sourceRow(active: false, warn: false, icon: "display", text: "Screen: off")
+                }
+            } else if env.recording.isCapturing {
                 screenRow(now: now)
                 if env.recording.lowDiskPaused {
                     sourceRow(active: false, warn: true, icon: "externaldrive.badge.exclamationmark",
@@ -59,7 +67,61 @@ struct RecordingStatusView: View {
                     .font(.caption2).foregroundStyle(.orange)
                     .lineLimit(3)
             }
+            if let error = env.calls.errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .lineLimit(3)
+            }
         }
+    }
+
+    @ViewBuilder
+    private var callSourceRows: some View {
+        let snapshot = env.calls.snapshot
+        let meState = liveCallState(snapshot.me, engineRunning: env.audio?.micRunning == true)
+        let systemState = liveCallState(snapshot.system, engineRunning: env.audio?.systemRunning == true)
+        sourceRow(
+            active: meState == .recording,
+            warn: meState == .unavailable || meState == .gap,
+            icon: "mic",
+            text: callSourceText(.me, state: meState)
+        )
+        sourceRow(
+            active: systemState == .recording,
+            warn: systemState == .unavailable || systemState == .gap,
+            icon: "speaker.wave.2",
+            text: callSourceText(.system, state: systemState)
+        )
+        if snapshot.bookmarkCount > 0 {
+            sourceRow(
+                active: true,
+                warn: false,
+                icon: "bookmark",
+                text: "\(snapshot.bookmarkCount) bookmarks saved"
+            )
+        }
+    }
+
+    private func callSourceText(_ source: CallAudioSource, state: CallSourceState) -> String {
+        switch (source, state) {
+        case (.me, .recording): String(localized: "Microphone")
+        case (.me, .disabled): String(localized: "Microphone: off")
+        case (.me, .unavailable): String(localized: "Microphone: unavailable")
+        case (.me, .gap): String(localized: "Microphone: gap recorded")
+        case (.system, .recording): String(localized: "System audio")
+        case (.system, .disabled): String(localized: "System audio: off")
+        case (.system, .unavailable): String(localized: "System audio: unavailable")
+        case (.system, .gap): String(localized: "System audio: gap recorded")
+        }
+    }
+
+    private func liveCallState(
+        _ persisted: CallSourceState,
+        engineRunning: Bool
+    ) -> CallSourceState {
+        if persisted == .disabled || persisted == .gap { return persisted }
+        return engineRunning ? .recording : .unavailable
     }
 
     /// The "Screen" row: warn by the cycle HEARTBEAT (not by the last frame — a static screen is deduped for

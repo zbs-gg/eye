@@ -260,7 +260,13 @@ private struct SourceChip: View {
 
     private var label: String {
         let when = result.ts.formatted(date: .abbreviated, time: .shortened)
-        let who = result.appName ?? result.bundleId ?? (result.kind == .audio ? "Audio" : "Screen")
+        let who = result.appName ?? result.bundleId ?? {
+            switch result.kind {
+            case .screen: "Screen"
+            case .audio: "Audio"
+            case .call: "Call"
+            }
+        }()
         return "\(when) · \(who)"
     }
 }

@@ -117,6 +117,46 @@ final class AutomaticRetentionAdmissionTests: XCTestCase {
         }
     }
 
+    func testRevokeWaitsForAsyncLeaseAndNoNewLeaseCanEnter() async throws {
+        let admitted = AutomaticRetentionRecord(
+            revision: 10,
+            policy: .fiveGB,
+            phase: .finiteAdmitted,
+            source: .explicitSelection
+        )
+        let admission = AutomaticRetentionAdmission(record: admitted)
+        let permit = try XCTUnwrap(admission.currentPermit())
+        let leaseEntered = expectation(description: "async lease entered")
+        let gate = AutomaticRetentionAsyncLeaseGate()
+        let revokeProbe = AutomaticRetentionRevokeProbe()
+
+        let leaseTask = Task {
+            try await admission.withAsyncLease(permit) {
+                leaseEntered.fulfill()
+                await gate.waitUntilReleased()
+                return 3
+            }
+        }
+        await fulfillment(of: [leaseEntered], timeout: 1)
+
+        let revokeTask = Task.detached {
+            admission.revoke(to: 11)
+            revokeProbe.markFinished()
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertFalse(revokeProbe.isFinished)
+        XCTAssertThrowsError(try admission.withLease(permit) { 4 }) { error in
+            XCTAssertEqual(error as? AutomaticRetentionAdmissionError, .stalePermit)
+        }
+
+        await gate.release()
+        let leaseResult = try await leaseTask.value
+        XCTAssertEqual(leaseResult, 3)
+        _ = await revokeTask.value
+        XCTAssertTrue(revokeProbe.isFinished)
+        XCTAssertNil(admission.currentPermit())
+    }
+
     @MainActor
     func testPendingForeverFinalizesClosedOnRestart() throws {
         let defaults = isolatedDefaults()
@@ -269,5 +309,21 @@ private final class AutomaticRetentionRevokeProbe: @unchecked Sendable {
         lock.lock()
         finished = true
         lock.unlock()
+    }
+}
+
+private actor AutomaticRetentionAsyncLeaseGate {
+    private var released = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func waitUntilReleased() async {
+        guard !released else { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func release() {
+        released = true
+        continuation?.resume()
+        continuation = nil
     }
 }

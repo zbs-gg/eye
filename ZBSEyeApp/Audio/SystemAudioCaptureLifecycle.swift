@@ -118,6 +118,12 @@ final class SystemAudioFrameAdmission<Session: AnyObject, Sink: Sendable>:
         return current?.sink
     }
 
+    func currentSink() -> Sink? {
+        lock.lock()
+        defer { lock.unlock() }
+        return current?.sink
+    }
+
     func close() -> Sink? {
         lock.lock()
         defer { lock.unlock() }

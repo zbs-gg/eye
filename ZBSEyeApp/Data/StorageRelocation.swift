@@ -8,6 +8,8 @@ struct RelocationReport: Sendable {
     let mediaFilesCopied: Int
     let modelFilesCopied: Int
     let modelBytesCopied: Int64
+    let speechModelFilesCopied: Int
+    let speechModelBytesCopied: Int64
 }
 
 /// Moves "forever memory" (DB + media + managed generative assets) to another folder. DB — GRDB online backup (a consistent
@@ -18,9 +20,17 @@ struct RelocationReport: Sendable {
 actor StorageRelocator {
     /// chosen — the folder picked by the user; data lands in chosen/ZBS Eye. Capture MUST be
     /// paused (recording.pauseForMaintenance) before the call, otherwise a couple of boundary frames settle into the old root.
-    func migrate(sourcePool: DatabasePool, sourceDBURL: URL, sourceMedia: URL, chosen: URL,
-                 progress: @Sendable @escaping (Double, String) -> Void) async throws -> RelocationReport {
-        let currentRoot = StorageLocation.dataRoot().resolvingSymlinksInPath().standardizedFileURL
+    func migrate(
+        sourcePool: DatabasePool,
+        sourceDBURL: URL,
+        sourceMedia: URL,
+        chosen: URL,
+        currentRootOverride: URL? = nil,
+        progress: @Sendable @escaping (Double, String) -> Void
+    ) async throws -> RelocationReport {
+        let currentRoot = (currentRootOverride ?? StorageLocation.dataRoot())
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
         let newRoot = try StorageRelocationPolicy.destinationRoot(
             currentRoot: currentRoot,
             chosenParent: chosen
@@ -32,6 +42,8 @@ actor StorageRelocator {
             let destMedia = newRoot.appendingPathComponent("media", isDirectory: true)
             let sourceModels = StorageLocation.builtInModelRoot(under: currentRoot)
             let destModels = StorageLocation.builtInModelRoot(under: newRoot)
+            let sourceSpeechModels = StorageLocation.speechModelRoot(under: currentRoot)
+            let destSpeechModels = StorageLocation.speechModelRoot(under: newRoot)
             // pre-flight: space on the TARGET volume
             let srcDBBytes = BackupManager.fileBytes(sourceDBURL)
             guard let mediaInventory = try RelocatableAssetTree
@@ -41,10 +53,18 @@ actor StorageRelocator {
             let mediaBytes = mediaInventory.totalBytes
             let modelInventory = try RelocatableAssetTree.inventoryIfPresent(at: sourceModels)
             let modelBytes = modelInventory?.totalBytes ?? 0
+            let speechModelInventory = try RelocatableAssetTree.inventoryIfPresent(
+                at: sourceSpeechModels
+            )
+            let speechModelBytes = speechModelInventory?.totalBytes ?? 0
+            let combinedModels = modelBytes.addingReportingOverflow(speechModelBytes)
+            guard !combinedModels.overflow else {
+                throw RelocationError.verifyFailed("managed model size overflowed")
+            }
             let needed = try StorageRelocationPolicy.requiredFreeBytes(
                 databaseBytes: srcDBBytes,
                 mediaBytes: mediaBytes,
-                modelBytes: modelBytes
+                modelBytes: combinedModels.partialValue
             )
             let destinationParent = newRoot.deletingLastPathComponent()
             let capacity = try? destinationParent.resourceValues(forKeys: [
@@ -113,6 +133,11 @@ actor StorageRelocator {
                     from: sourceModels,
                     to: destModels
                 )
+                progress(0.95, "Copying Whisper model…")
+                let copiedSpeechModels = try RelocatableAssetTree.copyIfPresent(
+                    from: sourceSpeechModels,
+                    to: destSpeechModels
+                )
 
                 progress(1.0, "Done")
                 return RelocationReport(
@@ -120,7 +145,9 @@ actor StorageRelocator {
                     dbBytes: srcDBBytes,
                     mediaFilesCopied: mediaInventory.files.count,
                     modelFilesCopied: copiedModels?.files.count ?? 0,
-                    modelBytesCopied: copiedModels?.totalBytes ?? 0
+                    modelBytesCopied: copiedModels?.totalBytes ?? 0,
+                    speechModelFilesCopied: copiedSpeechModels?.files.count ?? 0,
+                    speechModelBytesCopied: copiedSpeechModels?.totalBytes ?? 0
                 )
             }
         }.value
@@ -130,7 +157,10 @@ actor StorageRelocator {
         var c: [String: Int] = [:]
         for t in [
             "screen_captures", "text_blocks", "audio_captures", "transcriptions",
-            "apps", "browser_visits", "embed_queue",
+            "apps", "browser_visits", "embed_queue", "calls", "call_source_spans",
+            "call_audio_chunks", "call_source_gaps", "call_bookmarks", "call_transcript_jobs",
+            "call_transcript_revisions", "call_transcript_segments",
+            "call_transcript_projection_gaps", "call_media_mutations",
         ] {
             c[t] = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(t)") ?? -1
         }

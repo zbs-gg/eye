@@ -341,7 +341,7 @@ final class CaptureCoordinator {
         } catch {
             // -3801 after a permission grant / no display. Consecutive failures = capture effectively dead.
             sckFailureStreak += 1
-            Log.capture.error("SCK capture failed (streak \(self.sckFailureStreak)): \(String(describing: error), privacy: .public)")
+            Log.capture.error("screen_capture_failed streak=\(self.sckFailureStreak)")
             if sckFailureStreak == 3 { onCaptureBroken?() }
             return
         }
@@ -438,7 +438,7 @@ final class CaptureCoordinator {
             _ = try await ingest.ingest(record)
             onFrame?()
         } catch {
-            Log.ingest.error("frame ingest failed: \(String(describing: error), privacy: .public)")
+            Log.ingest.error("screen_frame_ingest_failed")
         }
     }
 }

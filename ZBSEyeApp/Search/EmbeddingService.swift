@@ -94,7 +94,7 @@ actor E5ModelProvider {
 /// (Apple MLTensor, no MLX/Python). Loading/cache — via E5ModelProvider (shared per process).
 /// e5 requires the prefixes "query: " / "passage: ". Vectors are L2-normalized.
 /// A load failure is NOT permanent: it retries on the next embed (with a minute backoff in the provider).
-actor EmbeddingService {
+actor EmbeddingService: SearchEmbeddingProviding {
     private var bundle: XLMRoberta.ModelBundle?
     private var loading = false
 
@@ -143,15 +143,4 @@ actor EmbeddingService {
         if norm > 1e-6 { for i in f.indices { f[i] /= norm } }
         return f.count == ZBSEyeDatabase.embeddingDim ? f : nil
     }
-}
-
-/// Monthly bucket (YYYYMM) for the vec0 temporal partition.
-func monthBucket(_ date: Date) -> Int {
-    let c = Calendar.current.dateComponents([.year, .month], from: date)
-    return (c.year ?? 2026) * 100 + (c.month ?? 1)
-}
-
-/// [Float] → Data (little-endian float32) for binding into vec0.
-func floatBlob(_ v: [Float]) -> Data {
-    v.withUnsafeBufferPointer { Data(buffer: $0) }
 }

@@ -118,6 +118,26 @@ enum StorageLocation {
             .appendingPathComponent("v1", isDirectory: true)
     }
 
+    /// Optional speech assets are independent from the generative provider
+    /// model but relocate with the same authoritative data root.
+    static func speechModelRoot(under resolvedDataRoot: URL) -> URL {
+        resolvedDataRoot
+            .appendingPathComponent("ai", isDirectory: true)
+            .appendingPathComponent("speech", isDirectory: true)
+            .appendingPathComponent("v1", isDirectory: true)
+    }
+
+    static func callEvidenceRoot(under resolvedDataRoot: URL) -> URL {
+        resolvedDataRoot
+            .appendingPathComponent("media", isDirectory: true)
+            .appendingPathComponent("calls", isDirectory: true)
+    }
+
+    static func callHelperRoot(under resolvedDataRoot: URL) -> URL {
+        resolvedDataRoot
+            .appendingPathComponent("call-helper", isDirectory: true)
+    }
+
     /// Default (legacy) location — the same one that was hardcoded before relocate.
     static func legacyRoot() -> URL {
         let support = (try? FileManager.default.url(for: .applicationSupportDirectory,

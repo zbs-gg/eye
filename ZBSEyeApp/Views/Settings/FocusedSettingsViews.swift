@@ -153,6 +153,9 @@ struct AISettingsView: View {
                         Button("Turn AI off", role: .destructive) { env.ai.deactivate() }
                     }
                 }
+                SettingsGroup("Call transcription") {
+                    WhisperModelSettingsView()
+                }
                 if let provider = env.ai.activeProvider, provider.isCloud {
                     SettingsGroup("Background AI") {
                         automaticConsumerToggle(
@@ -561,7 +564,12 @@ struct DataStorageSettingsView: View {
                     into: destination,
                     includeMedia: media
                 )
-                return "Done · \(report.days) days · \(report.path)"
+                var parts = ["Done", "\(report.days) days", "\(report.calls) calls"]
+                if media { parts.append("\(report.mediaFiles) media files") }
+                if report.mediaErrors > 0 {
+                    parts.append("\(report.mediaErrors) copy errors")
+                }
+                return parts.joined(separator: " · ") + " · \(report.path)"
             } catch {
                 return String(localized: "Export failed: \(error.localizedDescription)")
             }

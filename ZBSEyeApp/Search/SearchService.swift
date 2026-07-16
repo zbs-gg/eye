@@ -12,7 +12,7 @@ actor SearchService {
 
     init(
         db: ZBSEyeDatabase,
-        embedder: EmbeddingService,
+        embedder: any SearchEmbeddingProviding,
         semanticPolicy: SearchSemanticPolicy = .uncoordinated
     ) {
         self.db = db
@@ -50,7 +50,7 @@ actor SearchService {
         var score: [String: Double] = [:]
         func key(_ r: SearchResult) -> String { "\(r.kind.rawValue):\(r.id)" }
 
-        // screen-FTS and audio-FTS are INDEPENDENT RRF legs (as is the semantic pair): bm25 of different FTS
+        // Screen, legacy audio, and call FTS are INDEPENDENT RRF legs: bm25 of different FTS
         // tables is incomparable, concatenation would underrate the best audio hit by the size of the whole screen set.
         for (i, r) in fts.screen.enumerated() {
             let k = key(r)
@@ -62,20 +62,28 @@ actor SearchService {
             score[k, default: 0] += 1.0 / (rrfK + Double(i + 1))
             byKey[k] = r
         }
+        for (i, r) in fts.call.enumerated() {
+            let k = key(r)
+            score[k, default: 0] += 1.0 / (rrfK + Double(i + 1))
+            byKey[k] = r
+        }
 
         let semanticOutcome = await semanticTask
         if case .vector(let qvec) = semanticOutcome {
-            // Two semantic legs IN PARALLEL (async let → DB reads overlap via the pool): screen and
-            // transcripts (cross-lingual, for calls). The kind filter AND app filter mute the unneeded leg
+            // Three semantic legs IN PARALLEL (async let → DB reads overlap via the pool): screen,
+            // legacy audio transcripts, and preferred call transcripts. The kind/app filters mute unneeded legs
             // entirely (audio has no appId — under an app filter it's dropped in matches() anyway, no KNN burned).
             // Recency-first: with no time filter KNN starts on hot shards — on large history 37 vs 370ms.
             let appFiltered = !(filters.app?.isEmpty ?? true)
-            async let semIdsTask: [Int64] = filters.kind == .audio ? [] :
+            async let semIdsTask: [Int64] = (filters.kind == .audio || filters.kind == .call) ? [] :
                 recencyFirst(window) { try await self.semanticSearch(qvec, filters: filters, limit: window, buckets: $0) }
-            async let semAudioTask: [Int64] = (filters.kind == .screen || appFiltered) ? [] :
+            async let semAudioTask: [Int64] = (filters.kind == .screen || filters.kind == .call || appFiltered) ? [] :
                 recencyFirst(min(window, 80)) { try await self.semanticTranscripts(qvec, filters: filters, limit: min(window, 80), buckets: $0) }
+            async let semCallTask: [Int64] = (filters.kind == .screen || filters.kind == .audio || appFiltered) ? [] :
+                recencyFirst(min(window, 80)) { try await self.semanticCalls(qvec, filters: filters, limit: min(window, 80), buckets: $0) }
             let semIds = await semIdsTask
             let semAudio = await semAudioTask
+            let semCalls = await semCallTask
 
             for (rank, captureId) in semIds.enumerated() {
                 let k = "screen:\(captureId)"
@@ -91,6 +99,13 @@ actor SearchService {
                     byKey[k] = r
                 }
             }
+            for (rank, callID) in semCalls.enumerated() {
+                let k = "call:\(callID)"
+                score[k, default: 0] += 1.0 / (rrfK + Double(rank + 1))
+                if byKey[k] == nil, let r = try? await fetchCallResult(callID) {
+                    byKey[k] = r
+                }
+            }
         }
 
         // The post-filter closes the semantic legs (vec partitions are monthly, app isn't in vec at all)
@@ -102,7 +117,7 @@ actor SearchService {
             let sa = score[key(a)] ?? 0, sb = score[key(b)] ?? 0
             if sa != sb { return sa > sb }
             if a.ts != b.ts { return a.ts > b.ts }
-            if a.kind != b.kind { return a.kind == .screen }
+            if a.kind != b.kind { return a.kind.rawValue < b.kind.rawValue }
             return a.id > b.id
         }
         let mode: SearchSemanticMode
@@ -123,7 +138,8 @@ actor SearchService {
     /// Exact check of a result against the filters (the semantic legs are only filtered coarsely in SQL).
     private func matches(_ r: SearchResult, _ f: SearchFilters) -> Bool {
         if let k = f.kind, r.kind != k { return false }
-        if !f.includes(timestamp: r.ts) { return false }
+        if let from = f.from, (r.endTs ?? r.ts) < from { return false }
+        if let to = f.to, r.ts > to { return false }
         if let app = f.app, !app.isEmpty {
             guard r.kind == .screen else { return false }   // the app filter only makes sense for screen
             let needle = app.lowercased()
@@ -176,6 +192,33 @@ actor SearchService {
         }
     }
 
+    /// Preferred call revision only: vec_call_transcripts → revision → call. Superseded revisions may still
+    /// be present briefly while the durable queue catches up, so the join to calls.preferredRevisionId is required.
+    private func semanticCalls(_ qvec: [Float], filters: SearchFilters, limit: Int,
+                               buckets: (Int, Int)? = nil) async throws -> [Int64] {
+        let blob = floatBlob(qvec)
+        let (b0, b1) = (filters.from != nil || filters.to != nil) ? Self.bucketRange(filters)
+                       : (buckets ?? Self.bucketRange(filters))
+        return try await db.pool.read { db in
+            let revisionIDs = try Int64.fetchAll(db, sql: """
+                SELECT revision_id FROM vec_call_transcripts
+                WHERE bucket_month BETWEEN ? AND ? AND embedding MATCH ? AND k = ? ORDER BY distance
+                """, arguments: [b0, b1, blob, limit])
+            var callIDs: [Int64] = []
+            var seen = Set<Int64>()
+            for revisionID in revisionIDs {
+                if let callID = try Int64.fetchOne(
+                    db,
+                    sql: "SELECT id FROM calls WHERE preferredRevisionId = ? AND state != 'erased'",
+                    arguments: [revisionID]
+                ), seen.insert(callID).inserted {
+                    callIDs.append(callID)
+                }
+            }
+            return callIDs
+        }
+    }
+
     /// Range of monthly buckets for the vec partitions (no filter — the whole history).
     private static func bucketRange(_ f: SearchFilters) -> (Int, Int) {
         let lo = f.from.map(monthBucket) ?? 0
@@ -194,18 +237,19 @@ actor SearchService {
         return recent + full.filter { seen.insert($0).inserted }
     }
 
-    /// Two independent FTS legs. app filter: the needle resolves to an appId list IN SWIFT (Unicode-correct;
+    /// Three independent FTS legs. app filter: the needle resolves to an appId list IN SWIFT (Unicode-correct;
     /// SQLite lower() is ASCII-only and broke Cyrillic) and goes into SQL as `appId IN (…)` — lossless
     /// (a post-filter over topN lost rare apps that drowned behind frequent words).
     private func ftsSearch(_ query: String, filters: SearchFilters,
-                           limit: Int) async throws -> (screen: [SearchResult], audio: [SearchResult]) {
+                           limit: Int) async throws -> (screen: [SearchResult], audio: [SearchResult], call: [SearchResult]) {
         let match = Self.ftsQuery(query)
-        guard !match.isEmpty else { return ([], []) }
+        guard !match.isEmpty else { return ([], [], []) }
         let fromMs = filters.from.map(msFromDate) ?? 0
         let toMs = filters.to.map(msFromDate) ?? Int64.max
-        let wantScreen = filters.kind != .audio
+        let wantScreen = filters.kind != .audio && filters.kind != .call
         // audio has no appId → under an app filter the audio leg is guaranteed empty, skip the extra FTS scan
-        let wantAudio = filters.kind != .screen && (filters.app?.isEmpty ?? true)
+        let wantAudio = filters.kind != .screen && filters.kind != .call && (filters.app?.isEmpty ?? true)
+        let wantCall = filters.kind != .screen && filters.kind != .audio && (filters.app?.isEmpty ?? true)
         // app needle → ids (the apps table is small; contains over Unicode-lowercased)
         let appIdsClause: String
         if let app = filters.app?.lowercased(), !app.isEmpty {
@@ -216,7 +260,7 @@ actor SearchService {
                     return (b.contains(app) || n.contains(app)) ? row["id"] : nil
                 }
             }
-            guard !ids.isEmpty else { return ([], []) }   // no such app — an honest zero
+            guard !ids.isEmpty else { return ([], [], []) }   // no such app — an honest zero
             appIdsClause = "AND c.appId IN (\(ids.map(String.init).joined(separator: ",")))"
         } else {
             appIdsClause = ""
@@ -224,6 +268,7 @@ actor SearchService {
         return try await db.pool.read { db in
             var screen: [SearchResult] = []
             var audio: [SearchResult] = []
+            var call: [SearchResult] = []
             if wantScreen {
                 // snippet()/bm25() are computed in the subquery PURELY over the FTS table (hits): extra conditions on
                 // joined tables (ts BETWEEN) change the plan and SQLite loses the FTS context —
@@ -286,7 +331,36 @@ actor SearchService {
                         snippet: row["snip"] ?? "", relativePath: row["relativePath"]))
                 }
             }
-            return (screen, audio)
+            if wantCall {
+                let callSQL = """
+                WITH hits AS (
+                    SELECT revision_id, call_id,
+                           snippet(call_transcript_fts, 2, '⟦', '⟧', '…', 12) AS snip,
+                           bm25(call_transcript_fts) AS rank
+                    FROM call_transcript_fts WHERE call_transcript_fts MATCH ?
+                    ORDER BY rank LIMIT 5000
+                )
+                SELECT c.id AS id, c.startTs AS ts, c.endTs AS endTs, r.kind AS revisionKind,
+                       h.snip AS snip, h.rank AS rank
+                FROM hits h
+                JOIN calls c ON c.id = h.call_id AND c.preferredRevisionId = h.revision_id
+                JOIN call_transcript_revisions r ON r.id = h.revision_id
+                WHERE c.state != 'erased' AND c.startTs <= ? AND COALESCE(c.endTs, c.startTs) >= ?
+                ORDER BY h.rank LIMIT ?
+                """
+                for row in try Row.fetchAll(db, sql: callSQL, arguments: [match, toMs, fromMs, limit]) {
+                    let revisionKind: String = row["revisionKind"]
+                    call.append(SearchResult(
+                        id: row["id"], kind: .call, ts: dateFromMs(row["ts"]),
+                        endTs: (row["endTs"] as Int64?).map(dateFromMs),
+                        bundleId: nil, appName: "Call",
+                        windowTitle: revisionKind == CallTranscriptRevisionKind.final.rawValue
+                            ? "Final transcript" : "Provisional transcript",
+                        browserURL: nil, snippet: row["snip"] ?? "", relativePath: nil
+                    ))
+                }
+            }
+            return (screen, audio, call)
         }
     }
 
@@ -332,6 +406,27 @@ actor SearchService {
                 bundleId: nil, appName: Self.audioLabel(row["channel"]),
                 windowTitle: nil, browserURL: nil,
                 snippet: snip, relativePath: row["relativePath"])
+        }
+    }
+
+    private func fetchCallResult(_ callID: Int64) async throws -> SearchResult? {
+        try await db.pool.read { db in
+            guard let row = try Row.fetchOne(db, sql: """
+                SELECT c.id AS id, c.startTs AS ts, c.endTs AS endTs, r.kind AS revisionKind,
+                       substr(r.text, 1, 140) AS snip
+                FROM calls c
+                JOIN call_transcript_revisions r ON r.id = c.preferredRevisionId
+                WHERE c.id = ? AND c.state != 'erased' AND r.state = 'ready'
+                """, arguments: [callID]) else { return nil }
+            let revisionKind: String = row["revisionKind"]
+            return SearchResult(
+                id: row["id"], kind: .call, ts: dateFromMs(row["ts"]),
+                endTs: (row["endTs"] as Int64?).map(dateFromMs),
+                bundleId: nil, appName: "Call",
+                windowTitle: revisionKind == CallTranscriptRevisionKind.final.rawValue
+                    ? "Final transcript" : "Provisional transcript",
+                browserURL: nil, snippet: row["snip"] ?? "", relativePath: nil
+            )
         }
     }
 

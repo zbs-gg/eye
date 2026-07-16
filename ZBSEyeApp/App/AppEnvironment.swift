@@ -18,6 +18,8 @@ final class AppEnvironment {
     let aiSetup = AISetupPresentation()
     let mcpReadiness = MCPReadinessService()
     let audioSettings = AudioSettingsStore()
+    let calls = CallRecordingStore()
+    let speechModel = WhisperModelSettingsStore()
     let storageSettings: StorageSettingsStore
     let storageOperations = StorageOperationsStore()
     let resourceUsage: ResourceUsageStore
@@ -38,6 +40,7 @@ final class AppEnvironment {
             self?.recording.syncAudio()
         }
     }
+    var presentedCallID: Int64?
     /// First launch → onboarding (consent "everything gets recorded" + permissions). Persist: shown until completed.
     var showOnboarding = !UserDefaults.standard.bool(forKey: "zbseye.onboarding.done")
     /// Self-repair sheet trigger — shared by the main-window toolbar button and the menu-bar item.
@@ -58,6 +61,10 @@ final class AppEnvironment {
     // Data layer (created in bootstrap; nil until initialized / on error).
     private(set) var database: ZBSEyeDatabase?
     private(set) var ingest: IngestService?
+    private(set) var callRepository: CallRepository?
+    private(set) var callEvidenceQueryService: CallEvidenceQueryService?
+    private(set) var callEvidenceDeletionService: CallEvidenceDeletionService?
+    private(set) var callRecovery: CallRecoveryService?
     private(set) var retention: RetentionManager?
     @ObservationIgnored private var automaticRetentionAdmission: AutomaticRetentionAdmission?
     private(set) var timelineStore: TimelineStore?
@@ -77,6 +84,9 @@ final class AppEnvironment {
     @ObservationIgnored private var automationAuditWriter: AutomationAuditWriter?
     @ObservationIgnored private(set) var llmRouter: LLMRouter?
     @ObservationIgnored private(set) var aiComputeCoordinator: AIComputeCoordinator?
+    @ObservationIgnored private(set) var whisperModelStore: WhisperModelStore?
+    @ObservationIgnored private(set) var callTranscriptWorker: CallTranscriptWorker?
+    @ObservationIgnored private var callTranscriptWorkerTask: Task<Void, Never>?
     @ObservationIgnored private(set) var builtInModelManager: BuiltInModelManager?
     @ObservationIgnored private var builtInModelProviderBridge: BuiltInModelProviderBridge?
     @ObservationIgnored private var builtInModelReconciliationTask: Task<Void, Never>?
@@ -292,6 +302,12 @@ final class AppEnvironment {
 
     private func bootstrapOnce() async {
         ZBSEyeHTTPServer.log("bootstrap: begin")
+        calls.admissionAllowed = { [weak self] in
+            guard let self else { return false }
+            return !self.storageSettings.relocationInProgress
+                && self.recording.pausedUntil == nil
+                && !self.recording.lowDiskPaused
+        }
         rewards.applyAppIcon()   // the chosen alternate app icon (dock) — apply on startup
         // Crash marker: if the clean-exit flag wasn't set on the previous launch → the session died
         // incorrectly (kill/crash/kernel panic). Visible in Console.app for remote diagnostics.
@@ -312,7 +328,7 @@ final class AppEnvironment {
         if let missing = StorageLocation.unavailableConfiguredPath() {
             self.dataError = "Data folder unavailable: \(missing). Connect the disk/volume and restart ZBS Eye — "
                 + "recording is off so the \"eternal memory\" isn't split in two."
-            ZBSEyeHTTPServer.log("data root unavailable (\(missing)) — bootstrap aborted (anti-split-brain)")
+            ZBSEyeHTTPServer.log("data_root_unavailable: bootstrap aborted (anti-split-brain)")
             return
         }
         do {
@@ -387,6 +403,7 @@ final class AppEnvironment {
                         // The outer critical phase owns the only caller
                         // deadline. The underlying hardware teardown remains
                         // retained to real completion before recovery resumes.
+                        await self.calls.endAndWait(reason: .maintenance)
                         let recordingDrain = await self.recording.pauseForMaintenanceAndDrain(
                             waitForTranscription: false
                         )
@@ -402,6 +419,8 @@ final class AppEnvironment {
                 }
                 self.cancelBuiltInModelRecovery()
                 let reconciliation = self.cancelBuiltInModelReconciliation()
+                await self.callTranscriptWorker?.suspendAndDrain()
+                await self.whisperModelStore?.suspendAndDrain()
 
                 // These two ownership barriers share the fail-closed Quit path:
                 // each is caller-bounded, but its task remains retained until it
@@ -424,6 +443,8 @@ final class AppEnvironment {
                             await self.builtInModels.refresh()
                         }
                         self.recording.resumeAfterMaintenance()
+                        await self.whisperModelStore?.resumeAfterDrain()
+                        await self.callTranscriptWorker?.resume()
                     } else {
                         self.relocationTerminationDrainTask = localRuntimePhase.operation
                     }
@@ -452,6 +473,8 @@ final class AppEnvironment {
                         )
                         await self.builtInModels.refresh()
                         self.recording.resumeAfterMaintenance()
+                        await self.whisperModelStore?.resumeAfterDrain()
+                        await self.callTranscriptWorker?.resume()
                     } else {
                         self.relocationTerminationDrainTask = computePhase.operation
                     }
@@ -479,6 +502,29 @@ final class AppEnvironment {
             // Ingest does NOT embed anymore (that kept the e5 model resident 24/7 and burned CPU per capture).
             let ingestService = IngestService(db: db, storage: storage)
             self.ingest = ingestService
+            let callRepository = CallRepository(database: db)
+            self.callRepository = callRepository
+            let callEvidenceQueryService = CallEvidenceQueryService(database: db)
+            self.callEvidenceQueryService = callEvidenceQueryService
+            let callEvidenceDeletionService = CallEvidenceDeletionService(
+                repository: callRepository,
+                mediaRoot: storage.mediaDirectory
+            )
+            self.callEvidenceDeletionService = callEvidenceDeletionService
+            let callRecovery = CallRecoveryService(
+                repository: callRepository,
+                mediaRoot: storage.mediaDirectory
+            )
+            self.callRecovery = callRecovery
+            let callRecoveryReport = try await callRecovery.recover()
+            if callRecoveryReport.callsInterrupted > 0
+                || callRecoveryReport.jobsReset > 0
+                || callRecoveryReport.chunksFinalized > 0
+                || callRecoveryReport.chunksDiscarded > 0 {
+                Log.audio.notice(
+                    "call recovery reconciled interrupted evidence and queued retryable work"
+                )
+            }
 
             // The continuous semantic indexer owns ALL embedding: it fills vectors for frames/transcripts off the
             // hot path and UNLOADS the model when the backlog is drained. Its own EmbeddingService (search keeps a
@@ -494,6 +540,57 @@ final class AppEnvironment {
             )
             await backfill.attachComputeCoordinator(computeCoordinator)
             self.aiComputeCoordinator = computeCoordinator
+
+            let speechRoot = StorageLocation.speechModelRoot(under: resolvedDataRoot)
+            do {
+                try FileManager.default.createDirectory(
+                    at: speechRoot,
+                    withIntermediateDirectories: true
+                )
+                let whisperModelStore = WhisperModelStore(root: speechRoot)
+                self.whisperModelStore = whisperModelStore
+                let callTranscriptWorker = CallTranscriptWorker(
+                    repository: callRepository,
+                    computeCoordinator: computeCoordinator,
+                    dataRoot: resolvedDataRoot,
+                    modelStore: whisperModelStore
+                )
+                self.callTranscriptWorker = callTranscriptWorker
+                await callEvidenceDeletionService.attachTranscriptWorker(
+                    suspend: {
+                        await callTranscriptWorker.suspendAndDrainForEvidenceMutation()
+                    },
+                    resume: { [weak self] in
+                        let allowed = await MainActor.run {
+                            self?.recording.lowDiskPaused == false
+                                && self?.storageSettings.relocationInProgress == false
+                        }
+                        if allowed { await callTranscriptWorker.resume() }
+                    }
+                )
+                speechModel.attach(
+                    whisperModelStore,
+                    suspendWorker: { await callTranscriptWorker.suspendAndDrain() },
+                    resumeWorker: { [weak self] in
+                        let allowed = await MainActor.run {
+                            self?.recording.lowDiskPaused == false
+                                && self?.storageSettings.relocationInProgress == false
+                        }
+                        if allowed { await callTranscriptWorker.resume() }
+                    }
+                )
+                if storage.freeBytes() < DiskReservePolicy.standard.pauseBytes {
+                    await callTranscriptWorker.suspendAndDrain()
+                }
+                callTranscriptWorkerTask = Task.detached(priority: .utility) {
+                    await callTranscriptWorker.runLoop()
+                }
+                Task { @MainActor [speechModel] in
+                    await speechModel.refresh()
+                }
+            } catch {
+                Log.audio.error("optional Whisper model storage unavailable")
+            }
 
             let localDriver = MLXLocalRuntimeDriver()
             let localInference = LocalInferenceService(
@@ -579,7 +676,11 @@ final class AppEnvironment {
                 try? await Task.sleep(for: .seconds(30))
                 await backfill.run()
             }
-            let retention = RetentionManager(db: db, storage: storage)
+            let retention = RetentionManager(
+                db: db,
+                storage: storage,
+                callDeletion: callEvidenceDeletionService
+            )
             self.retention = retention
 
             // Capture loop (the heart). Starts on toggle in RecordingStore.
@@ -635,6 +736,47 @@ final class AppEnvironment {
                     && self.permissions.snapshot.screenRecording == .granted
             }
             self.audio = audioCoordinator
+            let callAudio = CallAudioControl(
+                installSink: { [weak audioCoordinator] sink in
+                    await audioCoordinator?.installCallFrameSink(sink)
+                },
+                start: { [weak self, weak audioCoordinator] requested in
+                    guard let audioCoordinator else { return .none }
+                    let permitted = await MainActor.run { [weak self] in
+                        guard let self else { return CallSourceSelection.none }
+                        let diskOK = storage.freeBytes() >= DiskReservePolicy.standard.pauseBytes
+                        guard !self.recording.lowDiskPaused, diskOK else {
+                            return CallSourceSelection.none
+                        }
+                        return CallSourceSelection(
+                            me: requested.me && self.permissions.snapshot.microphone == .granted,
+                            system: requested.system
+                                && self.permissions.snapshot.screenRecording == .granted
+                        )
+                    }
+                    return await audioCoordinator.beginExplicitCall(permitted)
+                },
+                acceptedTargets: { [weak audioCoordinator] in
+                    await audioCoordinator?.acceptedIngressTargets()
+                        ?? AudioIngressTargets(me: nil, system: nil)
+                },
+                drainGaps: { [weak audioCoordinator] in
+                    await audioCoordinator?.drainIngressGaps() ?? []
+                },
+                stop: { [weak audioCoordinator] in
+                    await audioCoordinator?.endExplicitCall()
+                }
+            )
+            let callCoordinator = CallCoordinator(
+                repository: callRepository,
+                mediaRoot: storage.mediaDirectory,
+                audio: callAudio
+            )
+            calls.requestedSources = { [weak self] in
+                guard let self, self.audioSettings.audioMode != .off else { return .none }
+                return CallSourceSelection(me: true, system: self.audioSettings.recordSystemAudio)
+            }
+            calls.attach(callCoordinator)
             // Clear the session-scoped manual audio override when recording truly stops (NOT on every
             // syncAudio re-sync — that fires each meeting edge and would wipe the override).
             recording.onSessionStop = { [weak self] in self?.audioSettings.clearManualOverride() }
@@ -768,14 +910,21 @@ final class AppEnvironment {
             self.automations = automationsStore
 
             // Export (anti-lock-in): markdown by day ± media.
-            self.export = ExportService(db: db, summary: summarySvc, mediaDirectory: storage.mediaDirectory)
+            self.export = ExportService(
+                db: db,
+                mediaDirectory: storage.mediaDirectory,
+                collectDay: { day in
+                    try await summarySvc.collect(day: day, safety: .default)
+                }
+            )
             self.historyImporter = HistoryImporter(db: db)
 
             // Local REST /v1 (auth on everything except /health).
             let token = KeychainStore.apiToken()
             let rec = recording
             let deps = ZBSEyeHTTPServer.Deps(
-                search: searchSvc, timeline: timelineSvc, db: db, mediaDir: storage.mediaDirectory,
+                search: searchSvc, timeline: timelineSvc, calls: callEvidenceQueryService,
+                db: db, mediaDir: storage.mediaDirectory,
                 token: token, version: AppVersion.current,
                 isCapturing: { await MainActor.run { rec.isCapturing } },
                 toggleCapture: { enable in
@@ -808,6 +957,8 @@ final class AppEnvironment {
                             report = PruneReport(
                                 framesDeleted: automatic.framesDeleted,
                                 audioDeleted: automatic.audioDeleted,
+                                callsDeleted: automatic.callsDeleted,
+                                callBytesDeleted: automatic.callBytesDeleted,
                                 orphansDeleted: 0
                             )
                         } catch AutomaticRetentionError.postCommitFileDeletionFailed {
@@ -822,8 +973,11 @@ final class AppEnvironment {
                     } else {
                         report = nil
                     }
-                    if let r = report, r.framesDeleted + r.audioDeleted + r.orphansDeleted > 0 {
-                        Log.retention.info("prune: frames \(r.framesDeleted) audio \(r.audioDeleted) orphans \(r.orphansDeleted)")
+                    if let r = report,
+                       r.framesDeleted + r.audioDeleted + r.callsDeleted + r.orphansDeleted > 0 {
+                        Log.retention.info(
+                            "prune: frames \(r.framesDeleted) audio \(r.audioDeleted) calls \(r.callsDeleted) orphans \(r.orphansDeleted)"
+                        )
                     }
                     // 👁 delighter: warmly mark a crossed "round" memory milestone (once each)
                     if let frames = try? await db.pool.read({ try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM screen_captures") ?? 0 }) {
@@ -869,8 +1023,8 @@ final class AppEnvironment {
             }
         } catch {
             self.dataError = String(describing: error)
-            Log.app.error("bootstrap failed: \(String(describing: error), privacy: .public)")
-            ZBSEyeHTTPServer.log("bootstrap: dataError \(error)")
+            Log.app.error("bootstrap_failed")
+            ZBSEyeHTTPServer.log("bootstrap_failed")
         }
 
         // Permission polling (the user grants them in System Settings — the UI and autostart pick it up themselves).
@@ -948,6 +1102,14 @@ final class AppEnvironment {
         return .positivelyEmpty
     }
 
+    func pauseForPrivacy(minutes: Int) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.calls.endAndWait(reason: .privacy)
+            self.recording.pauseFor(minutes: minutes)
+        }
+    }
+
     /// History deletion (privacy): lastSeconds=nil → everything. Returns a report for the UI.
     func deleteHistory(lastSeconds: TimeInterval?) async -> PruneReport? {
         guard !storageSettings.relocationInProgress, let retention else { return nil }
@@ -956,13 +1118,28 @@ final class AppEnvironment {
         let now = Date()
         let toMs: Int64 = lastSeconds == nil ? Int64.max : msFromDate(now)
         let fromMs: Int64 = lastSeconds.map { msFromDate(now.addingTimeInterval(-$0)) } ?? 0
+        var ownsWorkerResume = false
+        if let callTranscriptWorker {
+            ownsWorkerResume = await callTranscriptWorker
+                .suspendAndDrainForEvidenceMutation()
+        }
+        // A privacy cut is terminal for an intersecting active Call Envelope. Flush/close it first;
+        // live mutation would let the spool re-persist bytes after the accepted deletion boundary.
+        await calls.endAndWait(reason: .privacy)
         // CRITICAL (privacy): an open VAD segment lives in memory — deleteRange doesn't see it.
         // We flush in-flight audio BEFORE the delete, otherwise "said a password → wipe" would survive
         // up to 28s of speech captured before the click (it would close and land in the DB AFTER the delete).
         await audio?.discardInFlight(from: dateFromMs(fromMs), to: lastSeconds == nil ? now : dateFromMs(toMs))
         let report = try? await retention.deleteRange(fromMs: fromMs, toMs: toMs)
+        if ownsWorkerResume,
+           !recording.lowDiskPaused,
+           !storageSettings.relocationInProgress {
+            await callTranscriptWorker?.resume()
+        }
         if let r = report {
-            Log.retention.info("manual delete: frames \(r.framesDeleted) audio \(r.audioDeleted)")
+            Log.retention.info(
+                "manual delete: frames \(r.framesDeleted) audio \(r.audioDeleted) calls \(r.callsDeleted)"
+            )
         }
         await storageSettings.refresh(storage: storage)
         // the timeline cursor may have pointed into what was wiped — refresh it
@@ -1004,6 +1181,10 @@ final class AppEnvironment {
     func relocate(to chosen: URL) async {
         guard let db, let storage, let ingest,
               !storageSettings.relocationInProgress else { return }
+        guard !calls.isActive else {
+            storageSettings.relocationError = "End the active call before moving storage. The recording was not interrupted."
+            return
+        }
         let previousRoot = StorageLocation.dataRoot()
         let previousRootWasRelocated = StorageLocation.isRelocated()
         var committedNewRoot = false
@@ -1017,12 +1198,14 @@ final class AppEnvironment {
 
         let relocator = StorageRelocator()
         do {
-            // Ordered barrier: downloads/runtime first (cancels generation),
-            // then query/background e5. Capture/audio remain independently
-            // paused for data consistency, never because inference asked.
+            // Ordered barrier: stop transcript jobs before draining the model
+            // store they read, then stop the remaining compute users. Capture
+            // and audio stay independently paused for data consistency.
             if let builtInModelManager {
                 _ = try await builtInModelManager.suspendAndDrainForRelocation()
             }
+            await callTranscriptWorker?.suspendAndDrain()
+            await whisperModelStore?.suspendAndDrain()
             if let aiComputeCoordinator {
                 try await aiComputeCoordinator.suspendAndDrain()
             }
@@ -1106,6 +1289,8 @@ final class AppEnvironment {
                     // suspends backfill again while warming the old-root LKG.
                     await self.aiComputeCoordinator?.resume()
                     try? await self.builtInModelManager?.resumeAfterRelocation()
+                    await self.whisperModelStore?.resumeAfterDrain()
+                    await self.callTranscriptWorker?.resume()
                     await self.builtInModels.refresh()
                     self.recording.resumeAfterMaintenance()
                 }
@@ -1124,6 +1309,10 @@ final class AppEnvironment {
         case .none:
             return
         case .pauseCapture:
+            // Stop speech scratch work first, then close the explicit Call
+            // Envelope before draining the shared physical capture legs.
+            await callTranscriptWorker?.suspendAndDrain()
+            await calls.endAndWait(reason: .lowDisk)
             let drain = await recording.pauseForLowDiskAndDrain(
                 systemCaptureTimeout: .seconds(5)
             )
@@ -1144,6 +1333,26 @@ final class AppEnvironment {
                 return
             }
             recording.resumeAfterLowDisk()
+            await callTranscriptWorker?.resume()
+        }
+    }
+
+    func retryCallTranscription(callID: Int64) async -> String? {
+        guard let callRepository else {
+            return String(localized: "Call service is still starting. Try again in a moment.")
+        }
+        calls.setExternalError(nil)
+        do {
+            try await callRepository.retryFinalTranscript(
+                callID: callID,
+                nowMs: Int64(Date().timeIntervalSince1970 * 1_000)
+            )
+            calls.setExternalError(nil)
+            return nil
+        } catch {
+            let message = error.localizedDescription
+            calls.setExternalError(message)
+            return message
         }
     }
 }

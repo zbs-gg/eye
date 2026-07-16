@@ -17,8 +17,8 @@ Two product goals:
 
 1. **Replace personal memory after the fact** — record everything, search like a human, rewind time.
    This is the core (v1.0).
-2. **Replace a live AI prompter in calls** — real-time hints over a conversation. A new layer on top of
-   the existing audio pipeline (v1.5).
+2. **Hand trustworthy local evidence to the tools you choose** — authenticated REST/MCP, without growing
+   Eye into a CRM, calendar bot, or live meeting workspace.
 
 ---
 
@@ -28,8 +28,8 @@ Two product goals:
   except `/health` is behind a Bearer token. History excerpts leave the Mac only after explicit consent to
   an activated external generation provider.
 - **Zero accounts, zero subscription, zero telemetry.** That IS the product, not a temporary stance.
-- **Built-in local AI is the default path.** External local, cloud, broker, and signed-in CLI providers
-  remain deliberate choices; recommendations guide but never activate themselves.
+- **Built-in local AI is the shortest one-click path, never an automatic install.** External local, cloud,
+  broker, and signed-in CLI providers remain deliberate choices; recommendations guide but never activate themselves.
 - **Default is to record everything**, but give the person control: pause, exclusions, delete a range.
 - **Native and lightweight.** Swift/SwiftUI, Apple Silicon hardware acceleration, minimal dependencies.
 
@@ -42,6 +42,9 @@ Two product goals:
 - Hybrid search: FTS5 + semantics (multilingual-e5, 384-dim) via RRF — **cross-lingual**.
 - Timeline: scrubber, activity density, 1×/2×/4× player, day/hour/10-min zoom.
 - Local REST + MCP for AI agents.
+- Explicit Call Envelopes: uninterrupted mic/system recording, durable Bookmarks, optional post-call
+  Whisper transcript, preferred-only search, compact Timeline/Call Detail, and read-only agent evidence.
+  Automated fixtures are green; installed-app 60/120-minute physical qualification remains before release.
 - Storage: retention (forever by default), move to external SSD, iCloud backup as a compressed snapshot,
   size tracking.
 - Automations: daily summary (local LLM → file/Obsidian), export.
@@ -77,6 +80,11 @@ Two product goals:
 ### 4. Call memory — ✅
 - ✅ Semantics over transcripts (vec_transcripts, cross-lingual: a query in one language finds a conversation in another).
 - ✅ Audio on the timeline: a transcript panel + m4a playback (`AudioPlayerStore`).
+- ✅ Explicit Call Envelopes keep microphone/system evidence separate; Bookmark never stops capture.
+- ✅ Optional Whisper Large V3 Turbo checkpoints + preferred whole-call final; no model required to record.
+- ✅ Timeline/search/REST/MCP resolve one Call Envelope without duplicate provisional/final hits.
+- 🟡 Release qualification: deterministic fixtures pass; short installed-app smoke and 60/120-minute
+  continuity/resource/recovery gates remain deliberately physical.
 
 ### 5. Truly zero egress — ✅
 - ✅ The embedding model is bundled (`scripts/build-release.sh`) — first-run with no network.
@@ -109,16 +117,19 @@ text and conversations; the first launch on a fresh machine is completed without
 
 ---
 
-## v1.5 — "live prompter" (new epic)
+## After v1 — keep the recorder small
 
-> Goal: real-time hints during a call — something after-the-fact memory doesn't have.
+Eye may improve evidence quality, resource use, export, and agent interoperability. The following are
+explicitly deferred to another product/repository (for example AIOS), not a hidden Eye v1.5 epic:
 
-- **Live overlay**: a lightweight window over the call.
-- **Streaming transcript of both sides** (microphone = me, system audio = the other party) in real time.
-- **A local LLM on the stream**: hints, answers, a running summary during the conversation.
+- live streaming transcript or call overlay;
+- calendar pre-arming / automatic meeting joining;
+- call maps, summaries, action items, CRM/contact management, or sales intelligence;
+- remote diarization or any cloud speech path;
+- multi-speaker identity inference inside the system-audio track.
 
-The foundation is already there architecturally (mic+system audio pipeline, a local LLM, context search) —
-what's needed is the real-time layer and the overlay window.
+Eye's boundary is the useful one: record reliably, preserve gaps honestly, index after the fact, and let a
+separate authorized agent consume the evidence.
 
 ---
 
@@ -127,7 +138,7 @@ what's needed is the real-time layer and the overlay window.
 - **Scheduled automations** + notifications (currently manual only).
 - **Connectors**: Obsidian / Notion / etc. as full destinations.
 - **Extended export** of a day/everything (markdown + media) — "take your memory with you", against lock-in.
-- **Speaker diarization** deeper than simple me/other-party labels.
+- **Speech evidence quality/size benchmark** before considering any smaller runtime; no identity claims.
 - **Hotkeys, jump to date, app exclusions** — the small daily-comfort things.
 
 ---
@@ -137,3 +148,5 @@ what's needed is the real-time layer and the overlay window.
 - Cloud, accounts, telemetry — never.
 - An app blocklist by default — the default is "record everything", exclusions are opt-in only.
 - Heavy models that heat the CPU — the lightness of the native stack is part of the product.
+- Live transcript, meeting workspace, calendar bot, call intelligence, or CRM features — another product.
+- Alternative/quantized speech models until a reproducible accuracy/size/resource benchmark justifies one.

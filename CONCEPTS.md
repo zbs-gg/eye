@@ -34,3 +34,33 @@ Capture Admission is evaluated again after asynchronous frame work and immediate
 
 ### Protected System Shell
 A macOS process that renders login or screen-saver surfaces rather than user activity and is therefore never eligible for capture, even when another session signal is stale.
+
+## Call evidence
+
+### Call Envelope
+
+A durable interval that binds one uninterrupted local call recording to its microphone and system-audio evidence, bookmarks, source health, and transcript state.
+
+### Bookmark Checkpoint
+
+A timestamp saved during an active Call Envelope that requests a provisional Whisper transcript for the new interval plus 45 seconds of preceding context without changing capture state.
+
+### Preferred Final Transcript
+
+The authoritative transcript produced by a full-call Whisper pass after recording ends. Bookmark Checkpoint text is a replaceable draft; bookmark timestamps remain durable.
+
+### Source Span
+
+A continuous, sample-addressed epoch of microphone or system-audio evidence. A device restart or sample-rate change closes one Source Span and opens another instead of pretending the stream was continuous.
+
+### Source Gap
+
+A durable statement that a source interval is absent, unavailable, redacted, or dropped. A Source Gap is evidence about missing evidence: UI, export, REST, and MCP surface it instead of guessing speech.
+
+### Evidence Reference
+
+An opaque typed identifier such as `call:42`, `bookmark:7`, or `call-audio-chunk:19`. It resolves only through authenticated local services and never serializes an absolute filesystem path.
+
+## Call evidence relationships
+
+A Call Envelope owns its Bookmark Checkpoints, Source Spans, Source Gaps, and Evidence References. Bookmark Checkpoints produce provisional text; the completed Call Envelope produces one Preferred Final Transcript. Transcript source labels describe microphone/system provenance, not inferred human identity.

@@ -15,11 +15,13 @@ enum APIDTO {
         let frameUrl: String?
         var audioUrl: String? = nil        // kind=audio: m4a segment
         var transcriptUrl: String? = nil   // kind=audio: transcript text
+        var callUrl: String? = nil         // kind=call: Call Envelope
     }
     struct SearchHit: Encodable {
         let id: Int64
-        let kind: String          // screen | audio
+        let kind: String          // screen | audio | call
         let ts: Int64             // epoch ms
+        let endTs: Int64?
         let tsISO: String
         let app: AppRef
         let windowTitle: String?
@@ -75,6 +77,43 @@ enum APIDTO {
     }
     struct ErrorBody: Encodable { let code: String; let message: String }
     struct ErrorResponse: Encodable { let error: ErrorBody }
+}
+
+/// Shared localhost + Bearer policy. Keeping it independent from FlyingFox
+/// makes the exact boundary fixture-testable while every server route still
+/// calls the same function.
+enum APILocalAuthorization {
+    static func allows(hostHeader: String?, authorizationHeader: String?, token: String) -> Bool {
+        guard let hostHeader else { return false }
+        let host: String
+        if hostHeader == "::1" {
+            host = hostHeader
+        } else if hostHeader.hasPrefix("["), let closing = hostHeader.firstIndex(of: "]") {
+            host = String(hostHeader[...closing])
+        } else {
+            host = hostHeader.split(separator: ":").first.map(String.init) ?? hostHeader
+        }
+        guard host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" else {
+            return false
+        }
+        return authorizationHeader == "Bearer \(token)"
+    }
+}
+
+/// Resolves only database-owned relative media references inside the current
+/// StorageLocation media directory. Caller-supplied paths never reach disk.
+enum ManagedMediaResolver {
+    static func url(relativePath: String, mediaRoot: URL) -> URL? {
+        guard !relativePath.isEmpty,
+              !relativePath.contains(".."),
+              !relativePath.hasPrefix("/") else { return nil }
+        let base = mediaRoot.standardizedFileURL.resolvingSymlinksInPath()
+        let target = base.appendingPathComponent(relativePath).standardizedFileURL.resolvingSymlinksInPath()
+        guard Array(target.pathComponents.prefix(base.pathComponents.count)) == base.pathComponents else {
+            return nil
+        }
+        return target
+    }
 }
 
 func isoFromMs(_ ms: Int64) -> String {

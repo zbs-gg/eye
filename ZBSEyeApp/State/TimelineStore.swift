@@ -34,12 +34,14 @@ final class TimelineStore {
     var current: FrameDetail?
     var density: [DensityBucket] = []
     var audioDensity: [DensityBucket] = []   // the strip's second track: where in history there's speech
+    var callSpans: [CallTimelineSpan] = []
     var searchQuery = ""
     var results: [SearchResult] = []
     var isSearching = false
     /// An open audio segment (click on an audio hit): transcript + playback. Previously an audio hit
     /// was a dead end — the nearest screen frame was shown, the transcript vanished.
     var audioDetail: AudioDetail?
+    var selectedCallID: Int64?
     let audioPlayer = AudioPlayerStore()
 
     // Player: playback at the real cadence of captured frames, scaled by speed.
@@ -110,6 +112,9 @@ final class TimelineStore {
         }
         if let a = try? await timeline.audioDensity(from: rangeStart, to: rangeEnd, bucketMs: effectiveBucketMs) {
             audioDensity = a
+        }
+        if let calls = try? await timeline.callSpans(from: rangeStart, to: rangeEnd) {
+            callSpans = calls
         }
     }
 
@@ -271,9 +276,11 @@ final class TimelineStore {
         // audio strip kept the buckets of the previous window — the strip lied about where the calls are)
         let d = try? await timeline.density(from: rangeStart, to: rangeEnd, bucketMs: effectiveBucketMs)
         let a = try? await timeline.audioDensity(from: rangeStart, to: rangeEnd, bucketMs: effectiveBucketMs)
+        let calls = try? await timeline.callSpans(from: rangeStart, to: rangeEnd)
         guard zoom == z else { return }
         if let d { density = d }
         if let a { audioDensity = a }
+        if let calls { callSpans = calls }
     }
 
     func runSearch() async {
@@ -301,6 +308,11 @@ final class TimelineStore {
         results = []
         searchQuery = ""
         cursor = r.ts          // cursor first — refresh computes the frame+density for the new moment
+        if r.kind == .call {
+            closeAudio()
+            selectedCallID = r.id
+            return
+        }
         await refresh()
         // Audio hit: open the transcript/playback panel (instead of silently losing the found call).
         if r.kind == .audio {
@@ -309,6 +321,17 @@ final class TimelineStore {
         } else {
             closeAudio()
         }
+    }
+
+    func openCall(_ call: CallTimelineSpan) {
+        pause()
+        cursor = call.start
+        closeAudio()
+        selectedCallID = call.id
+    }
+
+    func closeCall() {
+        selectedCallID = nil
     }
 
     func closeAudio() {

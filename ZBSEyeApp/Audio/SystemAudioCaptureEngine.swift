@@ -2,6 +2,7 @@ import Foundation
 import ScreenCaptureKit
 import AVFoundation
 import CoreMedia
+import Darwin
 
 struct SystemAudioCaptureStartCancelled: Error, Sendable, Equatable {
     let teardownOutcome: SystemAudioCaptureTeardownOutcome
@@ -17,10 +18,14 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
     private let lifecycle: SystemAudioCaptureLifecycle<SCStream>
     private let frameAdmission = SystemAudioFrameAdmission<
         SCStream,
-        AsyncStream<AudioFrame>.Continuation
+        SystemAudioIngressSink
     >()
     private var stream: SCStream?
     private var running = false
+    private var epoch = -1
+    private var nextIngressSequence: Int64 = 0
+    private var lastAcceptedIngressSequence: Int64?
+    private var completedGaps: [AudioIngressGap] = []
     private let sampleQueue = DispatchQueue(label: "com.zbseye.systemaudio.samples")
 
     /// The stream died mid-run (SCK error, permission revoked, display reconfiguration) — the feed is closed;
@@ -32,6 +37,18 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
         self.config = config
         self.lifecycle = SystemAudioCaptureLifecycle()
         super.init()
+    }
+
+    var latestAcceptedIngressSequence: Int64? {
+        frameAdmission.currentSink()?.publisher.latestAcceptedIngressSequence
+            ?? lastAcceptedIngressSequence
+    }
+
+    func drainIngressGaps() -> [AudioIngressGap] {
+        let result = completedGaps
+            + (frameAdmission.currentSink()?.publisher.drainGaps() ?? [])
+        completedGaps.removeAll(keepingCapacity: true)
+        return result
     }
 
     @MainActor
@@ -62,16 +79,17 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
             cfg.height = 2
             cfg.minimumFrameInterval = CMTime(value: 1, timescale: 1)
 
-            let (s, cont) = AsyncStream.makeStream(
-                of: AudioFrame.self,
-                bufferingPolicy: .bufferingNewest(64)
+            epoch += 1
+            let sink = SystemAudioIngressSink(
+                epoch: epoch,
+                initialSequence: nextIngressSequence
             )
             let stream = SCStream(filter: filter, configuration: cfg, delegate: self)
             try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
             do {
                 try await stream.startCapture()
             } catch {
-                cont.finish()
+                sink.publisher.finish()
                 lifecycle.failStart(token: startToken)
                 throw AudioEngineError.engineStartFailed(error.localizedDescription)
             }
@@ -81,16 +99,16 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
                 // the hardware session. The lifecycle adopted that exact stream
                 // and retained its stop operation before publishStarted returned,
                 // including across a failed teardown so restart cannot replace it.
-                cont.finish()
+                sink.publisher.finish()
                 let teardownOutcome = await lifecycle.drain()
                 throw SystemAudioCaptureStartCancelled(
                     teardownOutcome: teardownOutcome
                 )
             }
             self.stream = stream
-            frameAdmission.open(session: stream, sink: cont)
+            frameAdmission.open(session: stream, sink: sink)
             running = true
-            return s
+            return sink.publisher.stream
         } catch {
             lifecycle.failStart(token: startToken)
             throw error
@@ -103,7 +121,10 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
     @discardableResult
     func stop() -> Task<SystemAudioCaptureTeardownOutcome, Never>? {
         running = false
-        frameAdmission.close()?.finish()
+        if let sink = frameAdmission.close() {
+            archive(sink)
+            sink.publisher.finish()
+        }
         self.stream = nil
         return lifecycle.beginStop { stream in
             await Self.stopStream(stream)
@@ -137,7 +158,10 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
                   self.stream.map(ObjectIdentifier.init) == stoppedID else { return }
             self.running = false
             self.stream = nil
-            self.frameAdmission.close()?.finish()
+            if let sink = self.frameAdmission.close() {
+                self.archive(sink)
+                sink.publisher.finish()
+            }
             _ = self.lifecycle.acknowledgeExternalStop(sessionID: stoppedID)
             self.onStreamStopped?()
         }
@@ -150,33 +174,50 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
         // The locked identity lookup admits only the exact current stream. A
         // late buffer from an old SCK session cannot reach a new continuation.
         guard type == .audio, sampleBuffer.isValid,
-              let cont = frameAdmission.sink(for: stream),
-              let frame = Self.frame(from: sampleBuffer) else { return }
-        cont.yield(frame)
+              let sink = frameAdmission.sink(for: stream),
+              let payload = Self.payload(from: sampleBuffer) else { return }
+        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let normalizedHostTimeNs = sink.normalizedHostTimeNs(for: presentationTime)
+        let callbackHostTimeNs = Int64(
+            CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock())) * 1_000_000_000
+        )
+        _ = sink.publisher.yield(
+            samples: payload.samples,
+            rms: payload.rms,
+            captureSampleRate: payload.sampleRate,
+            sourceSampleTime: presentationTime.isValid
+                ? Int64(CMTimeGetSeconds(presentationTime) * payload.sampleRate)
+                : nil,
+            normalizedHostTimeNs: normalizedHostTimeNs,
+            capturedAt: AudioHostClockWallMapper.date(
+                for: normalizedHostTimeNs,
+                callbackHostTimeNs: callbackHostTimeNs,
+                callbackWallDate: Date()
+            ),
+            provenance: presentationTime.isValid ? .screenCaptureKit : .callbackFallback
+        )
     }
 
     @MainActor
     private static func stopStream(
         _ stream: SCStream
     ) async -> SystemAudioCaptureTeardownOutcome {
-        var lastError = "unknown ScreenCaptureKit error"
         for attempt in 0..<2 {
             do {
                 try await stream.stopCapture()
                 return .stopped
             } catch {
-                lastError = error.localizedDescription
                 if attempt == 0 {
                     try? await Task.sleep(for: .milliseconds(100))
                 }
             }
         }
-        Log.audio.error("system audio stop failed after retry: \(lastError, privacy: .public)")
-        return .failed(lastError)
+        Log.audio.error("system_audio_stop_failed_after_retry")
+        return .failed("system_audio_stop_failed")
     }
 
     /// CMSampleBuffer (Float32, non-interleaved — SCStream audio format) → mono frame + RMS.
-    private static func frame(from sb: CMSampleBuffer) -> AudioFrame? {
+    private static func payload(from sb: CMSampleBuffer) -> (samples: [Float], rms: Float, sampleRate: Double)? {
         guard let asbd = sb.formatDescription?.audioStreamBasicDescription else { return nil }
         let sr = asbd.mSampleRate
         var mono: [Float] = []
@@ -200,6 +241,66 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
         var sum: Float = 0
         for v in mono { sum += v * v }
         let rms = (sum / Float(mono.count)).squareRoot()
-        return AudioFrame(samples: mono, rms: rms, sampleRate: sr, ts: Date())
+        return (mono, rms, sr)
+    }
+
+    @MainActor
+    private func archive(_ sink: SystemAudioIngressSink) {
+        lastAcceptedIngressSequence = sink.publisher.latestAcceptedIngressSequence
+            ?? lastAcceptedIngressSequence
+        nextIngressSequence = sink.publisher.nextAttemptedIngressSequence
+        completedGaps.append(contentsOf: sink.publisher.drainGaps())
+    }
+}
+
+private final class SystemAudioIngressSink: @unchecked Sendable {
+    let publisher: AudioIngressPublisher
+    private let lock = NSLock()
+    private var bestObservedOffsetSeconds: Double?
+    private var lastNormalizedNanoseconds: Int64?
+
+    init(epoch: Int, initialSequence: Int64) {
+        publisher = AudioIngressPublisher(
+            source: .system,
+            epoch: epoch,
+            capacity: 64,
+            initialSequence: initialSequence
+        )
+    }
+
+    func normalizedHostTimeNs(for presentationTime: CMTime) -> Int64 {
+        lock.withLock {
+            let hostSeconds = CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock()))
+            let fallback = Int64(hostSeconds * 1_000_000_000)
+            guard presentationTime.isValid else { return monotonic(fallback) }
+            let presentationSeconds = CMTimeGetSeconds(presentationTime)
+            guard presentationSeconds.isFinite, hostSeconds.isFinite else {
+                return monotonic(fallback)
+            }
+
+            // ScreenCaptureKit normally timestamps audio directly in host-clock
+            // time. Preserve it instead of baking callback-delivery latency into
+            // a one-shot anchor. For relative timelines, use the minimum
+            // observed delivery offset, which converges toward the clock offset
+            // while rejecting scheduling spikes.
+            let mappedSeconds: Double
+            if abs(hostSeconds - presentationSeconds) < 60 {
+                mappedSeconds = presentationSeconds
+            } else {
+                let observedOffset = hostSeconds - presentationSeconds
+                bestObservedOffsetSeconds = min(
+                    bestObservedOffsetSeconds ?? observedOffset,
+                    observedOffset
+                )
+                mappedSeconds = presentationSeconds + (bestObservedOffsetSeconds ?? observedOffset)
+            }
+            return monotonic(Int64(mappedSeconds * 1_000_000_000))
+        }
+    }
+
+    private func monotonic(_ candidate: Int64) -> Int64 {
+        let value = max(candidate, (lastNormalizedNanoseconds ?? (candidate - 1)) + 1)
+        lastNormalizedNanoseconds = value
+        return value
     }
 }
