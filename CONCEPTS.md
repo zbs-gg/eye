@@ -34,3 +34,21 @@ Capture Admission is evaluated again after asynchronous frame work and immediate
 
 ### Protected System Shell
 A macOS process that renders login or screen-saver surfaces rather than user activity and is therefore never eligible for capture, even when another session signal is stale.
+
+## Call evidence
+
+### Call Envelope
+
+A durable interval that binds one uninterrupted local call recording to its microphone and system-audio evidence, bookmarks, source health, and transcript state.
+
+### Bookmark Checkpoint
+
+A timestamp saved during an active Call Envelope that requests a provisional Whisper transcript for the new interval plus 45 seconds of preceding context without changing capture state.
+
+### Preferred Final Transcript
+
+The authoritative transcript produced by a full-call Whisper pass after recording ends. Bookmark Checkpoint text is a replaceable draft; bookmark timestamps remain durable.
+
+## Call evidence relationships
+
+A Call Envelope owns its Bookmark Checkpoints and source evidence. Bookmark Checkpoints produce provisional text; the completed Call Envelope produces one Preferred Final Transcript.
