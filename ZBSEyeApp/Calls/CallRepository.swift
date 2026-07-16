@@ -1237,6 +1237,325 @@ actor CallRepository {
         }
     }
 
+    func redactionSnapshot(callID: Int64) async throws -> CallRedactionSourceSnapshot {
+        try await database.pool.read { db in
+            guard let call = try CallRow.fetchOne(db, key: callID) else {
+                throw CallRepositoryError.callNotFound(callID)
+            }
+            guard call.state != .recording else {
+                throw CallRepositoryError.activeCallMustEnd(callID)
+            }
+            let pendingMutation = try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT 1 FROM call_media_mutations
+                    WHERE callId = ? AND kind = ? AND state IN (?, ?, ?)
+                    LIMIT 1
+                    """,
+                arguments: [
+                    callID,
+                    CallMediaMutationKind.redaction.rawValue,
+                    CallMediaMutationState.staged.rawValue,
+                    CallMediaMutationState.referenceSwapped.rawValue,
+                    CallMediaMutationState.cleanupPending.rawValue,
+                ]
+            )
+            guard pendingMutation == nil else {
+                throw CallRepositoryError.invalidMediaMutation(callID)
+            }
+            let spans = try CallSourceSpanRow.fetchAll(
+                db,
+                sql: "SELECT * FROM call_source_spans WHERE callId = ? ORDER BY source, epoch",
+                arguments: [callID]
+            )
+            let chunks = try CallAudioChunkRow.fetchAll(
+                db,
+                sql: "SELECT * FROM call_audio_chunks WHERE callId = ? ORDER BY source, epoch, sequence",
+                arguments: [callID]
+            )
+            return CallRedactionSourceSnapshot(call: call, spans: spans, chunks: chunks)
+        }
+    }
+
+    func callIDsIntersecting(fromMs: Int64, toMs: Int64) async throws -> [Int64] {
+        guard fromMs < toMs else { return [] }
+        return try await database.pool.read { db in
+            try Int64.fetchAll(
+                db,
+                sql: """
+                    SELECT id FROM calls
+                    WHERE startTs < ? AND COALESCE(endTs, 9223372036854775807) > ?
+                      AND (degradationReason IS NULL OR degradationReason != 'erase_pending')
+                    ORDER BY startTs, id
+                    """,
+                arguments: [toMs, fromMs]
+            )
+        }
+    }
+
+    func beginRedaction(
+        manifest: CallRedactionManifestV1,
+        nowMs: Int64
+    ) async throws -> CallMediaMutationRow {
+        try await database.pool.write { db in
+            guard var call = try CallRow.fetchOne(db, key: manifest.callID) else {
+                throw CallRepositoryError.callNotFound(manifest.callID)
+            }
+            guard call.state != .recording else {
+                throw CallRepositoryError.activeCallMustEnd(manifest.callID)
+            }
+            let identity = "redaction:\(manifest.callID):\(manifest.fromGeneration):\(manifest.fromMs):\(manifest.toMs)"
+            if let existing = try CallMediaMutationRow
+                .filter(Column("identity") == identity)
+                .fetchOne(db) {
+                return existing
+            }
+            guard manifest.formatVersion == CallRedactionManifestV1.formatVersion,
+                  manifest.fromMs < manifest.toMs,
+                  call.mediaGeneration == manifest.fromGeneration,
+                  manifest.toGeneration == manifest.fromGeneration + 1 else {
+                throw CallRepositoryError.invalidMediaMutation(manifest.callID)
+            }
+            let oldJSON = String(
+                decoding: try JSONEncoder().encode(manifest.obsoleteRelativePaths),
+                as: UTF8.self
+            )
+            var mutation = CallMediaMutationRow(
+                id: nil,
+                identity: identity,
+                callId: manifest.callID,
+                kind: .redaction,
+                state: .staged,
+                fromGeneration: manifest.fromGeneration,
+                toGeneration: manifest.toGeneration,
+                oldRelativePathsJSON: oldJSON,
+                newRelativePathsJSON: try manifest.encodedJSON(),
+                createdAtMs: nowMs,
+                updatedAtMs: nowMs,
+                errorCode: nil
+            )
+            try mutation.insert(db)
+
+            call.preferredRevisionId = nil
+            call.mediaGeneration = manifest.toGeneration
+            call.state = .failed
+            call.degradationReason = "redaction_pending"
+            call.updatedAtMs = nowMs
+            try call.update(db)
+
+            try db.execute(
+                sql: """
+                    DELETE FROM embed_queue WHERE kind = 2 AND row_id IN (
+                        SELECT id FROM call_transcript_revisions WHERE callId = ?
+                    )
+                    """,
+                arguments: [manifest.callID]
+            )
+            // Revisions precede jobs: deleting jobs first SET NULLs jobId and violates
+            // the revision identity CHECK before the revision can be invalidated.
+            try db.execute(
+                sql: "DELETE FROM call_transcript_revisions WHERE callId = ?",
+                arguments: [manifest.callID]
+            )
+            try db.execute(
+                sql: "DELETE FROM call_transcript_jobs WHERE callId = ?",
+                arguments: [manifest.callID]
+            )
+            try db.execute(
+                sql: """
+                    DELETE FROM call_bookmarks
+                    WHERE callId = ? AND acceptedAtMs >= ? AND acceptedAtMs < ?
+                    """,
+                arguments: [manifest.callID, manifest.fromMs, manifest.toMs]
+            )
+            try db.execute(
+                sql: """
+                    UPDATE call_bookmarks
+                    SET mediaGeneration = ?, state = ?
+                    WHERE callId = ?
+                    """,
+                arguments: [
+                    manifest.toGeneration,
+                    CallBookmarkState.pending.rawValue,
+                    manifest.callID,
+                ]
+            )
+            try db.execute(
+                sql: "UPDATE call_source_gaps SET mediaGeneration = ? WHERE callId = ?",
+                arguments: [manifest.toGeneration, manifest.callID]
+            )
+            return mutation
+        }
+    }
+
+    func commitRedactionReferenceSwap(
+        mutationID: Int64,
+        manifest: CallRedactionManifestV1,
+        nowMs: Int64
+    ) async throws {
+        try await database.pool.write { db in
+            guard var mutation = try CallMediaMutationRow.fetchOne(db, key: mutationID),
+                  mutation.kind == .redaction,
+                  mutation.callId == manifest.callID,
+                  mutation.fromGeneration == manifest.fromGeneration,
+                  mutation.toGeneration == manifest.toGeneration,
+                  let call = try CallRow.fetchOne(db, key: manifest.callID),
+                  call.mediaGeneration == manifest.toGeneration else {
+                throw CallRepositoryError.invalidMediaMutation(mutationID)
+            }
+            if mutation.state == .referenceSwapped
+                || mutation.state == .cleanupPending
+                || mutation.state == .completed {
+                return
+            }
+            guard mutation.state == .staged else {
+                throw CallRepositoryError.invalidMediaMutation(mutationID)
+            }
+
+            try db.execute(
+                sql: "DELETE FROM call_audio_chunks WHERE callId = ?",
+                arguments: [manifest.callID]
+            )
+            for survivor in manifest.survivors {
+                var chunk = CallAudioChunkRow(
+                    id: nil,
+                    callId: manifest.callID,
+                    sourceSpanId: survivor.sourceSpanID,
+                    source: survivor.source,
+                    epoch: survivor.epoch,
+                    sequence: survivor.sequence,
+                    mediaGeneration: manifest.toGeneration,
+                    startSample: survivor.startSample,
+                    endSample: survivor.endSample,
+                    startMs: survivor.startMs,
+                    endMs: survivor.endMs,
+                    relativePath: survivor.relativePath,
+                    bytes: survivor.bytes,
+                    sha256: survivor.sha256,
+                    finalized: true
+                )
+                try chunk.insert(db)
+            }
+
+            for requestedGap in manifest.redactedGaps {
+                let overlapping = try CallSourceGapRow.fetchAll(
+                    db,
+                    sql: """
+                        SELECT * FROM call_source_gaps
+                        WHERE callId = ? AND mediaGeneration = ? AND source = ?
+                          AND reason = 'redacted' AND endMs >= ? AND startMs <= ?
+                        """,
+                    arguments: [
+                        manifest.callID,
+                        manifest.toGeneration,
+                        requestedGap.source.rawValue,
+                        requestedGap.startMs,
+                        requestedGap.endMs,
+                    ]
+                )
+                let mergedStart = overlapping.reduce(requestedGap.startMs) { min($0, $1.startMs) }
+                let mergedEnd = overlapping.reduce(requestedGap.endMs) { max($0, $1.endMs) }
+                if !overlapping.isEmpty {
+                    let ids = overlapping.compactMap(\.id)
+                    try CallSourceGapRow.filter(ids.contains(Column("id"))).deleteAll(db)
+                }
+                var gap = CallSourceGapRow(
+                    id: nil,
+                    callId: manifest.callID,
+                    mediaGeneration: manifest.toGeneration,
+                    source: requestedGap.source,
+                    startMs: mergedStart,
+                    endMs: mergedEnd,
+                    reason: "redacted",
+                    createdAtMs: nowMs
+                )
+                try gap.insert(db)
+            }
+
+            let meEndSample = manifest.survivors
+                .filter { $0.source == .me }
+                .map(\.endSample)
+                .max()
+            let systemEndSample = manifest.survivors
+                .filter { $0.source == .system }
+                .map(\.endSample)
+                .max()
+            guard let logicalEndMs = call.endTs else {
+                throw CallRepositoryError.invalidMediaMutation(mutationID)
+            }
+            var final = CallTranscriptJobRow(
+                id: nil,
+                identity: "final:\(manifest.callID):\(manifest.toGeneration)",
+                callId: manifest.callID,
+                bookmarkId: nil,
+                kind: .final,
+                mediaGeneration: manifest.toGeneration,
+                state: .pending,
+                priority: 0,
+                logicalStartMs: call.startTs,
+                logicalEndMs: logicalEndMs,
+                contextStartMs: call.startTs,
+                meEndSample: meEndSample,
+                systemEndSample: systemEndSample,
+                coverageFrozen: true,
+                attempts: 0,
+                errorCode: "redaction_rebuild",
+                createdAtMs: nowMs,
+                updatedAtMs: nowMs
+            )
+            try final.insert(db)
+            try db.execute(
+                sql: """
+                    UPDATE calls
+                    SET state = ?, degradationReason = 'redacted', updatedAtMs = ?
+                    WHERE id = ?
+                    """,
+                arguments: [CallLifecycleState.finalizing.rawValue, nowMs, manifest.callID]
+            )
+            mutation.state = .referenceSwapped
+            mutation.updatedAtMs = nowMs
+            mutation.errorCode = nil
+            try mutation.update(db)
+        }
+    }
+
+    func completeRedaction(mutationID: Int64, nowMs: Int64) async throws {
+        try await database.pool.write { db in
+            guard let mutation = try CallMediaMutationRow.fetchOne(db, key: mutationID),
+                  mutation.kind == .redaction,
+                  mutation.state == .referenceSwapped || mutation.state == .cleanupPending else {
+                throw CallRepositoryError.invalidMediaMutation(mutationID)
+            }
+            try db.execute(
+                sql: """
+                    UPDATE call_media_mutations
+                    SET state = ?, updatedAtMs = ?, errorCode = NULL
+                    WHERE id = ?
+                    """,
+                arguments: [CallMediaMutationState.completed.rawValue, nowMs, mutationID]
+            )
+        }
+    }
+
+    func pendingRedactions() async throws -> [CallMediaMutationRow] {
+        try await database.pool.read { db in
+            try CallMediaMutationRow.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM call_media_mutations
+                    WHERE kind = ? AND state IN (?, ?, ?)
+                    ORDER BY id
+                    """,
+                arguments: [
+                    CallMediaMutationKind.redaction.rawValue,
+                    CallMediaMutationState.staged.rawValue,
+                    CallMediaMutationState.referenceSwapped.rawValue,
+                    CallMediaMutationState.cleanupPending.rawValue,
+                ]
+            )
+        }
+    }
+
     func pendingErasePreparations() async throws -> [CallErasePreparation] {
         try await database.pool.read { db in
             let mutations = try CallMediaMutationRow.fetchAll(
@@ -1302,7 +1621,11 @@ actor CallRepository {
         }
     }
 
-    func beginEraseCall(callID: Int64, nowMs: Int64) async throws -> CallErasePreparation {
+    func beginEraseCall(
+        callID: Int64,
+        nowMs: Int64,
+        additionalRelativePaths: [String] = []
+    ) async throws -> CallErasePreparation {
         try await database.pool.write { db in
             guard var call = try CallRow.fetchOne(db, key: callID) else {
                 throw CallRepositoryError.callNotFound(callID)
@@ -1340,12 +1663,36 @@ actor CallRepository {
                 .filter(Column("callId") == callID)
                 .order(Column("id"))
                 .fetchAll(db)
-            let paths = chunks.map(\.relativePath)
+            let redactionMutations = try CallMediaMutationRow.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM call_media_mutations
+                    WHERE callId = ? AND kind = ?
+                      AND state NOT IN (?, ?, ?)
+                    """,
+                arguments: [
+                    callID,
+                    CallMediaMutationKind.redaction.rawValue,
+                    CallMediaMutationState.completed.rawValue,
+                    CallMediaMutationState.rolledBack.rawValue,
+                    CallMediaMutationState.failed.rawValue,
+                ]
+            )
+            var paths = Set(chunks.map(\.relativePath))
+            paths.formUnion(additionalRelativePaths)
+            for redaction in redactionMutations {
+                guard let data = redaction.oldRelativePathsJSON.data(using: .utf8),
+                      let oldPaths = try? JSONDecoder().decode([String].self, from: data) else {
+                    continue
+                }
+                paths.formUnion(oldPaths)
+            }
+            let sortedPaths = paths.sorted()
             let bytes = chunks.reduce(Int64(0)) { partial, chunk in
                 let next = partial.addingReportingOverflow(chunk.bytes)
                 return next.overflow ? Int64.max : next.partialValue
             }
-            let pathData = try JSONEncoder().encode(paths)
+            let pathData = try JSONEncoder().encode(sortedPaths)
             guard let pathJSON = String(data: pathData, encoding: .utf8) else {
                 throw CallRepositoryError.invalidMediaMutation(callID)
             }
@@ -1413,7 +1760,7 @@ actor CallRepository {
             return CallErasePreparation(
                 mutationID: mutationID,
                 callID: callID,
-                relativePaths: paths,
+                relativePaths: sortedPaths,
                 bytes: bytes
             )
         }

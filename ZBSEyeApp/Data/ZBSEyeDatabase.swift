@@ -82,7 +82,7 @@ final class ZBSEyeDatabase: Sendable {
         [
             "v1", "v2_vector", "v3_vec_e5_384", "v4_vec_transcripts",
             "v5_browser_visits", "v6_embed_queue", "v7_call_envelopes",
-            "v8_call_transcript_projection_gaps",
+            "v8_call_transcript_projection_gaps", "v9_call_source_gaps",
         ]
     private static func warnIfNewerSchema(_ pool: DatabasePool) {
         let applied = (try? pool.read { db in
@@ -598,6 +598,32 @@ final class ZBSEyeDatabase: Sendable {
                 ) WITHOUT ROWID;
                 CREATE INDEX idx_call_projection_gaps_bookmark
                     ON call_transcript_projection_gaps(bookmarkId, revisionId);
+                """)
+        }
+        // v9: privacy redaction creates an explicit interval in the current media generation.
+        // Source spans describe capture epochs and cannot represent a hole inside an epoch without
+        // rewriting their immutable clock mapping, so durable gaps live beside them.
+        m.registerMigration("v9_call_source_gaps") { db in
+            try db.execute(sql: """
+                CREATE TABLE call_source_gaps (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    callId          INTEGER NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+                    mediaGeneration INTEGER NOT NULL CHECK (mediaGeneration >= 0),
+                    source          TEXT NOT NULL CHECK (source IN ('me', 'system')),
+                    startMs         INTEGER NOT NULL,
+                    endMs           INTEGER NOT NULL CHECK (endMs > startMs),
+                    reason          TEXT NOT NULL,
+                    createdAtMs     INTEGER NOT NULL,
+                    UNIQUE(callId, mediaGeneration, source, startMs, endMs, reason)
+                );
+                CREATE INDEX idx_call_source_gaps_call_time
+                    ON call_source_gaps(callId, mediaGeneration, startMs, endMs);
+                CREATE TRIGGER call_source_gaps_generation_bi
+                BEFORE INSERT ON call_source_gaps BEGIN
+                    SELECT CASE WHEN NEW.mediaGeneration != (
+                        SELECT mediaGeneration FROM calls WHERE id = NEW.callId
+                    ) THEN RAISE(ABORT, 'call source gap generation is stale') END;
+                END;
                 """)
         }
         return m

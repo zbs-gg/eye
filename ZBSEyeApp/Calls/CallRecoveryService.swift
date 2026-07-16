@@ -77,9 +77,23 @@ actor CallRecoveryService {
     }
 
     private func replayMutationJournal(nowMs: Int64) async throws -> (completed: Int, rolledBack: Int) {
-        var completed = 0
+        // A versioned redaction is an already accepted privacy intent. Reuse the runtime executor
+        // so bootstrap always moves it forward; only legacy path-list mutations below may roll back.
+        let redactions = try await CallEvidenceDeletionService(
+            repository: repository,
+            mediaRoot: mediaRoot
+        ).resumePendingRedactions(nowMs: nowMs)
+        var completed = redactions.count
         var rolledBack = 0
         for mutation in try await repository.recoverableMutations() {
+            // The executor above already attempted every versioned redaction. If its manifest is
+            // corrupt, preserve the accepted generation tombstone and retryable journal row rather
+            // than converting a privacy intent into a terminal failed/rolled-back mutation.
+            if mutation.kind == .redaction,
+               mutation.newRelativePathsJSON.trimmingCharacters(in: .whitespacesAndNewlines)
+                .hasPrefix("{") {
+                continue
+            }
             guard let mutationID = mutation.id,
                   let oldPaths = decodePaths(mutation.oldRelativePathsJSON),
                   let newPaths = decodePaths(mutation.newRelativePathsJSON) else {

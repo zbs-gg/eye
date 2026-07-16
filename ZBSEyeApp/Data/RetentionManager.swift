@@ -219,6 +219,17 @@ actor RetentionManager {
                 add(erasure, to: &report)
             }
             try checkOperationContinuation()
+        } else if let callDeletion {
+            let redactions = try await callDeletion.redactIntersectingRange(
+                fromMs: fromMs,
+                toMs: toMs,
+                nowMs: Int64(Date().timeIntervalSince1970 * 1_000)
+            )
+            for redaction in redactions {
+                let next = report.callBytesDeleted.addingReportingOverflow(redaction.bytesRemoved)
+                report.callBytesDeleted = next.overflow ? Int64.max : next.partialValue
+            }
+            try checkOperationContinuation()
         }
         while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
             let (count, paths): (Int, [String]) = try await db.pool.write { database in

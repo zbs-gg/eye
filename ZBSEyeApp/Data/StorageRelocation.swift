@@ -158,7 +158,7 @@ actor StorageRelocator {
         for t in [
             "screen_captures", "text_blocks", "audio_captures", "transcriptions",
             "apps", "browser_visits", "embed_queue", "calls", "call_source_spans",
-            "call_audio_chunks", "call_bookmarks", "call_transcript_jobs",
+            "call_audio_chunks", "call_source_gaps", "call_bookmarks", "call_transcript_jobs",
             "call_transcript_revisions", "call_transcript_segments",
             "call_transcript_projection_gaps", "call_media_mutations",
         ] {

@@ -69,6 +69,11 @@ final class SecureCallSpoolRoot: @unchecked Sendable {
     }
 
     func readPrefix(relativePath: String, byteCount: Int) throws -> Data {
+        try readRange(relativePath: relativePath, offset: 0, byteCount: byteCount)
+    }
+
+    func readRange(relativePath: String, offset: Int64, byteCount: Int) throws -> Data {
+        guard offset >= 0, byteCount >= 0 else { throw CallSpoolError.shortRead }
         let components = try safeComponents(relativePath)
         let parent = try openParent(components: Array(components.dropLast()), create: false)
         defer { _ = close(parent) }
@@ -85,7 +90,36 @@ final class SecureCallSpoolRoot: @unchecked Sendable {
         }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
         defer { try? handle.close() }
+        try handle.seek(toOffset: UInt64(offset))
         return try handle.read(upToCount: byteCount) ?? Data()
+    }
+
+    func synchronizeParent(relativePath: String) throws {
+        let components = try safeComponents(relativePath)
+        let parent = try openParent(components: Array(components.dropLast()), create: false)
+        defer { _ = close(parent) }
+        guard fsync(parent) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+    }
+
+    /// Removes only the named leaf below the descriptor-pinned media root. Every
+    /// intermediate directory is opened with O_NOFOLLOW, so a symlink swap cannot
+    /// redirect a privacy cleanup outside Eye's managed tree.
+    @discardableResult
+    func removeFile(relativePath: String) throws -> Bool {
+        let components = try safeComponents(relativePath)
+        let parent = try openParent(components: Array(components.dropLast()), create: false)
+        defer { _ = close(parent) }
+        let result = components.last!.withCString { unlinkat(parent, $0, 0) }
+        if result == 0 {
+            guard fsync(parent) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            return true
+        }
+        if errno == ENOENT { return false }
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 
     private func safeComponents(_ relativePath: String) throws -> [String] {

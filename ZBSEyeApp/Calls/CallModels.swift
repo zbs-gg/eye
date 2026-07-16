@@ -134,6 +134,21 @@ struct CallAudioChunkRow: Codable, FetchableRecord, MutablePersistableRecord, Se
     mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 }
 
+struct CallSourceGapRow: Codable, FetchableRecord, MutablePersistableRecord, Sendable, Equatable {
+    static let databaseTableName = "call_source_gaps"
+
+    var id: Int64?
+    var callId: Int64
+    var mediaGeneration: Int
+    var source: CallAudioSource
+    var startMs: Int64
+    var endMs: Int64
+    var reason: String
+    var createdAtMs: Int64
+
+    mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
+}
+
 struct CallBookmarkRow: Codable, FetchableRecord, MutablePersistableRecord, Sendable, Equatable {
     static let databaseTableName = "call_bookmarks"
 
@@ -241,6 +256,19 @@ struct CallMediaMutationRow: Codable, FetchableRecord, MutablePersistableRecord,
     var errorCode: String?
 
     mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
+}
+
+struct CallRedactionSourceSnapshot: Sendable, Equatable {
+    let call: CallRow
+    let spans: [CallSourceSpanRow]
+    let chunks: [CallAudioChunkRow]
+}
+
+struct CallRedactionReport: Sendable, Equatable {
+    let callID: Int64
+    let fromGeneration: Int
+    let toGeneration: Int
+    let bytesRemoved: Int64
 }
 
 struct CallSourceSpanDraft: Sendable, Equatable {

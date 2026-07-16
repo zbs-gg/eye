@@ -93,9 +93,9 @@ struct CallDetailView: View {
     private func sourceSection(_ evidence: CallEvidencePage) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Audio sources").font(.headline)
-            sourceRow(.me, spans: evidence.sourceSpans)
-            sourceRow(.system, spans: evidence.sourceSpans)
-            if evidence.sourceSpansTruncated {
+            sourceRow(.me, spans: evidence.sourceSpans, gaps: evidence.sourceGaps)
+            sourceRow(.system, spans: evidence.sourceSpans, gaps: evidence.sourceGaps)
+            if evidence.sourceSpansTruncated || evidence.sourceGapsTruncated {
                 Text("Source history is summarized after \(CallEvidenceQueryService.maximumSourceSpans) changes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -105,10 +105,12 @@ struct CallDetailView: View {
 
     private func sourceRow(
         _ source: CallAudioSource,
-        spans: [CallSourceSpanRow]
+        spans: [CallSourceSpanRow],
+        gaps: [CallSourceGapRow]
     ) -> some View {
         let matching = spans.filter { $0.source == source }
         let hasGap = matching.contains { $0.availability == .gap || $0.gapReason != nil }
+            || gaps.contains { $0.source == source }
         let available = matching.contains { $0.availability == .available }
         let title = source == .me ? "You · microphone" : "Others · system audio"
         let status = hasGap ? "Recorded with gaps" : (available ? "Recorded" : "Not recorded")

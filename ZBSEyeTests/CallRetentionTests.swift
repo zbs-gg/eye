@@ -221,6 +221,43 @@ final class CallRetentionTests: XCTestCase {
         XCTAssertEqual(counts.calls, 1)
     }
 
+    func testNarrowPrivacyRangeRedactsIntersectingCallWithoutErasingEnvelope() async throws {
+        let fixture = try CallRetentionFixture()
+        let callID = try await fixture.makeEndedCall(key: "range-redaction", startedAtMs: 1_000)
+
+        let report = try await fixture.retention.deleteRange(fromMs: 1_500, toMs: 2_500)
+
+        XCTAssertEqual(report.callsDeleted, 0)
+        XCTAssertEqual(report.callBytesDeleted, 4)
+        let snapshot = try await fixture.database.pool.read { db in
+            (
+                call: try CallRow.fetchOne(db, key: callID),
+                chunks: try CallAudioChunkRow.fetchAll(
+                    db,
+                    sql: "SELECT * FROM call_audio_chunks WHERE callId = ? ORDER BY startSample",
+                    arguments: [callID]
+                ),
+                gaps: try CallSourceGapRow.fetchAll(
+                    db,
+                    sql: "SELECT * FROM call_source_gaps WHERE callId = ?",
+                    arguments: [callID]
+                )
+            )
+        }
+        XCTAssertNotNil(snapshot.call)
+        XCTAssertEqual(snapshot.call?.mediaGeneration, 1)
+        XCTAssertEqual(snapshot.chunks.count, 2)
+        XCTAssertEqual(snapshot.gaps.count, 1)
+        let gap = try XCTUnwrap(snapshot.gaps.first)
+        XCTAssertEqual(gap.startMs, 1_500)
+        XCTAssertEqual(gap.endMs, 2_500)
+        var remaining = Data()
+        for chunk in snapshot.chunks {
+            remaining.append(try Data(contentsOf: fixture.mediaRoot.appendingPathComponent(chunk.relativePath)))
+        }
+        XCTAssertEqual(remaining, Data([1, 0, 4, 0]))
+    }
+
     func testWholeEraseDrainsWorkerScavengesScratchAndConditionallyResumes() async throws {
         let fixture = try CallRetentionFixture()
         let callID = try await fixture.makeEndedCall(key: "worker-barrier", startedAtMs: 1_000)
@@ -394,7 +431,7 @@ private final class CallRetentionFixture {
                 callId: callID,
                 source: .me,
                 epoch: 0,
-                sampleRate: 16_000,
+                sampleRate: 2,
                 startedAtMs: startedAtMs,
                 startSample: 0,
                 startHostTimeNs: 0,
@@ -422,7 +459,7 @@ private final class CallRetentionFixture {
                 endMs: startedAtMs + 2_000,
                 relativePath: relative,
                 bytes: bytes,
-                sha256: "fixture",
+                sha256: nil,
                 finalized: true
             )
         )

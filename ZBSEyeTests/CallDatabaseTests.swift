@@ -14,7 +14,7 @@ final class CallDatabaseTests: XCTestCase {
             "calls", "call_source_spans", "call_audio_chunks", "call_bookmarks",
             "call_transcript_jobs", "call_transcript_revisions",
             "call_transcript_segments", "call_transcript_projection_gaps",
-            "call_media_mutations", "call_transcript_fts",
+            "call_media_mutations", "call_source_gaps", "call_transcript_fts",
         ].allSatisfy(freshTables.contains))
 
         let upgraded = try CallDatabaseTestStore(runMigrations: false)
@@ -39,7 +39,7 @@ final class CallDatabaseTests: XCTestCase {
             )
         }
         XCTAssertEqual(snapshot.appCount, 1)
-        XCTAssertEqual(snapshot.migrations.last, "v8_call_transcript_projection_gaps")
+        XCTAssertEqual(snapshot.migrations.last, "v9_call_source_gaps")
         XCTAssertGreaterThanOrEqual(snapshot.triggerCount, 6)
     }
 

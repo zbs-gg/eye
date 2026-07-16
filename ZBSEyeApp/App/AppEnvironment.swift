@@ -1107,15 +1107,14 @@ final class AppEnvironment {
         let now = Date()
         let toMs: Int64 = lastSeconds == nil ? Int64.max : msFromDate(now)
         let fromMs: Int64 = lastSeconds.map { msFromDate(now.addingTimeInterval(-$0)) } ?? 0
-        let fullDeletion = lastSeconds == nil
         var ownsWorkerResume = false
-        if fullDeletion {
-            if let callTranscriptWorker {
-                ownsWorkerResume = await callTranscriptWorker
-                    .suspendAndDrainForEvidenceMutation()
-            }
-            await calls.endAndWait(reason: .privacy)
+        if let callTranscriptWorker {
+            ownsWorkerResume = await callTranscriptWorker
+                .suspendAndDrainForEvidenceMutation()
         }
+        // A privacy cut is terminal for an intersecting active Call Envelope. Flush/close it first;
+        // live mutation would let the spool re-persist bytes after the accepted deletion boundary.
+        await calls.endAndWait(reason: .privacy)
         // CRITICAL (privacy): an open VAD segment lives in memory — deleteRange doesn't see it.
         // We flush in-flight audio BEFORE the delete, otherwise "said a password → wipe" would survive
         // up to 28s of speech captured before the click (it would close and land in the DB AFTER the delete).

@@ -46,6 +46,10 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   XCFramework and can separately download, resume, verify, smoke-test, and remove the full Whisper Large V3
   Turbo model. Transcription runs in a bounded one-job helper process; no speech model ships in the base app
   and there is no cloud fallback.
+- **Frame-exact call privacy redaction.** Deleting a narrow history interval now preserves the Call
+  Envelope and byte-identical PCM outside the selection, removes covered microphone/system samples and
+  Bookmarks, invalidates stale transcript/search state immediately, records an explicit redacted gap,
+  and rebuilds one current-generation final transcript. The journal resumes forward after a crash.
 - **One-click built-in local AI.** On qualified Apple Silicon Macs, **ZBS Eye Local** downloads a pinned,
   verified MLX model after an explicit click and then powers Ask, Daily Insights, summaries, and generated
   activity labels offline — no LM Studio, Ollama, account, API key, or separate server required. Setup is

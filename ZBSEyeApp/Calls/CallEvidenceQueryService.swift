@@ -11,6 +11,8 @@ struct CallEvidencePage: Sendable, Equatable {
     let call: CallRow
     let sourceSpans: [CallSourceSpanRow]
     let sourceSpansTruncated: Bool
+    let sourceGaps: [CallSourceGapRow]
+    let sourceGapsTruncated: Bool
     let bookmarks: [CallBookmarkRow]
     let bookmarksTruncated: Bool
     let finalJob: CallTranscriptJobRow?
@@ -28,6 +30,7 @@ struct CallEvidencePage: Sendable, Equatable {
 actor CallEvidenceQueryService {
     static let maximumSegmentPage = 200
     static let maximumSourceSpans = 512
+    static let maximumSourceGaps = 1_000
     static let maximumBookmarks = 1_000
     static let maximumProjectionGaps = 1_000
 
@@ -89,6 +92,15 @@ actor CallEvidenceQueryService {
                 arguments: [callID, Self.maximumBookmarks + 1]
             )
             let sourceSpans = Array(sourceRows.prefix(Self.maximumSourceSpans))
+            let sourceGapRows = try CallSourceGapRow.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM call_source_gaps
+                    WHERE callId = ? AND mediaGeneration = ?
+                    ORDER BY startMs, source, id LIMIT ?
+                    """,
+                arguments: [callID, call.mediaGeneration, Self.maximumSourceGaps + 1]
+            )
             let bookmarks = Array(bookmarkRows.prefix(Self.maximumBookmarks))
             let finalJob = try CallTranscriptJobRow.fetchOne(
                 db,
@@ -143,6 +155,8 @@ actor CallEvidenceQueryService {
                 call: call,
                 sourceSpans: sourceSpans,
                 sourceSpansTruncated: sourceRows.count > Self.maximumSourceSpans,
+                sourceGaps: Array(sourceGapRows.prefix(Self.maximumSourceGaps)),
+                sourceGapsTruncated: sourceGapRows.count > Self.maximumSourceGaps,
                 bookmarks: bookmarks,
                 bookmarksTruncated: bookmarkRows.count > Self.maximumBookmarks,
                 finalJob: finalJob,

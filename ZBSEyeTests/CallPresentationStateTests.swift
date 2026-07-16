@@ -167,6 +167,8 @@ final class CallPresentationStateTests: XCTestCase {
             call: call,
             sourceSpans: [],
             sourceSpansTruncated: false,
+            sourceGaps: [],
+            sourceGapsTruncated: false,
             bookmarks: [],
             bookmarksTruncated: false,
             finalJob: job,
