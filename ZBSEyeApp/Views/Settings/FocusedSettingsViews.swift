@@ -564,7 +564,12 @@ struct DataStorageSettingsView: View {
                     into: destination,
                     includeMedia: media
                 )
-                return "Done · \(report.days) days · \(report.path)"
+                var parts = ["Done", "\(report.days) days", "\(report.calls) calls"]
+                if media { parts.append("\(report.mediaFiles) media files") }
+                if report.mediaErrors > 0 {
+                    parts.append("\(report.mediaErrors) copy errors")
+                }
+                return parts.joined(separator: " · ") + " · \(report.path)"
             } catch {
                 return String(localized: "Export failed: \(error.localizedDescription)")
             }

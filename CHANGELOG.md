@@ -50,6 +50,9 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   Envelope and byte-identical PCM outside the selection, removes covered microphone/system samples and
   Bookmarks, invalidates stale transcript/search state immediately, records an explicit redacted gap,
   and rebuilds one current-generation final transcript. The journal resumes forward after a crash.
+- **Portable Call Envelope export.** Existing history export now adds stable per-call JSON manifests with
+  source availability and gaps, Bookmarks, final/provisional status, and timed speaker-labeled transcript.
+  Optional audio copies use only verified current-generation chunks and bundle-relative paths.
 - **One-click built-in local AI.** On qualified Apple Silicon Macs, **ZBS Eye Local** downloads a pinned,
   verified MLX model after an explicit click and then powers Ask, Daily Insights, summaries, and generated
   activity labels offline — no LM Studio, Ollama, account, API key, or separate server required. Setup is

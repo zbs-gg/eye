@@ -149,6 +149,7 @@ targets:
       - path: ZBSEyeApp/Connections/LocalAIContextPolicy.swift
       - path: ZBSEyeApp/Connections/LocalAIOutputContract.swift
       - path: ZBSEyeApp/Connections/LocalAIAnswerToolContract.swift
+      - path: ZBSEyeApp/Automations/ExportService.swift
       - path: ZBSEyeApp/Connections/BuiltInModelManifest.swift
       - path: ZBSEyeApp/Connections/BuiltInModelVerifier.swift
       - path: ZBSEyeApp/Connections/BuiltInModelLifecycle.swift

@@ -906,7 +906,13 @@ final class AppEnvironment {
             self.automations = automationsStore
 
             // Export (anti-lock-in): markdown by day ± media.
-            self.export = ExportService(db: db, summary: summarySvc, mediaDirectory: storage.mediaDirectory)
+            self.export = ExportService(
+                db: db,
+                mediaDirectory: storage.mediaDirectory,
+                collectDay: { day in
+                    try await summarySvc.collect(day: day, safety: .default)
+                }
+            )
             self.historyImporter = HistoryImporter(db: db)
 
             // Local REST /v1 (auth on everything except /health).
