@@ -63,6 +63,7 @@ final class AppEnvironment {
     private(set) var ingest: IngestService?
     private(set) var callRepository: CallRepository?
     private(set) var callEvidenceQueryService: CallEvidenceQueryService?
+    private(set) var callEvidenceDeletionService: CallEvidenceDeletionService?
     private(set) var callRecovery: CallRecoveryService?
     private(set) var retention: RetentionManager?
     @ObservationIgnored private var automaticRetentionAdmission: AutomaticRetentionAdmission?
@@ -301,6 +302,9 @@ final class AppEnvironment {
 
     private func bootstrapOnce() async {
         ZBSEyeHTTPServer.log("bootstrap: begin")
+        calls.admissionAllowed = { [weak self] in
+            self?.storageSettings.relocationInProgress == false
+        }
         rewards.applyAppIcon()   // the chosen alternate app icon (dock) — apply on startup
         // Crash marker: if the clean-exit flag wasn't set on the previous launch → the session died
         // incorrectly (kill/crash/kernel panic). Visible in Console.app for remote diagnostics.
@@ -498,6 +502,11 @@ final class AppEnvironment {
             let callRepository = CallRepository(database: db)
             self.callRepository = callRepository
             self.callEvidenceQueryService = CallEvidenceQueryService(database: db)
+            let callEvidenceDeletionService = CallEvidenceDeletionService(
+                repository: callRepository,
+                mediaRoot: storage.mediaDirectory
+            )
+            self.callEvidenceDeletionService = callEvidenceDeletionService
             let callRecovery = CallRecoveryService(
                 repository: callRepository,
                 mediaRoot: storage.mediaDirectory
@@ -543,6 +552,18 @@ final class AppEnvironment {
                     modelStore: whisperModelStore
                 )
                 self.callTranscriptWorker = callTranscriptWorker
+                await callEvidenceDeletionService.attachTranscriptWorker(
+                    suspend: {
+                        await callTranscriptWorker.suspendAndDrainForEvidenceMutation()
+                    },
+                    resume: { [weak self] in
+                        let allowed = await MainActor.run {
+                            self?.recording.lowDiskPaused == false
+                                && self?.storageSettings.relocationInProgress == false
+                        }
+                        if allowed { await callTranscriptWorker.resume() }
+                    }
+                )
                 speechModel.attach(
                     whisperModelStore,
                     suspendWorker: { await callTranscriptWorker.suspendAndDrain() },
@@ -651,7 +672,11 @@ final class AppEnvironment {
                 try? await Task.sleep(for: .seconds(30))
                 await backfill.run()
             }
-            let retention = RetentionManager(db: db, storage: storage)
+            let retention = RetentionManager(
+                db: db,
+                storage: storage,
+                callDeletion: callEvidenceDeletionService
+            )
             self.retention = retention
 
             // Capture loop (the heart). Starts on toggle in RecordingStore.
@@ -921,6 +946,8 @@ final class AppEnvironment {
                             report = PruneReport(
                                 framesDeleted: automatic.framesDeleted,
                                 audioDeleted: automatic.audioDeleted,
+                                callsDeleted: automatic.callsDeleted,
+                                callBytesDeleted: automatic.callBytesDeleted,
                                 orphansDeleted: 0
                             )
                         } catch AutomaticRetentionError.postCommitFileDeletionFailed {
@@ -935,8 +962,11 @@ final class AppEnvironment {
                     } else {
                         report = nil
                     }
-                    if let r = report, r.framesDeleted + r.audioDeleted + r.orphansDeleted > 0 {
-                        Log.retention.info("prune: frames \(r.framesDeleted) audio \(r.audioDeleted) orphans \(r.orphansDeleted)")
+                    if let r = report,
+                       r.framesDeleted + r.audioDeleted + r.callsDeleted + r.orphansDeleted > 0 {
+                        Log.retention.info(
+                            "prune: frames \(r.framesDeleted) audio \(r.audioDeleted) calls \(r.callsDeleted) orphans \(r.orphansDeleted)"
+                        )
                     }
                     // 👁 delighter: warmly mark a crossed "round" memory milestone (once each)
                     if let frames = try? await db.pool.read({ try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM screen_captures") ?? 0 }) {
@@ -1077,13 +1107,29 @@ final class AppEnvironment {
         let now = Date()
         let toMs: Int64 = lastSeconds == nil ? Int64.max : msFromDate(now)
         let fromMs: Int64 = lastSeconds.map { msFromDate(now.addingTimeInterval(-$0)) } ?? 0
+        let fullDeletion = lastSeconds == nil
+        var ownsWorkerResume = false
+        if fullDeletion {
+            if let callTranscriptWorker {
+                ownsWorkerResume = await callTranscriptWorker
+                    .suspendAndDrainForEvidenceMutation()
+            }
+            await calls.endAndWait(reason: .privacy)
+        }
         // CRITICAL (privacy): an open VAD segment lives in memory — deleteRange doesn't see it.
         // We flush in-flight audio BEFORE the delete, otherwise "said a password → wipe" would survive
         // up to 28s of speech captured before the click (it would close and land in the DB AFTER the delete).
         await audio?.discardInFlight(from: dateFromMs(fromMs), to: lastSeconds == nil ? now : dateFromMs(toMs))
         let report = try? await retention.deleteRange(fromMs: fromMs, toMs: toMs)
+        if ownsWorkerResume,
+           !recording.lowDiskPaused,
+           !storageSettings.relocationInProgress {
+            await callTranscriptWorker?.resume()
+        }
         if let r = report {
-            Log.retention.info("manual delete: frames \(r.framesDeleted) audio \(r.audioDeleted)")
+            Log.retention.info(
+                "manual delete: frames \(r.framesDeleted) audio \(r.audioDeleted) calls \(r.callsDeleted)"
+            )
         }
         await storageSettings.refresh(storage: storage)
         // the timeline cursor may have pointed into what was wiped — refresh it
@@ -1125,6 +1171,10 @@ final class AppEnvironment {
     func relocate(to chosen: URL) async {
         guard let db, let storage, let ingest,
               !storageSettings.relocationInProgress else { return }
+        guard !calls.isActive else {
+            storageSettings.relocationError = "End the active call before moving storage. The recording was not interrupted."
+            return
+        }
         let previousRoot = StorageLocation.dataRoot()
         let previousRootWasRelocated = StorageLocation.isRelocated()
         var committedNewRoot = false
@@ -1132,7 +1182,6 @@ final class AppEnvironment {
         storageSettings.relocationError = nil
         storageSettings.relocationProgress = 0
         storageSettings.relocationStatus = "Stopping recording…"
-        await calls.endAndWait(reason: .maintenance)
         let recordingDrainTask = Task { @MainActor [recording] in
             await recording.pauseForMaintenanceAndDrain()
         }

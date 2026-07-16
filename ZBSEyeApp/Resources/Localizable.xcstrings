@@ -3480,12 +3480,12 @@
         }
       }
     },
-    "Old data is deleted automatically when the limit is exceeded (every 30 minutes). The limit covers moments and audio; the search index grows separately and is cleaned along with history. \"Forever\" — at your own risk: the disk is finite.": {
+    "Old data is deleted automatically when the limit is exceeded (every 30 minutes). The limit covers moments, audio, and calls; the search index grows separately and is cleaned along with history. \"Forever\" — at your own risk: the disk is finite.": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Старые данные удаляются автоматически при превышении лимита (каждые 30 минут). Лимит покрывает моменты и звук; поисковый индекс растёт отдельно и чистится вместе с историей. «Навсегда» — на свой риск: диск не бесконечен."
+            "value": "Старые данные удаляются автоматически при превышении лимита (каждые 30 минут). Лимит покрывает моменты, обычный звук и звонки; поисковый индекс растёт отдельно и чистится вместе с историей. «Навсегда» — на свой риск: диск не бесконечен."
           }
         }
       }

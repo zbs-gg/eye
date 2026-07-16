@@ -10,17 +10,23 @@ final class RetentionManagerTests: XCTestCase {
         defer { harness.remove() }
         try harness.writeFile("frame.heic", bytes: 3)
         try harness.writeFile("audio.m4a", bytes: 5)
+        try harness.writeFile("calls/1/me/epoch-0000/chunk-000000.pcm", bytes: 7)
         try await harness.insertScreen(ts: 1, path: "frame.heic", bytes: 3)
         try await harness.insertScreen(ts: 2, path: nil, bytes: nil)
         try await harness.insertAudio(ts: 3, path: "audio.m4a", bytes: 5)
         try await harness.insertAudio(ts: 4, path: "imported", bytes: nil)
+        try await harness.insertCallAudio(
+            ts: 5,
+            path: "calls/1/me/epoch-0000/chunk-000000.pcm",
+            bytes: 7
+        )
 
         let evidence = await CapturedMediaReconciler.reconcile(
             db: harness.db,
             storage: harness.storage
         )
 
-        XCTAssertEqual(evidence, .reconciled(capturedMediaBytes: 8))
+        XCTAssertEqual(evidence, .reconciled(capturedMediaBytes: 15))
     }
 
     func testReconcilerFailsClosedForMissingStaleAndOrphanedMedia() async throws {
@@ -49,6 +55,16 @@ final class RetentionManagerTests: XCTestCase {
             let harness = try Harness()
             defer { harness.remove() }
             try harness.writeFile("orphan.m4a", bytes: 2)
+            let evidence = await CapturedMediaReconciler.reconcile(
+                db: harness.db,
+                storage: harness.storage
+            )
+            XCTAssertEqual(evidence, .uncertain(.orphanCapturedMedia))
+        }
+        do {
+            let harness = try Harness()
+            defer { harness.remove() }
+            try harness.writeFile("calls/99/me/epoch-0000/orphan.pcm", bytes: 2)
             let evidence = await CapturedMediaReconciler.reconcile(
                 db: harness.db,
                 storage: harness.storage
@@ -421,11 +437,20 @@ private final class Harness: @unchecked Sendable {
     }
 
     func writeFile(_ name: String, bytes: Int) throws {
-        try Data(repeating: 0xA5, count: bytes).write(to: storage.url(forRelative: name))
+        let url = storage.url(forRelative: name)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data(repeating: 0xA5, count: bytes).write(to: url)
     }
 
     func truncateFile(_ name: String, bytes: UInt64) throws {
         let url = storage.url(forRelative: name)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
         if !FileManager.default.fileExists(atPath: url.path) {
             FileManager.default.createFile(atPath: url.path, contents: nil)
         }
@@ -455,6 +480,44 @@ private final class Harness: @unchecked Sendable {
             try database.execute(
                 sql: "INSERT INTO audio_captures(ts, relativePath, durationSec, channel, bytes) VALUES (?, ?, 1, 'mic', ?)",
                 arguments: [ts, path, bytes]
+            )
+            return database.lastInsertedRowID
+        }
+    }
+
+    @discardableResult
+    func insertCallAudio(ts: Int64, path: String, bytes: Int64) async throws -> Int64 {
+        try await db.pool.write { database in
+            try database.execute(
+                sql: """
+                    INSERT INTO calls(
+                        startIdempotencyKey, startTs, endTs, state, interrupted,
+                        mediaGeneration, createdAtMs, updatedAtMs
+                    ) VALUES (?, ?, ?, 'ready', 0, 0, ?, ?)
+                    """,
+                arguments: ["retention-\(UUID().uuidString)", ts, ts + 1_000, ts, ts]
+            )
+            let callID = database.lastInsertedRowID
+            try database.execute(
+                sql: """
+                    INSERT INTO call_source_spans(
+                        callId, source, epoch, sampleRate, startedAtMs,
+                        endedAtMs, startSample, endSample, startHostTimeNs,
+                        endHostTimeNs, availability
+                    ) VALUES (?, 'me', 0, 16000, ?, ?, 0, 16000, 0, 1000, 'available')
+                    """,
+                arguments: [callID, ts, ts + 1_000]
+            )
+            let spanID = database.lastInsertedRowID
+            try database.execute(
+                sql: """
+                    INSERT INTO call_audio_chunks(
+                        callId, sourceSpanId, source, epoch, sequence,
+                        mediaGeneration, startSample, endSample, startMs,
+                        endMs, relativePath, bytes, finalized
+                    ) VALUES (?, ?, 'me', 0, 0, 0, 0, 16000, ?, ?, ?, ?, 1)
+                    """,
+                arguments: [callID, spanID, ts, ts + 1_000, path, bytes]
             )
             return database.lastInsertedRowID
         }

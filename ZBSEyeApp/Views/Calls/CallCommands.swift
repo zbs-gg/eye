@@ -7,7 +7,7 @@ struct CallCommands: Commands {
         CommandMenu("Call") {
             Button("Start Call") { env.calls.start() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
-                .disabled(env.calls.isActive)
+                .disabled(env.calls.isActive || env.storageSettings.relocationInProgress)
             Button("Bookmark Call") { env.calls.bookmark() }
                 .keyboardShortcut("b", modifiers: [.command, .shift])
                 .disabled(env.calls.snapshot.phase != .recording)

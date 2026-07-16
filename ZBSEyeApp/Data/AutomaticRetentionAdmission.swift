@@ -95,8 +95,9 @@ enum AutomaticRetentionAdmissionError: Error, Sendable, Equatable {
 /// lock intentionally spans the synchronous transaction body: revocation can
 /// wait for the already-admitted transaction, then prevents every later one.
 final class AutomaticRetentionAdmission: @unchecked Sendable {
-    private let lock = NSLock()
+    private let condition = NSCondition()
     private var record: AutomaticRetentionRecord
+    private var activeLeases = 0
 
     init(record: AutomaticRetentionRecord = .closedForever) {
         // Callers pass an already startup-resolved record. Keeping recovery in
@@ -106,16 +107,16 @@ final class AutomaticRetentionAdmission: @unchecked Sendable {
     }
 
     func currentPermit() -> AutomaticRetentionPermit? {
-        lock.lock()
-        defer { lock.unlock() }
+        condition.lock()
+        defer { condition.unlock() }
         return permitIfAdmitted()
     }
 
     @discardableResult
     func activate(_ admitted: AutomaticRetentionRecord) -> Bool {
         precondition(admitted.isValid && admitted.phase == .finiteAdmitted)
-        lock.lock()
-        defer { lock.unlock() }
+        condition.lock()
+        defer { condition.unlock() }
         let mayCompletePendingFinite = admitted.revision == record.revision
             && record.phase == .pendingFinite
             && record.policy == admitted.policy
@@ -129,7 +130,7 @@ final class AutomaticRetentionAdmission: @unchecked Sendable {
     /// Closes new admission. If a transaction already owns the lease, this
     /// call waits for that synchronous transaction to finish exactly once.
     func revoke(to revision: UInt64) {
-        lock.lock()
+        condition.lock()
         let nextRevision = max(revision, record.revision)
         record = AutomaticRetentionRecord(
             revision: nextRevision,
@@ -137,7 +138,8 @@ final class AutomaticRetentionAdmission: @unchecked Sendable {
             phase: .closed,
             source: record.source
         )
-        lock.unlock()
+        while activeLeases > 0 { condition.wait() }
+        condition.unlock()
     }
 
     /// Revoke the old permit and publish the new finite decision as inert.
@@ -146,8 +148,8 @@ final class AutomaticRetentionAdmission: @unchecked Sendable {
     @discardableResult
     func revokeAndStage(_ pending: AutomaticRetentionRecord) -> Bool {
         precondition(pending.isValid && pending.phase == .pendingFinite)
-        lock.lock()
-        defer { lock.unlock() }
+        condition.lock()
+        defer { condition.unlock() }
         guard pending.revision > record.revision
                 || (pending.revision == record.revision
                     && record.phase == .pendingFinite
@@ -162,12 +164,35 @@ final class AutomaticRetentionAdmission: @unchecked Sendable {
         _ permit: AutomaticRetentionPermit,
         _ body: () throws -> T
     ) throws -> T {
-        lock.lock()
-        defer { lock.unlock() }
+        try beginLease(permit)
+        defer { endLease() }
+        return try body()
+    }
+
+    func withAsyncLease<T: Sendable>(
+        _ permit: AutomaticRetentionPermit,
+        _ body: () async throws -> T
+    ) async throws -> T {
+        try beginLease(permit)
+        defer { endLease() }
+        return try await body()
+    }
+
+    private func beginLease(_ permit: AutomaticRetentionPermit) throws {
+        condition.lock()
         guard permitIfAdmitted() == permit else {
+            condition.unlock()
             throw AutomaticRetentionAdmissionError.stalePermit
         }
-        return try body()
+        activeLeases += 1
+        condition.unlock()
+    }
+
+    private func endLease() {
+        condition.lock()
+        activeLeases -= 1
+        if activeLeases == 0 { condition.broadcast() }
+        condition.unlock()
     }
 
     private func permitIfAdmitted() -> AutomaticRetentionPermit? {

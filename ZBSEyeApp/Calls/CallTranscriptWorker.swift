@@ -135,12 +135,21 @@ actor CallTranscriptWorker {
     }
 
     func suspendAndDrain() async {
+        _ = await suspendAndDrainForEvidenceMutation()
+    }
+
+    /// Returns true only to the caller that changed the worker from running to
+    /// suspended. That caller may resume after its mutation gate is clear;
+    /// nested maintenance must leave an already-suspended worker alone.
+    func suspendAndDrainForEvidenceMutation() async -> Bool {
+        let ownsResume = !suspended
         suspended = true
         cancelHelper()
-        guard let operation = activeOperation else { return }
+        guard let operation = activeOperation else { return ownsResume }
         operation.cancel()
         _ = await operation.value
         if activeOperation != nil { activeOperation = nil }
+        return ownsResume
     }
 
     func resume() {
@@ -232,6 +241,12 @@ actor CallTranscriptWorker {
         evidence: CallTranscriptJobEvidence
     ) async throws -> WhisperHelperResult {
         let helperID = UUID().uuidString.lowercased()
+        let scratch = CallHelperScratchStore(dataRoot: dataRoot)
+        do {
+            try scratch.prepareForJob(helperID)
+        } catch {
+            throw CallTranscriptWorkerError.invalidEvidence
+        }
         let jobRoot = "call-helper/jobs/\(helperID)"
         let manifestRelativePath = "\(jobRoot)/manifest.json"
         let resultRelativePath = "\(jobRoot)/result.json"
@@ -277,6 +292,11 @@ actor CallTranscriptWorker {
             throw CallTranscriptWorkerError.invalidEvidence
         }
         let result = try await helperLauncher(manifest, manifestRelativePath, dataRoot)
+        guard (try? scratch.inventory().bytes).map({
+            $0 <= CallHelperScratchStore.maximumGlobalBytes
+        }) == true else {
+            throw CallTranscriptWorkerError.invalidHelperResult
+        }
         guard result.jobID == helperID else {
             throw CallTranscriptWorkerError.invalidHelperResult
         }

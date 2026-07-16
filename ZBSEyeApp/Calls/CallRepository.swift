@@ -10,6 +10,8 @@ enum CallRepositoryError: LocalizedError, Sendable, Equatable {
     case transcriptJobNotRunning(Int64)
     case staleTranscriptJob(Int64)
     case preferredRevisionMissing(Int64)
+    case activeCallMustEnd(Int64)
+    case invalidMediaMutation(Int64)
 
     var errorDescription: String? {
         switch self {
@@ -29,6 +31,10 @@ enum CallRepositoryError: LocalizedError, Sendable, Equatable {
             return "The transcript job references an obsolete media generation."
         case .preferredRevisionMissing:
             return "The transcript revision was saved without a preferred projection."
+        case .activeCallMustEnd:
+            return "End the active call before deleting its evidence. Nothing was deleted."
+        case .invalidMediaMutation:
+            return "The call deletion journal is inconsistent."
         }
     }
 }
@@ -1210,6 +1216,226 @@ actor CallRepository {
                 sql: "UPDATE call_media_mutations SET state = ?, updatedAtMs = ?, errorCode = ? WHERE id = ?",
                 arguments: [state.rawValue, nowMs, errorCode, id]
             )
+        }
+    }
+
+    func callEvidenceBytes() async throws -> Int64 {
+        try await database.pool.read { db in
+            try Int64.fetchOne(
+                db,
+                sql: "SELECT COALESCE(SUM(bytes), 0) FROM call_audio_chunks"
+            ) ?? 0
+        }
+    }
+
+    func recordingCallID() async throws -> Int64? {
+        try await database.pool.read { db in
+            try Int64.fetchOne(
+                db,
+                sql: "SELECT id FROM calls WHERE state = 'recording' ORDER BY id LIMIT 1"
+            )
+        }
+    }
+
+    func pendingErasePreparations() async throws -> [CallErasePreparation] {
+        try await database.pool.read { db in
+            let mutations = try CallMediaMutationRow.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM call_media_mutations
+                    WHERE kind = ? AND state NOT IN (?, ?, ?)
+                    ORDER BY id
+                    """,
+                arguments: [
+                    CallMediaMutationKind.erase.rawValue,
+                    CallMediaMutationState.completed.rawValue,
+                    CallMediaMutationState.rolledBack.rawValue,
+                    CallMediaMutationState.failed.rawValue,
+                ]
+            )
+            return try mutations.map { mutation in
+                guard let mutationID = mutation.id,
+                      let data = mutation.oldRelativePathsJSON.data(using: .utf8),
+                      let paths = try? JSONDecoder().decode([String].self, from: data) else {
+                    throw CallRepositoryError.invalidMediaMutation(mutation.id ?? mutation.callId)
+                }
+                return CallErasePreparation(
+                    mutationID: mutationID,
+                    callID: mutation.callId,
+                    relativePaths: paths,
+                    bytes: 0
+                )
+            }
+        }
+    }
+
+    func referencedCallMediaPaths() async throws -> Set<String> {
+        try await database.pool.read { db in
+            Set(try String.fetchAll(db, sql: "SELECT relativePath FROM call_audio_chunks"))
+        }
+    }
+
+    func oldestErasableCallID(before cutoffMs: Int64?) async throws -> Int64? {
+        try await database.pool.read { db in
+            if let cutoffMs {
+                return try Int64.fetchOne(
+                    db,
+                    sql: """
+                        SELECT id FROM calls
+                        WHERE state != 'recording'
+                          AND COALESCE(endTs, startTs) < ?
+                          AND (degradationReason IS NULL OR degradationReason != 'erase_pending')
+                        ORDER BY startTs, id LIMIT 1
+                        """,
+                    arguments: [cutoffMs]
+                )
+            }
+            return try Int64.fetchOne(
+                db,
+                sql: """
+                    SELECT id FROM calls
+                    WHERE state != 'recording'
+                      AND (degradationReason IS NULL OR degradationReason != 'erase_pending')
+                    ORDER BY startTs, id LIMIT 1
+                    """
+            )
+        }
+    }
+
+    func beginEraseCall(callID: Int64, nowMs: Int64) async throws -> CallErasePreparation {
+        try await database.pool.write { db in
+            guard var call = try CallRow.fetchOne(db, key: callID) else {
+                throw CallRepositoryError.callNotFound(callID)
+            }
+            guard call.state != .recording else {
+                throw CallRepositoryError.activeCallMustEnd(callID)
+            }
+            if let existing = try CallMediaMutationRow.fetchOne(
+                db,
+                sql: """
+                    SELECT * FROM call_media_mutations
+                    WHERE callId = ? AND kind = ?
+                      AND state NOT IN (?, ?, ?)
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                arguments: [
+                    callID,
+                    CallMediaMutationKind.erase.rawValue,
+                    CallMediaMutationState.completed.rawValue,
+                    CallMediaMutationState.rolledBack.rawValue,
+                    CallMediaMutationState.failed.rawValue,
+                ]
+            ), let mutationID = existing.id,
+               let data = existing.oldRelativePathsJSON.data(using: .utf8),
+               let paths = try? JSONDecoder().decode([String].self, from: data) {
+                return CallErasePreparation(
+                    mutationID: mutationID,
+                    callID: callID,
+                    relativePaths: paths,
+                    bytes: 0
+                )
+            }
+
+            let chunks = try CallAudioChunkRow
+                .filter(Column("callId") == callID)
+                .order(Column("id"))
+                .fetchAll(db)
+            let paths = chunks.map(\.relativePath)
+            let bytes = chunks.reduce(Int64(0)) { partial, chunk in
+                let next = partial.addingReportingOverflow(chunk.bytes)
+                return next.overflow ? Int64.max : next.partialValue
+            }
+            let pathData = try JSONEncoder().encode(paths)
+            guard let pathJSON = String(data: pathData, encoding: .utf8) else {
+                throw CallRepositoryError.invalidMediaMutation(callID)
+            }
+            let generation = call.mediaGeneration.addingReportingOverflow(1)
+            guard !generation.overflow else {
+                throw CallRepositoryError.invalidMediaMutation(callID)
+            }
+            let nextGeneration = generation.partialValue
+            var mutation = CallMediaMutationRow(
+                id: nil,
+                identity: "erase:\(callID):\(call.mediaGeneration)",
+                callId: callID,
+                kind: .erase,
+                state: .cleanupPending,
+                fromGeneration: call.mediaGeneration,
+                toGeneration: nextGeneration,
+                oldRelativePathsJSON: pathJSON,
+                newRelativePathsJSON: "[]",
+                createdAtMs: nowMs,
+                updatedAtMs: nowMs,
+                errorCode: nil
+            )
+            try mutation.insert(db)
+            guard let mutationID = mutation.id else {
+                throw CallRepositoryError.invalidMediaMutation(callID)
+            }
+
+            call.preferredRevisionId = nil
+            call.mediaGeneration = nextGeneration
+            call.state = .failed
+            call.degradationReason = "erase_pending"
+            call.updatedAtMs = nowMs
+            try call.update(db)
+
+            try db.execute(
+                sql: """
+                    DELETE FROM embed_queue WHERE kind = 2 AND row_id IN (
+                        SELECT id FROM call_transcript_revisions WHERE callId = ?
+                    )
+                    """,
+                arguments: [callID]
+            )
+            // Revisions go before jobs: deleting a job first SET NULLs jobId
+            // and violates the revision identity CHECK.
+            try db.execute(
+                sql: "DELETE FROM call_transcript_revisions WHERE callId = ?",
+                arguments: [callID]
+            )
+            try db.execute(
+                sql: "DELETE FROM call_transcript_jobs WHERE callId = ?",
+                arguments: [callID]
+            )
+            try db.execute(
+                sql: "DELETE FROM call_bookmarks WHERE callId = ?",
+                arguments: [callID]
+            )
+            try db.execute(
+                sql: "DELETE FROM call_audio_chunks WHERE callId = ?",
+                arguments: [callID]
+            )
+            try db.execute(
+                sql: "DELETE FROM call_source_spans WHERE callId = ?",
+                arguments: [callID]
+            )
+            return CallErasePreparation(
+                mutationID: mutationID,
+                callID: callID,
+                relativePaths: paths,
+                bytes: bytes
+            )
+        }
+    }
+
+    func finalizeEraseCall(mutationID: Int64, nowMs: Int64) async throws {
+        try await database.pool.write { db in
+            guard let mutation = try CallMediaMutationRow.fetchOne(db, key: mutationID),
+                  mutation.kind == .erase,
+                  mutation.state == .cleanupPending || mutation.state == .referenceSwapped,
+                  (try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM call_audio_chunks WHERE callId = ?",
+                    arguments: [mutation.callId]
+                  ) ?? -1) == 0 else {
+                throw CallRepositoryError.invalidMediaMutation(mutationID)
+            }
+            try db.execute(
+                sql: "UPDATE call_media_mutations SET updatedAtMs = ? WHERE id = ?",
+                arguments: [nowMs, mutationID]
+            )
+            try db.execute(sql: "DELETE FROM calls WHERE id = ?", arguments: [mutation.callId])
         }
     }
 }

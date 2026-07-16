@@ -4,6 +4,8 @@ import GRDB
 struct PruneReport: Sendable {
     var framesDeleted = 0
     var audioDeleted = 0
+    var callsDeleted = 0
+    var callBytesDeleted: Int64 = 0
     var orphansDeleted = 0
 }
 
@@ -22,9 +24,24 @@ struct AutomaticRetentionVictim: Sendable, Equatable {
 
 struct AutomaticRetentionRunReport: Sendable, Equatable {
     var victims: [AutomaticRetentionVictim] = []
+    var callErasures: [CallEraseReport] = []
     var framesDeleted: Int { victims.count { $0.kind == .frame } }
     var audioDeleted: Int { victims.count { $0.kind == .audio } }
-    var bytesCommitted: Int64 { victims.reduce(0) { $0 + $1.bytes } }
+    var callsDeleted: Int { callErasures.count }
+    var callBytesDeleted: Int64 {
+        callErasures.reduce(0) { partial, erasure in
+            let next = partial.addingReportingOverflow(erasure.bytesDeleted)
+            return next.overflow ? Int64.max : next.partialValue
+        }
+    }
+    var bytesCommitted: Int64 {
+        let captured = victims.reduce(Int64(0)) { partial, victim in
+            let next = partial.addingReportingOverflow(victim.bytes)
+            return next.overflow ? Int64.max : next.partialValue
+        }
+        let total = captured.addingReportingOverflow(callBytesDeleted)
+        return total.overflow ? Int64.max : total.partialValue
+    }
 }
 
 struct AutomaticRetentionFailureLedger: Sendable, Equatable {
@@ -47,8 +64,15 @@ actor RetentionManager {
         let victims: [AutomaticRetentionVictim]
     }
 
+    private enum AutomaticRetentionStep: Sendable {
+        case captured(CommittedBatch)
+        case call(Int64)
+        case done
+    }
+
     private let db: ZBSEyeDatabase
     private let storage: StorageManager
+    private let callDeletion: CallEvidenceDeletionService?
     private let maintenanceGate = DatabaseWriterMaintenanceGate()
     private let automaticBatchSize: Int
     private var automaticFailure: AutomaticRetentionFailureLedger?
@@ -56,11 +80,13 @@ actor RetentionManager {
     init(
         db: ZBSEyeDatabase,
         storage: StorageManager,
+        callDeletion: CallEvidenceDeletionService? = nil,
         automaticBatchSize: Int = 500
     ) {
         precondition(automaticBatchSize > 0)
         self.db = db
         self.storage = storage
+        self.callDeletion = callDeletion
         self.automaticBatchSize = automaticBatchSize
     }
 
@@ -81,14 +107,19 @@ actor RetentionManager {
         defer { maintenanceGate.finishOperation() }
 
         var report = AutomaticRetentionRunReport()
+        if let callDeletion {
+            report.callErasures.append(contentsOf: try await callDeletion.resumePendingErases(
+                nowMs: Int64(Date().timeIntervalSince1970 * 1_000)
+            ))
+        }
         var physicallyDeletedPaths: [String] = []
         while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
             try checkOperationContinuation()
             // This synchronous lease deliberately contains the complete GRDB
             // transaction, including COMMIT on return from pool.write.
-            let batch = try admission.withLease(permit) {
+            let step = try admission.withLease(permit) {
                 try db.pool.write { database in
-                    try Self.commitOldestBatch(
+                    try Self.nextAutomaticStep(
                         in: database,
                         storage: storage,
                         maxBytes: permit.maxBytes,
@@ -96,31 +127,48 @@ actor RetentionManager {
                     )
                 }
             }
-            guard !batch.victims.isEmpty else { break }
-
-            report.victims.append(contentsOf: batch.victims)
-            for victim in batch.victims {
-                do {
-                    try storage.deleteFile(relativePath: victim.relativePath)
-                    physicallyDeletedPaths.append(victim.relativePath)
-                } catch {
-                    // Rows and all dependent indexes already committed. Stop
-                    // immediately and expose the exact reconcilable orphan.
-                    let ledger = AutomaticRetentionFailureLedger(
-                        committedVictims: report.victims,
-                        physicallyDeletedPaths: physicallyDeletedPaths,
-                        failedPath: victim.relativePath
-                    )
-                    admission.revoke(to: permit.revision &+ 1)
-                    automaticFailure = ledger
-                    throw AutomaticRetentionError.postCommitFileDeletionFailed(ledger)
+            switch step {
+            case .done:
+                break
+            case .call(let callID):
+                guard let callDeletion else {
+                    throw AutomaticRetentionError.invalidCandidateState
                 }
+                let erasure = try await admission.withAsyncLease(permit) {
+                    try await callDeletion.erase(
+                        callID: callID,
+                        nowMs: Int64(Date().timeIntervalSince1970 * 1_000)
+                    )
+                }
+                report.callErasures.append(erasure)
+                continue
+            case .captured(let batch):
+                report.victims.append(contentsOf: batch.victims)
+                for victim in batch.victims {
+                    do {
+                        try storage.deleteFile(relativePath: victim.relativePath)
+                        physicallyDeletedPaths.append(victim.relativePath)
+                    } catch {
+                        // Rows and all dependent indexes already committed. Stop
+                        // immediately and expose the exact reconcilable orphan.
+                        let ledger = AutomaticRetentionFailureLedger(
+                            committedVictims: report.victims,
+                            physicallyDeletedPaths: physicallyDeletedPaths,
+                            failedPath: victim.relativePath
+                        )
+                        admission.revoke(to: permit.revision &+ 1)
+                        automaticFailure = ledger
+                        throw AutomaticRetentionError.postCommitFileDeletionFailed(ledger)
+                    }
+                }
+                continue
             }
-            // The next loop deliberately re-reads both total and global head;
-            // a concurrent backdated import cannot be skipped behind a cursor.
+            break
         }
         try checkOperationContinuation()
-        if !report.victims.isEmpty { try await checkpoint() }
+        if !report.victims.isEmpty || !report.callErasures.isEmpty {
+            try await checkpoint()
+        }
         return report
     }
 
@@ -146,6 +194,12 @@ actor RetentionManager {
             try database.execute(
                 sql: "DELETE FROM vec_transcripts WHERE transcription_id NOT IN (SELECT id FROM transcriptions)"
             )
+            try database.execute(
+                sql: "DELETE FROM vec_call_transcripts WHERE revision_id NOT IN (SELECT id FROM call_transcript_revisions)"
+            )
+            try database.execute(
+                sql: "DELETE FROM embed_queue WHERE kind = 2 AND row_id NOT IN (SELECT id FROM call_transcript_revisions)"
+            )
         }
     }
 
@@ -156,6 +210,16 @@ actor RetentionManager {
         }
         defer { maintenanceGate.finishOperation() }
         var report = PruneReport()
+        let isFullDeletion = fromMs == 0 && toMs == Int64.max
+        if isFullDeletion, let callDeletion {
+            try await callDeletion.requireNoActiveCall()
+            for erasure in try await callDeletion.resumePendingErases(
+                nowMs: Int64(Date().timeIntervalSince1970 * 1_000)
+            ) {
+                add(erasure, to: &report)
+            }
+            try checkOperationContinuation()
+        }
         while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
             let (count, paths): (Int, [String]) = try await db.pool.write { database in
                 let rows = try ScreenCaptureRow
@@ -195,9 +259,18 @@ actor RetentionManager {
             report.audioDeleted += count
         }
         try checkOperationContinuation()
+        if isFullDeletion, let callDeletion {
+            while !Task.isCancelled && !maintenanceGate.snapshot().suspended {
+                guard let erasure = try await callDeletion.eraseOldest(
+                    nowMs: Int64(Date().timeIntervalSince1970 * 1_000)
+                ) else { break }
+                add(erasure, to: &report)
+            }
+            try checkOperationContinuation()
+        }
         try? await checkpoint()
         try checkOperationContinuation()
-        if fromMs == 0 && toMs == Int64.max {
+        if isFullDeletion {
             try? await db.pool.writeWithoutTransaction { database in
                 try database.execute(sql: "VACUUM")
             }
@@ -205,12 +278,18 @@ actor RetentionManager {
         return report
     }
 
-    private nonisolated static func commitOldestBatch(
+    private func add(_ erasure: CallEraseReport, to report: inout PruneReport) {
+        report.callsDeleted += 1
+        let next = report.callBytesDeleted.addingReportingOverflow(erasure.bytesDeleted)
+        report.callBytesDeleted = next.overflow ? Int64.max : next.partialValue
+    }
+
+    private nonisolated static func nextAutomaticStep(
         in database: Database,
         storage: StorageManager,
         maxBytes: Int64,
         batchSize: Int
-    ) throws -> CommittedBatch {
+    ) throws -> AutomaticRetentionStep {
         let invalidCount = try Int.fetchOne(database, sql: """
             SELECT COUNT(*) FROM (
                 SELECT relativePath, bytes FROM screen_captures
@@ -218,6 +297,8 @@ actor RetentionManager {
                 UNION ALL
                 SELECT relativePath, bytes FROM audio_captures
                 WHERE relativePath <> 'imported'
+                UNION ALL
+                SELECT relativePath, bytes FROM call_audio_chunks
             ) WHERE bytes IS NULL OR bytes <= 0
             """) ?? 0
         guard invalidCount == 0 else {
@@ -231,6 +312,8 @@ actor RetentionManager {
                     UNION ALL
                     SELECT relativePath FROM audio_captures
                     WHERE relativePath <> 'imported'
+                    UNION ALL
+                    SELECT relativePath FROM call_audio_chunks
                 ) GROUP BY relativePath HAVING COUNT(*) > 1
             )
             """) ?? 0
@@ -245,9 +328,11 @@ actor RetentionManager {
                 UNION ALL
                 SELECT bytes FROM audio_captures
                 WHERE relativePath <> 'imported'
+                UNION ALL
+                SELECT bytes FROM call_audio_chunks
             )
             """) ?? 0
-        guard total > maxBytes else { return CommittedBatch(victims: []) }
+        guard total > maxBytes else { return .done }
         let overage = total - maxBytes
 
         let rows = try Row.fetchAll(database, sql: """
@@ -257,21 +342,36 @@ actor RetentionManager {
                 UNION ALL
                 SELECT id, ts, 1 AS kind, relativePath, bytes FROM audio_captures
                 WHERE relativePath <> 'imported'
+                UNION ALL
+                SELECT calls.id AS id,
+                       calls.startTs AS ts,
+                       2 AS kind,
+                       NULL AS relativePath,
+                       SUM(call_audio_chunks.bytes) AS bytes
+                FROM calls
+                JOIN call_audio_chunks ON call_audio_chunks.callId = calls.id
+                WHERE calls.state != 'recording'
+                  AND (calls.degradationReason IS NULL OR calls.degradationReason != 'erase_pending')
+                GROUP BY calls.id
+                HAVING SUM(call_audio_chunks.bytes) > 0
             )
             ORDER BY ts ASC, kind ASC, id ASC
             LIMIT ?
             """, arguments: [batchSize])
-        guard !rows.isEmpty else {
-            throw AutomaticRetentionError.invalidCandidateState
-        }
+        guard !rows.isEmpty else { return .done }
 
         var victims: [AutomaticRetentionVictim] = []
         var selectedBytes: Int64 = 0
         for row in rows {
             let kindRaw: Int = row["kind"]
-            let path: String = row["relativePath"]
+            if kindRaw == 2 {
+                if victims.isEmpty { return .call(row["id"]) }
+                break
+            }
+            let path: String? = row["relativePath"]
             let bytes: Int64 = row["bytes"]
             guard let kind = CapturedMediaKind(rawValue: kindRaw),
+                  let path,
                   CapturedMediaReconciler.isSafeRelativePath(path),
                   bytes > 0 else {
                 throw AutomaticRetentionError.invalidCandidateState
@@ -290,6 +390,7 @@ actor RetentionManager {
             selectedBytes = next.partialValue
             if selectedBytes >= overage { break }
         }
+        guard !victims.isEmpty else { return .done }
 
         // Revalidate every selected file before deleting any database row.
         // This remains inside both the permit lease and GRDB transaction.
@@ -318,7 +419,7 @@ actor RetentionManager {
                 sql: "DELETE FROM audio_captures WHERE id IN (\(idList(audioIDs)))"
             )
         }
-        return CommittedBatch(victims: victims)
+        return .captured(CommittedBatch(victims: victims))
     }
 
     private nonisolated static func idList(_ ids: [Int64]) -> String {
@@ -361,6 +462,7 @@ actor RetentionManager {
         try await db.pool.write { database in
             try database.execute(sql: "INSERT INTO text_fts(text_fts) VALUES('optimize')")
             try database.execute(sql: "INSERT INTO transcription_fts(transcription_fts) VALUES('optimize')")
+            try database.execute(sql: "INSERT INTO call_transcript_fts(call_transcript_fts) VALUES('optimize')")
         }
         try? await db.pool.writeWithoutTransaction { database in
             try database.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")

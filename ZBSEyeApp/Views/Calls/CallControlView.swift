@@ -88,6 +88,7 @@ struct CallControlView: View {
             }
             .help("Start another call")
             .accessibilityLabel("Start another call")
+            .disabled(env.storageSettings.relocationInProgress)
         case .idle:
             if evidence != nil {
                 Button { openDetail() } label: {
@@ -98,6 +99,7 @@ struct CallControlView: View {
             }
             Button("Start") { env.calls.start() }
                 .controlSize(.small)
+                .disabled(env.storageSettings.relocationInProgress)
         }
     }
 

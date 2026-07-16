@@ -19,6 +19,10 @@ actor CallRecoveryService {
     }
 
     func recover(nowMs: Int64 = Int64(Date().timeIntervalSince1970 * 1_000)) async throws -> CallRecoveryReport {
+        _ = try CallHelperScratchStore(
+            dataRoot: mediaRoot.deletingLastPathComponent(),
+            fileManager: fileManager
+        ).scavenge()
         var chunksFinalized = 0
         var chunksDiscarded = 0
         for chunk in try await repository.unfinalizedChunks() {
@@ -85,6 +89,25 @@ actor CallRecoveryService {
                         state: .failed,
                         nowMs: nowMs,
                         errorCode: "invalid_manifest"
+                    )
+                }
+                continue
+            }
+
+            if mutation.kind == .erase {
+                let allRemoved = try await removeUnreferenced(paths: oldPaths)
+                if allRemoved {
+                    try await repository.finalizeEraseCall(
+                        mutationID: mutationID,
+                        nowMs: nowMs
+                    )
+                    completed += 1
+                } else {
+                    try await repository.markMutation(
+                        mutationID,
+                        state: .cleanupPending,
+                        nowMs: nowMs,
+                        errorCode: "erase_cleanup_pending"
                     )
                 }
                 continue
@@ -159,7 +182,7 @@ actor CallRecoveryService {
     }
 
     private func containedURL(for relativePath: String) -> URL? {
-        guard !relativePath.isEmpty, !relativePath.hasPrefix("/") else { return nil }
+        guard ManagedAssetVerifier.isSafeRelativePath(relativePath) else { return nil }
         let candidate = mediaRoot
             .appending(path: relativePath)
             .resolvingSymlinksInPath()

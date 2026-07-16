@@ -9,6 +9,7 @@ final class CallRecordingStore {
     @ObservationIgnored private var coordinator: CallCoordinator?
     @ObservationIgnored private var ending = false
     @ObservationIgnored var requestedSources: @MainActor () -> CallSourceSelection = { .none }
+    @ObservationIgnored var admissionAllowed: @MainActor () -> Bool = { true }
 
     var isActive: Bool {
         switch snapshot.phase {
@@ -27,6 +28,10 @@ final class CallRecordingStore {
 
     func start() {
         guard let coordinator else { return }
+        guard admissionAllowed() else {
+            errorMessage = "A storage move is in progress. No call was started."
+            return
+        }
         errorMessage = nil
         Task {
             do {

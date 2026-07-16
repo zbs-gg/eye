@@ -164,6 +164,8 @@ targets:
       - path: ZBSEyeApp/Connections/LocalTokenizerLoader.swift
       - path: ZBSEyeApp/Search/SearchSemanticPolicy.swift
       - path: ZBSEyeApp/Data/RelocatableAssetTree.swift
+      - path: ZBSEyeApp/Data/StorageRelocation.swift
+      - path: ZBSEyeApp/Data/BackupManager.swift
       - path: ZBSEyeApp/Data/IngestWriteBarrier.swift
       - path: ZBSEyeApp/Data/DatabaseWriterMaintenanceGate.swift
       - path: ZBSEyeApp/Connections/BuiltInModelRuntimeSupport.swift
@@ -199,10 +201,13 @@ targets:
       - path: ZBSEyeApp/Data/Models.swift
       - path: ZBSEyeApp/Data/ZBSEyeDatabase.swift
       - path: ZBSEyeApp/Data/StorageManager.swift
+      - path: ZBSEyeApp/Data/RetentionManager.swift
       - path: ZBSEyeApp/Data/IngestService.swift
       - path: ZBSEyeApp/Calls/CallModels.swift
       - path: ZBSEyeApp/Calls/CallRepository.swift
       - path: ZBSEyeApp/Calls/CallRecoveryService.swift
+      - path: ZBSEyeApp/Calls/CallMediaMutationJournal.swift
+      - path: ZBSEyeApp/Calls/CallEvidenceDeletionService.swift
       - path: ZBSEyeApp/Audio/AudioIngressPublisher.swift
       - path: ZBSEyeApp/Calls/CallSpoolPolicy.swift
       - path: ZBSEyeApp/Calls/CallSpool.swift
