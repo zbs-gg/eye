@@ -79,7 +79,10 @@ final class ZBSEyeDatabase: Sendable {
     /// was written by a NEWER ZBS Eye. We never erase (the history is precious) — just log, so a
     /// downgrade is visible instead of silently mis-reading a future schema.
     private static let knownMigrations: Set<String> =
-        ["v1", "v2_vector", "v3_vec_e5_384", "v4_vec_transcripts", "v5_browser_visits", "v6_embed_queue"]
+        [
+            "v1", "v2_vector", "v3_vec_e5_384", "v4_vec_transcripts",
+            "v5_browser_visits", "v6_embed_queue", "v7_call_envelopes",
+        ]
     private static func warnIfNewerSchema(_ pool: DatabasePool) {
         let applied = (try? pool.read { db in
             try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations")
@@ -278,6 +281,303 @@ final class ZBSEyeDatabase: Sendable {
                 END;
                 CREATE TRIGGER embed_queue_transcript_ad AFTER DELETE ON transcriptions BEGIN
                     DELETE FROM embed_queue WHERE row_id = old.id AND kind = 1;
+                END;
+                """)
+        }
+        // v7: first-class explicit call evidence. This is deliberately schema-only: a store-forever
+        // database must open without a synchronous media or transcript backfill.
+        m.registerMigration("v7_call_envelopes") { db in
+            try db.execute(sql: """
+                CREATE TABLE calls (
+                    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                    startIdempotencyKey   TEXT NOT NULL UNIQUE,
+                    endIdempotencyKey     TEXT,
+                    startTs               INTEGER NOT NULL,
+                    endTs                 INTEGER,
+                    state                 TEXT NOT NULL CHECK (state IN ('recording', 'finalizing', 'interrupted', 'ready', 'failed')),
+                    interrupted           INTEGER NOT NULL DEFAULT 0 CHECK (interrupted IN (0, 1)),
+                    degradationReason     TEXT,
+                    mediaGeneration       INTEGER NOT NULL DEFAULT 0 CHECK (mediaGeneration >= 0),
+                    preferredRevisionId   INTEGER REFERENCES call_transcript_revisions(id) ON DELETE SET NULL,
+                    createdAtMs           INTEGER NOT NULL,
+                    updatedAtMs           INTEGER NOT NULL,
+                    CHECK (endTs IS NULL OR endTs >= startTs),
+                    CHECK (state != 'recording' OR endTs IS NULL)
+                );
+                CREATE UNIQUE INDEX idx_calls_one_recording ON calls((1)) WHERE state = 'recording';
+                CREATE INDEX idx_calls_start ON calls(startTs DESC);
+
+                CREATE TABLE call_source_spans (
+                    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                    callId            INTEGER NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+                    source            TEXT NOT NULL CHECK (source IN ('me', 'system')),
+                    epoch             INTEGER NOT NULL CHECK (epoch >= 0),
+                    sampleRate        INTEGER NOT NULL CHECK (sampleRate > 0),
+                    startedAtMs       INTEGER NOT NULL,
+                    endedAtMs         INTEGER,
+                    startSample       INTEGER NOT NULL CHECK (startSample >= 0),
+                    endSample         INTEGER,
+                    startHostTimeNs   INTEGER NOT NULL CHECK (startHostTimeNs >= 0),
+                    endHostTimeNs     INTEGER,
+                    availability      TEXT NOT NULL CHECK (availability IN ('available', 'unavailable', 'gap')),
+                    gapReason         TEXT,
+                    UNIQUE(callId, source, epoch),
+                    CHECK (endedAtMs IS NULL OR endedAtMs >= startedAtMs),
+                    CHECK (endSample IS NULL OR endSample >= startSample),
+                    CHECK (endHostTimeNs IS NULL OR endHostTimeNs >= startHostTimeNs)
+                );
+
+                CREATE TABLE call_audio_chunks (
+                    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                    callId            INTEGER NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+                    sourceSpanId      INTEGER NOT NULL REFERENCES call_source_spans(id) ON DELETE CASCADE,
+                    source            TEXT NOT NULL CHECK (source IN ('me', 'system')),
+                    epoch             INTEGER NOT NULL CHECK (epoch >= 0),
+                    sequence          INTEGER NOT NULL CHECK (sequence >= 0),
+                    mediaGeneration   INTEGER NOT NULL CHECK (mediaGeneration >= 0),
+                    startSample       INTEGER NOT NULL CHECK (startSample >= 0),
+                    endSample         INTEGER NOT NULL CHECK (endSample >= startSample),
+                    startMs           INTEGER NOT NULL,
+                    endMs             INTEGER NOT NULL CHECK (endMs >= startMs),
+                    relativePath      TEXT NOT NULL,
+                    bytes             INTEGER NOT NULL CHECK (bytes >= 0),
+                    sha256            TEXT,
+                    finalized         INTEGER NOT NULL DEFAULT 0 CHECK (finalized IN (0, 1)),
+                    UNIQUE(callId, source, epoch, sequence),
+                    UNIQUE(relativePath)
+                );
+                CREATE INDEX idx_call_audio_chunks_call_time ON call_audio_chunks(callId, startMs, endMs);
+
+                CREATE TABLE call_bookmarks (
+                    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                    callId                INTEGER NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+                    idempotencyKey        TEXT NOT NULL,
+                    ordinal               INTEGER NOT NULL CHECK (ordinal > 0),
+                    acceptedAtMs          INTEGER NOT NULL,
+                    meIngressTarget       INTEGER,
+                    systemIngressTarget   INTEGER,
+                    logicalStartMs        INTEGER NOT NULL,
+                    logicalEndMs          INTEGER NOT NULL,
+                    contextStartMs        INTEGER NOT NULL,
+                    state                 TEXT NOT NULL CHECK (state IN ('preparing', 'pending', 'deferred_capacity', 'ready', 'ready_degraded', 'failed', 'satisfied_by_final')),
+                    mediaGeneration       INTEGER NOT NULL CHECK (mediaGeneration >= 0),
+                    UNIQUE(callId, idempotencyKey),
+                    UNIQUE(callId, ordinal),
+                    CHECK (meIngressTarget IS NULL OR meIngressTarget >= 0),
+                    CHECK (systemIngressTarget IS NULL OR systemIngressTarget >= 0),
+                    CHECK (contextStartMs <= logicalStartMs AND logicalStartMs <= logicalEndMs),
+                    CHECK (acceptedAtMs >= logicalEndMs)
+                );
+
+                CREATE TABLE call_transcript_jobs (
+                    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                    identity          TEXT NOT NULL UNIQUE,
+                    callId            INTEGER NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+                    bookmarkId        INTEGER REFERENCES call_bookmarks(id) ON DELETE CASCADE,
+                    kind              TEXT NOT NULL CHECK (kind IN ('checkpoint', 'final')),
+                    mediaGeneration   INTEGER NOT NULL CHECK (mediaGeneration >= 0),
+                    state             TEXT NOT NULL CHECK (state IN ('preparing', 'deferred_capacity', 'pending', 'running', 'satisfied_by_final', 'ready', 'ready_degraded', 'failed', 'cancelled')),
+                    priority          INTEGER NOT NULL,
+                    logicalStartMs    INTEGER NOT NULL,
+                    logicalEndMs      INTEGER NOT NULL,
+                    contextStartMs    INTEGER NOT NULL,
+                    meEndSample       INTEGER,
+                    systemEndSample   INTEGER,
+                    coverageFrozen    INTEGER NOT NULL DEFAULT 0 CHECK (coverageFrozen IN (0, 1)),
+                    attempts          INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+                    errorCode         TEXT,
+                    createdAtMs       INTEGER NOT NULL,
+                    updatedAtMs       INTEGER NOT NULL,
+                    CHECK ((kind = 'checkpoint' AND bookmarkId IS NOT NULL) OR (kind = 'final' AND bookmarkId IS NULL)),
+                    CHECK (contextStartMs <= logicalStartMs AND logicalStartMs <= logicalEndMs)
+                );
+                CREATE UNIQUE INDEX idx_call_jobs_one_final_generation
+                    ON call_transcript_jobs(callId, mediaGeneration) WHERE kind = 'final';
+                CREATE INDEX idx_call_jobs_claim
+                    ON call_transcript_jobs(state, priority, createdAtMs);
+
+                CREATE TABLE call_transcript_revisions (
+                    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                    callId            INTEGER NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+                    jobId             INTEGER UNIQUE REFERENCES call_transcript_jobs(id) ON DELETE SET NULL,
+                    projectionKey     TEXT UNIQUE,
+                    kind              TEXT NOT NULL CHECK (kind IN ('interval', 'projection', 'final')),
+                    mediaGeneration   INTEGER NOT NULL CHECK (mediaGeneration >= 0),
+                    state             TEXT NOT NULL CHECK (state IN ('writing', 'ready', 'failed')),
+                    text              TEXT NOT NULL,
+                    language          TEXT NOT NULL,
+                    engine            TEXT NOT NULL,
+                    modelRevision     TEXT NOT NULL,
+                    logicalStartMs    INTEGER NOT NULL,
+                    logicalEndMs      INTEGER NOT NULL,
+                    createdAtMs       INTEGER NOT NULL,
+                    CHECK ((jobId IS NOT NULL) != (projectionKey IS NOT NULL)),
+                    CHECK (logicalEndMs >= logicalStartMs)
+                );
+                CREATE INDEX idx_call_revisions_call ON call_transcript_revisions(callId, createdAtMs);
+
+                CREATE TABLE call_transcript_segments (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    revisionId    INTEGER NOT NULL REFERENCES call_transcript_revisions(id) ON DELETE CASCADE,
+                    ordinal       INTEGER NOT NULL CHECK (ordinal >= 0),
+                    source        TEXT NOT NULL CHECK (source IN ('me', 'system')),
+                    startMs       INTEGER NOT NULL,
+                    endMs         INTEGER NOT NULL CHECK (endMs >= startMs),
+                    text          TEXT NOT NULL,
+                    UNIQUE(revisionId, ordinal)
+                );
+
+                CREATE TABLE call_media_mutations (
+                    id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    identity                  TEXT NOT NULL UNIQUE,
+                    callId                    INTEGER NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+                    kind                      TEXT NOT NULL CHECK (kind IN ('redaction', 'erase')),
+                    state                     TEXT NOT NULL CHECK (state IN ('staged', 'reference_swapped', 'cleanup_pending', 'completed', 'rolled_back', 'failed')),
+                    fromGeneration            INTEGER NOT NULL CHECK (fromGeneration >= 0),
+                    toGeneration              INTEGER NOT NULL CHECK (toGeneration > fromGeneration),
+                    oldRelativePathsJSON      TEXT NOT NULL,
+                    newRelativePathsJSON      TEXT NOT NULL,
+                    createdAtMs               INTEGER NOT NULL,
+                    updatedAtMs               INTEGER NOT NULL,
+                    errorCode                 TEXT,
+                    UNIQUE(callId, toGeneration)
+                );
+
+                CREATE VIRTUAL TABLE call_transcript_fts USING fts5(
+                    revision_id UNINDEXED,
+                    call_id UNINDEXED,
+                    text,
+                    tokenize="unicode61 remove_diacritics 2"
+                );
+                CREATE VIRTUAL TABLE vec_call_transcripts USING vec0(
+                    revision_id integer,
+                    bucket_month integer partition key,
+                    embedding float[384]
+                );
+                """)
+
+            try db.execute(sql: """
+                CREATE TRIGGER call_audio_chunks_generation_bi
+                BEFORE INSERT ON call_audio_chunks BEGIN
+                    SELECT CASE WHEN NEW.mediaGeneration != (
+                        SELECT mediaGeneration FROM calls WHERE id = NEW.callId
+                    ) THEN RAISE(ABORT, 'call audio chunk generation is stale') END;
+                END;
+
+                CREATE TRIGGER call_audio_chunks_owner_bi
+                BEFORE INSERT ON call_audio_chunks BEGIN
+                    SELECT CASE WHEN NOT EXISTS (
+                        SELECT 1 FROM call_source_spans s
+                        WHERE s.id = NEW.sourceSpanId
+                          AND s.callId = NEW.callId
+                          AND s.source = NEW.source
+                          AND s.epoch = NEW.epoch
+                    ) THEN RAISE(ABORT, 'call audio chunk source span mismatch') END;
+                END;
+
+                CREATE TRIGGER call_audio_chunks_identity_bu
+                BEFORE UPDATE ON call_audio_chunks
+                WHEN NEW.callId != OLD.callId
+                  OR NEW.sourceSpanId != OLD.sourceSpanId
+                  OR NEW.source != OLD.source
+                  OR NEW.epoch != OLD.epoch
+                  OR NEW.sequence != OLD.sequence
+                  OR NEW.mediaGeneration != OLD.mediaGeneration
+                  OR NEW.startSample != OLD.startSample
+                  OR NEW.startMs != OLD.startMs
+                  OR NEW.relativePath != OLD.relativePath BEGIN
+                    SELECT RAISE(ABORT, 'call audio chunk identity is immutable');
+                END;
+
+                CREATE TRIGGER call_audio_chunks_finalized_bu
+                BEFORE UPDATE ON call_audio_chunks WHEN OLD.finalized = 1 BEGIN
+                    SELECT RAISE(ABORT, 'finalized call audio chunk is immutable');
+                END;
+
+                CREATE TRIGGER call_bookmarks_generation_bi
+                BEFORE INSERT ON call_bookmarks BEGIN
+                    SELECT CASE WHEN NEW.mediaGeneration != (
+                        SELECT mediaGeneration FROM calls WHERE id = NEW.callId
+                    ) THEN RAISE(ABORT, 'call bookmark generation is stale') END;
+                END;
+
+                CREATE TRIGGER call_jobs_generation_bi
+                BEFORE INSERT ON call_transcript_jobs BEGIN
+                    SELECT CASE WHEN NEW.mediaGeneration != (
+                        SELECT mediaGeneration FROM calls WHERE id = NEW.callId
+                    ) THEN RAISE(ABORT, 'call transcript job generation is stale') END;
+                END;
+
+                CREATE TRIGGER call_jobs_bookmark_owner_bi
+                BEFORE INSERT ON call_transcript_jobs WHEN NEW.kind = 'checkpoint' BEGIN
+                    SELECT CASE WHEN NOT EXISTS (
+                        SELECT 1 FROM call_bookmarks b
+                        WHERE b.id = NEW.bookmarkId
+                          AND b.callId = NEW.callId
+                          AND b.mediaGeneration = NEW.mediaGeneration
+                    ) THEN RAISE(ABORT, 'call transcript job bookmark mismatch') END;
+                END;
+
+                CREATE TRIGGER call_revisions_generation_bi
+                BEFORE INSERT ON call_transcript_revisions BEGIN
+                    SELECT CASE WHEN NEW.mediaGeneration != (
+                        SELECT mediaGeneration FROM calls WHERE id = NEW.callId
+                    ) THEN RAISE(ABORT, 'call transcript revision generation is stale') END;
+                END;
+
+                CREATE TRIGGER call_revisions_job_owner_bi
+                BEFORE INSERT ON call_transcript_revisions WHEN NEW.jobId IS NOT NULL BEGIN
+                    SELECT CASE WHEN NOT EXISTS (
+                        SELECT 1 FROM call_transcript_jobs j
+                        WHERE j.id = NEW.jobId
+                          AND j.callId = NEW.callId
+                          AND j.mediaGeneration = NEW.mediaGeneration
+                    ) THEN RAISE(ABORT, 'call transcript revision job mismatch') END;
+                END;
+
+                CREATE TRIGGER calls_preferred_revision_bi
+                BEFORE INSERT ON calls WHEN NEW.preferredRevisionId IS NOT NULL BEGIN
+                    SELECT CASE WHEN NOT EXISTS (
+                        SELECT 1 FROM call_transcript_revisions r
+                        WHERE r.id = NEW.preferredRevisionId
+                          AND r.callId = NEW.id
+                          AND r.mediaGeneration = NEW.mediaGeneration
+                          AND r.kind IN ('projection', 'final')
+                          AND r.state = 'ready'
+                    ) THEN RAISE(ABORT, 'invalid preferred call transcript revision') END;
+                END;
+
+                CREATE TRIGGER calls_preferred_revision_bu
+                BEFORE UPDATE OF preferredRevisionId, mediaGeneration ON calls
+                WHEN NEW.preferredRevisionId IS NOT NULL BEGIN
+                    SELECT CASE WHEN NOT EXISTS (
+                        SELECT 1 FROM call_transcript_revisions r
+                        WHERE r.id = NEW.preferredRevisionId
+                          AND r.callId = NEW.id
+                          AND r.mediaGeneration = NEW.mediaGeneration
+                          AND r.kind IN ('projection', 'final')
+                          AND r.state = 'ready'
+                    ) THEN RAISE(ABORT, 'invalid preferred call transcript revision') END;
+                END;
+
+                CREATE TRIGGER calls_preferred_fts_au
+                AFTER UPDATE OF preferredRevisionId ON calls BEGIN
+                    DELETE FROM call_transcript_fts WHERE revision_id = old.preferredRevisionId;
+                    DELETE FROM vec_call_transcripts WHERE revision_id = old.preferredRevisionId;
+                    INSERT INTO call_transcript_fts(revision_id, call_id, text)
+                    SELECT id, callId, text FROM call_transcript_revisions
+                    WHERE id = new.preferredRevisionId;
+                END;
+
+                CREATE TRIGGER calls_preferred_fts_ad
+                AFTER DELETE ON calls BEGIN
+                    DELETE FROM call_transcript_fts WHERE call_id = old.id;
+                END;
+
+                CREATE TRIGGER call_revisions_projection_ad
+                AFTER DELETE ON call_transcript_revisions BEGIN
+                    DELETE FROM call_transcript_fts WHERE revision_id = old.id;
+                    DELETE FROM vec_call_transcripts WHERE revision_id = old.id;
                 END;
                 """)
         }

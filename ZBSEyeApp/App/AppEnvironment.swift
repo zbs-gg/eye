@@ -58,6 +58,8 @@ final class AppEnvironment {
     // Data layer (created in bootstrap; nil until initialized / on error).
     private(set) var database: ZBSEyeDatabase?
     private(set) var ingest: IngestService?
+    private(set) var callRepository: CallRepository?
+    private(set) var callRecovery: CallRecoveryService?
     private(set) var retention: RetentionManager?
     @ObservationIgnored private var automaticRetentionAdmission: AutomaticRetentionAdmission?
     private(set) var timelineStore: TimelineStore?
@@ -479,6 +481,22 @@ final class AppEnvironment {
             // Ingest does NOT embed anymore (that kept the e5 model resident 24/7 and burned CPU per capture).
             let ingestService = IngestService(db: db, storage: storage)
             self.ingest = ingestService
+            let callRepository = CallRepository(database: db)
+            self.callRepository = callRepository
+            let callRecovery = CallRecoveryService(
+                repository: callRepository,
+                mediaRoot: storage.mediaDirectory
+            )
+            self.callRecovery = callRecovery
+            let callRecoveryReport = try await callRecovery.recover()
+            if callRecoveryReport.callsInterrupted > 0
+                || callRecoveryReport.jobsReset > 0
+                || callRecoveryReport.chunksFinalized > 0
+                || callRecoveryReport.chunksDiscarded > 0 {
+                Log.audio.notice(
+                    "call recovery reconciled interrupted evidence and queued retryable work"
+                )
+            }
 
             // The continuous semantic indexer owns ALL embedding: it fills vectors for frames/transcripts off the
             // hot path and UNLOADS the model when the backlog is drained. Its own EmbeddingService (search keeps a
