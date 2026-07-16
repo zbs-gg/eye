@@ -325,7 +325,7 @@ final class AppEnvironment {
         if let missing = StorageLocation.unavailableConfiguredPath() {
             self.dataError = "Data folder unavailable: \(missing). Connect the disk/volume and restart ZBS Eye — "
                 + "recording is off so the \"eternal memory\" isn't split in two."
-            ZBSEyeHTTPServer.log("data root unavailable (\(missing)) — bootstrap aborted (anti-split-brain)")
+            ZBSEyeHTTPServer.log("data_root_unavailable: bootstrap aborted (anti-split-brain)")
             return
         }
         do {
@@ -1020,8 +1020,8 @@ final class AppEnvironment {
             }
         } catch {
             self.dataError = String(describing: error)
-            Log.app.error("bootstrap failed: \(String(describing: error), privacy: .public)")
-            ZBSEyeHTTPServer.log("bootstrap: dataError \(error)")
+            Log.app.error("bootstrap_failed")
+            ZBSEyeHTTPServer.log("bootstrap_failed")
         }
 
         // Permission polling (the user grants them in System Settings — the UI and autostart pick it up themselves).

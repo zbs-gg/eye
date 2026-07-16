@@ -24,9 +24,14 @@ ZBS Eye quietly keeps an "eternal memory" of your work at the computer:
   **Meetings-only by default**: audio is captured only while a call is detected (a meeting app is
   using the mic), the engine is fully off otherwise — saving disk. Switch to always / off, or force
   it on/off from the menu bar.
+  For a call you explicitly want to keep, press **Start Call**: Eye records microphone and system audio
+  as separate durable sources until **End Call**. **Bookmark** schedules a local checkpoint transcript
+  without interrupting either source; the optional one-click Whisper Large V3 Turbo model produces the
+  preferred whole-call transcript after the call.
 - **Search** → hybrid full-text + semantic (cross-lingual: search in one language, find another),
   a scrubbable timeline, frames served as images.
-- **Access for AI agents** → a local REST + MCP surface so LLMs/agents can work with your memory.
+- **Access for AI agents** → a local REST + read-only MCP surface so LLMs/agents can find Call Envelopes,
+  bookmarks, source health, and paginated transcript evidence without scraping the UI.
 - **Built-in local AI, with provider choice** → one click downloads a verified on-device model for Ask,
   Daily Insights, summaries, and activity labels. Or choose Codex, OpenRouter, Anthropic, Kimi, GLM,
   MiMo, OpenAI, Claude Code, Ollama, or LM Studio. Providers own their model lists; cloud and signed-in
@@ -56,14 +61,19 @@ native alternative that **never goes to the cloud** — your activity history is
 - 🎙️ **Audio + transcription** — system + microphone, VAD, on-device speech. **Meetings-only by
   default** (auto-detected on-device) — records during calls, off otherwise to save disk; always / off
   modes + a menu-bar force on/off.
+- 🔖 **Explicit call recording** — Start / Bookmark / End in one compact strip. Bookmark never pauses
+  recording; it creates a provisional local checkpoint, while an optional 1.62 GB Whisper model performs
+  the final whole-call pass after End. Mic-only calls remain valid and clearly report the missing source.
 - 🔍 **Hybrid search** — FTS5 + multilingual-e5 (384-dim) via RRF; cross-lingual.
 - 🕰️ **Timeline** — scrub through time, frame + text + app/URL, a player.
-- 🔌 **REST + MCP** — a local API (127.0.0.1, Bearer token) for agents; MCP over stdio.
+- 🔌 **REST + MCP** — a local API (127.0.0.1, Bearer token) for agents; MCP over stdio. Call tools are
+  read-only, use typed IDs, never return absolute paths, and cannot select another database or storage root.
 - 🧠 **Built-in local AI** — the headline path in "AI Models" downloads a pinned, verified MLX model and
   then runs fully offline on supported Macs. The same provider-first screen keeps real choice: Codex,
   OpenRouter, Anthropic, Kimi, GLM, MiMo, OpenAI, Claude Code, and separate Ollama / LM Studio connections.
   A recommendation lives inside its provider and never silently changes the active provider/model pair.
-- ♾️ **Storage** — forever by default; **move to an external SSD** in one click;
+- ♾️ **Storage** — no age cutoff with a small **5 GB local media budget** on fresh installs; choose
+  **Forever · no limit** to keep media until you delete it; **move to an external SSD** in one click;
   **iCloud auto-backup** (a compressed snapshot, without uploading the live database); size tracking.
 - 📥 **Import previous history** — bring your accumulated history (text + metadata) over.
 - 📝 **Automations** — daily summary to a file/Obsidian; export.
@@ -76,6 +86,13 @@ native alternative that **never goes to the cloud** — your activity history is
   fix prompt (it reads the public source and fixes it), or opens a pre-filled GitHub issue. No dead ends.
   Reachable from a **main-window button**, the **menu bar**, and Settings; agents can also pull live state
   over MCP (`get_diagnostics`).
+
+### Calls, without turning Eye into a CRM
+
+Eye's job is to preserve and expose trustworthy local evidence. It does not show a live transcript,
+build a call map, manage contacts, join meetings as a bot, infer speaker identity inside the system track,
+or inspect your calendar. Those are consumers that can use Eye's authenticated REST/MCP evidence later;
+they are not part of this tiny recorder.
 
 ## Own it: fix and extend Eye with your agent
 
@@ -144,14 +161,17 @@ Architecture and contributor/agent guide — [`AGENTS.md`](AGENTS.md). Distribut
 ## Tech
 
 Swift 6 (strict concurrency), SwiftUI, macOS 15+ · GRDB (DatabasePool + WAL) + FTS5 + sqlite-vec ·
-ScreenCaptureKit · Accessibility API · Vision OCR · SFSpeech · multilingual-e5 (swift-embeddings) ·
+ScreenCaptureKit · Accessibility API · Vision OCR · SFSpeech · whisper.cpp · multilingual-e5 (swift-embeddings) ·
 MLX Swift LM (built-in generation) · FlyingFox (REST) · MCP swift-sdk · Hardened Runtime without App Sandbox.
 
 ## Status
 
 Working: capture (screen + audio), hybrid search, timeline, REST + MCP, import of previous history,
-retention (forever by default), relocatable storage, iCloud backup, size tracking, daily summary,
+retention (5 GB local media budget by default, with explicit Forever), relocatable storage, iCloud backup, size tracking, daily summary,
 export, and one global provider/model pair for Ask, Daily Insights, summaries, and generated labels.
+Explicit Call Envelopes, uninterrupted Bookmark checkpoints, optional post-call Whisper transcription,
+preferred-only call search, and read-only agent evidence are implemented; physical 60/120-minute release
+qualification is tracked separately and must pass before this call feature is declared field-qualified.
 The default path is a one-click built-in local model on qualified hardware; external local and cloud
 providers remain choices. Distribution — **notarized Developer ID** (`scripts/build-notarized.sh`).
 

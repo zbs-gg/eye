@@ -112,8 +112,12 @@ struct CallDetailView: View {
         let hasGap = matching.contains { $0.availability == .gap || $0.gapReason != nil }
             || gaps.contains { $0.source == source }
         let available = matching.contains { $0.availability == .available }
-        let title = source == .me ? "You · microphone" : "Others · system audio"
-        let status = hasGap ? "Recorded with gaps" : (available ? "Recorded" : "Not recorded")
+        let title = source == .me
+            ? String(localized: "Microphone")
+            : String(localized: "System audio")
+        let status = hasGap
+            ? String(localized: "Recorded with gaps")
+            : (available ? String(localized: "Recorded") : String(localized: "Not recorded"))
         return HStack {
             Label(title, systemImage: source == .me ? "mic" : "speaker.wave.2")
             Spacer()
@@ -176,7 +180,9 @@ struct CallDetailView: View {
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
                             .frame(width: 48, alignment: .leading)
-                        Text(segment.source == .me ? "You" : "System")
+                        Text(segment.source == .me
+                             ? String(localized: "Mic")
+                             : String(localized: "System"))
                             .font(.caption.weight(.semibold))
                             .frame(width: 54, alignment: .leading)
                         Text(segment.text)
@@ -185,7 +191,9 @@ struct CallDetailView: View {
                     }
                 }
                 if hasMoreSegments {
-                    Button(loadingMore ? "Loading…" : "Load more") {
+                    Button(loadingMore
+                           ? String(localized: "Loading…")
+                           : String(localized: "Load more")) {
                         Task { await loadMore() }
                     }
                     .disabled(loadingMore)
@@ -218,7 +226,7 @@ struct CallDetailView: View {
         guard let service = env.callEvidenceQueryService else { return }
         do {
             guard let page = try await service.call(id: callID, segmentLimit: 80) else {
-                errorMessage = "This call no longer exists."
+                errorMessage = String(localized: "This call no longer exists.")
                 return
             }
             let revisionChanged = evidence?.preferredRevision?.id != page.preferredRevision?.id
@@ -257,7 +265,18 @@ struct CallDetailView: View {
 
     private func duration(_ call: CallRow) -> String {
         let end = call.endTs ?? Int64(Date().timeIntervalSince1970 * 1_000)
-        return "\(max(0, end - call.startTs) / 1_000) seconds · local recording"
+        let totalSeconds = max(0, end - call.startTs) / 1_000
+        let hours = totalSeconds / 3_600
+        let minutes = (totalSeconds % 3_600) / 60
+        let seconds = totalSeconds % 60
+        let value = if hours > 0 {
+            "\(hours)h \(minutes)m"
+        } else if minutes > 0 {
+            "\(minutes)m \(seconds)s"
+        } else {
+            "\(seconds)s"
+        }
+        return String(localized: "\(value) · local recording")
     }
 
     private func offset(_ milliseconds: Int64, from start: Int64) -> String {
@@ -267,12 +286,12 @@ struct CallDetailView: View {
 
     private func bookmarkLabel(_ state: CallBookmarkState) -> String {
         switch state {
-        case .preparing, .pending: "Transcribing"
-        case .deferredCapacity: "Queued"
-        case .ready: "Ready"
-        case .readyDegraded: "Ready · gap"
-        case .failed: "Retry needed"
-        case .satisfiedByFinal: "Included in final"
+        case .preparing, .pending: String(localized: "Transcribing")
+        case .deferredCapacity: String(localized: "Queued")
+        case .ready: String(localized: "Ready")
+        case .readyDegraded: String(localized: "Ready · gap")
+        case .failed: String(localized: "Retry needed")
+        case .satisfiedByFinal: String(localized: "Included in final")
         }
     }
 

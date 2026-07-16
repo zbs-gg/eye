@@ -95,8 +95,8 @@ struct CallPresentationState: Sendable, Equatable {
 
     private static func state(
         _ kind: CallPresentationKind,
-        _ title: String,
-        _ detail: String,
+        _ title: LocalizedStringResource,
+        _ detail: LocalizedStringResource,
         canInstallModel: Bool = false,
         canRetry: Bool = false,
         isProvisional: Bool = false,
@@ -104,8 +104,8 @@ struct CallPresentationState: Sendable, Equatable {
     ) -> CallPresentationState {
         CallPresentationState(
             kind: kind,
-            title: title,
-            detail: detail,
+            title: String(localized: title),
+            detail: String(localized: detail),
             canInstallModel: canInstallModel,
             canRetry: canRetry,
             isProvisional: isProvisional,

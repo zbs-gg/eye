@@ -55,7 +55,7 @@ enum ZBSEyeMCPServer {
             )
             timeline = TimelineService(db: d)
         } catch {
-            FileHandle.standardError.write("[mcp] db open failed: \(error)\n".data(using: .utf8)!)
+            FileHandle.standardError.write("[mcp] db_open_failed\n".data(using: .utf8)!)
             db = nil; search = nil; timeline = nil
         }
 
@@ -137,7 +137,7 @@ enum ZBSEyeMCPServer {
                     ])
                 } catch {
                     // honest error: the agent must distinguish "nothing found" from "DB broken"
-                    return .init(content: [.text("Search failed: \(error)")], isError: true)
+                    return .init(content: [.text("Search failed (search_failed).")], isError: true)
                 }
 
             case "list_calls":
@@ -255,7 +255,7 @@ enum ZBSEyeMCPServer {
                 let detail: AudioDetail?
                 do { detail = try await timeline.audioDetail(id: Int64(id)) }
                 catch {
-                    return .init(content: [.text("DB read failed: \(error)")], isError: true)
+                    return .init(content: [.text("DB read failed (db_read_failed).")], isError: true)
                 }
                 guard let d = detail else {
                     return .init(content: [.text("Audio segment #\(id) not found.")], isError: true)
@@ -358,7 +358,7 @@ enum ZBSEyeMCPServer {
             await server.stop()
             try? await Task.sleep(for: .milliseconds(50))   // let the in-flight toggle POST land
         } catch {
-            FileHandle.standardError.write("[mcp] start error: \(error)\n".data(using: .utf8)!)
+            FileHandle.standardError.write("[mcp] start_failed\n".data(using: .utf8)!)
         }
     }
 

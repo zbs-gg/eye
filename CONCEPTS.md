@@ -49,6 +49,18 @@ A timestamp saved during an active Call Envelope that requests a provisional Whi
 
 The authoritative transcript produced by a full-call Whisper pass after recording ends. Bookmark Checkpoint text is a replaceable draft; bookmark timestamps remain durable.
 
+### Source Span
+
+A continuous, sample-addressed epoch of microphone or system-audio evidence. A device restart or sample-rate change closes one Source Span and opens another instead of pretending the stream was continuous.
+
+### Source Gap
+
+A durable statement that a source interval is absent, unavailable, redacted, or dropped. A Source Gap is evidence about missing evidence: UI, export, REST, and MCP surface it instead of guessing speech.
+
+### Evidence Reference
+
+An opaque typed identifier such as `call:42`, `bookmark:7`, or `call-audio-chunk:19`. It resolves only through authenticated local services and never serializes an absolute filesystem path.
+
 ## Call evidence relationships
 
-A Call Envelope owns its Bookmark Checkpoints and source evidence. Bookmark Checkpoints produce provisional text; the completed Call Envelope produces one Preferred Final Transcript.
+A Call Envelope owns its Bookmark Checkpoints, Source Spans, Source Gaps, and Evidence References. Bookmark Checkpoints produce provisional text; the completed Call Envelope produces one Preferred Final Transcript. Transcript source labels describe microphone/system provenance, not inferred human identity.

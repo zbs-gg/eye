@@ -75,6 +75,9 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   explicit choices. Shrinking a limit asks before deleting old media, while low disk pauses capture and never
   silently deletes history to self-heal.
 - Microphone and System Audio can now be controlled independently, including across low-disk pause and resume.
+- Call Envelopes now appear as one compact Timeline span and one localized Call Detail view; search exposes
+  only the preferred transcript, while authenticated REST/MCP provide bounded read-only evidence with typed
+  IDs and no absolute paths.
 - Every generative consumer now goes through one cancellable router with selection revision, authorization,
   deterministic context budgets, and provider/model/locality provenance. Interactive Ask takes priority over
   background work; stale or revoked output is discarded.

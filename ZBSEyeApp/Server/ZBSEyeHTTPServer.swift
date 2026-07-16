@@ -38,7 +38,7 @@ actor ZBSEyeHTTPServer {
             let srv = HTTPServer(address: address)
             await registerRoutes(srv)
             let task = Task {
-                do { try await srv.run() } catch { Self.log("run error on \(port): \(error)") }
+                do { try await srv.run() } catch { Self.log("run_failed port=\(port)") }
             }
             let ok = await Self.raceListening(srv)
             Self.log("port \(port): listened=\(ok)")
@@ -274,7 +274,7 @@ actor ZBSEyeHTTPServer {
                                                    semanticFallbackReason: fallbackReason,
                                                    results: hits))
         } catch {
-            Self.log("search error: \(error)")
+            Self.log("search_failed")
             return Self.error(.internalServerError, "search failed", code: "search_failed")
         }
     }
@@ -306,7 +306,7 @@ actor ZBSEyeHTTPServer {
                 language: d.language, text: d.transcript,
                 audioUrl: "/v1/audio/file?id=\(d.id)"))
         } catch {
-            Self.log("transcript error: \(error)")
+            Self.log("transcript_failed")
             return Self.error(.internalServerError, "transcript failed", code: "transcript_failed")
         }
     }
@@ -462,7 +462,7 @@ actor ZBSEyeHTTPServer {
             let dto = buckets.map { APIDTO.DensityBucketDTO(ts: msFromDate($0.ts), count: $0.count) }
             return Self.json(APIDTO.TimelineResponse(from: from, to: to, bucketMs: bucket, buckets: dto))
         } catch {
-            Self.log("timeline error: \(error)")
+            Self.log("timeline_failed")
             return Self.error(.internalServerError, "timeline failed", code: "timeline_failed")
         }
     }

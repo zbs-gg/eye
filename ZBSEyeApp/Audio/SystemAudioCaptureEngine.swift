@@ -194,20 +194,18 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
     private static func stopStream(
         _ stream: SCStream
     ) async -> SystemAudioCaptureTeardownOutcome {
-        var lastError = "unknown ScreenCaptureKit error"
         for attempt in 0..<2 {
             do {
                 try await stream.stopCapture()
                 return .stopped
             } catch {
-                lastError = error.localizedDescription
                 if attempt == 0 {
                     try? await Task.sleep(for: .milliseconds(100))
                 }
             }
         }
-        Log.audio.error("system audio stop failed after retry: \(lastError, privacy: .public)")
-        return .failed(lastError)
+        Log.audio.error("system_audio_stop_failed_after_retry")
+        return .failed("system_audio_stop_failed")
     }
 
     /// CMSampleBuffer (Float32, non-interleaved — SCStream audio format) → mono frame + RMS.

@@ -9578,6 +9578,186 @@
           }
         }
       }
+    },
+    "%@ · local recording": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "%@ · локальная запись" } } }
+    },
+    "%@, %lld bookmarks": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "%@, закладок: %lld" } } }
+    },
+    "Audio is safe; the final local pass is running.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Аудио сохранено; идёт финальная локальная расшифровка." } } }
+    },
+    "Audio sources": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Источники звука" } } }
+    },
+    "Bookmark %lld": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Закладка %lld" } } }
+    },
+    "Bookmark text is available with explicit gaps; the final pass is running.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Текст закладки доступен, разрывы отмечены; идёт финальная расшифровка." } } }
+    },
+    "Bookmark text is available; the final pass is running.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Текст закладки доступен; идёт финальная расшифровка." } } }
+    },
+    "Bookmarks": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Закладки" } } }
+    },
+    "Call": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонок" } } }
+    },
+    "Call from %@": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонок с %@" } } }
+    },
+    "Call unavailable": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонок недоступен" } } }
+    },
+    "Call · %@": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонок · %@" } } }
+    },
+    "Call · %@ · %lld bookmarks": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонок · %@ · закладок: %lld" } } }
+    },
+    "Calls and bookmark markers": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонки и метки закладок" } } }
+    },
+    "FINAL": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "ФИНАЛЬНАЯ" } } }
+    },
+    "Final transcript ready": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Финальная расшифровка готова" } } }
+    },
+    "Final transcript · gaps noted": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Финальная расшифровка · разрывы отмечены" } } }
+    },
+    "Finishing call": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Завершение звонка" } } }
+    },
+    "Forever · no limit": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Навсегда · без лимита" } } }
+    },
+    "History has no age cutoff and uses up to 5 GB by default; Settings can keep media forever with no limit. Recording other people in calls is your responsibility: macOS shows them no indicator.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "У истории нет ограничения по возрасту, а свежая установка использует до 5 ГБ. В настройках можно хранить медиа навсегда без лимита. Запись других людей во время звонков — ваша ответственность: macOS не показывает им индикатор." } } }
+    },
+    "Included in final": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Включено в финальную" } } }
+    },
+    "Install Whisper": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Установить Whisper" } } }
+    },
+    "Install the optional local speech model to transcribe it.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Установите необязательную локальную модель речи, чтобы получить расшифровку." } } }
+    },
+    "Load more": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Показать ещё" } } }
+    },
+    "Loading call…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Загрузка звонка…" } } }
+    },
+    "Loading…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Загрузка…" } } }
+    },
+    "Mic": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Микр." } } }
+    },
+    "Mic and system audio stay on until End Call.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Микрофон и системный звук записываются до нажатия «Завершить звонок»." } } }
+    },
+    "Missing source ranges are marked instead of being guessed.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Отсутствующие участки источников отмечены явно, без догадок." } } }
+    },
+    "No transcript text yet. The recording and bookmarks are already safe.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Текста пока нет. Запись и закладки уже сохранены." } } }
+    },
+    "Not recorded": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Не записывался" } } }
+    },
+    "Old data is deleted automatically when the limit is exceeded (every 30 minutes). The limit covers moments, audio, and calls; the search index grows separately and is cleaned along with history. Fresh installs use 5 GB; \"Forever · no limit\" keeps media until you delete it.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Старые данные удаляются автоматически при превышении лимита (каждые 30 минут). Лимит покрывает моменты, звук и звонки; поисковый индекс растёт отдельно и очищается вместе с историей. Свежая установка использует 5 ГБ; «Навсегда · без лимита» хранит медиа, пока вы сами его не удалите." } } }
+    },
+    "PROVISIONAL": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "ПРЕДВАРИТЕЛЬНАЯ" } } }
+    },
+    "Provisional transcript": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Предварительная расшифровка" } } }
+    },
+    "Queued": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "В очереди" } } }
+    },
+    "Ready": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Готово" } } }
+    },
+    "Ready · gap": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Готово · есть разрыв" } } }
+    },
+    "Recorded": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Записано" } } }
+    },
+    "Recorded with gaps": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Записано с разрывами" } } }
+    },
+    "Recording call": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Идёт запись звонка" } } }
+    },
+    "Recording saved · Whisper needed": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Запись сохранена · нужен Whisper" } } }
+    },
+    "Recording saved · transcribing": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Запись сохранена · идёт расшифровка" } } }
+    },
+    "Retry needed": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Нужен повтор" } } }
+    },
+    "Retry transcription": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Повторить расшифровку" } } }
+    },
+    "Showing the first %lld bookmarks.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Показаны первые %lld закладок." } } }
+    },
+    "Showing the first %lld transcript gaps.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Показаны первые %lld разрывов расшифровки." } } }
+    },
+    "Source history is summarized after %lld changes.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "История источников свёрнута после %lld изменений." } } }
+    },
+    "The provisional transcript is safe; the final pass failed.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Предварительная расшифровка сохранена; финальный проход завершился ошибкой." } } }
+    },
+    "The recording is safe. Retry transcription when ready.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Запись сохранена. Повторите расшифровку, когда будете готовы." } } }
+    },
+    "This call no longer exists.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Этого звонка больше нет." } } }
+    },
+    "Transcribing": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Расшифровка" } } }
+    },
+    "Transcript": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Расшифровка" } } }
+    },
+    "Transcription needs attention": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Расшифровка требует внимания" } } }
+    },
+    "Whisper finished the complete local pass.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Whisper завершил полную локальную расшифровку." } } }
+    },
+    "Whisper will finish locally in the background.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Whisper завершит расшифровку локально в фоне." } } }
+    },
+    "calls · markers are bookmarks": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "звонки · метки — это закладки" } } }
+    },
+    "processing": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "обработка" } } }
+    },
+    "ready": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "готово" } } }
+    },
+    "ready with gaps": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "готово с разрывами" } } }
+    },
+    "retry available": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "можно повторить" } } }
     }
   },
   "version": "1.0"

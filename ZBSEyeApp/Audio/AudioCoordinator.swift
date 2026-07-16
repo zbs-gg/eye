@@ -312,7 +312,7 @@ final class AudioCoordinator {
         do { stream = try micEngine.start() }
         catch {
             micStartFailed = true
-            Log.audio.error("mic engine start failed: \(String(describing: error), privacy: .public)")
+            Log.audio.error("mic_engine_start_failed")
             return false
         }
         micEpoch += 1
@@ -344,7 +344,7 @@ final class AudioCoordinator {
                 self?.systemStarting = false
                 return nil
             } catch {
-                Log.audio.error("system audio start failed: \(String(describing: error), privacy: .public)")
+                Log.audio.error("system_audio_start_failed")
                 guard let self, self.isRunning,
                       self.legGeneration == generation else { return nil }
                 self.systemStarting = false

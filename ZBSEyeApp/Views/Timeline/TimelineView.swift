@@ -572,7 +572,9 @@ private struct CallSpanStrip: View {
                     }
                     .buttonStyle(.plain)
                     .offset(x: x)
-                    .help("Call · \(label(span.status)) · \(span.bookmarks.count) bookmarks")
+                    .help(String(localized: "Call · \(label(span.status)) · \(span.bookmarks.count) bookmarks"))
+                    .accessibilityLabel(Text(String(localized: "Call from \(span.start.formatted(date: .abbreviated, time: .shortened))")))
+                    .accessibilityValue(Text(String(localized: "\(label(span.status)), \(span.bookmarks.count) bookmarks")))
                 }
             }
         }
@@ -590,10 +592,10 @@ private struct CallSpanStrip: View {
 
     private func label(_ status: CallTimelineStatus) -> String {
         switch status {
-        case .processing: "processing"
-        case .retryable: "retry available"
-        case .ready: "ready"
-        case .degraded: "ready with gaps"
+        case .processing: String(localized: "processing")
+        case .retryable: String(localized: "retry available")
+        case .ready: String(localized: "ready")
+        case .degraded: String(localized: "ready with gaps")
         }
     }
 }
