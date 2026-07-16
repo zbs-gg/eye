@@ -42,6 +42,10 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 - **Durable local call recording foundation.** Start, Bookmark, and End now create one Call Envelope with
   separately attributable microphone/system PCM spools. Bookmarks persist exact source watermarks without
   pausing capture; source restarts become explicit gaps, and End creates one retryable final-transcript job.
+- **Optional local Whisper transcription runtime.** The app pins the official `whisper.cpp` v1.9.1
+  XCFramework and can separately download, resume, verify, smoke-test, and remove the full Whisper Large V3
+  Turbo model. Transcription runs in a bounded one-job helper process; no speech model ships in the base app
+  and there is no cloud fallback.
 - **One-click built-in local AI.** On qualified Apple Silicon Macs, **ZBS Eye Local** downloads a pinned,
   verified MLX model after an explicit click and then powers Ask, Daily Insights, summaries, and generated
   activity labels offline — no LM Studio, Ollama, account, API key, or separate server required. Setup is

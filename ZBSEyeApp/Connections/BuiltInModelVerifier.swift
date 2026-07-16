@@ -1,5 +1,3 @@
-import CryptoKit
-import Darwin
 import Foundation
 
 enum BuiltInModelVerificationError: Error, Sendable, Equatable {
@@ -66,17 +64,17 @@ enum BuiltInModelVerifier {
                 throw BuiltInModelVerificationError.missingFile(file.relativePath)
             }
             try rejectSymlinkComponents(from: root, relativePath: file.relativePath)
-            let actualDigest = try digestAndValidateFile(
-                url,
-                relativePath: file.relativePath,
-                expectedBytes: file.expectedBytes
-            )
-            guard actualDigest == file.sha256 else {
-                throw BuiltInModelVerificationError.digestMismatch(
-                    path: file.relativePath,
-                    expected: file.sha256,
-                    actual: actualDigest
+            do {
+                _ = try ManagedAssetVerifier.verifyFile(
+                    root: root,
+                    relativePath: file.relativePath,
+                    expectedBytes: file.expectedBytes,
+                    sha256: file.sha256
                 )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw map(error)
             }
             verifiedBytes += file.expectedBytes
             try Task.checkCancellation()
@@ -116,67 +114,6 @@ enum BuiltInModelVerifier {
         )
     }
 
-    private static func digestAndValidateFile(
-        _ url: URL,
-        relativePath: String,
-        expectedBytes: Int64
-    ) throws -> String {
-        let descriptor = url.withUnsafeFileSystemRepresentation { path -> Int32 in
-            guard let path else { return -1 }
-            return Darwin.open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
-        }
-        guard descriptor >= 0 else {
-            if errno == ELOOP { throw BuiltInModelVerificationError.nonRegularFile(relativePath) }
-            throw BuiltInModelVerificationError.unreadableFile(relativePath)
-        }
-        defer { Darwin.close(descriptor) }
-
-        var attributes = stat()
-        guard fstat(descriptor, &attributes) == 0 else {
-            throw BuiltInModelVerificationError.unreadableFile(relativePath)
-        }
-        guard (attributes.st_mode & S_IFMT) == S_IFREG else {
-            throw BuiltInModelVerificationError.nonRegularFile(relativePath)
-        }
-        guard attributes.st_nlink == 1 else {
-            throw BuiltInModelVerificationError.nonRegularFile(relativePath)
-        }
-
-        let actualBytes = Int64(attributes.st_size)
-        guard actualBytes == expectedBytes else {
-            throw BuiltInModelVerificationError.byteCountMismatch(
-                path: relativePath,
-                expected: expectedBytes,
-                actual: actualBytes
-            )
-        }
-
-        var hasher = SHA256()
-        var buffer = [UInt8](repeating: 0, count: 1_048_576)
-        while true {
-            try Task.checkCancellation()
-            let count = buffer.withUnsafeMutableBytes { bytes -> Int in
-                let count = Darwin.read(descriptor, bytes.baseAddress, bytes.count)
-                if count > 0 {
-                    hasher.update(
-                        bufferPointer: UnsafeRawBufferPointer(
-                            start: bytes.baseAddress,
-                            count: count
-                        )
-                    )
-                }
-                return count
-            }
-            if count == 0 { break }
-            guard count > 0 else {
-                if errno == EINTR { continue }
-                throw BuiltInModelVerificationError.unreadableFile(relativePath)
-            }
-        }
-        try Task.checkCancellation()
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
     private static func rejectSymlinkComponents(from root: URL, relativePath: String) throws {
         var current = root
         for component in NSString(string: relativePath).pathComponents {
@@ -197,5 +134,20 @@ enum BuiltInModelVerifier {
 
     private static func relativePath(of item: URL, under root: URL) -> String {
         String(item.standardizedFileURL.path.dropFirst(root.path.count + 1))
+    }
+
+    private static func map(_ error: Error) -> BuiltInModelVerificationError {
+        guard let error = error as? ManagedAssetVerificationError else {
+            return .unreadableFile(".")
+        }
+        return switch error {
+        case .invalidRelativePath(let path): .invalidManifestPath(path)
+        case .nonRegularFile(let path): .nonRegularFile(path)
+        case .byteCountMismatch(let path, let expected, let actual):
+            .byteCountMismatch(path: path, expected: expected, actual: actual)
+        case .digestMismatch(let path, let expected, let actual):
+            .digestMismatch(path: path, expected: expected, actual: actual)
+        case .unreadableFile(let path): .unreadableFile(path)
+        }
     }
 }

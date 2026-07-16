@@ -25,6 +25,8 @@ packages:
     exactVersion: "0.12.1"
   ZBSEyeVec:
     path: Packages/ZBSEyeVec
+  ZBSEyeWhisper:
+    path: Packages/ZBSEyeWhisper
   Embeddings:
     url: https://github.com/jkrukowski/swift-embeddings
     from: "0.0.16"
@@ -76,6 +78,8 @@ targets:
         product: MCP
       - package: ZBSEyeVec
         product: CSqliteVec
+      - package: ZBSEyeWhisper
+        product: ZBSEyeWhisper
       - package: Embeddings
         product: Embeddings
       - package: MLXSwiftLM
@@ -204,6 +208,11 @@ targets:
       - path: ZBSEyeApp/Calls/CallSpool.swift
       - path: ZBSEyeApp/Calls/CallAudioWindowAssembler.swift
       - path: ZBSEyeApp/Calls/CallCoordinator.swift
+      - path: ZBSEyeApp/Calls/WhisperModelManifest.swift
+      - path: ZBSEyeApp/Calls/WhisperModelStore.swift
+      - path: ZBSEyeApp/Calls/WhisperHelperCommand.swift
+      - path: ZBSEyeApp/Connections/ManagedAssetDownloadClient.swift
+      - path: ZBSEyeApp/Connections/ManagedAssetVerifier.swift
       - path: ZBSEyeApp/Audio/AudioModels.swift
       - path: ZBSEyeApp/Data/StorageRelocationPolicy.swift
       - path: ZBSEyeApp/Support/Log.swift
@@ -241,6 +250,8 @@ targets:
         product: GRDB
       - package: ZBSEyeVec
         product: CSqliteVec
+      - package: ZBSEyeWhisper
+        product: ZBSEyeWhisper
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye.tests

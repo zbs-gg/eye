@@ -2,6 +2,7 @@ import Foundation
 
 enum SemanticQueryFallbackReason: String, Sendable, Equatable {
     case localGeneration
+    case speechTranscription
     case computeSuspended
     case secondaryProcess
 }
@@ -15,10 +16,13 @@ enum AIComputeLeaseKind: String, Sendable, Equatable {
     case semanticQuery
     case backgroundEmbedding
     case localGeneration
+    case speechTranscription
 }
 
 enum AIComputeCoordinatorError: Error, Sendable, Equatable {
     case generationAlreadyPending
+    case speechAlreadyPending
+    case speechHasPriority
     case suspended
 }
 
@@ -37,6 +41,8 @@ struct AIComputeCoordinatorSnapshot: Sendable, Equatable {
     let activeBackgroundEmbeddings: Int
     let generationPending: Bool
     let generationActive: Bool
+    let speechPending: Bool
+    let speechActive: Bool
     let externallySuspended: Bool
 }
 
@@ -64,6 +70,7 @@ struct AIComputeLease: Sendable {
 actor AIComputeCoordinator {
     private enum DrainTarget {
         case e5
+        case speechPrerequisites
         case all
     }
 
@@ -77,6 +84,8 @@ actor AIComputeCoordinator {
     private var backgroundEmbeddings: Set<UUID> = []
     private var activeGeneration: UUID?
     private var generationPending = false
+    private var activeSpeech: UUID?
+    private var speechPending = false
     private var externallySuspended = false
     private var drainWaiters: [UUID: DrainWaiter] = [:]
 
@@ -87,6 +96,9 @@ actor AIComputeCoordinator {
     func acquireSemanticQuery() -> SemanticQueryAdmission {
         if externallySuspended {
             return .ftsOnly(.computeSuspended)
+        }
+        if speechPending || activeSpeech != nil {
+            return .ftsOnly(.speechTranscription)
         }
         if generationPending || activeGeneration != nil {
             return .ftsOnly(.localGeneration)
@@ -103,7 +115,9 @@ actor AIComputeCoordinator {
     func acquireBackgroundEmbedding() -> AIComputeLease? {
         guard !externallySuspended,
               !generationPending,
-              activeGeneration == nil else { return nil }
+              activeGeneration == nil,
+              !speechPending,
+              activeSpeech == nil else { return nil }
         let id = UUID()
         backgroundEmbeddings.insert(id)
         return AIComputeLease(
@@ -120,6 +134,9 @@ actor AIComputeCoordinator {
         }
         guard !generationPending, activeGeneration == nil else {
             throw AIComputeCoordinatorError.generationAlreadyPending
+        }
+        guard !speechPending, activeSpeech == nil else {
+            throw AIComputeCoordinatorError.speechHasPriority
         }
 
         generationPending = true
@@ -143,7 +160,46 @@ actor AIComputeCoordinator {
         } catch {
             generationPending = false
             wakeSatisfiedDrainWaiters()
-            if !externallySuspended {
+            if !externallySuspended, !speechPending, activeSpeech == nil {
+                await vectorBackfill.resume()
+            }
+            throw error
+        }
+    }
+
+    /// Speech waits for current semantic/generation work, then owns compute
+    /// exclusively. Capture and audio spooling never acquire this lease.
+    func acquireSpeech() async throws -> AIComputeLease {
+        try Task.checkCancellation()
+        guard !externallySuspended else {
+            throw AIComputeCoordinatorError.suspended
+        }
+        guard !speechPending, activeSpeech == nil else {
+            throw AIComputeCoordinatorError.speechAlreadyPending
+        }
+
+        speechPending = true
+        await vectorBackfill.suspendAndDrain()
+        do {
+            try Task.checkCancellation()
+            try await waitUntilDrained(.speechPrerequisites)
+            try Task.checkCancellation()
+            guard !externallySuspended else {
+                throw AIComputeCoordinatorError.suspended
+            }
+            let id = UUID()
+            activeSpeech = id
+            speechPending = false
+            wakeSatisfiedDrainWaiters()
+            return AIComputeLease(
+                id: id,
+                kind: .speechTranscription,
+                coordinator: self
+            )
+        } catch {
+            speechPending = false
+            wakeSatisfiedDrainWaiters()
+            if !externallySuspended, !generationPending, activeGeneration == nil {
                 await vectorBackfill.resume()
             }
             throw error
@@ -164,7 +220,8 @@ actor AIComputeCoordinator {
     func resume() async {
         guard externallySuspended else { return }
         externallySuspended = false
-        if !generationPending, activeGeneration == nil {
+        if !generationPending, activeGeneration == nil,
+           !speechPending, activeSpeech == nil {
             await vectorBackfill.resume()
         }
     }
@@ -175,6 +232,8 @@ actor AIComputeCoordinator {
             activeBackgroundEmbeddings: backgroundEmbeddings.count,
             generationPending: generationPending,
             generationActive: activeGeneration != nil,
+            speechPending: speechPending,
+            speechActive: activeSpeech != nil,
             externallySuspended: externallySuspended
         )
     }
@@ -189,7 +248,17 @@ actor AIComputeCoordinator {
         case .localGeneration:
             guard activeGeneration == id else { return }
             activeGeneration = nil
-            shouldResumeBackfill = !externallySuspended && !generationPending
+            shouldResumeBackfill = !externallySuspended
+                && !generationPending
+                && !speechPending
+                && activeSpeech == nil
+        case .speechTranscription:
+            guard activeSpeech == id else { return }
+            activeSpeech = nil
+            shouldResumeBackfill = !externallySuspended
+                && !generationPending
+                && activeGeneration == nil
+                && !speechPending
         }
         wakeSatisfiedDrainWaiters()
         if shouldResumeBackfill {
@@ -230,8 +299,14 @@ actor AIComputeCoordinator {
         switch target {
         case .e5:
             return e5Drained
-        case .all:
+        case .speechPrerequisites:
             return e5Drained && activeGeneration == nil && !generationPending
+        case .all:
+            return e5Drained
+                && activeGeneration == nil
+                && !generationPending
+                && activeSpeech == nil
+                && !speechPending
         }
     }
 

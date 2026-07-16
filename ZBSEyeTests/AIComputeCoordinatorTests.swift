@@ -108,6 +108,34 @@ final class AIComputeCoordinatorTests: XCTestCase {
         XCTAssertNotNil(resumedAdmission.lease)
     }
 
+    func testSpeechWaitsForGenerationAndBlocksNewModelWorkUntilReleased() async throws {
+        let coordinator = AIComputeCoordinator(vectorBackfill: .noop)
+        let generation = try await coordinator.acquireGeneration()
+
+        let speechTask = Task { try await coordinator.acquireSpeech() }
+        try await waitUntil { await coordinator.snapshot().speechPending }
+        let fallback = await coordinator.acquireSemanticQuery()
+        XCTAssertEqual(fallback.fallbackReason, .speechTranscription)
+        let background = await coordinator.acquireBackgroundEmbedding()
+        XCTAssertNil(background)
+        do {
+            _ = try await coordinator.acquireGeneration()
+            XCTFail("speech must retain priority")
+        } catch {
+            XCTAssertEqual(error as? AIComputeCoordinatorError, .generationAlreadyPending)
+        }
+
+        await generation.release()
+        let speech = try await speechTask.value
+        let active = await coordinator.snapshot()
+        XCTAssertTrue(active.speechActive)
+        XCTAssertFalse(active.generationActive)
+
+        await speech.release()
+        let resumed = await coordinator.acquireSemanticQuery()
+        XCTAssertNotNil(resumed.lease)
+    }
+
     private func waitUntil(
         timeout: Duration = .seconds(1),
         _ predicate: @escaping @Sendable () async -> Bool

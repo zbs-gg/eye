@@ -80,6 +80,7 @@ final class AppEnvironment {
     @ObservationIgnored private var automationAuditWriter: AutomationAuditWriter?
     @ObservationIgnored private(set) var llmRouter: LLMRouter?
     @ObservationIgnored private(set) var aiComputeCoordinator: AIComputeCoordinator?
+    @ObservationIgnored private(set) var whisperModelStore: WhisperModelStore?
     @ObservationIgnored private(set) var builtInModelManager: BuiltInModelManager?
     @ObservationIgnored private var builtInModelProviderBridge: BuiltInModelProviderBridge?
     @ObservationIgnored private var builtInModelReconciliationTask: Task<Void, Never>?
@@ -406,6 +407,7 @@ final class AppEnvironment {
                 }
                 self.cancelBuiltInModelRecovery()
                 let reconciliation = self.cancelBuiltInModelReconciliation()
+                await self.whisperModelStore?.suspendAndDrain()
 
                 // These two ownership barriers share the fail-closed Quit path:
                 // each is caller-bounded, but its task remains retained until it
@@ -428,6 +430,7 @@ final class AppEnvironment {
                             await self.builtInModels.refresh()
                         }
                         self.recording.resumeAfterMaintenance()
+                        await self.whisperModelStore?.resumeAfterDrain()
                     } else {
                         self.relocationTerminationDrainTask = localRuntimePhase.operation
                     }
@@ -456,6 +459,7 @@ final class AppEnvironment {
                         )
                         await self.builtInModels.refresh()
                         self.recording.resumeAfterMaintenance()
+                        await self.whisperModelStore?.resumeAfterDrain()
                     } else {
                         self.relocationTerminationDrainTask = computePhase.operation
                     }
@@ -514,6 +518,21 @@ final class AppEnvironment {
             )
             await backfill.attachComputeCoordinator(computeCoordinator)
             self.aiComputeCoordinator = computeCoordinator
+
+            let speechRoot = StorageLocation.speechModelRoot(under: resolvedDataRoot)
+            do {
+                try FileManager.default.createDirectory(
+                    at: speechRoot,
+                    withIntermediateDirectories: true
+                )
+                let whisperModelStore = WhisperModelStore(root: speechRoot)
+                self.whisperModelStore = whisperModelStore
+                Task.detached(priority: .utility) {
+                    _ = await whisperModelStore.refresh()
+                }
+            } catch {
+                Log.audio.error("optional Whisper model storage unavailable")
+            }
 
             let localDriver = MLXLocalRuntimeDriver()
             let localInference = LocalInferenceService(
@@ -1104,6 +1123,7 @@ final class AppEnvironment {
             if let builtInModelManager {
                 _ = try await builtInModelManager.suspendAndDrainForRelocation()
             }
+            await whisperModelStore?.suspendAndDrain()
             if let aiComputeCoordinator {
                 try await aiComputeCoordinator.suspendAndDrain()
             }
@@ -1187,6 +1207,7 @@ final class AppEnvironment {
                     // suspends backfill again while warming the old-root LKG.
                     await self.aiComputeCoordinator?.resume()
                     try? await self.builtInModelManager?.resumeAfterRelocation()
+                    await self.whisperModelStore?.resumeAfterDrain()
                     await self.builtInModels.refresh()
                     self.recording.resumeAfterMaintenance()
                 }

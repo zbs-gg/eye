@@ -22,6 +22,34 @@ struct ZBSEyeMain {
                 exit(1)
             }
         }
+        if CommandLine.arguments.contains(WhisperHelperCommand.flag) {
+            do {
+                let root = try StorageLocation.requireAvailableDataRoot()
+                let command = try WhisperHelperCommand(
+                    arguments: CommandLine.arguments,
+                    dataRoot: root
+                )
+                try command.execute()
+                exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("Whisper helper failed.\n".utf8))
+                exit(1)
+            }
+        }
+        if CommandLine.arguments.contains(WhisperModelSmokeCommand.flag) {
+            do {
+                let root = try StorageLocation.requireAvailableDataRoot()
+                let command = try WhisperModelSmokeCommand(
+                    arguments: CommandLine.arguments,
+                    dataRoot: root
+                )
+                try command.execute()
+                exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("Whisper smoke test failed.\n".utf8))
+                exit(1)
+            }
+        }
         LanguageManager.applyAtLaunch()   // apply the in-app language override before any UI loads
         let mcpProfile: MCPAccessProfile? = if CommandLine.arguments.contains("--mcp-full")
             || CommandLine.arguments.contains("--mcp") {
