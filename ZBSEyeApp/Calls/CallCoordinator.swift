@@ -103,6 +103,7 @@ actor CallCoordinator {
     private let audio: CallAudioControl
     private let now: @Sendable () -> Date
     private let barrierTimeout: Duration
+    private let afterSourceTransition: @Sendable () async -> Void
     private var active: ActiveCall?
     private var current = CallCoordinatorSnapshot.idle
     private var commandTail: Task<Void, Never>?
@@ -112,13 +113,15 @@ actor CallCoordinator {
         mediaRoot: URL,
         audio: CallAudioControl,
         now: @escaping @Sendable () -> Date = Date.init,
-        barrierTimeout: Duration = .seconds(2)
+        barrierTimeout: Duration = .seconds(2),
+        afterSourceTransition: @escaping @Sendable () async -> Void = {}
     ) {
         self.repository = repository
         self.mediaRoot = mediaRoot
         self.audio = audio
         self.now = now
         self.barrierTimeout = barrierTimeout
+        self.afterSourceTransition = afterSourceTransition
     }
 
     func snapshot() -> CallCoordinatorSnapshot { current }
@@ -332,6 +335,7 @@ actor CallCoordinator {
                 degradationReason: reason.persistenceCode
                     ?? ((finalCoverage.degraded || finished.degraded) ? "source_gap" : nil)
             )
+            await afterSourceTransition()
         } catch {
             await audio.installSink(nil)
             await active.spool.closeAdmission()

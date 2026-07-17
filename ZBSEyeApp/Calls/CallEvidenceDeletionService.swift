@@ -39,12 +39,16 @@ struct CallEraseReport: Sendable, Equatable {
 actor CallEvidenceDeletionService {
     typealias WorkerSuspend = @Sendable () async -> Bool
     typealias WorkerResume = @Sendable () async -> Void
+    typealias AutomationSuspend = @Sendable () async -> Void
+    typealias AutomationResume = @Sendable () async -> Void
 
     private let repository: CallRepository
     private let mediaRoot: URL
     private let fileManager: FileManager
     private var suspendWorker: WorkerSuspend?
     private var resumeWorker: WorkerResume?
+    private var suspendAutomation: AutomationSuspend?
+    private var resumeAutomation: AutomationResume?
     private var mutationInProgress = false
 
     init(
@@ -63,6 +67,14 @@ actor CallEvidenceDeletionService {
     ) {
         suspendWorker = suspend
         resumeWorker = resume
+    }
+
+    func attachCallAutomation(
+        suspend: @escaping AutomationSuspend,
+        resume: @escaping AutomationResume
+    ) {
+        suspendAutomation = suspend
+        resumeAutomation = resume
     }
 
     func requireNoActiveCall() async throws {
@@ -102,13 +114,16 @@ actor CallEvidenceDeletionService {
     }
 
     private func eraseWithWorkerBarrier(callID: Int64, nowMs: Int64) async throws -> CallEraseReport {
+        await suspendAutomation?()
         let ownsResume = await suspendWorker?() ?? false
         do {
             let report = try await eraseWhileWorkerDrained(callID: callID, nowMs: nowMs)
             if ownsResume { await resumeWorker?() }
+            await resumeAutomation?()
             return report
         } catch {
             if ownsResume { await resumeWorker?() }
+            await resumeAutomation?()
             throw error
         }
     }
@@ -222,6 +237,7 @@ actor CallEvidenceDeletionService {
     private func resumePendingRedactionsWithWorkerBarrier(
         nowMs: Int64
     ) async throws -> [CallRedactionReport] {
+        await suspendAutomation?()
         let ownsResume = await suspendWorker?() ?? false
         do {
             _ = try CallHelperScratchStore(
@@ -254,9 +270,11 @@ actor CallEvidenceDeletionService {
                 )
             }
             if ownsResume { await resumeWorker?() }
+            await resumeAutomation?()
             return reports
         } catch {
             if ownsResume { await resumeWorker?() }
+            await resumeAutomation?()
             throw error
         }
     }
@@ -264,6 +282,7 @@ actor CallEvidenceDeletionService {
     func resumePendingErases(nowMs: Int64) async throws -> [CallEraseReport] {
         try acquireMutationLease()
         defer { releaseMutationLease() }
+        await suspendAutomation?()
         let ownsResume = await suspendWorker?() ?? false
         do {
             let pending = try await repository.pendingErasePreparations()
@@ -278,9 +297,11 @@ actor CallEvidenceDeletionService {
                 )
             }
             if ownsResume { await resumeWorker?() }
+            await resumeAutomation?()
             return reports
         } catch {
             if ownsResume { await resumeWorker?() }
+            await resumeAutomation?()
             throw error
         }
     }

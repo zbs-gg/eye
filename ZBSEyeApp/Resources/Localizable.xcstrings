@@ -9736,6 +9736,84 @@
     "ready with gaps": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "готово с разрывами" } } }
     },
+    "After a call": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "После звонка" } } }
+    },
+    "After a call automation details": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Настройки автоматизации после звонка" } } }
+    },
+    "Automation status unavailable": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Статус автоматизации недоступен" } } }
+    },
+    "Change and discard pending events": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Сменить и удалить ожидающие события" } } }
+    },
+    "Change local receiver?": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Сменить локальный обработчик?" } } }
+    },
+    "Copy secret": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Скопировать секрет" } } }
+    },
+    "Delivery blocked · %lld waiting": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Доставка заблокирована · ожидают: %lld" } } }
+    },
+    "Enable after-call webhook": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Включить вебхук после звонка" } } }
+    },
+    "Enter a valid local receiver": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Укажите корректный локальный обработчик" } } }
+    },
+    "Local after-call receiver URL": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "URL локального обработчика после звонка" } } }
+    },
+    "Local receiver URL": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "URL локального обработчика" } } }
+    },
+    "Off": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Выключено" } } }
+    },
+    "On · %lld pending": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Включено · ожидают: %lld" } } }
+    },
+    "On · Ready": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Включено · Готово" } } }
+    },
+    "Paused while storage is moving": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Приостановлено на время переноса данных" } } }
+    },
+    "Pending events belong to the old receiver and cannot be sent to the new one.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Ожидающие события принадлежат старому обработчику и не могут быть отправлены новому." } } }
+    },
+    "Save receiver": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Сохранить обработчик" } } }
+    },
+    "Saving receiver…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Сохраняем обработчик…" } } }
+    },
+    "Send a signed event to a service on this Mac when a call ends or its transcript is ready.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Отправлять подписанное событие сервису на этом Mac после звонка или готовности расшифровки." } } }
+    },
+    "Signing secret unavailable": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Секрет подписи недоступен" } } }
+    },
+    "Test": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Проверить" } } }
+    },
+    "Test delivered": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Тест доставлен" } } }
+    },
+    "Test failed · %1$@": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Тест не прошёл · %1$@" } } }
+    },
+    "Testing receiver…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Проверяем обработчик…" } } }
+    },
+    "Use http://127.0.0.1 with an explicit port of 1024 or higher.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Используйте http://127.0.0.1 и явно укажите порт 1024 или выше." } } }
+    },
+    "%lld blocked": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Заблокировано: %lld" } } }
+    },
     "retry available": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "можно повторить" } } }
     }

@@ -39,6 +39,7 @@ actor CallTranscriptWorker {
     private let modelReadiness: ModelReadiness
     private let helperLauncher: HelperLauncher
     private let cancelHelper: HelperCancellation
+    private let afterSourceTransition: @Sendable () async -> Void
     private var suspended = false
     private var activeOperation: Task<CallTranscriptWorkerRunResult, Never>?
 
@@ -49,7 +50,8 @@ actor CallTranscriptWorker {
         modelManifest: WhisperModelManifest = .largeV3Turbo,
         modelReadiness: @escaping ModelReadiness,
         helperLauncher: @escaping HelperLauncher,
-        cancelHelper: @escaping HelperCancellation
+        cancelHelper: @escaping HelperCancellation,
+        afterSourceTransition: @escaping @Sendable () async -> Void = {}
     ) {
         self.repository = repository
         self.computeCoordinator = computeCoordinator
@@ -58,6 +60,7 @@ actor CallTranscriptWorker {
         self.modelReadiness = modelReadiness
         self.helperLauncher = helperLauncher
         self.cancelHelper = cancelHelper
+        self.afterSourceTransition = afterSourceTransition
     }
 
     init(
@@ -66,7 +69,8 @@ actor CallTranscriptWorker {
         dataRoot: URL,
         modelStore: WhisperModelStore,
         modelManifest: WhisperModelManifest = .largeV3Turbo,
-        executablePath: String = Bundle.main.executableURL?.path ?? CommandLine.arguments[0]
+        executablePath: String = Bundle.main.executableURL?.path ?? CommandLine.arguments[0],
+        afterSourceTransition: @escaping @Sendable () async -> Void = {}
     ) {
         let runner = WhisperHelperProcessRunner(executablePath: executablePath)
         self.init(
@@ -84,7 +88,8 @@ actor CallTranscriptWorker {
                     dataRoot: root
                 )
             },
-            cancelHelper: { runner.cancel() }
+            cancelHelper: { runner.cancel() },
+            afterSourceTransition: afterSourceTransition
         )
     }
 
@@ -106,6 +111,12 @@ actor CallTranscriptWorker {
     func runLoop() async {
         while !Task.isCancelled {
             let result = await runOne()
+            switch result {
+            case .completed, .failed:
+                await afterSourceTransition()
+            default:
+                break
+            }
             let finalWaiting: Bool
             switch result {
             case .retryScheduled, .failed:

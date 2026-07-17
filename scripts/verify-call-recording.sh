@@ -24,6 +24,10 @@ fixture_gate() {
     -only-testing:ZBSEyeTests/AudioIngressPublisherTests
     -only-testing:ZBSEyeTests/AutomaticRetentionAdmissionTests
     -only-testing:ZBSEyeTests/CallAPITests
+    -only-testing:ZBSEyeTests/CallAutomationDispatcherTests
+    -only-testing:ZBSEyeTests/CallAutomationOutboxTests
+    -only-testing:ZBSEyeTests/CallAutomationPayloadTests
+    -only-testing:ZBSEyeTests/CallAutomationStoreTests
     -only-testing:ZBSEyeTests/CallAudioWindowAssemblerTests
     -only-testing:ZBSEyeTests/CallCoordinatorTests
     -only-testing:ZBSEyeTests/CallDatabaseTests
@@ -49,6 +53,7 @@ fixture_gate() {
     -only-testing:ZBSEyeTests/MCPReadinessServiceTests
     -only-testing:ZBSEyeTests/ReleaseConfigurationTests
     -only-testing:ZBSEyeTests/RetentionManagerTests
+    -only-testing:ZBSEyeTests/LoopbackWebhookTransportTests
     -only-testing:ZBSEyeTests/SystemAudioCaptureLifecycleTests
     -only-testing:ZBSEyeTests/TranscriptOverlapReconcilerTests
     -only-testing:ZBSEyeTests/WhisperHelperCommandTests

@@ -30,6 +30,7 @@ The test target uses tiny fixtures and never downloads model weights:
 xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEyeUnitTests -configuration Debug test CODE_SIGNING_ALLOWED=NO
 bash scripts/verify-local-ai.sh --all-fixtures
 bash scripts/verify-call-recording.sh --fixtures
+bash scripts/verify-call-automation.sh
 ```
 
 ## Architecture

@@ -1036,7 +1036,15 @@ private struct AnthropicCatalogEnvelope: Decodable {
 /// following. Response bytes are rejected before appending the first byte over
 /// the status-specific limit.
 struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, Sendable {
-    static func makeConfiguration() -> URLSessionConfiguration {
+    private let disablesSystemProxy: Bool
+
+    init(disablesSystemProxy: Bool = false) {
+        self.disablesSystemProxy = disablesSystemProxy
+    }
+
+    static func makeConfiguration(
+        disablesSystemProxy: Bool = false
+    ) -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.urlCache = nil
@@ -1045,6 +1053,9 @@ struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, Sendable {
         configuration.urlCredentialStorage = nil
         configuration.waitsForConnectivity = false
         configuration.httpMaximumConnectionsPerHost = 2
+        if disablesSystemProxy {
+            configuration.connectionProxyDictionary = [:]
+        }
         return configuration
     }
 
@@ -1074,7 +1085,7 @@ struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, Sendable {
         )
         let delegate = ProviderHTTPURLSessionDelegate(state: state)
         let session = URLSession(
-            configuration: Self.makeConfiguration(),
+            configuration: Self.makeConfiguration(disablesSystemProxy: disablesSystemProxy),
             delegate: delegate,
             delegateQueue: nil
         )

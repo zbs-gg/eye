@@ -25,6 +25,9 @@ private struct AutomationBody: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                if let callAutomation = env.callAutomation {
+                    AfterCallAutomationCard(store: callAutomation)
+                }
                 header
                 destinationCard
                 if !store.llmReady { modelHintCard }
@@ -277,5 +280,129 @@ private struct AutomationBody: View {
     private func auditTime(_ d: Date) -> String {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US"); f.dateFormat = "d MMM, HH:mm"
         return f.string(from: d)
+    }
+}
+
+private struct AfterCallAutomationCard: View {
+    @Bindable var store: CallAutomationStore
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    Button {
+                        store.isExpanded.toggle()
+                    } label: {
+                        Label("After a call", systemImage: "phone.arrow.up.right")
+                            .font(.headline)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("After a call automation details")
+                    Spacer()
+                    Toggle("Enable after-call webhook", isOn: Binding(
+                        get: { store.isEnabled },
+                        set: { enabled in Task { await store.setEnabled(enabled) } }
+                    ))
+                    .labelsHidden()
+                    .disabled(
+                        store.isBusy || store.phase == .suspended
+                            || (!store.isEnabled && !store.canEnable)
+                    )
+                }
+
+                Label(statusPresentation.text, systemImage: statusPresentation.icon)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("After a call status: \(statusPresentation.text)")
+
+                if store.isExpanded {
+                    Text("Send a signed event to a service on this Mac when a call ends or its transcript is ready.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    TextField(
+                        "Local receiver URL",
+                        text: $store.draftEndpoint,
+                        prompt: Text(verbatim: "http://127.0.0.1:8765/hooks/call")
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                    .accessibilityLabel("Local after-call receiver URL")
+
+                    if store.phase == .invalidDraft {
+                        Label(
+                            "Use http://127.0.0.1 with an explicit port of 1024 or higher.",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+
+                    HStack(spacing: 8) {
+                        Button("Save receiver") { Task { await store.saveReceiver() } }
+                            .disabled(!store.canSave)
+                        Button("Cancel") { store.cancelDraft() }
+                            .disabled(!store.hasDraftChanges || store.isBusy)
+                        Spacer()
+                        Button("Test") { Task { await store.testReceiver() } }
+                            .disabled(
+                                store.persistedEndpoint.isEmpty || store.isBusy
+                                    || store.phase == .suspended
+                            )
+                        Button("Copy secret") { store.copySecret() }
+                            .disabled(
+                                store.persistedEndpoint.isEmpty || store.isBusy
+                                    || store.phase == .suspended
+                            )
+                    }
+
+                    if store.blockedCount > 0 {
+                        HStack {
+                            Text("\(store.blockedCount) blocked")
+                                .font(.caption)
+                            Button("Retry") { Task { await store.retryBlocked() } }
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(6)
+        }
+        .confirmationDialog(
+            "Change local receiver?",
+            isPresented: Binding(
+                get: { store.endpointChangeConfirmationCount != nil },
+                set: { if !$0 { store.cancelDraft() } }
+            )
+        ) {
+            Button("Change and discard pending events", role: .destructive) {
+                Task { await store.confirmEndpointChange() }
+            }
+            Button("Cancel", role: .cancel) { store.cancelDraft() }
+        } message: {
+            Text("Pending events belong to the old receiver and cannot be sent to the new one.")
+        }
+    }
+
+    private var statusPresentation: (text: String, icon: String) {
+        switch store.phase {
+        case .disabled: ("Off", "pause.circle")
+        case .invalidDraft: ("Enter a valid local receiver", "exclamationmark.circle")
+        case .ready:
+            (
+                store.pendingCount > 0 ? "On · \(store.pendingCount) pending" : "On · Ready",
+                "checkmark.circle"
+            )
+        case .saving: ("Saving receiver…", "clock")
+        case .testing: ("Testing receiver…", "clock")
+        case .testSucceeded: ("Test delivered", "checkmark.circle")
+        case .testFailed:
+            ("Test failed · \(store.statusCode ?? "receiver unavailable")", "exclamationmark.circle")
+        case .keychainUnavailable: ("Signing secret unavailable", "exclamationmark.circle")
+        case .suspended: ("Paused while storage is moving", "clock")
+        case .blocked:
+            ("Delivery blocked · \(store.blockedCount) waiting", "exclamationmark.circle")
+        case .failed: ("Automation status unavailable", "exclamationmark.circle")
+        }
     }
 }
