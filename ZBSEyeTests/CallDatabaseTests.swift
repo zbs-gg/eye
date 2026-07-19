@@ -16,6 +16,8 @@ final class CallDatabaseTests: XCTestCase {
             "call_transcript_segments", "call_transcript_projection_gaps",
             "call_media_mutations", "call_source_gaps", "call_transcript_fts",
             "call_automation_config", "call_automation_outbox",
+            "call_context", "call_speaker_revisions", "call_speaker_clusters",
+            "call_speaker_intervals",
         ].allSatisfy(freshTables.contains))
 
         let upgraded = try CallDatabaseTestStore(runMigrations: false)
@@ -40,8 +42,275 @@ final class CallDatabaseTests: XCTestCase {
             )
         }
         XCTAssertEqual(snapshot.appCount, 1)
-        XCTAssertEqual(snapshot.migrations.last, "v11_call_automation_outbox")
+        XCTAssertEqual(snapshot.migrations.last, "v13_call_processing_ready_event")
         XCTAssertGreaterThanOrEqual(snapshot.triggerCount, 6)
+    }
+
+    func testCallContextAndSpeakerRevisionAreGenerationBoundRevisionedAndCascading() async throws {
+        let store = try CallDatabaseTestStore()
+        let repository = CallRepository(database: store.database)
+        let call = try await repository.createCall(startedAtMs: 1_000, idempotencyKey: "speaker-call")
+        let callID = try XCTUnwrap(call.id)
+
+        let context = CallContextRow(
+            callId: callID,
+            captureOwner: .automatic,
+            disposition: .confirmed,
+            detectorFingerprintHash: "sha256:fixture",
+            sourceAppBundleID: "us.zoom.xos",
+            sourceAppName: "Zoom",
+            trustedOriginHost: nil,
+            title: "Client call",
+            participantsJSON: "[\"Olga\"]",
+            createdAtMs: 1_000,
+            updatedAtMs: 1_100
+        )
+        try await repository.upsertCallContext(context)
+
+        let first = try await repository.createSpeakerRevision(
+            callID: callID,
+            mediaGeneration: 0,
+            engine: "fixture",
+            modelRevision: "fixture-v1",
+            clusters: [
+                CallSpeakerClusterDraft(
+                    clusterKey: "speaker-1",
+                    displayName: "Olga",
+                    namingProvenance: .manual,
+                    intervals: [
+                        CallSpeakerIntervalDraft(
+                            source: .system,
+                            startMs: 1_100,
+                            endMs: 1_500
+                        ),
+                    ]
+                ),
+            ],
+            nowMs: 2_000
+        )
+        try await repository.setPreferredSpeakerRevision(callID: callID, revisionID: try XCTUnwrap(first.id))
+
+        let second = try await repository.createSpeakerRevision(
+            callID: callID,
+            mediaGeneration: 0,
+            engine: "manual",
+            modelRevision: "annotation-v1",
+            clusters: [
+                CallSpeakerClusterDraft(
+                    clusterKey: "speaker-1",
+                    displayName: "Olga Makhova",
+                    namingProvenance: .manual,
+                    intervals: [
+                        CallSpeakerIntervalDraft(
+                            source: .system,
+                            startMs: 1_100,
+                            endMs: 1_500
+                        ),
+                    ]
+                ),
+            ],
+            nowMs: 2_100
+        )
+        try await repository.setPreferredSpeakerRevision(callID: callID, revisionID: try XCTUnwrap(second.id))
+
+        try await store.database.pool.write { db in
+            try db.execute(
+                sql: "UPDATE calls SET preferredSpeakerRevisionId = NULL, mediaGeneration = 1 WHERE id = ?",
+                arguments: [callID]
+            )
+        }
+        await XCTAssertThrowsAsync {
+            try await repository.setPreferredSpeakerRevision(callID: callID, revisionID: try XCTUnwrap(first.id))
+        }
+
+        let beforeErase = try await store.database.pool.read { db in
+            (
+                context: try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM call_context WHERE callId = ?", arguments: [callID]) ?? 0,
+                revisions: try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM call_speaker_revisions WHERE callId = ?", arguments: [callID]) ?? 0,
+                clusters: try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM call_speaker_clusters") ?? 0,
+                intervals: try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM call_speaker_intervals") ?? 0
+            )
+        }
+        XCTAssertEqual(beforeErase.context, 1)
+        XCTAssertEqual(beforeErase.revisions, 2, "Undo needs the previous immutable revision")
+        XCTAssertEqual(beforeErase.clusters, 2)
+        XCTAssertEqual(beforeErase.intervals, 2)
+
+        try await store.database.pool.write { db in
+            try db.execute(sql: "DELETE FROM calls WHERE id = ?", arguments: [callID])
+        }
+        let afterErase = try await store.database.pool.read { db in
+            try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT
+                        (SELECT COUNT(*) FROM call_context) +
+                        (SELECT COUNT(*) FROM call_speaker_revisions) +
+                        (SELECT COUNT(*) FROM call_speaker_clusters) +
+                        (SELECT COUNT(*) FROM call_speaker_intervals)
+                    """
+            ) ?? -1
+        }
+        XCTAssertEqual(afterErase, 0)
+    }
+
+    func testTranscriptSpeakerAlignmentUsesUniqueMaximumOverlapAndPreservesSource() {
+        let transcript = [
+            CallTranscriptSegmentDraft(source: .system, startMs: 100, endMs: 200, text: "tie"),
+            CallTranscriptSegmentDraft(source: .system, startMs: 200, endMs: 300, text: "winner"),
+            CallTranscriptSegmentDraft(source: .system, startMs: 300, endMs: 500, text: "несколько окон"),
+            CallTranscriptSegmentDraft(source: .me, startMs: 100, endMs: 200, text: "my source"),
+            CallTranscriptSegmentDraft(source: .system, startMs: 600, endMs: 700, text: "silence"),
+        ]
+        let clusters = [
+            CallSpeakerClusterDraft(
+                clusterKey: "system:S1",
+                displayName: nil,
+                namingProvenance: .anonymous,
+                intervals: [
+                    .init(source: .system, startMs: 100, endMs: 150),
+                    .init(source: .system, startMs: 200, endMs: 260),
+                    .init(source: .system, startMs: 340, endMs: 400),
+                ]
+            ),
+            CallSpeakerClusterDraft(
+                clusterKey: "system:S2",
+                displayName: nil,
+                namingProvenance: .anonymous,
+                intervals: [
+                    .init(source: .system, startMs: 150, endMs: 200),
+                    .init(source: .system, startMs: 260, endMs: 300),
+                    .init(source: .system, startMs: 300, endMs: 340),
+                    .init(source: .system, startMs: 460, endMs: 500),
+                ]
+            ),
+            CallSpeakerClusterDraft(
+                clusterKey: "me:S1",
+                displayName: nil,
+                namingProvenance: .anonymous,
+                intervals: [.init(source: .me, startMs: 100, endMs: 200)]
+            ),
+        ]
+
+        let aligned = CallTranscriptSpeakerAligner.align(transcript, to: clusters)
+
+        XCTAssertEqual(aligned.map(\.segment.source), transcript.map(\.source))
+        XCTAssertEqual(
+            aligned.map(\.speakerClusterKey),
+            [nil, "system:S1", "system:S2", "me:S1", nil]
+        )
+    }
+
+    func testSpeakerRenameReassignmentAndUndoCreateImmutablePreferredRevisions() async throws {
+        let store = try CallDatabaseTestStore()
+        let repository = CallRepository(database: store.database)
+        let callID = try await makeEndedCorrectionCall(repository: repository)
+        let initial = try await makeInitialSpeakerRevision(repository: repository, callID: callID)
+
+        let renamed = try await repository.renameSpeakerCluster(
+            callID: callID,
+            clusterKey: "system:S1",
+            displayName: "  Olga  ",
+            nowMs: 3_000
+        )
+        let renamedID = try XCTUnwrap(renamed.id)
+        XCTAssertEqual(renamed.previousRevisionId, initial.id)
+        let renamedSnapshot = try await speakerRevisionSnapshot(
+            database: store.database,
+            revisionID: renamedID
+        )
+        XCTAssertEqual(renamedSnapshot.names["system:S1"], "Olga")
+        XCTAssertEqual(renamedSnapshot.provenance["system:S1"], .manual)
+        XCTAssertEqual(
+            renamedSnapshot.intervals,
+            [
+                .init(clusterKey: "me:S1", source: .me, startMs: 100, endMs: 400),
+                .init(clusterKey: "system:S1", source: .system, startMs: 100, endMs: 200),
+                .init(clusterKey: "system:S1", source: .system, startMs: 300, endMs: 400),
+                .init(clusterKey: "system:S2", source: .system, startMs: 200, endMs: 300),
+            ]
+        )
+
+        let reassigned = try await repository.reassignSpeakerInterval(
+            callID: callID,
+            selection: .init(source: .system, startMs: 150, endMs: 250),
+            target: .newNamedSpeaker(" Dima "),
+            nowMs: 3_100
+        )
+        let reassignedID = try XCTUnwrap(reassigned.id)
+        XCTAssertEqual(reassigned.previousRevisionId, renamed.id)
+        let reassignedSnapshot = try await speakerRevisionSnapshot(
+            database: store.database,
+            revisionID: reassignedID
+        )
+        XCTAssertEqual(reassignedSnapshot.names["manual:S1"], "Dima")
+        XCTAssertEqual(reassignedSnapshot.provenance["manual:S1"], .manual)
+        XCTAssertEqual(
+            reassignedSnapshot.intervals,
+            [
+                .init(clusterKey: "manual:S1", source: .system, startMs: 150, endMs: 250),
+                .init(clusterKey: "me:S1", source: .me, startMs: 100, endMs: 400),
+                .init(clusterKey: "system:S1", source: .system, startMs: 100, endMs: 150),
+                .init(clusterKey: "system:S1", source: .system, startMs: 300, endMs: 400),
+                .init(clusterKey: "system:S2", source: .system, startMs: 250, endMs: 300),
+            ]
+        )
+
+        let restored = try await repository.undoSpeakerCorrection(callID: callID, nowMs: 3_200)
+        XCTAssertEqual(restored.id, renamed.id)
+        let databaseState = try await store.database.pool.read { db in
+            (
+                preferred: try Int64.fetchOne(
+                    db,
+                    sql: "SELECT preferredSpeakerRevisionId FROM calls WHERE id = ?",
+                    arguments: [callID]
+                ),
+                revisionCount: try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM call_speaker_revisions WHERE callId = ?",
+                    arguments: [callID]
+                ) ?? -1,
+                originalName: try String.fetchOne(
+                    db,
+                    sql: """
+                        SELECT displayName FROM call_speaker_clusters
+                        WHERE revisionId = ? AND clusterKey = 'system:S1'
+                        """,
+                    arguments: [initial.id]
+                )
+            )
+        }
+        XCTAssertEqual(databaseState.preferred, renamed.id)
+        XCTAssertEqual(databaseState.revisionCount, 3)
+        XCTAssertNil(databaseState.originalName, "Earlier revisions must remain immutable")
+    }
+
+    func testIntervalReassignmentCanTargetExistingClusterWithoutChangingAudioSource() async throws {
+        let store = try CallDatabaseTestStore()
+        let repository = CallRepository(database: store.database)
+        let callID = try await makeEndedCorrectionCall(repository: repository)
+        _ = try await makeInitialSpeakerRevision(repository: repository, callID: callID)
+
+        let revision = try await repository.reassignSpeakerInterval(
+            callID: callID,
+            selection: .init(source: .system, startMs: 150, endMs: 250),
+            target: .existingCluster(clusterKey: "system:S2"),
+            nowMs: 3_000
+        )
+        let snapshot = try await speakerRevisionSnapshot(
+            database: store.database,
+            revisionID: try XCTUnwrap(revision.id)
+        )
+
+        XCTAssertEqual(
+            snapshot.intervals,
+            [
+                .init(clusterKey: "me:S1", source: .me, startMs: 100, endMs: 400),
+                .init(clusterKey: "system:S1", source: .system, startMs: 100, endMs: 150),
+                .init(clusterKey: "system:S1", source: .system, startMs: 300, endMs: 400),
+                .init(clusterKey: "system:S2", source: .system, startMs: 150, endMs: 300),
+            ]
+        )
     }
 
     func testEnabledCallTransitionsEnqueueEndedAndPreferredFinalAtomically() async throws {
@@ -456,6 +725,114 @@ final class CallDatabaseTests: XCTestCase {
         XCTAssertEqual(counts.checkpointJobs, 1)
         XCTAssertEqual(counts.finalJobs, 1)
         XCTAssertEqual(counts.endedAt, 12_000)
+    }
+}
+
+private struct SpeakerIntervalProjection: Equatable {
+    let clusterKey: String
+    let source: CallAudioSource
+    let startMs: Int64
+    let endMs: Int64
+}
+
+private struct SpeakerRevisionSnapshot {
+    let names: [String: String]
+    let provenance: [String: CallSpeakerNamingProvenance]
+    let intervals: [SpeakerIntervalProjection]
+}
+
+private func makeEndedCorrectionCall(repository: CallRepository) async throws -> Int64 {
+    let call = try await repository.createCall(
+        startedAtMs: 100,
+        idempotencyKey: "speaker-correction-call"
+    )
+    let callID = try XCTUnwrap(call.id)
+    _ = try await repository.endCall(
+        callID: callID,
+        idempotencyKey: "speaker-correction-end",
+        endedAtMs: 500
+    )
+    return callID
+}
+
+private func makeInitialSpeakerRevision(
+    repository: CallRepository,
+    callID: Int64
+) async throws -> CallSpeakerRevisionRow {
+    let revision = try await repository.createSpeakerRevision(
+        callID: callID,
+        mediaGeneration: 0,
+        engine: "fixture",
+        modelRevision: "fixture-v1",
+        clusters: [
+            .init(
+                clusterKey: "system:S1",
+                displayName: nil,
+                namingProvenance: .anonymous,
+                intervals: [
+                    .init(source: .system, startMs: 100, endMs: 200),
+                    .init(source: .system, startMs: 300, endMs: 400),
+                ]
+            ),
+            .init(
+                clusterKey: "system:S2",
+                displayName: nil,
+                namingProvenance: .anonymous,
+                intervals: [.init(source: .system, startMs: 200, endMs: 300)]
+            ),
+            .init(
+                clusterKey: "me:S1",
+                displayName: nil,
+                namingProvenance: .anonymous,
+                intervals: [.init(source: .me, startMs: 100, endMs: 400)]
+            ),
+        ],
+        nowMs: 2_000
+    )
+    try await repository.setPreferredSpeakerRevision(
+        callID: callID,
+        revisionID: try XCTUnwrap(revision.id)
+    )
+    return revision
+}
+
+private func speakerRevisionSnapshot(
+    database: ZBSEyeDatabase,
+    revisionID: Int64
+) async throws -> SpeakerRevisionSnapshot {
+    try await database.pool.read { db in
+        let clusters = try CallSpeakerClusterRow.fetchAll(
+            db,
+            sql: "SELECT * FROM call_speaker_clusters WHERE revisionId = ? ORDER BY ordinal",
+            arguments: [revisionID]
+        )
+        let rows = try Row.fetchAll(
+            db,
+            sql: """
+                SELECT c.clusterKey, i.source, i.startMs, i.endMs
+                FROM call_speaker_intervals i
+                JOIN call_speaker_clusters c ON c.id = i.clusterId
+                WHERE i.revisionId = ?
+                ORDER BY c.clusterKey, i.source, i.startMs, i.endMs
+                """,
+            arguments: [revisionID]
+        )
+        return SpeakerRevisionSnapshot(
+            names: Dictionary(uniqueKeysWithValues: clusters.compactMap { cluster in
+                cluster.displayName.map { (cluster.clusterKey, $0) }
+            }),
+            provenance: Dictionary(uniqueKeysWithValues: clusters.map {
+                ($0.clusterKey, $0.namingProvenance)
+            }),
+            intervals: rows.map { row in
+                SpeakerIntervalProjection(
+                    clusterKey: row["clusterKey"],
+                    source: row["source"],
+                    startMs: row["startMs"],
+                    endMs: row["endMs"]
+                )
+            }
+        )
     }
 }
 

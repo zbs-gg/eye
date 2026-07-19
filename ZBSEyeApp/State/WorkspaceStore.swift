@@ -3,6 +3,7 @@ import Observation
 
 enum WorkspaceMode: Sendable, Equatable {
     case timeline
+    case calls
     case ask
 }
 
@@ -61,6 +62,11 @@ final class WorkspaceStore {
         if let scope { setAskScope(scope) }
         presentedFeature = nil
         mode = .ask
+    }
+
+    func openCalls() {
+        presentedFeature = nil
+        mode = .calls
     }
 
     func captureAskScope() -> AskScopeSnapshot {

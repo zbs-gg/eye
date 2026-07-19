@@ -38,12 +38,14 @@ struct WorkspaceHeader: View {
         Picker("Memory", selection: modeBinding) {
             Label("Timeline", systemImage: "clock.arrow.circlepath")
                 .tag(WorkspaceMode.timeline)
+            Label("Calls", systemImage: "phone.badge.waveform")
+                .tag(WorkspaceMode.calls)
             Label("Ask", systemImage: "questionmark.bubble")
                 .tag(WorkspaceMode.ask)
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        .frame(maxWidth: 250)
+        .frame(maxWidth: 340)
         .accessibilityLabel("Memory mode")
     }
 
@@ -120,6 +122,7 @@ struct WorkspaceHeader: View {
             set: { mode in
                 switch mode {
                 case .timeline: env.workspace.showTimeline()
+                case .calls: env.workspace.openCalls()
                 case .ask: env.workspace.openAsk()
                 }
             }

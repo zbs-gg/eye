@@ -127,6 +127,11 @@ enum StorageLocation {
             .appendingPathComponent("v1", isDirectory: true)
     }
 
+    static func speakerDiarizationModelRoot(under resolvedDataRoot: URL) -> URL {
+        speechModelRoot(under: resolvedDataRoot)
+            .appendingPathComponent("diarization", isDirectory: true)
+    }
+
     static func callEvidenceRoot(under resolvedDataRoot: URL) -> URL {
         resolvedDataRoot
             .appendingPathComponent("media", isDirectory: true)

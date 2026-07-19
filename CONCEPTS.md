@@ -61,6 +61,18 @@ A durable statement that a source interval is absent, unavailable, redacted, or 
 
 An opaque typed identifier such as `call:42`, `bookmark:7`, or `call-audio-chunk:19`. It resolves only through authenticated local services and never serializes an absolute filesystem path.
 
+### Per-Call Speaker Cluster
+
+An anonymous, stable grouping of speech intervals inside one Call Envelope. It may receive a name from current-call evidence or a manual correction, but it never becomes a cross-call voiceprint.
+
+### Speaker Assignment
+
+A revisioned annotation that maps a Per-Call Speaker Cluster or a selected time range to a human-readable name within one Call Envelope.
+
+### Call Trim
+
+Confirmed physical removal of a selected head, tail, or interior time range from a completed Call Envelope. It preserves evidence outside the range and invalidates every derived view until retained audio is rebuilt.
+
 ### Call Automation Event
 
 A minimal signed lifecycle hint created only after its Call Envelope state is durable. It carries a stable event ID and typed Evidence Reference, never transcript text, audio, screenshots, local paths, or API credentials. A receiver uses the reference to read authoritative evidence through authenticated MCP or REST.
@@ -71,4 +83,4 @@ The crash-safe local queue that stores a Call Automation Event in the same datab
 
 ## Call evidence relationships
 
-A Call Envelope owns its Bookmark Checkpoints, Source Spans, Source Gaps, Evidence References, and any Call Automation Events created while the local hook is enabled. Bookmark Checkpoints produce provisional text; the completed Call Envelope produces one Preferred Final Transcript. Transcript source labels describe microphone/system provenance, not inferred human identity. The Delivery Outbox reports durable transitions without becoming another source of evidence.
+A Call Envelope owns its Bookmark Checkpoints, Source Spans, Source Gaps, Evidence References, Per-Call Speaker Clusters, Speaker Assignments, and any Call Automation Events created while the local hook is enabled. Bookmark Checkpoints produce provisional text; the completed Call Envelope produces one Preferred Final Transcript. Source labels describe microphone/system provenance, while Speaker Assignments describe current-call human attribution without changing that provenance. The Delivery Outbox reports durable transitions without becoming another source of evidence.

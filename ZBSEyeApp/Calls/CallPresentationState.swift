@@ -21,6 +21,7 @@ struct CallControlRefreshKey: Hashable {
 struct CallDetailRefreshKey: Hashable {
     let callID: Int64
     let modelState: WhisperModelLifecycleState
+    let speakerModelState: SpeakerDiarizationModelLifecycleState
     let retryGeneration: UInt64
 }
 

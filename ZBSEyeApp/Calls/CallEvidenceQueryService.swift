@@ -20,6 +20,13 @@ enum CallEvidenceSourceHealth: String, Codable, Sendable {
     case missing
 }
 
+enum CallSpeakerEvidenceStatus: String, Codable, Sendable {
+    case unavailable
+    case processing
+    case ready
+    case degraded
+}
+
 enum CallEvidenceRequestError: Error, Equatable, Sendable {
     case invalidIdentifier
     case invalidPagination
@@ -55,6 +62,7 @@ enum CallEvidenceIdentifier {
     static func call(_ id: Int64) -> String { "call:\(id)" }
     static func bookmark(_ id: Int64) -> String { "bookmark:\(id)" }
     static func revision(_ id: Int64) -> String { "call-transcript-revision:\(id)" }
+    static func speakerRevision(_ id: Int64) -> String { "call-speaker-revision:\(id)" }
     static func segment(_ id: Int64) -> String { "call-transcript-segment:\(id)" }
     static func audioChunk(_ id: Int64) -> String { "call-audio-chunk:\(id)" }
 
@@ -78,6 +86,11 @@ struct CallEvidenceSummary: Codable, Sendable, Equatable {
     let status: CallEvidenceStatus
     let retryable: Bool
     let preferredRevisionKind: CallTranscriptRevisionKind?
+    let title: String?
+    let participants: [String]
+    let sourceApp: String?
+    let bookmarkCount: Int
+    let speakerStatus: CallSpeakerEvidenceStatus
 }
 
 struct CallEvidenceListPage: Codable, Sendable, Equatable {
@@ -124,6 +137,37 @@ struct CallEvidenceReference: Codable, Sendable, Equatable {
     let bytes: Int64
 }
 
+struct CallEvidenceContext: Codable, Sendable, Equatable {
+    let captureOwner: CallCaptureOwner
+    let disposition: CallCaptureDisposition
+    let title: String?
+    let participants: [String]
+    let sourceApp: String?
+}
+
+struct CallEvidenceSpeakerInterval: Codable, Sendable, Equatable {
+    let source: CallAudioSource
+    let startMs: Int64
+    let endMs: Int64
+}
+
+struct CallEvidenceSpeaker: Codable, Sendable, Equatable {
+    let clusterKey: String
+    let label: String
+    let namingProvenance: CallSpeakerNamingProvenance
+    let intervals: [CallEvidenceSpeakerInterval]
+}
+
+struct CallEvidenceSpeakerRevision: Codable, Sendable, Equatable {
+    let revisionId: String
+    let state: CallSpeakerRevisionState
+    let engine: String
+    let modelRevision: String
+    let canUndoCorrection: Bool
+    let speakers: [CallEvidenceSpeaker]
+    let intervalsTruncated: Bool
+}
+
 struct CallEvidenceEnvelope: Codable, Sendable, Equatable {
     let callId: String
     let startTs: Int64
@@ -134,7 +178,10 @@ struct CallEvidenceEnvelope: Codable, Sendable, Equatable {
     let degradationCode: String?
     let coverage: CallEvidenceCoverage
     let sources: [CallEvidenceSource]
+    let context: CallEvidenceContext?
     let preferredRevision: CallEvidenceRevision?
+    let preferredSpeakerRevision: CallEvidenceSpeakerRevision?
+    let speakerStatus: CallSpeakerEvidenceStatus
     let bookmarkCount: Int
     let evidence: [CallEvidenceReference]
     let evidenceTruncated: Bool
@@ -218,11 +265,37 @@ actor CallEvidenceQueryService {
     static let maximumSourceGaps = 1_000
     static let maximumBookmarks = 1_000
     static let maximumProjectionGaps = 1_000
+    static let maximumSpeakerIntervals = 5_000
 
     private let database: ZBSEyeDatabase
 
     init(database: ZBSEyeDatabase) {
         self.database = database
+    }
+
+    func playbackChunks(callID: Int64, source: CallAudioSource) async throws -> [CallPlaybackChunk] {
+        guard callID > 0 else { throw CallEvidenceRequestError.invalidIdentifier }
+        return try await database.pool.read { db in
+            guard let call = try CallRow.fetchOne(db, key: callID) else {
+                throw CallEvidenceRequestError.notFound
+            }
+            return try CallAudioChunkRow.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM call_audio_chunks
+                    WHERE callId = ? AND mediaGeneration = ? AND source = ? AND finalized = 1
+                    ORDER BY startSample, epoch, sequence, id
+                    """,
+                arguments: [callID, call.mediaGeneration, source.rawValue]
+            ).map {
+                CallPlaybackChunk(
+                    relativePath: $0.relativePath,
+                    startSample: $0.startSample,
+                    endSample: $0.endSample,
+                    bytes: $0.bytes
+                )
+            }
+        }
     }
 
     func listCalls(
@@ -243,20 +316,35 @@ actor CallEvidenceQueryService {
                 SELECT c.*,
                        r.kind AS revisionKind,
                        r.state AS revisionState,
+                       ctx.title AS callTitle,
+                       ctx.participantsJSON AS participantsJSON,
+                       ctx.sourceAppName AS sourceAppName,
+                       (SELECT COUNT(*) FROM call_bookmarks b WHERE b.callId = c.id) AS bookmarkCount,
+                       sr.state AS speakerRevisionState,
                        (SELECT j.state FROM call_transcript_jobs j
                         WHERE j.callId = c.id AND j.mediaGeneration = c.mediaGeneration AND j.kind = 'final'
                         ORDER BY j.id DESC LIMIT 1) AS finalJobState
                 """
             if let normalizedQuery, !normalizedQuery.isEmpty {
                 guard !match.isEmpty else { return [] }
+                let metadataPattern = "%\(normalizedQuery.lowercased())%"
                 return try Row.fetchAll(
                     db,
                     sql: """
-                        WITH hits AS (
-                            SELECT DISTINCT c.id AS call_id, c.startTs
+                        WITH transcript_hits AS (
+                            SELECT DISTINCT call_id
                             FROM call_transcript_fts
-                            JOIN calls c ON c.id = call_transcript_fts.call_id
                             WHERE call_transcript_fts MATCH ?
+                        ), hits AS (
+                            SELECT c.id AS call_id, c.startTs
+                            FROM calls c
+                            LEFT JOIN call_context context_match ON context_match.callId = c.id
+                            WHERE (
+                                  c.id IN (SELECT call_id FROM transcript_hits)
+                                  OR LOWER(COALESCE(context_match.title, '')) LIKE ?
+                                  OR LOWER(COALESCE(context_match.participantsJSON, '')) LIKE ?
+                                  OR LOWER(COALESCE(context_match.sourceAppName, '')) LIKE ?
+                                )
                               AND c.startTs <= ?
                               AND COALESCE(c.endTs, c.startTs) >= ?
                             ORDER BY c.startTs DESC, c.id DESC
@@ -266,9 +354,28 @@ actor CallEvidenceQueryService {
                         FROM hits h
                         JOIN calls c ON c.id = h.call_id
                         LEFT JOIN call_transcript_revisions r ON r.id = c.preferredRevisionId
+                        LEFT JOIN call_context ctx ON ctx.callId = c.id
+                        LEFT JOIN call_speaker_revisions sr ON sr.id = COALESCE(
+                            c.preferredSpeakerRevisionId,
+                            (
+                                SELECT latest.id FROM call_speaker_revisions latest
+                                WHERE latest.callId = c.id
+                                  AND latest.mediaGeneration = c.mediaGeneration
+                                ORDER BY latest.createdAtMs DESC, latest.id DESC LIMIT 1
+                            )
+                        )
                         ORDER BY c.startTs DESC, c.id DESC
                         """,
-                    arguments: [match, to, from, page.limit + 1, page.offset]
+                    arguments: [
+                        match,
+                        metadataPattern,
+                        metadataPattern,
+                        metadataPattern,
+                        to,
+                        from,
+                        page.limit + 1,
+                        page.offset,
+                    ]
                 )
             }
             return try Row.fetchAll(
@@ -277,6 +384,16 @@ actor CallEvidenceQueryService {
                     \(commonProjection)
                     FROM calls c
                     LEFT JOIN call_transcript_revisions r ON r.id = c.preferredRevisionId
+                    LEFT JOIN call_context ctx ON ctx.callId = c.id
+                    LEFT JOIN call_speaker_revisions sr ON sr.id = COALESCE(
+                        c.preferredSpeakerRevisionId,
+                        (
+                            SELECT latest.id FROM call_speaker_revisions latest
+                            WHERE latest.callId = c.id
+                              AND latest.mediaGeneration = c.mediaGeneration
+                            ORDER BY latest.createdAtMs DESC, latest.id DESC LIMIT 1
+                        )
+                    )
                     WHERE c.startTs <= ? AND COALESCE(c.endTs, c.startTs) >= ?
                     ORDER BY c.startTs DESC, c.id DESC
                     LIMIT ? OFFSET ?
@@ -298,8 +415,45 @@ actor CallEvidenceQueryService {
 
     func envelope(callID: Int64) async throws -> CallEvidenceEnvelope? {
         guard callID > 0, let page = try await call(id: callID, segmentLimit: 1) else { return nil }
-        let extra = try await database.pool.read { db -> (CallTranscriptRevisionRow?, Int, [CallAudioChunkRow]) in
+        let extra = try await database.pool.read { db -> (
+            CallTranscriptRevisionRow?, Int, [CallAudioChunkRow], CallContextRow?,
+            CallSpeakerRevisionRow?, [CallSpeakerClusterRow], [CallSpeakerIntervalRow],
+            CallSpeakerRevisionState?
+        ) in
             let revision = try page.call.preferredRevisionId.flatMap { try CallTranscriptRevisionRow.fetchOne(db, key: $0) }
+            let context = try CallContextRow.fetchOne(db, key: callID)
+            let speakerRevision = try page.call.preferredSpeakerRevisionId.flatMap {
+                try CallSpeakerRevisionRow.fetchOne(db, key: $0)
+            }
+            let latestSpeakerState = try String.fetchOne(
+                db,
+                sql: """
+                    SELECT state FROM call_speaker_revisions
+                    WHERE callId = ? AND mediaGeneration = ?
+                    ORDER BY createdAtMs DESC, id DESC LIMIT 1
+                    """,
+                arguments: [callID, page.call.mediaGeneration]
+            ).flatMap(CallSpeakerRevisionState.init(rawValue:))
+            let speakerClusters: [CallSpeakerClusterRow]
+            let speakerIntervals: [CallSpeakerIntervalRow]
+            if let speakerRevisionID = speakerRevision?.id {
+                speakerClusters = try CallSpeakerClusterRow.fetchAll(
+                    db,
+                    sql: "SELECT * FROM call_speaker_clusters WHERE revisionId = ? ORDER BY ordinal, id",
+                    arguments: [speakerRevisionID]
+                )
+                speakerIntervals = try CallSpeakerIntervalRow.fetchAll(
+                    db,
+                    sql: """
+                        SELECT * FROM call_speaker_intervals
+                        WHERE revisionId = ? ORDER BY ordinal, id LIMIT ?
+                        """,
+                    arguments: [speakerRevisionID, Self.maximumSpeakerIntervals + 1]
+                )
+            } else {
+                speakerClusters = []
+                speakerIntervals = []
+            }
             let bookmarkCount = try Int.fetchOne(
                 db,
                 sql: "SELECT COUNT(*) FROM call_bookmarks WHERE callId = ?",
@@ -315,9 +469,15 @@ actor CallEvidenceQueryService {
                     """,
                 arguments: [callID, page.call.mediaGeneration, CallEvidenceContract.maximumEvidenceReferences + 1]
             )
-            return (revision, bookmarkCount, chunks)
+            return (
+                revision, bookmarkCount, chunks, context,
+                speakerRevision, speakerClusters, speakerIntervals, latestSpeakerState
+            )
         }
-        let (revisionRow, bookmarkCount, chunkRows) = extra
+        let (
+            revisionRow, bookmarkCount, chunkRows, contextRow,
+            speakerRevisionRow, speakerClusterRows, speakerIntervalRows, latestSpeakerState
+        ) = extra
         let sourceGaps = page.sourceGaps
         let sources = CallAudioSource.allCasesForEvidence.map { source in
             Self.sourceProjection(source: source, spans: page.sourceSpans, gaps: sourceGaps)
@@ -340,7 +500,17 @@ actor CallEvidenceQueryService {
                 hasExplicitGaps: hasExplicitGaps
             ),
             sources: sources,
+            context: contextRow.map(Self.contextProjection),
             preferredRevision: revisionRow.map(Self.revisionProjection),
+            preferredSpeakerRevision: Self.speakerProjection(
+                revision: speakerRevisionRow,
+                clusters: speakerClusterRows,
+                intervals: speakerIntervalRows
+            ),
+            speakerStatus: Self.speakerStatus(
+                call: page.call,
+                revisionState: latestSpeakerState
+            ),
             bookmarkCount: bookmarkCount,
             evidence: evidenceRows.compactMap(Self.evidenceProjection),
             evidenceTruncated: chunkRows.count > CallEvidenceContract.maximumEvidenceReferences
@@ -655,7 +825,10 @@ actor CallEvidenceQueryService {
         guard let id = call.id else { throw CallEvidenceRequestError.invalidIdentifier }
         let revisionKind = (row["revisionKind"] as String?).flatMap(CallTranscriptRevisionKind.init(rawValue:))
         let finalJobState = (row["finalJobState"] as String?).flatMap(CallTranscriptJobState.init(rawValue:))
+        let speakerRevisionState = (row["speakerRevisionState"] as String?)
+            .flatMap(CallSpeakerRevisionState.init(rawValue:))
         let status = status(call: call, finalJobState: finalJobState, preferredKind: revisionKind)
+        let participants = decodeParticipants(row["participantsJSON"] as String?)
         return CallEvidenceSummary(
             callId: CallEvidenceIdentifier.call(id),
             startTs: call.startTs,
@@ -663,8 +836,35 @@ actor CallEvidenceQueryService {
             state: call.state,
             status: status,
             retryable: status == .retryable,
-            preferredRevisionKind: revisionKind
+            preferredRevisionKind: revisionKind,
+            title: row["callTitle"],
+            participants: participants,
+            sourceApp: row["sourceAppName"],
+            bookmarkCount: row["bookmarkCount"],
+            speakerStatus: speakerStatus(call: call, revisionState: speakerRevisionState)
         )
+    }
+
+    private static func decodeParticipants(_ json: String?) -> [String] {
+        guard let json, let data = json.data(using: .utf8),
+              let names = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return names.lazy
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .prefix(12)
+            .map { String($0.prefix(80)) }
+    }
+
+    private static func speakerStatus(
+        call: CallRow,
+        revisionState: CallSpeakerRevisionState?
+    ) -> CallSpeakerEvidenceStatus {
+        switch revisionState {
+        case .ready: return .ready
+        case .failed: return .degraded
+        case .writing: return .processing
+        case nil: return .unavailable
+        }
     }
 
     private static func status(
@@ -709,6 +909,46 @@ actor CallEvidenceQueryService {
             modelRevision: row.modelRevision,
             logicalStartMs: row.logicalStartMs,
             logicalEndMs: row.logicalEndMs
+        )
+    }
+
+    private static func contextProjection(_ row: CallContextRow) -> CallEvidenceContext {
+        CallEvidenceContext(
+            captureOwner: row.captureOwner,
+            disposition: row.disposition,
+            title: row.title,
+            participants: decodeParticipants(row.participantsJSON),
+            sourceApp: row.sourceAppName
+        )
+    }
+
+    private static func speakerProjection(
+        revision: CallSpeakerRevisionRow?,
+        clusters: [CallSpeakerClusterRow],
+        intervals: [CallSpeakerIntervalRow]
+    ) -> CallEvidenceSpeakerRevision? {
+        guard let revision, let revisionID = revision.id else { return nil }
+        let retainedIntervals = Array(intervals.prefix(Self.maximumSpeakerIntervals))
+        let byCluster = Dictionary(grouping: retainedIntervals, by: \.clusterId)
+        let speakers = clusters.compactMap { cluster -> CallEvidenceSpeaker? in
+            guard let clusterID = cluster.id else { return nil }
+            return CallEvidenceSpeaker(
+                clusterKey: cluster.clusterKey,
+                label: cluster.displayName ?? "Speaker \(cluster.ordinal + 1)",
+                namingProvenance: cluster.namingProvenance,
+                intervals: (byCluster[clusterID] ?? []).map {
+                    CallEvidenceSpeakerInterval(source: $0.source, startMs: $0.startMs, endMs: $0.endMs)
+                }
+            )
+        }
+        return CallEvidenceSpeakerRevision(
+            revisionId: CallEvidenceIdentifier.speakerRevision(revisionID),
+            state: revision.state,
+            engine: revision.engine,
+            modelRevision: revision.modelRevision,
+            canUndoCorrection: revision.previousRevisionId != nil,
+            speakers: speakers,
+            intervalsTruncated: intervals.count > Self.maximumSpeakerIntervals
         )
     }
 

@@ -36,6 +36,23 @@ struct ZBSEyeMain {
                 exit(1)
             }
         }
+        if CommandLine.arguments.contains(DiarizationHelperCommand.flag) {
+            Task.detached {
+                do {
+                    let root = try StorageLocation.requireAvailableDataRoot()
+                    let command = try DiarizationHelperCommand(
+                        arguments: CommandLine.arguments,
+                        dataRoot: root
+                    )
+                    try await command.execute()
+                    exit(0)
+                } catch {
+                    FileHandle.standardError.write(Data("Diarization helper failed.\n".utf8))
+                    exit(1)
+                }
+            }
+            dispatchMain()
+        }
         if CommandLine.arguments.contains(WhisperModelSmokeCommand.flag) {
             do {
                 let root = try StorageLocation.requireAvailableDataRoot()

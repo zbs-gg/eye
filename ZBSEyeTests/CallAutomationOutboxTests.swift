@@ -2,6 +2,82 @@ import GRDB
 import XCTest
 
 final class CallAutomationOutboxTests: XCTestCase {
+    func testProcessingReadyWaitsForTranscriptAndSpeakersThenEnqueuesOnce() async throws {
+        let fixture = try CallAutomationOutboxFixture()
+        try await fixture.enable()
+        let call = try await fixture.repository.createCall(
+            startedAtMs: 1_000,
+            idempotencyKey: "processing-ready-call"
+        )
+        let callID = try XCTUnwrap(call.id)
+        let job = try await fixture.repository.endCall(
+            callID: callID,
+            idempotencyKey: "processing-ready-end",
+            endedAtMs: 2_000
+        )
+
+        let transcriptID = try await fixture.database.pool.write { db -> Int64 in
+            var revision = CallTranscriptRevisionRow(
+                id: nil,
+                callId: callID,
+                jobId: try XCTUnwrap(job.id),
+                projectionKey: nil,
+                kind: .final,
+                mediaGeneration: 0,
+                state: .ready,
+                text: "private fixture transcript",
+                language: "en",
+                engine: "fixture",
+                modelRevision: "fixture",
+                logicalStartMs: 1_000,
+                logicalEndMs: 2_000,
+                createdAtMs: 2_500
+            )
+            try revision.insert(db)
+            let revisionID = try XCTUnwrap(revision.id)
+            try db.execute(
+                sql: "UPDATE calls SET state = 'ready', preferredRevisionId = ?, updatedAtMs = 2500 WHERE id = ?",
+                arguments: [revisionID, callID]
+            )
+            return revisionID
+        }
+        XCTAssertGreaterThan(transcriptID, 0)
+        let beforeSpeakers = try await fixture.eventCount(type: .processingReady)
+        XCTAssertEqual(beforeSpeakers, 0)
+
+        let speakers = try await fixture.repository.createSpeakerRevision(
+            callID: callID,
+            mediaGeneration: 0,
+            engine: "fixture",
+            modelRevision: "fixture",
+            clusters: [
+                CallSpeakerClusterDraft(
+                    clusterKey: "system:S1",
+                    displayName: nil,
+                    namingProvenance: .anonymous,
+                    intervals: [
+                        CallSpeakerIntervalDraft(source: .system, startMs: 1_000, endMs: 2_000)
+                    ]
+                )
+            ],
+            nowMs: 2_600
+        )
+        let speakerID = try XCTUnwrap(speakers.id)
+        try await fixture.repository.setPreferredSpeakerRevision(callID: callID, revisionID: speakerID)
+        try await fixture.repository.setPreferredSpeakerRevision(callID: callID, revisionID: speakerID)
+
+        let afterSpeakers = try await fixture.eventCount(type: .processingReady)
+        XCTAssertEqual(afterSpeakers, 1)
+        let payload = try await fixture.database.pool.read { db in
+            try String.fetchOne(
+                db,
+                sql: "SELECT payloadJSON FROM call_automation_outbox WHERE eventType = ?",
+                arguments: [CallAutomationEventType.processingReady.rawValue]
+            )
+        }
+        XCTAssertFalse(try XCTUnwrap(payload).contains("private fixture transcript"))
+    }
+
     func testOnlyTerminalFinalFailureEnqueuesAndEraseSuppressesUndeliveredEvents() async throws {
         let fixture = try CallAutomationOutboxFixture()
         try await fixture.enable()

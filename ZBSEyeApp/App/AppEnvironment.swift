@@ -20,6 +20,7 @@ final class AppEnvironment {
     let audioSettings = AudioSettingsStore()
     let calls = CallRecordingStore()
     let speechModel = WhisperModelSettingsStore()
+    let speakerModel = SpeakerDiarizationModelSettingsStore()
     let storageSettings: StorageSettingsStore
     let storageOperations = StorageOperationsStore()
     let resourceUsage: ResourceUsageStore
@@ -28,6 +29,7 @@ final class AppEnvironment {
     let privacy = PrivacyStore()
     let rewards = RewardsStore()   // cosmetic rewards (theme/icon/menu-bar) — independent of the DB
     let workspace = WorkspaceStore()
+    private(set) var automaticCallBanner: AutomaticCallBannerState?
     @ObservationIgnored private let keepMediaPolicyCoordinator = KeepMediaPolicyCoordinator()
 
     init() {
@@ -63,6 +65,7 @@ final class AppEnvironment {
     private(set) var ingest: IngestService?
     private(set) var callRepository: CallRepository?
     private(set) var callEvidenceQueryService: CallEvidenceQueryService?
+    private(set) var callsLibrary: CallsStore?
     private(set) var callEvidenceDeletionService: CallEvidenceDeletionService?
     private(set) var callRecovery: CallRecoveryService?
     private(set) var retention: RetentionManager?
@@ -87,8 +90,11 @@ final class AppEnvironment {
     @ObservationIgnored private(set) var llmRouter: LLMRouter?
     @ObservationIgnored private(set) var aiComputeCoordinator: AIComputeCoordinator?
     @ObservationIgnored private(set) var whisperModelStore: WhisperModelStore?
+    @ObservationIgnored private(set) var speakerDiarizationModelStore: SpeakerDiarizationModelStore?
     @ObservationIgnored private(set) var callTranscriptWorker: CallTranscriptWorker?
     @ObservationIgnored private var callTranscriptWorkerTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var speakerDiarizationWorker: SpeakerDiarizationWorker?
+    @ObservationIgnored private var speakerDiarizationWorkerTask: Task<Void, Never>?
     @ObservationIgnored private(set) var builtInModelManager: BuiltInModelManager?
     @ObservationIgnored private var builtInModelProviderBridge: BuiltInModelProviderBridge?
     @ObservationIgnored private var builtInModelReconciliationTask: Task<Void, Never>?
@@ -119,6 +125,10 @@ final class AppEnvironment {
     @ObservationIgnored private var autostartTask: Task<Void, Never>?
     @ObservationIgnored private var meetingDetector: MeetingDetector?
     @ObservationIgnored private var meetingTask: Task<Void, Never>?
+    @ObservationIgnored private var callDetectionPolicy = CallDetectionPolicy()
+    @ObservationIgnored private var automaticCallFingerprint: String?
+    @ObservationIgnored private var automaticCallEndGraceTask: Task<Void, Never>?
+    @ObservationIgnored private var automaticCallRecoveryTask: Task<Void, Never>?
     @ObservationIgnored private(set) var browserHistoryImporter: BrowserHistoryImporter?
     @ObservationIgnored private var browserHistoryTask: Task<Void, Never>?
     @ObservationIgnored private var lowDiskTask: Task<Void, Never>?
@@ -422,7 +432,9 @@ final class AppEnvironment {
                 self.cancelBuiltInModelRecovery()
                 let reconciliation = self.cancelBuiltInModelReconciliation()
                 await self.callTranscriptWorker?.suspendAndDrain()
+                await self.speakerDiarizationWorker?.suspendAndDrain()
                 await self.whisperModelStore?.suspendAndDrain()
+                await self.speakerDiarizationModelStore?.suspendAndDrain()
                 await self.callAutomationDispatcher?.suspendAndDrainForRelocation()
                 await self.callAutomation?.suspendAndDrain()
 
@@ -448,7 +460,9 @@ final class AppEnvironment {
                         }
                         self.recording.resumeAfterMaintenance()
                         await self.whisperModelStore?.resumeAfterDrain()
+                        await self.speakerDiarizationModelStore?.resumeAfterDrain()
                         await self.callTranscriptWorker?.resume()
+                        await self.speakerDiarizationWorker?.resume()
                         await self.callAutomationDispatcher?.resumeAfterRelocation()
                         await self.callAutomation?.resumeAfterSuspension()
                     } else {
@@ -480,7 +494,9 @@ final class AppEnvironment {
                         await self.builtInModels.refresh()
                         self.recording.resumeAfterMaintenance()
                         await self.whisperModelStore?.resumeAfterDrain()
+                        await self.speakerDiarizationModelStore?.resumeAfterDrain()
                         await self.callTranscriptWorker?.resume()
+                        await self.speakerDiarizationWorker?.resume()
                         await self.callAutomationDispatcher?.resumeAfterRelocation()
                         await self.callAutomation?.resumeAfterSuspension()
                     } else {
@@ -515,6 +531,7 @@ final class AppEnvironment {
             self.callRepository = callRepository
             let callEvidenceQueryService = CallEvidenceQueryService(database: db)
             self.callEvidenceQueryService = callEvidenceQueryService
+            self.callsLibrary = CallsStore(service: callEvidenceQueryService)
             let callEvidenceDeletionService = CallEvidenceDeletionService(
                 repository: callRepository,
                 mediaRoot: storage.mediaDirectory
@@ -581,6 +598,10 @@ final class AppEnvironment {
                 )
                 let whisperModelStore = WhisperModelStore(root: speechRoot)
                 self.whisperModelStore = whisperModelStore
+                let speakerDiarizationModelStore = SpeakerDiarizationModelStore(
+                    root: StorageLocation.speakerDiarizationModelRoot(under: resolvedDataRoot)
+                )
+                self.speakerDiarizationModelStore = speakerDiarizationModelStore
                 let callTranscriptWorker = CallTranscriptWorker(
                     repository: callRepository,
                     computeCoordinator: computeCoordinator,
@@ -591,16 +612,41 @@ final class AppEnvironment {
                     }
                 )
                 self.callTranscriptWorker = callTranscriptWorker
+                let speakerDiarizationWorker = SpeakerDiarizationWorker(
+                    repository: callRepository,
+                    computeCoordinator: computeCoordinator,
+                    dataRoot: resolvedDataRoot,
+                    afterTransition: { [weak callAutomationDispatcher] in
+                        await callAutomationDispatcher?.kick()
+                    }
+                )
+                self.speakerDiarizationWorker = speakerDiarizationWorker
+                let callEvidenceWorkerBarrier = CallEvidenceWorkerBarrier(
+                    workers: [
+                        .init(
+                            suspend: {
+                                await callTranscriptWorker
+                                    .suspendAndDrainForEvidenceMutation()
+                            },
+                            resume: { await callTranscriptWorker.resume() }
+                        ),
+                        .init(
+                            suspend: {
+                                await speakerDiarizationWorker
+                                    .suspendAndDrainForEvidenceMutation()
+                            },
+                            resume: { await speakerDiarizationWorker.resume() }
+                        ),
+                    ]
+                )
                 await callEvidenceDeletionService.attachTranscriptWorker(
-                    suspend: {
-                        await callTranscriptWorker.suspendAndDrainForEvidenceMutation()
-                    },
+                    suspend: { await callEvidenceWorkerBarrier.suspend() },
                     resume: { [weak self] in
                         let allowed = await MainActor.run {
                             self?.recording.lowDiskPaused == false
                                 && self?.storageSettings.relocationInProgress == false
                         }
-                        if allowed { await callTranscriptWorker.resume() }
+                        if allowed { await callEvidenceWorkerBarrier.resume() }
                     }
                 )
                 speechModel.attach(
@@ -614,14 +660,32 @@ final class AppEnvironment {
                         if allowed { await callTranscriptWorker.resume() }
                     }
                 )
+                speakerModel.attach(
+                    speakerDiarizationModelStore,
+                    suspendWorker: { await speakerDiarizationWorker.suspendAndDrain() },
+                    resumeWorker: { [weak self] in
+                        let allowed = await MainActor.run {
+                            self?.recording.lowDiskPaused == false
+                                && self?.storageSettings.relocationInProgress == false
+                        }
+                        if allowed { await speakerDiarizationWorker.resume() }
+                    }
+                )
                 if storage.freeBytes() < DiskReservePolicy.standard.pauseBytes {
                     await callTranscriptWorker.suspendAndDrain()
+                    await speakerDiarizationWorker.suspendAndDrain()
                 }
                 callTranscriptWorkerTask = Task.detached(priority: .utility) {
                     await callTranscriptWorker.runLoop()
                 }
+                speakerDiarizationWorkerTask = Task.detached(priority: .utility) {
+                    await speakerDiarizationWorker.runLoop()
+                }
                 Task { @MainActor [speechModel] in
                     await speechModel.refresh()
+                }
+                Task { @MainActor [speakerModel] in
+                    await speakerModel.refresh()
                 }
             } catch {
                 Log.audio.error("optional Whisper model storage unavailable")
@@ -815,6 +879,9 @@ final class AppEnvironment {
                 return CallSourceSelection(me: true, system: self.audioSettings.recordSystemAudio)
             }
             calls.attach(callCoordinator)
+            calls.onManualStartWhileActive = { [weak self] callID in
+                self?.claimAutomaticCall(callID: callID)
+            }
             // Clear the session-scoped manual audio override when recording truly stops (NOT on every
             // syncAudio re-sync — that fires each meeting edge and would wipe the override).
             recording.onSessionStop = { [weak self] in self?.audioSettings.clearManualOverride() }
@@ -825,9 +892,10 @@ final class AppEnvironment {
             let detector = MeetingDetector()
             self.meetingDetector = detector
             self.meetingTask = Task { [weak self] in
-                for await active in await detector.start() {
+                for await evidence in await detector.start() {
                     guard let self else { return }
-                    self.audioSettings.meetingActive = active
+                    let decision = self.callDetectionPolicy.reduce(evidence)
+                    await self.handleCallDetection(decision, evidence: evidence)
                     if self.recording.isCapturing { self.recording.syncAudio() }
                 }
             }
@@ -1157,8 +1225,13 @@ final class AppEnvironment {
         let toMs: Int64 = lastSeconds == nil ? Int64.max : msFromDate(now)
         let fromMs: Int64 = lastSeconds.map { msFromDate(now.addingTimeInterval(-$0)) } ?? 0
         var ownsWorkerResume = false
+        var ownsSpeakerWorkerResume = false
         if let callTranscriptWorker {
             ownsWorkerResume = await callTranscriptWorker
+                .suspendAndDrainForEvidenceMutation()
+        }
+        if let speakerDiarizationWorker {
+            ownsSpeakerWorkerResume = await speakerDiarizationWorker
                 .suspendAndDrainForEvidenceMutation()
         }
         // A privacy cut is terminal for an intersecting active Call Envelope. Flush/close it first;
@@ -1173,6 +1246,11 @@ final class AppEnvironment {
            !recording.lowDiskPaused,
            !storageSettings.relocationInProgress {
             await callTranscriptWorker?.resume()
+        }
+        if ownsSpeakerWorkerResume,
+           !recording.lowDiskPaused,
+           !storageSettings.relocationInProgress {
+            await speakerDiarizationWorker?.resume()
         }
         if let r = report {
             Log.retention.info(
@@ -1245,7 +1323,9 @@ final class AppEnvironment {
             await callAutomationDispatcher?.suspendAndDrainForRelocation()
             await callAutomation?.suspendAndDrain()
             await callTranscriptWorker?.suspendAndDrain()
+            await speakerDiarizationWorker?.suspendAndDrain()
             await whisperModelStore?.suspendAndDrain()
+            await speakerDiarizationModelStore?.suspendAndDrain()
             if let aiComputeCoordinator {
                 try await aiComputeCoordinator.suspendAndDrain()
             }
@@ -1332,7 +1412,9 @@ final class AppEnvironment {
                     await self.aiComputeCoordinator?.resume()
                     try? await self.builtInModelManager?.resumeAfterRelocation()
                     await self.whisperModelStore?.resumeAfterDrain()
+                    await self.speakerDiarizationModelStore?.resumeAfterDrain()
                     await self.callTranscriptWorker?.resume()
+                    await self.speakerDiarizationWorker?.resume()
                     await self.builtInModels.refresh()
                     self.recording.resumeAfterMaintenance()
                 }
@@ -1354,6 +1436,7 @@ final class AppEnvironment {
             // Stop speech scratch work first, then close the explicit Call
             // Envelope before draining the shared physical capture legs.
             await callTranscriptWorker?.suspendAndDrain()
+            await speakerDiarizationWorker?.suspendAndDrain()
             await calls.endAndWait(reason: .lowDisk)
             let drain = await recording.pauseForLowDiskAndDrain(
                 systemCaptureTimeout: .seconds(5)
@@ -1376,6 +1459,189 @@ final class AppEnvironment {
             }
             recording.resumeAfterLowDisk()
             await callTranscriptWorker?.resume()
+            await speakerDiarizationWorker?.resume()
+        }
+    }
+
+    private func handleCallDetection(
+        _ decision: CallDetectionDecision,
+        evidence: CallEvidenceSnapshot
+    ) async {
+        switch decision {
+        case .none:
+            audioSettings.meetingActive = false
+
+        case let .start(fingerprint):
+            audioSettings.meetingActive = true
+            guard automaticCallFingerprint == nil,
+                  let snapshot = await calls.startAutomatic(
+                    idempotencyKey: "automatic:\(fingerprint)"
+                  ),
+                  let callID = snapshot.callID
+            else { return }
+            automaticCallFingerprint = fingerprint
+            let nowMs = msFromDate(Date())
+            let bundleID = evidence.surface?.ownerBundleID
+            let appName = bundleID.flatMap {
+                NSRunningApplication.runningApplications(withBundleIdentifier: $0).first?.localizedName
+            }
+            try? await callRepository?.upsertCallContext(
+                CallContextRow(
+                    callId: callID,
+                    captureOwner: .automatic,
+                    disposition: .active,
+                    detectorFingerprintHash: fingerprint,
+                    sourceAppBundleID: bundleID,
+                    sourceAppName: appName,
+                    trustedOriginHost: evidence.surface?.trustedOrigin?.host,
+                    title: nil,
+                    participantsJSON: "[]",
+                    createdAtMs: nowMs,
+                    updatedAtMs: nowMs
+                )
+            )
+            automaticCallBanner = AutomaticCallBannerState(
+                phase: .started,
+                callID: callID,
+                deadline: nil
+            )
+
+        case let .activity(fingerprint):
+            guard automaticCallFingerprint == fingerprint else { return }
+            audioSettings.meetingActive = true
+            automaticCallEndGraceTask?.cancel()
+            automaticCallEndGraceTask = nil
+            if calls.snapshot.phase == .recoveryTail {
+                automaticCallRecoveryTask?.cancel()
+                automaticCallRecoveryTask = nil
+                _ = await calls.undoAutomaticEndAndWait()
+            }
+            if let callID = calls.snapshot.callID {
+                automaticCallBanner = AutomaticCallBannerState(
+                    phase: .started,
+                    callID: callID,
+                    deadline: nil
+                )
+            }
+
+        case let .strongEnd(fingerprint):
+            audioSettings.meetingActive = false
+            guard automaticCallFingerprint == fingerprint,
+                  calls.snapshot.phase == .recording,
+                  automaticCallEndGraceTask == nil
+            else { return }
+            let callID = calls.snapshot.callID ?? 0
+            let deadline = Date().addingTimeInterval(30)
+            automaticCallBanner = AutomaticCallBannerState(
+                phase: .endingGrace,
+                callID: callID,
+                deadline: deadline
+            )
+            automaticCallEndGraceTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled,
+                      let self,
+                      self.automaticCallFingerprint == fingerprint
+                else { return }
+                self.automaticCallEndGraceTask = nil
+                await self.beginAutomaticRecoveryTail(callID: callID, fingerprint: fingerprint)
+            }
+
+        case .becameIdle:
+            audioSettings.meetingActive = false
+        }
+    }
+
+    private func beginAutomaticRecoveryTail(callID: Int64, fingerprint: String) async {
+        guard automaticCallFingerprint == fingerprint,
+              await calls.softEndAutomaticAndWait() != nil
+        else { return }
+        let deadline = Date().addingTimeInterval(15)
+        automaticCallBanner = AutomaticCallBannerState(
+            phase: .endedUndo,
+            callID: callID,
+            deadline: deadline
+        )
+        automaticCallRecoveryTask?.cancel()
+        automaticCallRecoveryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled,
+                  let self,
+                  self.automaticCallFingerprint == fingerprint
+            else { return }
+            self.automaticCallRecoveryTask = nil
+            _ = await self.calls.commitAutomaticEndAndWait()
+            self.automaticCallFingerprint = nil
+            self.automaticCallBanner = nil
+            self.callDetectionPolicy.resetAfterCompletion()
+        }
+    }
+
+    func rejectDetectedCall() {
+        guard let fingerprint = automaticCallFingerprint else { return }
+        callDetectionPolicy.reject(fingerprint: fingerprint)
+        automaticCallEndGraceTask?.cancel()
+        automaticCallEndGraceTask = nil
+        automaticCallRecoveryTask?.cancel()
+        automaticCallRecoveryTask = nil
+        automaticCallBanner = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if let callID = self.calls.snapshot.callID {
+                try? await self.callRepository?.updateCallCaptureContext(
+                    callID: callID,
+                    owner: .automatic,
+                    disposition: .rejected,
+                    nowMs: msFromDate(Date())
+                )
+            }
+            guard let rejectedID = await self.calls.rejectAutomaticAndWait() else { return }
+            do {
+                _ = try await self.callEvidenceDeletionService?.erase(
+                    callID: rejectedID,
+                    nowMs: msFromDate(Date())
+                )
+            } catch {
+                self.calls.setExternalError(
+                    String(localized: "The false call stopped, but its local evidence still needs deletion.")
+                )
+            }
+            self.automaticCallFingerprint = nil
+        }
+    }
+
+    func undoDetectedCallEnd() {
+        automaticCallRecoveryTask?.cancel()
+        automaticCallRecoveryTask = nil
+        Task { @MainActor [weak self] in
+            guard let self,
+                  await self.calls.undoAutomaticEndAndWait() != nil,
+                  let callID = self.calls.snapshot.callID
+            else { return }
+            self.automaticCallBanner = AutomaticCallBannerState(
+                phase: .started,
+                callID: callID,
+                deadline: nil
+            )
+        }
+    }
+
+    private func claimAutomaticCall(callID: Int64) {
+        guard automaticCallFingerprint != nil else { return }
+        automaticCallEndGraceTask?.cancel()
+        automaticCallEndGraceTask = nil
+        automaticCallRecoveryTask?.cancel()
+        automaticCallRecoveryTask = nil
+        automaticCallFingerprint = nil
+        automaticCallBanner = nil
+        callDetectionPolicy.resetAfterCompletion()
+        Task { [weak callRepository] in
+            try? await callRepository?.updateCallCaptureContext(
+                callID: callID,
+                owner: .claimed,
+                disposition: .confirmed,
+                nowMs: msFromDate(Date())
+            )
         }
     }
 
@@ -1387,7 +1653,7 @@ final class AppEnvironment {
         do {
             try await callRepository.retryFinalTranscript(
                 callID: callID,
-                nowMs: Int64(Date().timeIntervalSince1970 * 1_000)
+                nowMs: msFromDate(Date())
             )
             calls.setExternalError(nil)
             return nil
@@ -1395,6 +1661,19 @@ final class AppEnvironment {
             let message = error.localizedDescription
             calls.setExternalError(message)
             return message
+        }
+    }
+
+    func retryCallSpeakerProcessing(callID: Int64) async -> String? {
+        guard let callRepository else {
+            return String(localized: "Calls are still initializing.")
+        }
+        do {
+            try await callRepository.retrySpeakerDiarization(callID: callID)
+            await speakerDiarizationWorker?.resume()
+            return nil
+        } catch {
+            return error.localizedDescription
         }
     }
 }

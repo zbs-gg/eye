@@ -4,6 +4,7 @@ enum CallCoordinatorPhase: String, Sendable, Equatable {
     case idle
     case starting
     case recording
+    case recoveryTail = "recovery_tail"
     case finalizing
     case pendingTranscription
     case ready
@@ -28,13 +29,14 @@ struct CallSourceSelection: Sendable, Equatable {
 
 enum CallStopReason: String, Sendable, Equatable {
     case user
+    case automatic
     case privacy
     case maintenance
     case lowDisk = "low_disk"
 
     var persistenceCode: String? {
         switch self {
-        case .user: nil
+        case .user, .automatic: nil
         case .privacy: "privacy_pause"
         case .maintenance: "maintenance_stop"
         case .lowDisk: "low_disk_stop"
@@ -96,6 +98,13 @@ actor CallCoordinator {
         let spool: CallAudioSpoolSession
         var lastBookmarkEndMs: Int64
         var bookmarkCount: Int
+        var softEnd: SoftEnd?
+    }
+
+    private struct SoftEnd: Sendable {
+        let boundaryAtMs: Int64
+        let coverage: CallSpoolCoverage
+        let tail: CallRecoveryTail
     }
 
     private let repository: CallRepository
@@ -150,6 +159,29 @@ actor CallCoordinator {
         try await enqueue { [self] in
             try await performEnd(idempotencyKey: idempotencyKey, reason: reason)
         }
+    }
+
+    func softEnd() async throws -> CallCoordinatorSnapshot {
+        try await enqueue { [self] in try await performSoftEnd() }
+    }
+
+    func undoSoftEnd() async throws -> CallCoordinatorSnapshot {
+        try await enqueue { [self] in try await performUndoSoftEnd() }
+    }
+
+    func commitSoftEnd(
+        idempotencyKey: String = UUID().uuidString
+    ) async throws -> CallCoordinatorSnapshot {
+        try await enqueue { [self] in
+            try await performEnd(idempotencyKey: idempotencyKey, reason: .automatic)
+        }
+    }
+
+    /// Stops an automatically-created false positive without creating final transcript work or lifecycle
+    /// webhooks. The caller must immediately run physical call erasure; the interrupted row is only a
+    /// crash-forward bridge that makes the evidence eligible for safe deletion.
+    func rejectAutomatic() async throws -> CallCoordinatorSnapshot {
+        try await enqueue { [self] in try await performRejectAutomatic() }
     }
 
     private func performStart(
@@ -218,7 +250,8 @@ actor CallCoordinator {
             baselines: baselines,
             spool: spool,
             lastBookmarkEndMs: startedAtMs,
-            bookmarkCount: 0
+            bookmarkCount: 0,
+            softEnd: nil
         )
         current = CallCoordinatorSnapshot(
             phase: .recording,
@@ -232,6 +265,9 @@ actor CallCoordinator {
     }
 
     private func performBookmark(idempotencyKey: String) async throws -> CallBookmarkRow {
+        if active?.softEnd != nil {
+            _ = try await performUndoSoftEnd()
+        }
         guard var active else {
             if current.phase == .finalizing || current.phase == .pendingTranscription {
                 throw CallCoordinatorError.bookmarkClosed
@@ -298,6 +334,62 @@ actor CallCoordinator {
         return bookmark
     }
 
+    private func performSoftEnd() async throws -> CallCoordinatorSnapshot {
+        guard var active else { throw CallCoordinatorError.notRecording }
+        if active.softEnd != nil { return current }
+        guard current.phase == .recording else { throw CallCoordinatorError.bookmarkClosed }
+
+        let targets = await audio.acceptedTargets()
+        let coverage = try await freezeCoverage(
+            spool: active.spool,
+            targets: targets,
+            baselines: active.baselines
+        )
+        let tail = CallRecoveryTail(maxDuration: 15, maximumBytes: 16 * 1_024 * 1_024)
+        await audio.installSink { frame in await tail.consume(frame) }
+        active.softEnd = SoftEnd(
+            boundaryAtMs: milliseconds(now()),
+            coverage: coverage,
+            tail: tail
+        )
+        self.active = active
+        current = CallCoordinatorSnapshot(
+            phase: .recoveryTail,
+            callID: active.id,
+            me: sourceStateAfterCoverage(
+                current.me,
+                endSample: coverage.meEndSample,
+                gap: coverage.meGap
+            ),
+            system: sourceStateAfterCoverage(
+                current.system,
+                endSample: coverage.systemEndSample,
+                gap: coverage.systemGap
+            ),
+            bookmarkCount: active.bookmarkCount,
+            stopReason: .automatic
+        )
+        return current
+    }
+
+    private func performUndoSoftEnd() async throws -> CallCoordinatorSnapshot {
+        guard var active else { throw CallCoordinatorError.notRecording }
+        guard let softEnd = active.softEnd else { return current }
+        let spool = active.spool
+        await softEnd.tail.forward { frame in await spool.consume(frame) }
+        active.softEnd = nil
+        self.active = active
+        current = CallCoordinatorSnapshot(
+            phase: .recording,
+            callID: active.id,
+            me: current.me,
+            system: current.system,
+            bookmarkCount: active.bookmarkCount,
+            stopReason: nil
+        )
+        return current
+    }
+
     private func performEnd(
         idempotencyKey: String,
         reason: CallStopReason
@@ -314,15 +406,22 @@ actor CallCoordinator {
 
         let finalCoverage: CallSpoolCoverage
         let finished: CallSpoolCoverage
+        let endedAtMs: Int64
         do {
-            let targets = await audio.acceptedTargets()
-            finalCoverage = try await freezeCoverage(
-                spool: active.spool,
-                targets: targets,
-                baselines: active.baselines
-            )
+            if let softEnd = active.softEnd {
+                await softEnd.tail.discard()
+                finalCoverage = softEnd.coverage
+                endedAtMs = softEnd.boundaryAtMs
+            } else {
+                let targets = await audio.acceptedTargets()
+                finalCoverage = try await freezeCoverage(
+                    spool: active.spool,
+                    targets: targets,
+                    baselines: active.baselines
+                )
+                endedAtMs = milliseconds(now())
+            }
             await audio.installSink(nil)
-            let endedAtMs = milliseconds(now())
             await active.spool.closeAdmission()
             finished = try await active.spool.finish()
             await audio.stop()
@@ -375,6 +474,49 @@ actor CallCoordinator {
             bookmarkCount: active.bookmarkCount,
             stopReason: reason
         )
+        return current
+    }
+
+    private func performRejectAutomatic() async throws -> CallCoordinatorSnapshot {
+        guard let active else { return current }
+        current = CallCoordinatorSnapshot(
+            phase: .finalizing,
+            callID: active.id,
+            me: current.me,
+            system: current.system,
+            bookmarkCount: active.bookmarkCount,
+            stopReason: .privacy
+        )
+        do {
+            if let softEnd = active.softEnd { await softEnd.tail.discard() }
+            await audio.installSink(nil)
+            await active.spool.closeAdmission()
+            _ = try await active.spool.finish()
+            await audio.stop()
+            let rejectedAtMs = milliseconds(now())
+            try await repository.markCallInterrupted(
+                callID: active.id,
+                endedAtMs: rejectedAtMs,
+                reason: "automatic_rejected",
+                nowMs: rejectedAtMs
+            )
+        } catch {
+            await audio.installSink(nil)
+            await active.spool.closeAdmission()
+            await audio.stop()
+            let failedAtMs = milliseconds(now())
+            try? await repository.markCallInterrupted(
+                callID: active.id,
+                endedAtMs: failedAtMs,
+                reason: "automatic_reject_incomplete",
+                nowMs: failedAtMs
+            )
+            self.active = nil
+            current = .idle
+            throw error
+        }
+        self.active = nil
+        current = .idle
         return current
     }
 
@@ -450,6 +592,60 @@ struct CallSpoolCoverage: Sendable, Equatable {
     )
 
     var degraded: Bool { meGap || systemGap }
+}
+
+private actor CallRecoveryTail {
+    private let maxDuration: TimeInterval
+    private let maximumBytes: Int
+    private var frames: [AudioFrame] = []
+    private var bytes = 0
+    private var forwardSink: CallAudioFrameSink?
+    private var discarding = false
+
+    init(maxDuration: TimeInterval, maximumBytes: Int) {
+        self.maxDuration = maxDuration
+        self.maximumBytes = maximumBytes
+    }
+
+    func consume(_ frame: AudioFrame) async -> Bool {
+        if discarding { return true }
+        if let forwardSink { return await forwardSink(frame) }
+        frames.append(frame)
+        bytes += frame.samples.count * MemoryLayout<Float>.size
+        trim()
+        return true
+    }
+
+    /// Replays every buffered frame before forwarding new arrivals. Actor reentrancy can append to
+    /// `frames` while a batch is replaying, so drain in batches and publish the forwarding sink only
+    /// after the buffer remains empty.
+    func forward(to sink: @escaping CallAudioFrameSink) async {
+        guard !discarding else { return }
+        while !frames.isEmpty {
+            let batch = frames
+            frames.removeAll(keepingCapacity: true)
+            bytes = 0
+            for frame in batch { _ = await sink(frame) }
+        }
+        forwardSink = sink
+    }
+
+    func discard() {
+        frames.removeAll(keepingCapacity: false)
+        bytes = 0
+        forwardSink = nil
+        discarding = true
+    }
+
+    private func trim() {
+        guard let newest = frames.last?.timing.capturedAt else { return }
+        while let first = frames.first,
+              bytes > maximumBytes
+                || newest.timeIntervalSince(first.timing.capturedAt) > maxDuration {
+            bytes -= first.samples.count * MemoryLayout<Float>.size
+            frames.removeFirst()
+        }
+    }
 }
 
 private actor CallAudioSpoolSession {

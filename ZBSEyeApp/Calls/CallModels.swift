@@ -73,6 +73,30 @@ enum CallMediaMutationState: String, Codable, DatabaseValueConvertible, Sendable
     case failed
 }
 
+enum CallCaptureOwner: String, Codable, DatabaseValueConvertible, Sendable {
+    case manual
+    case automatic
+    case claimed
+}
+
+enum CallCaptureDisposition: String, Codable, DatabaseValueConvertible, Sendable {
+    case active
+    case confirmed
+    case rejected
+}
+
+enum CallSpeakerRevisionState: String, Codable, DatabaseValueConvertible, Sendable {
+    case writing
+    case ready
+    case failed
+}
+
+enum CallSpeakerNamingProvenance: String, Codable, DatabaseValueConvertible, Sendable {
+    case anonymous
+    case currentCall = "current_call"
+    case manual
+}
+
 struct CallRow: Codable, FetchableRecord, MutablePersistableRecord, Sendable, Equatable {
     static let databaseTableName = "calls"
 
@@ -86,10 +110,135 @@ struct CallRow: Codable, FetchableRecord, MutablePersistableRecord, Sendable, Eq
     var degradationReason: String?
     var mediaGeneration: Int
     var preferredRevisionId: Int64?
+    var preferredSpeakerRevisionId: Int64? = nil
     var createdAtMs: Int64
     var updatedAtMs: Int64
 
     mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
+}
+
+struct CallContextRow: Codable, FetchableRecord, PersistableRecord, Sendable, Equatable {
+    static let databaseTableName = "call_context"
+
+    var callId: Int64
+    var captureOwner: CallCaptureOwner
+    var disposition: CallCaptureDisposition
+    var detectorFingerprintHash: String?
+    var sourceAppBundleID: String?
+    var sourceAppName: String?
+    var trustedOriginHost: String?
+    var title: String?
+    var participantsJSON: String
+    var createdAtMs: Int64
+    var updatedAtMs: Int64
+}
+
+struct CallSpeakerRevisionRow: Codable, FetchableRecord, MutablePersistableRecord, Sendable, Equatable {
+    static let databaseTableName = "call_speaker_revisions"
+
+    var id: Int64?
+    var callId: Int64
+    var mediaGeneration: Int
+    var previousRevisionId: Int64?
+    var state: CallSpeakerRevisionState
+    var engine: String
+    var modelRevision: String
+    var createdAtMs: Int64
+
+    mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
+}
+
+struct CallSpeakerClusterRow: Codable, FetchableRecord, MutablePersistableRecord, Sendable, Equatable {
+    static let databaseTableName = "call_speaker_clusters"
+
+    var id: Int64?
+    var revisionId: Int64
+    var ordinal: Int
+    var clusterKey: String
+    var displayName: String?
+    var namingProvenance: CallSpeakerNamingProvenance
+
+    mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
+}
+
+struct CallSpeakerIntervalRow: Codable, FetchableRecord, MutablePersistableRecord, Sendable, Equatable {
+    static let databaseTableName = "call_speaker_intervals"
+
+    var id: Int64?
+    var revisionId: Int64
+    var clusterId: Int64
+    var ordinal: Int
+    var source: CallAudioSource
+    var startMs: Int64
+    var endMs: Int64
+
+    mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
+}
+
+struct CallSpeakerIntervalDraft: Sendable, Equatable {
+    let source: CallAudioSource
+    let startMs: Int64
+    let endMs: Int64
+}
+
+struct CallSpeakerClusterDraft: Sendable, Equatable {
+    let clusterKey: String
+    let displayName: String?
+    let namingProvenance: CallSpeakerNamingProvenance
+    let intervals: [CallSpeakerIntervalDraft]
+}
+
+struct CallTranscriptSpeakerAlignment: Sendable, Equatable {
+    let segment: CallTranscriptSegmentDraft
+    let speakerClusterKey: String?
+}
+
+/// Assigns transcript segments only when one same-source speaker has a unique
+/// maximum amount of overlap. Ties remain anonymous instead of inventing a
+/// speaker identity.
+enum CallTranscriptSpeakerAligner {
+    static func align(
+        _ segments: [CallTranscriptSegmentDraft],
+        to clusters: [CallSpeakerClusterDraft]
+    ) -> [CallTranscriptSpeakerAlignment] {
+        segments.map { segment in
+            var overlapByCluster: [String: Int64] = [:]
+            for cluster in clusters {
+                let overlap = cluster.intervals.reduce(into: Int64(0)) { total, interval in
+                    guard interval.source == segment.source else { return }
+                    total += max(
+                        0,
+                        min(segment.endMs, interval.endMs) - max(segment.startMs, interval.startMs)
+                    )
+                }
+                if overlap > 0 {
+                    overlapByCluster[cluster.clusterKey, default: 0] += overlap
+                }
+            }
+
+            let maximum = overlapByCluster.values.max()
+            let winners = maximum.map { maximum in
+                overlapByCluster.compactMap { key, overlap in
+                    overlap == maximum ? key : nil
+                }
+            } ?? []
+            return CallTranscriptSpeakerAlignment(
+                segment: segment,
+                speakerClusterKey: winners.count == 1 ? winners[0] : nil
+            )
+        }
+    }
+}
+
+struct CallSpeakerIntervalSelection: Sendable, Equatable {
+    let source: CallAudioSource
+    let startMs: Int64
+    let endMs: Int64
+}
+
+enum CallSpeakerCorrectionTarget: Sendable, Equatable {
+    case existingCluster(clusterKey: String)
+    case newNamedSpeaker(String)
 }
 
 struct CallSourceSpanRow: Codable, FetchableRecord, MutablePersistableRecord, Sendable, Equatable {
@@ -354,4 +503,18 @@ struct CallTranscriptCommitResult: Sendable, Equatable {
     let intervalOrFinalRevisionID: Int64
     let preferredRevisionID: Int64
     let final: Bool
+}
+
+/// Immutable inputs for one speaker pass. The preferred final transcript and
+/// media generation are captured together so a later privacy edit cannot be
+/// promoted as if it described the new evidence.
+struct CallSpeakerDiarizationEvidence: Sendable, Equatable {
+    let call: CallRow
+    let transcriptRevision: CallTranscriptRevisionRow
+    let transcriptSegments: [CallTranscriptSegmentRow]
+    let chunks: [CallAudioChunkRow]
+
+    var identity: String {
+        "\(call.id ?? 0):\(call.mediaGeneration):\(transcriptRevision.id ?? 0)"
+    }
 }

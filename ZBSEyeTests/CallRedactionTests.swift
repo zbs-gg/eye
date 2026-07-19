@@ -192,6 +192,58 @@ final class CallRedactionTests: XCTestCase {
         XCTAssertEqual(remaining, fixture.pcm(samples: [0, 1, 2, 3, 6, 7, 8, 9]))
     }
 
+    func testAcceptedRedactionImmediatelyRemovesSpeakerEvidenceBeforeFileCleanup() async throws {
+        let fixture = try CallRedactionFixture()
+        let callID = try await fixture.makeEndedCall()
+        _ = try await fixture.makePreferredSpeakerRevision(callID: callID)
+        let before = try await fixture.speakerPrivacyState(callID: callID)
+        XCTAssertNotNil(before.preferredRevisionID)
+        XCTAssertEqual(before.revisions, 2)
+        XCTAssertEqual(before.clusters, 2)
+        XCTAssertEqual(before.intervals, 2)
+        let snapshot = try await fixture.repository.redactionSnapshot(callID: callID)
+        let manifest = try CallRedactionPlanner(mediaRoot: fixture.mediaRoot).makeManifest(
+            snapshot: snapshot,
+            fromMs: 1_400,
+            toMs: 1_600
+        )
+
+        _ = try await fixture.repository.beginRedaction(manifest: manifest, nowMs: 3_000)
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: fixture.originalURL.path),
+            "beginRedaction must revoke derived evidence before physical cleanup starts"
+        )
+        let privacyState = try await fixture.speakerPrivacyState(callID: callID)
+        XCTAssertNil(privacyState.preferredRevisionID)
+        XCTAssertEqual(privacyState.revisions, 0)
+        XCTAssertEqual(privacyState.clusters, 0)
+        XCTAssertEqual(privacyState.intervals, 0)
+    }
+
+    func testAcceptedEraseImmediatelyRemovesSpeakerEvidenceBeforeFileCleanup() async throws {
+        let fixture = try CallRedactionFixture()
+        let callID = try await fixture.makeEndedCall()
+        _ = try await fixture.makePreferredSpeakerRevision(callID: callID)
+        let before = try await fixture.speakerPrivacyState(callID: callID)
+        XCTAssertNotNil(before.preferredRevisionID)
+        XCTAssertEqual(before.revisions, 2)
+        XCTAssertEqual(before.clusters, 2)
+        XCTAssertEqual(before.intervals, 2)
+
+        _ = try await fixture.repository.beginEraseCall(callID: callID, nowMs: 3_000)
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: fixture.originalURL.path),
+            "beginEraseCall must revoke derived evidence before physical cleanup starts"
+        )
+        let privacyState = try await fixture.speakerPrivacyState(callID: callID)
+        XCTAssertNil(privacyState.preferredRevisionID)
+        XCTAssertEqual(privacyState.revisions, 0)
+        XCTAssertEqual(privacyState.clusters, 0)
+        XCTAssertEqual(privacyState.intervals, 0)
+    }
+
     func testRangeRedactionJournalsEveryIntersectingCallBeforeFileWork() async throws {
         let fixture = try CallRedactionFixture()
         let firstID = try await fixture.makeEndedCall(key: "range-first", startMs: 1_000)
@@ -766,6 +818,90 @@ private final class CallRedactionFixture {
             meEndSample: 10
         )
         return callID
+    }
+
+    func makePreferredSpeakerRevision(callID: Int64) async throws -> CallSpeakerRevisionRow {
+        let first = try await repository.createSpeakerRevision(
+            callID: callID,
+            mediaGeneration: 0,
+            engine: "fixture",
+            modelRevision: "fixture-v1",
+            clusters: [
+                CallSpeakerClusterDraft(
+                    clusterKey: "system:S1",
+                    displayName: "Olga",
+                    namingProvenance: .manual,
+                    intervals: [
+                        CallSpeakerIntervalDraft(
+                            source: .system,
+                            startMs: 1_100,
+                            endMs: 1_900
+                        ),
+                    ]
+                ),
+            ],
+            nowMs: 2_500
+        )
+        try await repository.setPreferredSpeakerRevision(
+            callID: callID,
+            revisionID: try XCTUnwrap(first.id)
+        )
+        let corrected = try await repository.createSpeakerRevision(
+            callID: callID,
+            mediaGeneration: 0,
+            engine: "manual",
+            modelRevision: "annotation-v1",
+            clusters: [
+                CallSpeakerClusterDraft(
+                    clusterKey: "system:S1",
+                    displayName: "Olga Makhova",
+                    namingProvenance: .manual,
+                    intervals: [
+                        CallSpeakerIntervalDraft(
+                            source: .system,
+                            startMs: 1_100,
+                            endMs: 1_900
+                        ),
+                    ]
+                ),
+            ],
+            nowMs: 2_600
+        )
+        try await repository.setPreferredSpeakerRevision(
+            callID: callID,
+            revisionID: try XCTUnwrap(corrected.id)
+        )
+        return corrected
+    }
+
+    func speakerPrivacyState(callID: Int64) async throws -> (
+        preferredRevisionID: Int64?,
+        revisions: Int,
+        clusters: Int,
+        intervals: Int
+    ) {
+        try await database.pool.read { db in
+            (
+                preferredRevisionID: try Int64.fetchOne(
+                    db,
+                    sql: "SELECT preferredSpeakerRevisionId FROM calls WHERE id = ?",
+                    arguments: [callID]
+                ),
+                revisions: try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM call_speaker_revisions WHERE callId = ?",
+                    arguments: [callID]
+                ) ?? -1,
+                clusters: try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM call_speaker_clusters"
+                ) ?? -1,
+                intervals: try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM call_speaker_intervals"
+                ) ?? -1
+            )
+        }
     }
 
     func appendSecondChunk(callID: Int64) async throws -> URL {

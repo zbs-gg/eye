@@ -84,6 +84,8 @@ final class ZBSEyeDatabase: Sendable {
             "v5_browser_visits", "v6_embed_queue", "v7_call_envelopes",
             "v8_call_transcript_projection_gaps", "v9_call_source_gaps",
             "v10_call_preferred_vector_guard", "v11_call_automation_outbox",
+            "v12_call_context_speakers",
+            "v13_call_processing_ready_event",
         ]
     private static func warnIfNewerSchema(_ pool: DatabasePool) {
         let applied = (try? pool.read { db in
@@ -684,6 +686,159 @@ final class ZBSEyeDatabase: Sendable {
                     createdAtMs             INTEGER NOT NULL,
                     updatedAtMs             INTEGER NOT NULL
                 );
+                CREATE INDEX idx_call_automation_claim
+                    ON call_automation_outbox(state, nextAttemptAtMs, sequence);
+                CREATE INDEX idx_call_automation_call_sequence
+                    ON call_automation_outbox(callId, sequence);
+                CREATE INDEX idx_call_automation_delivered
+                    ON call_automation_outbox(deliveredAtMs)
+                    WHERE state = 'delivered';
+                """)
+        }
+        // v12: one shared call context plus immutable, per-call speaker revisions.
+        // This remains schema-only so large existing stores open without media work.
+        m.registerMigration("v12_call_context_speakers") { db in
+            try db.execute(sql: """
+                ALTER TABLE calls ADD COLUMN preferredSpeakerRevisionId INTEGER
+                    REFERENCES call_speaker_revisions(id) ON DELETE SET NULL;
+
+                CREATE TABLE call_context (
+                    callId                      INTEGER PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE,
+                    captureOwner                TEXT NOT NULL CHECK (captureOwner IN ('manual', 'automatic', 'claimed')),
+                    disposition                 TEXT NOT NULL CHECK (disposition IN ('active', 'confirmed', 'rejected')),
+                    detectorFingerprintHash     TEXT,
+                    sourceAppBundleID           TEXT,
+                    sourceAppName               TEXT,
+                    trustedOriginHost           TEXT,
+                    title                       TEXT,
+                    participantsJSON            TEXT NOT NULL DEFAULT '[]',
+                    createdAtMs                 INTEGER NOT NULL,
+                    updatedAtMs                 INTEGER NOT NULL
+                ) WITHOUT ROWID;
+                CREATE INDEX idx_call_context_source_app ON call_context(sourceAppBundleID, callId);
+
+                CREATE TABLE call_speaker_revisions (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    callId              INTEGER NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+                    mediaGeneration     INTEGER NOT NULL CHECK (mediaGeneration >= 0),
+                    previousRevisionId  INTEGER REFERENCES call_speaker_revisions(id) ON DELETE SET NULL,
+                    state               TEXT NOT NULL CHECK (state IN ('writing', 'ready', 'failed')),
+                    engine              TEXT NOT NULL,
+                    modelRevision       TEXT NOT NULL,
+                    createdAtMs         INTEGER NOT NULL
+                );
+                CREATE INDEX idx_call_speaker_revisions_call
+                    ON call_speaker_revisions(callId, mediaGeneration, createdAtMs, id);
+
+                CREATE TABLE call_speaker_clusters (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    revisionId          INTEGER NOT NULL REFERENCES call_speaker_revisions(id) ON DELETE CASCADE,
+                    ordinal             INTEGER NOT NULL CHECK (ordinal >= 0),
+                    clusterKey          TEXT NOT NULL,
+                    displayName         TEXT,
+                    namingProvenance    TEXT NOT NULL CHECK (namingProvenance IN ('anonymous', 'current_call', 'manual')),
+                    UNIQUE(revisionId, ordinal),
+                    UNIQUE(revisionId, clusterKey)
+                );
+
+                CREATE TABLE call_speaker_intervals (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    revisionId          INTEGER NOT NULL REFERENCES call_speaker_revisions(id) ON DELETE CASCADE,
+                    clusterId           INTEGER NOT NULL REFERENCES call_speaker_clusters(id) ON DELETE CASCADE,
+                    ordinal             INTEGER NOT NULL CHECK (ordinal >= 0),
+                    source              TEXT NOT NULL CHECK (source IN ('me', 'system')),
+                    startMs             INTEGER NOT NULL,
+                    endMs               INTEGER NOT NULL CHECK (endMs >= startMs),
+                    UNIQUE(revisionId, ordinal)
+                );
+                CREATE INDEX idx_call_speaker_intervals_time
+                    ON call_speaker_intervals(revisionId, startMs, endMs, ordinal);
+
+                CREATE TRIGGER call_speaker_revisions_generation_bi
+                BEFORE INSERT ON call_speaker_revisions BEGIN
+                    SELECT CASE WHEN NEW.mediaGeneration != (
+                        SELECT mediaGeneration FROM calls WHERE id = NEW.callId
+                    ) THEN RAISE(ABORT, 'call speaker revision generation is stale') END;
+                END;
+
+                CREATE TRIGGER call_speaker_revisions_previous_bi
+                BEFORE INSERT ON call_speaker_revisions WHEN NEW.previousRevisionId IS NOT NULL BEGIN
+                    SELECT CASE WHEN NOT EXISTS (
+                        SELECT 1 FROM call_speaker_revisions r
+                        WHERE r.id = NEW.previousRevisionId
+                          AND r.callId = NEW.callId
+                          AND r.mediaGeneration = NEW.mediaGeneration
+                          AND r.state = 'ready'
+                    ) THEN RAISE(ABORT, 'invalid previous call speaker revision') END;
+                END;
+
+                CREATE TRIGGER call_speaker_intervals_owner_bi
+                BEFORE INSERT ON call_speaker_intervals BEGIN
+                    SELECT CASE WHEN NOT EXISTS (
+                        SELECT 1 FROM call_speaker_clusters c
+                        WHERE c.id = NEW.clusterId AND c.revisionId = NEW.revisionId
+                    ) THEN RAISE(ABORT, 'call speaker interval cluster mismatch') END;
+                END;
+
+                CREATE TRIGGER calls_preferred_speaker_revision_bu
+                BEFORE UPDATE OF preferredSpeakerRevisionId, mediaGeneration ON calls
+                WHEN NEW.preferredSpeakerRevisionId IS NOT NULL BEGIN
+                    SELECT CASE WHEN NOT EXISTS (
+                        SELECT 1 FROM call_speaker_revisions r
+                        WHERE r.id = NEW.preferredSpeakerRevisionId
+                          AND r.callId = NEW.id
+                          AND r.mediaGeneration = NEW.mediaGeneration
+                          AND r.state = 'ready'
+                    ) THEN RAISE(ABORT, 'invalid preferred call speaker revision') END;
+                END;
+                """)
+        }
+        // v13: add the post-processing readiness hint to the durable outbox.
+        // SQLite cannot widen a CHECK constraint in place, so rebuild the table
+        // while preserving every sequence, lease, attempt, and delivery result.
+        m.registerMigration("v13_call_processing_ready_event") { db in
+            try db.execute(sql: """
+                ALTER TABLE call_automation_outbox RENAME TO call_automation_outbox_v12;
+
+                CREATE TABLE call_automation_outbox (
+                    sequence                INTEGER PRIMARY KEY AUTOINCREMENT,
+                    eventID                 TEXT NOT NULL UNIQUE,
+                    semanticIdentity        TEXT NOT NULL UNIQUE,
+                    callId                  INTEGER NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+                    eventType               TEXT NOT NULL CHECK (eventType IN (
+                                                'call.ended',
+                                                'call.transcript.ready',
+                                                'call.transcript.failed',
+                                                'call.processing.ready'
+                                            )),
+                    occurredAtMs            INTEGER NOT NULL,
+                    endpointFingerprint     TEXT NOT NULL,
+                    payloadJSON             TEXT NOT NULL,
+                    state                   TEXT NOT NULL DEFAULT 'pending' CHECK (state IN (
+                                                'pending', 'sending', 'delivered', 'blocked'
+                                            )),
+                    attempts                INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+                    nextAttemptAtMs         INTEGER NOT NULL,
+                    leaseExpiresAtMs        INTEGER,
+                    httpStatus              INTEGER,
+                    lastErrorCode           TEXT,
+                    deliveredAtMs           INTEGER,
+                    createdAtMs             INTEGER NOT NULL,
+                    updatedAtMs             INTEGER NOT NULL
+                );
+                INSERT INTO call_automation_outbox(
+                    sequence, eventID, semanticIdentity, callId, eventType, occurredAtMs,
+                    endpointFingerprint, payloadJSON, state, attempts, nextAttemptAtMs,
+                    leaseExpiresAtMs, httpStatus, lastErrorCode, deliveredAtMs, createdAtMs, updatedAtMs
+                )
+                SELECT
+                    sequence, eventID, semanticIdentity, callId, eventType, occurredAtMs,
+                    endpointFingerprint, payloadJSON, state, attempts, nextAttemptAtMs,
+                    leaseExpiresAtMs, httpStatus, lastErrorCode, deliveredAtMs, createdAtMs, updatedAtMs
+                FROM call_automation_outbox_v12
+                ORDER BY sequence;
+                DROP TABLE call_automation_outbox_v12;
+
                 CREATE INDEX idx_call_automation_claim
                     ON call_automation_outbox(state, nextAttemptAtMs, sequence);
                 CREATE INDEX idx_call_automation_call_sequence

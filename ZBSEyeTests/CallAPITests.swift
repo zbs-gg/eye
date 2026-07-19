@@ -69,6 +69,8 @@ final class CallAPITests: XCTestCase {
         XCTAssertEqual(envelope.preferredRevision?.kind, .final)
         XCTAssertEqual(envelope.sources.first(where: { $0.source == .me })?.health, .available)
         XCTAssertEqual(envelope.sources.first(where: { $0.source == .system })?.health, .missing)
+        XCTAssertEqual(envelope.speakerStatus, .unavailable)
+        XCTAssertNil(envelope.preferredSpeakerRevision)
         XCTAssertEqual(envelope.bookmarkCount, 1)
         XCTAssertFalse(envelope.evidence.isEmpty)
 
@@ -129,7 +131,7 @@ final class CallAPITests: XCTestCase {
         let json = try XCTUnwrap(String(data: encoded, encoding: .utf8))
         XCTAssertFalse(json.contains(fixture.root.path))
         XCTAssertFalse(json.contains("relativePath"))
-        XCTAssertFalse(json.contains("speaker"))
+        XCTAssertFalse(json.contains("preferredSpeakerRevision"))
     }
 
     func testContractRejectsForgedIDsUnknownSelectorsOversizedPagesAndUnsafeMediaPaths() throws {

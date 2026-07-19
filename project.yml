@@ -39,6 +39,9 @@ packages:
   SwiftTransformers:
     url: https://github.com/huggingface/swift-transformers
     exactVersion: "1.3.3"
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio
+    exactVersion: "0.15.5"
 
 schemes:
   ZBSEye:
@@ -90,6 +93,8 @@ targets:
         product: MLX
       - package: SwiftTransformers
         product: Tokenizers
+      - package: FluidAudio
+        product: FluidAudio
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye
@@ -254,7 +259,14 @@ targets:
       - path: ZBSEyeApp/Search/AskService.swift
       - path: ZBSEyeApp/State/AskStore.swift
       - path: ZBSEyeApp/State/CallRecordingStore.swift
+      - path: ZBSEyeApp/State/CallsStore.swift
+      - path: ZBSEyeApp/State/CallPlaybackStore.swift
       - path: ZBSEyeApp/State/WorkspaceStore.swift
+      - path: ZBSEyeApp/Meeting/CallDetectionPolicy.swift
+      - path: ZBSEyeApp/Calls/Diarization/SpeakerDiarizationModelManifest.swift
+      - path: ZBSEyeApp/Calls/Diarization/SpeakerDiarizationModelStore.swift
+      - path: ZBSEyeApp/Calls/Diarization/DiarizationHelperCommand.swift
+      - path: ZBSEyeApp/Calls/Diarization/SpeakerDiarizationWorker.swift
       - path: ZBSEyeApp/State/StorageSettingsStore.swift
       - path: ZBSEyeApp/State/KeepMediaPolicyCoordinator.swift
       - path: ZBSEyeApp/State/AudioSettingsStore.swift
@@ -262,6 +274,8 @@ targets:
       - path: ZBSEyeApp/System/ResourceUsageSampler.swift
       - path: ZBSEyeApp/Views/Settings/SettingsRoute.swift
     dependencies:
+      - package: FluidAudio
+        product: FluidAudio
       - package: MLXSwiftLM
         product: MLXLLM
       - package: MLXSwiftLM

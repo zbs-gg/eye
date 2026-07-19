@@ -5,6 +5,7 @@ enum CallAutomationEventType: String, Codable, DatabaseValueConvertible, Sendabl
     case callEnded = "call.ended"
     case transcriptReady = "call.transcript.ready"
     case transcriptFailed = "call.transcript.failed"
+    case processingReady = "call.processing.ready"
 }
 
 enum CallAutomationDeliveryState: String, Codable, DatabaseValueConvertible, Sendable {
@@ -68,6 +69,21 @@ struct CallTranscriptFailedAutomationData: Codable, Sendable, Equatable {
     let state: String
     let errorCode: String
     let attempt: Int
+}
+
+/// Deliberately contains identifiers and state only. A webhook is a wake-up
+/// hint; transcript text, speaker names, titles, and media paths remain behind
+/// Eye's authenticated localhost evidence surfaces.
+struct CallProcessingReadyAutomationData: Codable, Sendable, Equatable {
+    let state: String
+    let transcriptRevisionID: Int64
+    let speakerRevisionID: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case transcriptRevisionID = "transcriptRevisionId"
+        case speakerRevisionID = "speakerRevisionId"
+    }
 }
 
 enum CallAutomationOutbox {

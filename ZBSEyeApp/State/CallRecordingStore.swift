@@ -13,10 +13,11 @@ final class CallRecordingStore {
     @ObservationIgnored private var ending = false
     @ObservationIgnored var requestedSources: @MainActor () -> CallSourceSelection = { .none }
     @ObservationIgnored var admissionAllowed: @MainActor () -> Bool = { true }
+    @ObservationIgnored var onManualStartWhileActive: @MainActor (Int64) -> Void = { _ in }
 
     var isActive: Bool {
         switch snapshot.phase {
-        case .starting, .recording, .finalizing: true
+        case .starting, .recording, .recoveryTail, .finalizing: true
         case .idle, .pendingTranscription, .ready, .readyDegraded, .failed: false
         }
     }
@@ -31,7 +32,11 @@ final class CallRecordingStore {
 
     func start() {
         guard let coordinator else { return }
-        guard !isActive, !starting, !ending else { return }
+        if isActive, let callID = snapshot.callID {
+            onManualStartWhileActive(callID)
+            return
+        }
+        guard !starting, !ending else { return }
         guard admissionAllowed() else {
             errorMessage = "A storage move is in progress. No call was started."
             return
@@ -71,6 +76,26 @@ final class CallRecordingStore {
         startTask = task
     }
 
+    func startAutomatic(idempotencyKey: String) async -> CallCoordinatorSnapshot? {
+        guard let coordinator, !isActive, !starting, !ending, admissionAllowed() else { return nil }
+        let requested = requestedSources()
+        guard !requested.isEmpty else { return nil }
+        starting = true
+        defer { starting = false }
+        errorMessage = nil
+        do {
+            snapshot = try await coordinator.start(
+                request: requested,
+                idempotencyKey: idempotencyKey
+            )
+            return snapshot
+        } catch {
+            errorMessage = error.localizedDescription
+            snapshot = await coordinator.snapshot()
+            return nil
+        }
+    }
+
     func bookmark() {
         guard let coordinator else { return }
         errorMessage = nil
@@ -87,6 +112,69 @@ final class CallRecordingStore {
 
     func end() {
         Task { await endAndWait(reason: .user) }
+    }
+
+    func undoAutomaticEnd() {
+        guard let coordinator else { return }
+        Task {
+            do {
+                snapshot = try await coordinator.undoSoftEnd()
+            } catch {
+                errorMessage = error.localizedDescription
+                snapshot = await coordinator.snapshot()
+            }
+        }
+    }
+
+    func undoAutomaticEndAndWait() async -> CallCoordinatorSnapshot? {
+        guard let coordinator else { return nil }
+        do {
+            snapshot = try await coordinator.undoSoftEnd()
+            return snapshot
+        } catch {
+            errorMessage = error.localizedDescription
+            snapshot = await coordinator.snapshot()
+            return nil
+        }
+    }
+
+    func softEndAutomaticAndWait() async -> CallCoordinatorSnapshot? {
+        guard let coordinator, snapshot.phase == .recording else { return nil }
+        do {
+            snapshot = try await coordinator.softEnd()
+            return snapshot
+        } catch {
+            errorMessage = error.localizedDescription
+            snapshot = await coordinator.snapshot()
+            return nil
+        }
+    }
+
+    func commitAutomaticEndAndWait() async -> CallCoordinatorSnapshot? {
+        guard let coordinator, snapshot.phase == .recoveryTail else { return nil }
+        do {
+            snapshot = try await coordinator.commitSoftEnd()
+            return snapshot
+        } catch {
+            errorMessage = error.localizedDescription
+            snapshot = await coordinator.snapshot()
+            return nil
+        }
+    }
+
+    func rejectAutomaticAndWait() async -> Int64? {
+        guard let coordinator, let callID = snapshot.callID else { return nil }
+        do {
+            snapshot = try await coordinator.rejectAutomatic()
+            return callID
+        } catch {
+            errorMessage = error.localizedDescription
+            snapshot = await coordinator.snapshot()
+            // The coordinator fails closed: it detaches the sink, stops audio,
+            // and clears its active call before rethrowing. Keep the durable ID
+            // so the caller can still erase every partial false-call artifact.
+            return callID
+        }
     }
 
     func endAndWait(reason: CallStopReason) async {

@@ -266,6 +266,112 @@ final class CallCoordinatorTests: XCTestCase {
         XCTAssertNil(persisted.call.degradationReason)
     }
 
+    func testSoftEndUndoReplaysTailIntoSameCall() async throws {
+        let fixture = try CallCoordinatorFixture(actual: .init(me: false, system: true))
+        defer { fixture.cleanup() }
+        let started = try await fixture.coordinator.start(
+            request: .init(me: false, system: true),
+            idempotencyKey: "soft-undo-start"
+        )
+        let callID = try XCTUnwrap(started.callID)
+        await fixture.audio.emit(frame(source: .system, epoch: 0, sequence: 0))
+
+        let soft = try await fixture.coordinator.softEnd()
+        XCTAssertEqual(soft.phase, .recoveryTail)
+        XCTAssertEqual(soft.callID, callID)
+        await fixture.audio.emit(frame(source: .system, epoch: 0, sequence: 1))
+
+        let resumed = try await fixture.coordinator.undoSoftEnd()
+        XCTAssertEqual(resumed.phase, .recording)
+        XCTAssertEqual(resumed.callID, callID)
+        await fixture.audio.emit(frame(source: .system, epoch: 0, sequence: 2))
+        _ = try await fixture.coordinator.end(
+            idempotencyKey: "soft-undo-end",
+            reason: .user
+        )
+
+        let persisted = try await fixture.database.pool.read { db in
+            (
+                calls: try CallRow.fetchCount(db),
+                samples: try Int64.fetchOne(
+                    db,
+                    sql: "SELECT COALESCE(SUM(endSample - startSample), 0) FROM call_audio_chunks WHERE callId = ?",
+                    arguments: [callID]
+                ) ?? -1
+            )
+        }
+        XCTAssertEqual(persisted.calls, 1)
+        XCTAssertEqual(persisted.samples, 480)
+        let stopCount = await fixture.audio.stopCount()
+        XCTAssertEqual(stopCount, 1)
+    }
+
+    func testSoftEndCommitDiscardsRecoveryTailAndFreezesCanonicalBoundary() async throws {
+        let fixture = try CallCoordinatorFixture(actual: .init(me: false, system: true))
+        defer { fixture.cleanup() }
+        let started = try await fixture.coordinator.start(
+            request: .init(me: false, system: true),
+            idempotencyKey: "soft-commit-start"
+        )
+        let callID = try XCTUnwrap(started.callID)
+        await fixture.audio.emit(frame(source: .system, epoch: 0, sequence: 0))
+
+        _ = try await fixture.coordinator.softEnd()
+        await fixture.audio.emit(frame(source: .system, epoch: 0, sequence: 1))
+        let committed = try await fixture.coordinator.commitSoftEnd(
+            idempotencyKey: "soft-commit-end"
+        )
+
+        XCTAssertEqual(committed.phase, .pendingTranscription)
+        XCTAssertEqual(committed.callID, callID)
+        XCTAssertEqual(committed.stopReason, .automatic)
+        let samples = try await fixture.database.pool.read { db in
+            try Int64.fetchOne(
+                db,
+                sql: "SELECT COALESCE(SUM(endSample - startSample), 0) FROM call_audio_chunks WHERE callId = ?",
+                arguments: [callID]
+            ) ?? -1
+        }
+        XCTAssertEqual(samples, 160)
+        let stopCount = await fixture.audio.stopCount()
+        XCTAssertEqual(stopCount, 1)
+    }
+
+    func testRejectAutomaticStopsWithoutCreatingTranscriptWorkOrAutomation() async throws {
+        let fixture = try CallCoordinatorFixture(actual: .init(me: true, system: true))
+        defer { fixture.cleanup() }
+        let started = try await fixture.coordinator.start(
+            request: .init(me: true, system: true),
+            idempotencyKey: "automatic-start"
+        )
+        let callID = try XCTUnwrap(started.callID)
+        await fixture.audio.emit(frame(source: .me, epoch: 0, sequence: 0))
+        await fixture.audio.emit(frame(source: .system, epoch: 0, sequence: 0))
+
+        let rejected = try await fixture.coordinator.rejectAutomatic()
+        XCTAssertEqual(rejected, .idle)
+
+        let persisted = try await fixture.database.pool.read { db in
+            (
+                call: try CallRow.fetchOne(db, key: callID),
+                jobs: try CallTranscriptJobRow
+                    .filter(Column("callId") == callID)
+                    .fetchCount(db),
+                events: try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM call_automation_outbox WHERE callId = ?",
+                    arguments: [callID]
+                ) ?? -1
+            )
+        }
+        XCTAssertEqual(persisted.call?.state, .interrupted)
+        XCTAssertEqual(persisted.call?.degradationReason, "automatic_rejected")
+        XCTAssertEqual(persisted.jobs, 0)
+        XCTAssertEqual(persisted.events, 0)
+        let stopCount = await fixture.audio.stopCount()
+        XCTAssertEqual(stopCount, 1)
+    }
+
     private func frame(
         source: CallAudioSource,
         epoch: Int,

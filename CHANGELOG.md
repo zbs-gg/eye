@@ -2,6 +2,22 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
+## [Unreleased]
+
+### Added
+- **Automatic, correctable local call capture.** Eye starts only from a supported call surface plus
+  microphone evidence, shows a dismissible “Not a call” banner, waits through a 30-second end grace,
+  and offers a 15-second Undo without splitting the recording.
+- **A focused Calls workspace.** Calls can be searched and opened independently of the full Timeline,
+  played by source, trimmed permanently by an exact range, and opened back at their Timeline moment.
+- **Optional per-call speaker separation.** A one-click, checksum-verified FluidAudio model assigns
+  anonymous speakers locally. Names and interval corrections apply only to the current call; no reusable
+  voiceprint is stored. REST, MCP, export, and the loopback automation report speaker readiness honestly.
+
+### Changed
+- The post-call automation can fire a signed `call.processing.ready` event after both transcript and
+  speaker work settle. Failed diarization is durable and retryable instead of looking permanently busy.
+
 ## [0.5.0] — 2026-07-16
 
 ### Added

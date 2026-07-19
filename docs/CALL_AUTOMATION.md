@@ -1,6 +1,9 @@
 # Local Call Automation
 
-ZBS Eye can notify one service on the same Mac after a recorded call ends and after its final transcript becomes ready or terminally fails. The notification is a small signed hint, not the call itself. The receiver fetches authoritative evidence through Eye's existing authenticated MCP or REST API.
+ZBS Eye can notify one service on the same Mac after a recorded call ends, after its final transcript
+becomes ready or terminally fails, and after both the final transcript and initial speaker revision are
+authoritative. The notification is a small signed hint, not the call itself. The receiver fetches
+authoritative evidence through Eye's existing authenticated MCP or REST API.
 
 The integration is disabled by default and can only send to `http://127.0.0.1:<port>/<path>`. It never follows redirects and never sends transcript text, audio, screenshots, local paths, titles, OCR, API tokens, or the signing secret.
 
@@ -11,6 +14,7 @@ The integration is disabled by default and can only send to `http://127.0.0.1:<p
 | `call.ended` | The Call Envelope end boundary and final transcript job are durable. Transcription may still be pending. |
 | `call.transcript.ready` | A whole-call final revision is now the Preferred Final Transcript. |
 | `call.transcript.failed` | The final job exhausted its automatic attempts and is durably failed. |
+| `call.processing.ready` | The Preferred Final Transcript and initial per-call speaker revision match the current retained media generation. |
 | `call.automation.test` | Synthetic setup check. It has no call subject or call data. |
 
 Real call events use a typed `subject` such as `call:42`. A receiver should treat the event as a wake-up hint, then call `get_call` and `read_call_transcript` over MCP, or the equivalent authenticated REST routes. Delivery is at-least-once: the same event ID may arrive again after a crash or ambiguous acknowledgement.
@@ -63,8 +67,10 @@ Eye sends a JSON body shaped like CloudEvents 1.0:
 
 The versioned `dataschema` is the application contract. `call.ended` data contains `state`,
 `interrupted`, and `degraded`; `call.transcript.ready` contains `state`, `degraded`, and `revisionId`;
-`call.transcript.failed` contains `state`, a redacted `errorCode`, and `attempt`. The synthetic test event
-contains only `{"status":"test"}` and has no `subject`.
+`call.transcript.failed` contains `state`, a redacted `errorCode`, and `attempt`; `call.processing.ready`
+contains only `state`, `transcriptRevisionId`, and `speakerRevisionId`. It never contains transcript text,
+speaker names, titles, participants, URLs, or local paths. The synthetic test event contains only
+`{"status":"test"}` and has no `subject`.
 
 Headers:
 
