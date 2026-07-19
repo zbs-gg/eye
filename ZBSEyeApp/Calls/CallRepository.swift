@@ -10,6 +10,9 @@ enum CallRepositoryError: LocalizedError, Sendable, Equatable {
     case transcriptJobNotRunning(Int64)
     case staleTranscriptJob(Int64)
     case preferredRevisionMissing(Int64)
+    case speakerRevisionMissing(Int64)
+    case invalidSpeakerCorrection(Int64)
+    case noSpeakerCorrectionToUndo(Int64)
     case activeCallMustEnd(Int64)
     case invalidMediaMutation(Int64)
 
@@ -31,12 +34,24 @@ enum CallRepositoryError: LocalizedError, Sendable, Equatable {
             return "The transcript job references an obsolete media generation."
         case .preferredRevisionMissing:
             return "The transcript revision was saved without a preferred projection."
+        case .speakerRevisionMissing:
+            return "The call has no current speaker revision."
+        case .invalidSpeakerCorrection:
+            return "The speaker correction is invalid or does not change the call."
+        case .noSpeakerCorrectionToUndo:
+            return "There is no earlier speaker correction to restore."
         case .activeCallMustEnd:
             return "End the active call before deleting its evidence. Nothing was deleted."
         case .invalidMediaMutation:
             return "The call deletion journal is inconsistent."
         }
     }
+}
+
+private struct PreferredSpeakerSnapshot {
+    let call: CallRow
+    let revision: CallSpeakerRevisionRow
+    let clusters: [CallSpeakerClusterDraft]
 }
 
 /// The only writer for the first-class call tables. Capture code hands Sendable drafts to this actor;
@@ -320,9 +335,455 @@ actor CallRepository {
             }
             try db.execute(
                 sql: "UPDATE calls SET preferredRevisionId = ?, updatedAtMs = MAX(updatedAtMs, ?) WHERE id = ?",
-                arguments: [revisionID, Int64(Date().timeIntervalSince1970 * 1_000), callID]
+                arguments: [revisionID, msFromDate(Date()), callID]
             )
         }
+    }
+
+    func upsertCallContext(_ context: CallContextRow) async throws {
+        try await database.pool.write { db in
+            guard try CallRow.fetchOne(db, key: context.callId) != nil else {
+                throw CallRepositoryError.callNotFound(context.callId)
+            }
+            try context.save(db)
+        }
+    }
+
+    func updateCallCaptureContext(
+        callID: Int64,
+        owner: CallCaptureOwner,
+        disposition: CallCaptureDisposition,
+        nowMs: Int64
+    ) async throws {
+        try await database.pool.write { db in
+            guard try CallRow.fetchOne(db, key: callID) != nil else {
+                throw CallRepositoryError.callNotFound(callID)
+            }
+            try db.execute(
+                sql: """
+                    UPDATE call_context
+                    SET captureOwner = ?, disposition = ?, updatedAtMs = ?
+                    WHERE callId = ?
+                    """,
+                arguments: [owner.rawValue, disposition.rawValue, nowMs, callID]
+            )
+        }
+    }
+
+    /// Saves one complete immutable per-call speaker revision. Acoustic
+    /// embeddings never cross this boundary; only anonymous timed clusters do.
+    func createSpeakerRevision(
+        callID: Int64,
+        mediaGeneration: Int,
+        engine: String,
+        modelRevision: String,
+        clusters: [CallSpeakerClusterDraft],
+        nowMs: Int64
+    ) async throws -> CallSpeakerRevisionRow {
+        try await database.pool.write { db in
+            guard let call = try CallRow.fetchOne(db, key: callID) else {
+                throw CallRepositoryError.callNotFound(callID)
+            }
+            guard call.mediaGeneration == mediaGeneration else {
+                throw CallRepositoryError.invalidMediaMutation(callID)
+            }
+
+            return try Self.insertSpeakerRevision(
+                callID: callID,
+                mediaGeneration: mediaGeneration,
+                previousRevisionID: call.preferredSpeakerRevisionId,
+                engine: engine,
+                modelRevision: modelRevision,
+                clusters: clusters,
+                nowMs: nowMs,
+                db: db
+            )
+        }
+    }
+
+    func setPreferredSpeakerRevision(callID: Int64, revisionID: Int64) async throws {
+        try await database.pool.write { db in
+            guard try CallRow.fetchOne(db, key: callID) != nil else {
+                throw CallRepositoryError.callNotFound(callID)
+            }
+            let nowMs = msFromDate(Date())
+            try db.execute(
+                sql: """
+                    UPDATE calls
+                    SET preferredSpeakerRevisionId = ?, updatedAtMs = MAX(updatedAtMs, ?)
+                    WHERE id = ?
+                    """,
+                arguments: [revisionID, nowMs, callID]
+            )
+            try Self.enqueueProcessingReadyAutomationIfComplete(
+                callID: callID,
+                occurredAtMs: nowMs,
+                db: db
+            )
+        }
+    }
+
+    /// Renaming never edits diarization output in place. It writes a complete
+    /// successor revision and promotes it in the same transaction.
+    func renameSpeakerCluster(
+        callID: Int64,
+        clusterKey: String,
+        displayName: String,
+        nowMs: Int64
+    ) async throws -> CallSpeakerRevisionRow {
+        try await database.pool.write { db in
+            let snapshot = try Self.preferredSpeakerSnapshot(callID: callID, db: db)
+            let normalizedName = try Self.normalizedSpeakerName(displayName, callID: callID)
+            guard let index = snapshot.clusters.firstIndex(where: { $0.clusterKey == clusterKey }) else {
+                throw CallRepositoryError.invalidSpeakerCorrection(callID)
+            }
+
+            var clusters = snapshot.clusters
+            let current = clusters[index]
+            guard current.displayName != normalizedName || current.namingProvenance != .manual else {
+                throw CallRepositoryError.invalidSpeakerCorrection(callID)
+            }
+            clusters[index] = CallSpeakerClusterDraft(
+                clusterKey: current.clusterKey,
+                displayName: normalizedName,
+                namingProvenance: .manual,
+                intervals: current.intervals
+            )
+            return try Self.insertAndPromoteSpeakerRevision(
+                snapshot: snapshot,
+                clusters: clusters,
+                callID: callID,
+                nowMs: nowMs,
+                db: db
+            )
+        }
+    }
+
+    /// Moves the selected time range while retaining the original mic/system
+    /// provenance on every split interval.
+    func reassignSpeakerInterval(
+        callID: Int64,
+        selection: CallSpeakerIntervalSelection,
+        target: CallSpeakerCorrectionTarget,
+        nowMs: Int64
+    ) async throws -> CallSpeakerRevisionRow {
+        try await database.pool.write { db in
+            guard selection.startMs < selection.endMs else {
+                throw CallRepositoryError.invalidSpeakerCorrection(callID)
+            }
+            let snapshot = try Self.preferredSpeakerSnapshot(callID: callID, db: db)
+            var clusters = snapshot.clusters
+
+            let targetKey: String
+            switch target {
+            case let .existingCluster(clusterKey):
+                guard clusters.contains(where: { $0.clusterKey == clusterKey }) else {
+                    throw CallRepositoryError.invalidSpeakerCorrection(callID)
+                }
+                targetKey = clusterKey
+            case let .newNamedSpeaker(name):
+                let normalizedName = try Self.normalizedSpeakerName(name, callID: callID)
+                let existingKeys = Set(clusters.map(\.clusterKey))
+                var suffix = 1
+                while existingKeys.contains("manual:S\(suffix)") { suffix += 1 }
+                targetKey = "manual:S\(suffix)"
+                clusters.append(
+                    CallSpeakerClusterDraft(
+                        clusterKey: targetKey,
+                        displayName: normalizedName,
+                        namingProvenance: .manual,
+                        intervals: []
+                    )
+                )
+            }
+
+            var moved: [CallSpeakerIntervalDraft] = []
+            var didMove = false
+            clusters = clusters.map { cluster in
+                guard cluster.clusterKey != targetKey else { return cluster }
+                var retained: [CallSpeakerIntervalDraft] = []
+                for interval in cluster.intervals {
+                    let overlapStart = max(interval.startMs, selection.startMs)
+                    let overlapEnd = min(interval.endMs, selection.endMs)
+                    guard interval.source == selection.source, overlapStart < overlapEnd else {
+                        retained.append(interval)
+                        continue
+                    }
+                    didMove = true
+                    if interval.startMs < overlapStart {
+                        retained.append(
+                            .init(source: interval.source, startMs: interval.startMs, endMs: overlapStart)
+                        )
+                    }
+                    moved.append(.init(source: interval.source, startMs: overlapStart, endMs: overlapEnd))
+                    if overlapEnd < interval.endMs {
+                        retained.append(
+                            .init(source: interval.source, startMs: overlapEnd, endMs: interval.endMs)
+                        )
+                    }
+                }
+                return CallSpeakerClusterDraft(
+                    clusterKey: cluster.clusterKey,
+                    displayName: cluster.displayName,
+                    namingProvenance: cluster.namingProvenance,
+                    intervals: Self.mergedSpeakerIntervals(retained)
+                )
+            }
+            guard didMove else {
+                throw CallRepositoryError.invalidSpeakerCorrection(callID)
+            }
+            guard let targetIndex = clusters.firstIndex(where: { $0.clusterKey == targetKey }) else {
+                throw CallRepositoryError.invalidSpeakerCorrection(callID)
+            }
+            let targetCluster = clusters[targetIndex]
+            clusters[targetIndex] = CallSpeakerClusterDraft(
+                clusterKey: targetCluster.clusterKey,
+                displayName: targetCluster.displayName,
+                namingProvenance: targetCluster.namingProvenance,
+                intervals: Self.mergedSpeakerIntervals(targetCluster.intervals + moved)
+            )
+            clusters.removeAll { $0.clusterKey != targetKey && $0.intervals.isEmpty }
+
+            return try Self.insertAndPromoteSpeakerRevision(
+                snapshot: snapshot,
+                clusters: clusters,
+                callID: callID,
+                nowMs: nowMs,
+                db: db
+            )
+        }
+    }
+
+    /// Undo is a pointer move to the immutable predecessor; it never deletes
+    /// correction history or creates another synthetic revision.
+    func undoSpeakerCorrection(callID: Int64, nowMs: Int64) async throws -> CallSpeakerRevisionRow {
+        try await database.pool.write { db in
+            let snapshot = try Self.preferredSpeakerSnapshot(callID: callID, db: db)
+            guard let previousID = snapshot.revision.previousRevisionId,
+                  let previous = try CallSpeakerRevisionRow.fetchOne(db, key: previousID),
+                  previous.callId == callID,
+                  previous.mediaGeneration == snapshot.call.mediaGeneration,
+                  previous.state == .ready else {
+                throw CallRepositoryError.noSpeakerCorrectionToUndo(callID)
+            }
+            try db.execute(
+                sql: """
+                    UPDATE calls
+                    SET preferredSpeakerRevisionId = ?, updatedAtMs = MAX(updatedAtMs, ?)
+                    WHERE id = ?
+                    """,
+                arguments: [previousID, nowMs, callID]
+            )
+            return previous
+        }
+    }
+
+    private static func preferredSpeakerSnapshot(
+        callID: Int64,
+        db: Database
+    ) throws -> PreferredSpeakerSnapshot {
+        guard let call = try CallRow.fetchOne(db, key: callID) else {
+            throw CallRepositoryError.callNotFound(callID)
+        }
+        guard let revisionID = call.preferredSpeakerRevisionId,
+              let revision = try CallSpeakerRevisionRow.fetchOne(db, key: revisionID),
+              revision.callId == callID,
+              revision.mediaGeneration == call.mediaGeneration,
+              revision.state == .ready else {
+            throw CallRepositoryError.speakerRevisionMissing(callID)
+        }
+
+        let clusterRows = try CallSpeakerClusterRow.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM call_speaker_clusters
+                WHERE revisionId = ?
+                ORDER BY ordinal, id
+                """,
+            arguments: [revisionID]
+        )
+        let clusters = try clusterRows.map { cluster -> CallSpeakerClusterDraft in
+            guard let clusterID = cluster.id else {
+                throw CallRepositoryError.speakerRevisionMissing(callID)
+            }
+            let intervals = try CallSpeakerIntervalRow.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM call_speaker_intervals
+                    WHERE revisionId = ? AND clusterId = ?
+                    ORDER BY ordinal, id
+                    """,
+                arguments: [revisionID, clusterID]
+            )
+            return CallSpeakerClusterDraft(
+                clusterKey: cluster.clusterKey,
+                displayName: cluster.displayName,
+                namingProvenance: cluster.namingProvenance,
+                intervals: intervals.map {
+                    .init(source: $0.source, startMs: $0.startMs, endMs: $0.endMs)
+                }
+            )
+        }
+        return PreferredSpeakerSnapshot(call: call, revision: revision, clusters: clusters)
+    }
+
+    private static func insertAndPromoteSpeakerRevision(
+        snapshot: PreferredSpeakerSnapshot,
+        clusters: [CallSpeakerClusterDraft],
+        callID: Int64,
+        nowMs: Int64,
+        db: Database
+    ) throws -> CallSpeakerRevisionRow {
+        guard let previousRevisionID = snapshot.revision.id else {
+            throw CallRepositoryError.speakerRevisionMissing(callID)
+        }
+        let revision = try insertSpeakerRevision(
+            callID: callID,
+            mediaGeneration: snapshot.call.mediaGeneration,
+            previousRevisionID: previousRevisionID,
+            engine: snapshot.revision.engine,
+            modelRevision: snapshot.revision.modelRevision,
+            clusters: clusters,
+            nowMs: nowMs,
+            db: db
+        )
+        guard let revisionID = revision.id else {
+            throw CallRepositoryError.speakerRevisionMissing(callID)
+        }
+        try db.execute(
+            sql: """
+                UPDATE calls
+                SET preferredSpeakerRevisionId = ?, updatedAtMs = MAX(updatedAtMs, ?)
+                WHERE id = ? AND mediaGeneration = ? AND preferredSpeakerRevisionId = ?
+                """,
+            arguments: [
+                revisionID,
+                nowMs,
+                callID,
+                snapshot.call.mediaGeneration,
+                previousRevisionID,
+            ]
+        )
+        guard db.changesCount == 1 else {
+            throw CallRepositoryError.speakerRevisionMissing(callID)
+        }
+        return revision
+    }
+
+    private static func insertSpeakerRevision(
+        callID: Int64,
+        mediaGeneration: Int,
+        previousRevisionID: Int64?,
+        engine: String,
+        modelRevision: String,
+        clusters: [CallSpeakerClusterDraft],
+        nowMs: Int64,
+        db: Database
+    ) throws -> CallSpeakerRevisionRow {
+        var revision = CallSpeakerRevisionRow(
+            id: nil,
+            callId: callID,
+            mediaGeneration: mediaGeneration,
+            previousRevisionId: previousRevisionID,
+            state: .ready,
+            engine: engine,
+            modelRevision: modelRevision,
+            createdAtMs: nowMs
+        )
+        try revision.insert(db)
+        guard let revisionID = revision.id else {
+            throw CallRepositoryError.speakerRevisionMissing(callID)
+        }
+
+        try insertSpeakerClusters(
+            revisionID: revisionID,
+            callID: callID,
+            clusters: clusters,
+            db: db
+        )
+        return revision
+    }
+
+    private static func insertSpeakerClusters(
+        revisionID: Int64,
+        callID: Int64,
+        clusters: [CallSpeakerClusterDraft],
+        db: Database
+    ) throws {
+        guard Set(clusters.map(\.clusterKey)).count == clusters.count else {
+            throw CallRepositoryError.invalidSpeakerCorrection(callID)
+        }
+
+        var intervalOrdinal = 0
+        for (clusterOrdinal, draft) in clusters.enumerated() {
+            var cluster = CallSpeakerClusterRow(
+                id: nil,
+                revisionId: revisionID,
+                ordinal: clusterOrdinal,
+                clusterKey: draft.clusterKey,
+                displayName: draft.displayName,
+                namingProvenance: draft.namingProvenance
+            )
+            try cluster.insert(db)
+            guard let clusterID = cluster.id else {
+                throw CallRepositoryError.speakerRevisionMissing(callID)
+            }
+            for interval in draft.intervals.sorted(by: {
+                ($0.source.rawValue, $0.startMs, $0.endMs)
+                    < ($1.source.rawValue, $1.startMs, $1.endMs)
+            }) {
+                guard interval.endMs >= interval.startMs else {
+                    throw CallRepositoryError.invalidSpeakerCorrection(callID)
+                }
+                var row = CallSpeakerIntervalRow(
+                    id: nil,
+                    revisionId: revisionID,
+                    clusterId: clusterID,
+                    ordinal: intervalOrdinal,
+                    source: interval.source,
+                    startMs: interval.startMs,
+                    endMs: interval.endMs
+                )
+                try row.insert(db)
+                intervalOrdinal += 1
+            }
+        }
+    }
+
+    private static func normalizedSpeakerName(_ rawName: String, callID: Int64) throws -> String {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty,
+              name.count <= 128,
+              name.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
+            throw CallRepositoryError.invalidSpeakerCorrection(callID)
+        }
+        return name
+    }
+
+    private static func mergedSpeakerIntervals(
+        _ intervals: [CallSpeakerIntervalDraft]
+    ) -> [CallSpeakerIntervalDraft] {
+        let sorted = intervals
+            .filter { $0.startMs < $0.endMs }
+            .sorted {
+                ($0.source.rawValue, $0.startMs, $0.endMs)
+                    < ($1.source.rawValue, $1.startMs, $1.endMs)
+            }
+        var merged: [CallSpeakerIntervalDraft] = []
+        for interval in sorted {
+            if let previous = merged.last,
+               previous.source == interval.source,
+               interval.startMs <= previous.endMs {
+                merged[merged.count - 1] = CallSpeakerIntervalDraft(
+                    source: previous.source,
+                    startMs: previous.startMs,
+                    endMs: max(previous.endMs, interval.endMs)
+                )
+            } else {
+                merged.append(interval)
+            }
+        }
+        return merged
     }
 
     /// Claims exactly one immutable, coverage-frozen job. Final work has priority zero, so End
@@ -454,6 +915,226 @@ actor CallRepository {
                 job: job,
                 bookmark: bookmark,
                 chunks: chunks
+            )
+        }
+    }
+
+    /// Returns the next authoritative final transcript that has not yet gained
+    /// a speaker projection. This is read-only: an absent optional model never
+    /// claims or mutates work.
+    func nextSpeakerDiarizationEvidence(
+        excluding identities: Set<String> = []
+    ) async throws -> CallSpeakerDiarizationEvidence? {
+        try await database.pool.read { db in
+            let candidates = try CallRow.fetchAll(
+                db,
+                sql: """
+                    SELECT c.*
+                    FROM calls c
+                    JOIN call_transcript_revisions r ON r.id = c.preferredRevisionId
+                    WHERE c.state = ?
+                      AND c.preferredSpeakerRevisionId IS NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM call_speaker_revisions sr
+                          WHERE sr.callId = c.id AND sr.mediaGeneration = c.mediaGeneration
+                      )
+                      AND r.callId = c.id
+                      AND r.mediaGeneration = c.mediaGeneration
+                      AND r.kind = ?
+                      AND r.state = ?
+                    ORDER BY c.updatedAtMs, c.id
+                    LIMIT 100
+                    """,
+                arguments: [
+                    CallLifecycleState.ready.rawValue,
+                    CallTranscriptRevisionKind.final.rawValue,
+                    CallTranscriptRevisionState.ready.rawValue,
+                ]
+            )
+            for call in candidates {
+                guard let callID = call.id,
+                      let transcriptID = call.preferredRevisionId,
+                      let transcript = try CallTranscriptRevisionRow.fetchOne(db, key: transcriptID)
+                else { continue }
+                let identity = "\(callID):\(call.mediaGeneration):\(transcriptID)"
+                guard !identities.contains(identity) else { continue }
+                let segments = try CallTranscriptSegmentRow.fetchAll(
+                    db,
+                    sql: """
+                        SELECT * FROM call_transcript_segments
+                        WHERE revisionId = ? ORDER BY ordinal, id
+                        """,
+                    arguments: [transcriptID]
+                )
+                let chunks = try CallAudioChunkRow.fetchAll(
+                    db,
+                    sql: """
+                        SELECT * FROM call_audio_chunks
+                        WHERE callId = ? AND mediaGeneration = ?
+                          AND finalized = 1 AND bytes > 0
+                        ORDER BY source, startMs, epoch, sequence, id
+                        """,
+                    arguments: [callID, call.mediaGeneration]
+                )
+                return CallSpeakerDiarizationEvidence(
+                    call: call,
+                    transcriptRevision: transcript,
+                    transcriptSegments: segments,
+                    chunks: chunks
+                )
+            }
+            return nil
+        }
+    }
+
+    /// Claims speaker processing durably before the helper starts. A failed or
+    /// interrupted helper therefore becomes inspectable state instead of an
+    /// endless in-memory "processing" loop.
+    func beginInitialSpeakerRevision(
+        callID: Int64,
+        mediaGeneration: Int,
+        expectedTranscriptRevisionID: Int64,
+        engine: String,
+        modelRevision: String,
+        nowMs: Int64
+    ) async throws -> CallSpeakerRevisionRow {
+        try await database.pool.write { db in
+            guard let call = try CallRow.fetchOne(db, key: callID) else {
+                throw CallRepositoryError.callNotFound(callID)
+            }
+            guard call.state == .ready,
+                  call.mediaGeneration == mediaGeneration,
+                  call.preferredRevisionId == expectedTranscriptRevisionID,
+                  call.preferredSpeakerRevisionId == nil,
+                  let transcript = try CallTranscriptRevisionRow.fetchOne(
+                    db,
+                    key: expectedTranscriptRevisionID
+                  ),
+                  transcript.callId == callID,
+                  transcript.mediaGeneration == mediaGeneration,
+                  transcript.kind == .final,
+                  transcript.state == .ready else {
+                throw CallRepositoryError.invalidMediaMutation(callID)
+            }
+            guard try CallSpeakerRevisionRow
+                .filter(Column("callId") == callID && Column("mediaGeneration") == mediaGeneration)
+                .fetchCount(db) == 0 else {
+                throw CallRepositoryError.invalidMediaMutation(callID)
+            }
+            var revision = CallSpeakerRevisionRow(
+                id: nil,
+                callId: callID,
+                mediaGeneration: mediaGeneration,
+                previousRevisionId: nil,
+                state: .writing,
+                engine: engine,
+                modelRevision: modelRevision,
+                createdAtMs: nowMs
+            )
+            try revision.insert(db)
+            return revision
+        }
+    }
+
+    /// Commits timed clusters into an existing writing revision and promotes
+    /// it only if the call still points at the same final transcript and media.
+    func completeInitialSpeakerRevision(
+        revisionID: Int64,
+        callID: Int64,
+        mediaGeneration: Int,
+        expectedTranscriptRevisionID: Int64,
+        clusters: [CallSpeakerClusterDraft],
+        nowMs: Int64
+    ) async throws -> CallSpeakerRevisionRow {
+        try await database.pool.write { db in
+            guard let call = try CallRow.fetchOne(db, key: callID),
+                  var revision = try CallSpeakerRevisionRow.fetchOne(db, key: revisionID),
+                  revision.callId == callID,
+                  revision.mediaGeneration == mediaGeneration,
+                  revision.state == .writing,
+                  call.state == .ready,
+                  call.mediaGeneration == mediaGeneration,
+                  call.preferredRevisionId == expectedTranscriptRevisionID,
+                  call.preferredSpeakerRevisionId == nil else {
+                throw CallRepositoryError.invalidMediaMutation(callID)
+            }
+            try Self.insertSpeakerClusters(
+                revisionID: revisionID,
+                callID: callID,
+                clusters: clusters,
+                db: db
+            )
+            revision.state = .ready
+            try revision.update(db)
+            guard let revisionID = revision.id else {
+                throw CallRepositoryError.speakerRevisionMissing(callID)
+            }
+            try db.execute(
+                sql: """
+                    UPDATE calls
+                    SET preferredSpeakerRevisionId = ?, updatedAtMs = MAX(updatedAtMs, ?)
+                    WHERE id = ? AND state = ? AND mediaGeneration = ?
+                      AND preferredRevisionId = ? AND preferredSpeakerRevisionId IS NULL
+                    """,
+                arguments: [
+                    revisionID,
+                    nowMs,
+                    callID,
+                    CallLifecycleState.ready.rawValue,
+                    mediaGeneration,
+                    expectedTranscriptRevisionID,
+                ]
+            )
+            guard db.changesCount == 1 else {
+                throw CallRepositoryError.invalidMediaMutation(callID)
+            }
+            try Self.enqueueProcessingReadyAutomationIfComplete(
+                callID: callID,
+                occurredAtMs: nowMs,
+                db: db
+            )
+            return revision
+        }
+    }
+
+    func failInitialSpeakerRevision(revisionID: Int64) async throws {
+        try await database.pool.write { db in
+            try db.execute(
+                sql: "UPDATE call_speaker_revisions SET state = ? WHERE id = ? AND state = ?",
+                arguments: [
+                    CallSpeakerRevisionState.failed.rawValue,
+                    revisionID,
+                    CallSpeakerRevisionState.writing.rawValue,
+                ]
+            )
+        }
+    }
+
+    func cancelInitialSpeakerRevision(revisionID: Int64) async throws {
+        try await database.pool.write { db in
+            try db.execute(
+                sql: "DELETE FROM call_speaker_revisions WHERE id = ? AND state = ?",
+                arguments: [revisionID, CallSpeakerRevisionState.writing.rawValue]
+            )
+        }
+    }
+
+    func retrySpeakerDiarization(callID: Int64) async throws {
+        try await database.pool.write { db in
+            guard let call = try CallRow.fetchOne(db, key: callID),
+                  call.preferredSpeakerRevisionId == nil else {
+                throw CallRepositoryError.invalidMediaMutation(callID)
+            }
+            try db.execute(
+                sql: """
+                    DELETE FROM call_speaker_revisions
+                    WHERE callId = ? AND mediaGeneration = ? AND state = ?
+                    """,
+                arguments: [
+                    callID,
+                    call.mediaGeneration,
+                    CallSpeakerRevisionState.failed.rawValue,
+                ]
             )
         }
     }
@@ -706,6 +1387,11 @@ actor CallRepository {
                 try Self.enqueueTranscriptReadyAutomation(
                     call: call, job: job, revisionID: revisionID, degraded: degraded,
                     occurredAtMs: nowMs, db: db)
+                try Self.enqueueProcessingReadyAutomationIfComplete(
+                    callID: job.callId,
+                    occurredAtMs: nowMs,
+                    db: db
+                )
                 try Self.admitDeferredCheckpoints(db: db, nowMs: nowMs)
                 return CallTranscriptCommitResult(
                     intervalOrFinalRevisionID: revisionID,

@@ -36,6 +36,10 @@ struct CallControlView: View {
             )
             .font(.caption.weight(.medium))
             .foregroundStyle(.red)
+        case .recoveryTail:
+            Label("Call ended · recovery tail", systemImage: "arrow.uturn.backward.circle")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.orange)
         case .finalizing:
             Label("Saving call…", systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
                 .font(.caption)
@@ -78,6 +82,10 @@ struct CallControlView: View {
             }
             .help("End call")
             .accessibilityLabel("End call")
+        case .recoveryTail:
+            Button("Undo") { env.calls.undoAutomaticEnd() }
+                .controlSize(.small)
+                .help("Continue the same call without losing the boundary")
         case .pendingTranscription, .ready, .readyDegraded, .failed:
             if evidence != nil || env.calls.snapshot.callID != nil {
                 Button("Open") { openDetail() }

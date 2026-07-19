@@ -110,11 +110,13 @@ final class CallPresentationStateTests: XCTestCase {
         let failed = CallDetailRefreshKey(
             callID: 1,
             modelState: .ready,
+            speakerModelState: .absent,
             retryGeneration: 0
         )
         let retried = CallDetailRefreshKey(
             callID: 1,
             modelState: .ready,
+            speakerModelState: .absent,
             retryGeneration: 1
         )
         XCTAssertNotEqual(failed, retried)

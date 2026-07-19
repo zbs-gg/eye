@@ -38,6 +38,11 @@ enum CallAutomationPayload {
                     attempt: decoded.attempt
                 )
             )
+        case .processingReady:
+            return try encodeEnvelope(
+                event: event,
+                data: decode(CallProcessingReadyAutomationData.self, from: stored)
+            )
         }
     }
 

@@ -169,6 +169,128 @@ final class CallEvidenceQueryServiceTests: XCTestCase {
         XCTAssertEqual(tail.nextOffset, 5_000)
     }
 
+    func testCallListUsesSharedMetadataSpeakerAndBookmarkProjection() async throws {
+        let fixture = try QueryFixture()
+        let call = try await fixture.repository.createCall(startedAtMs: 1_000, idempotencyKey: "library-call")
+        let callID = try XCTUnwrap(call.id)
+        try await fixture.repository.upsertCallContext(
+            CallContextRow(
+                callId: callID,
+                captureOwner: .automatic,
+                disposition: .confirmed,
+                detectorFingerprintHash: "sha256:library",
+                sourceAppBundleID: "us.zoom.xos",
+                sourceAppName: "Zoom",
+                trustedOriginHost: nil,
+                title: "Client call Olga",
+                participantsJSON: "[\"Olga\"]",
+                createdAtMs: 1_000,
+                updatedAtMs: 1_100
+            )
+        )
+        _ = try await fixture.repository.createBookmark(
+            callID: callID,
+            idempotencyKey: "library-bookmark",
+            acceptedAtMs: 1_200,
+            meIngressTarget: nil,
+            systemIngressTarget: nil,
+            logicalStartMs: 1_000,
+            logicalEndMs: 1_200,
+            contextStartMs: 1_000
+        )
+        let revision = try await fixture.repository.createSpeakerRevision(
+            callID: callID,
+            mediaGeneration: 0,
+            engine: "fixture",
+            modelRevision: "fixture-v1",
+            clusters: [
+                CallSpeakerClusterDraft(
+                    clusterKey: "speaker-1",
+                    displayName: "Olga",
+                    namingProvenance: .currentCall,
+                    intervals: [.init(source: .system, startMs: 1_000, endMs: 1_200)]
+                ),
+            ],
+            nowMs: 1_300
+        )
+        try await fixture.repository.setPreferredSpeakerRevision(
+            callID: callID,
+            revisionID: try XCTUnwrap(revision.id)
+        )
+
+        let page = try await fixture.service.listCalls(query: "Olga", limit: 10)
+        let item = try XCTUnwrap(page.calls.first)
+        XCTAssertEqual(item.callId, "call:\(callID)")
+        XCTAssertEqual(item.title, "Client call Olga")
+        XCTAssertEqual(item.participants, ["Olga"])
+        XCTAssertEqual(item.sourceApp, "Zoom")
+        XCTAssertEqual(item.bookmarkCount, 1)
+        XCTAssertEqual(item.speakerStatus, .ready)
+
+        let envelopeCandidate = try await fixture.service.envelope(callID: callID)
+        let envelope = try XCTUnwrap(envelopeCandidate)
+        XCTAssertEqual(envelope.context?.captureOwner, .automatic)
+        XCTAssertEqual(envelope.context?.disposition, .confirmed)
+        XCTAssertEqual(envelope.context?.title, "Client call Olga")
+        XCTAssertEqual(envelope.context?.participants, ["Olga"])
+        XCTAssertEqual(envelope.context?.sourceApp, "Zoom")
+        XCTAssertEqual(envelope.preferredSpeakerRevision?.state, .ready)
+        XCTAssertEqual(envelope.preferredSpeakerRevision?.speakers.map(\.label), ["Olga"])
+        XCTAssertEqual(
+            envelope.preferredSpeakerRevision?.speakers.first?.intervals,
+            [CallEvidenceSpeakerInterval(source: .system, startMs: 1_000, endMs: 1_200)]
+        )
+        XCTAssertEqual(envelope.preferredSpeakerRevision?.intervalsTruncated, false)
+    }
+
+    func testCallListReportsLatestFailedSpeakerProcessingInsteadOfSpinningForever() async throws {
+        let fixture = try QueryFixture()
+        let call = try await fixture.repository.createCall(
+            startedAtMs: 1_000,
+            idempotencyKey: "speaker-failure"
+        )
+        let callID = try XCTUnwrap(call.id)
+        let finalJob = try await fixture.repository.endCall(
+            callID: callID,
+            idempotencyKey: "speaker-failure-end",
+            endedAtMs: 2_000
+        )
+        _ = try await fixture.repository.claimNextTranscriptJob(nowMs: 2_100)
+        let finalRevision = try await fixture.repository.commitTranscriptJob(
+            jobID: try XCTUnwrap(finalJob.id),
+            segments: [segment(.system, 1_000, 2_000, "hello")],
+            language: "en",
+            engine: "fixture",
+            modelRevision: "fixture",
+            degraded: false,
+            nowMs: 2_200
+        )
+        let writing = try await fixture.repository.beginInitialSpeakerRevision(
+            callID: callID,
+            mediaGeneration: 0,
+            expectedTranscriptRevisionID: finalRevision.preferredRevisionID,
+            engine: "FluidAudio",
+            modelRevision: "fixture",
+            nowMs: 2_300
+        )
+        try await fixture.repository.failInitialSpeakerRevision(
+            revisionID: try XCTUnwrap(writing.id)
+        )
+
+        let page = try await fixture.service.listCalls(limit: 10)
+
+        XCTAssertEqual(page.calls.first?.speakerStatus, .degraded)
+        let envelopeCandidate = try await fixture.service.envelope(callID: callID)
+        let envelope = try XCTUnwrap(envelopeCandidate)
+        let encoded = try JSONEncoder().encode(envelope)
+        let json = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        XCTAssertTrue(json.contains(#""speakerStatus":"degraded""#))
+
+        try await fixture.repository.retrySpeakerDiarization(callID: callID)
+        let retried = try await fixture.service.listCalls(limit: 10)
+        XCTAssertEqual(retried.calls.first?.speakerStatus, .unavailable)
+    }
+
     func testRetryRequeuesOnlyTheCurrentFailedFinalAndKeepsEvidence() async throws {
         let fixture = try QueryFixture()
         let call = try await fixture.repository.createCall(

@@ -29,6 +29,25 @@ final class WorkspaceNavigationTests: XCTestCase {
         XCTAssertEqual(store.captureAskScope(), scope)
     }
 
+    func testCallsIsAPrimaryModeAndDismissesSecondaryFeatures() {
+        let store = WorkspaceStore(now: Date(timeIntervalSince1970: 1_000))
+        store.showActivities()
+        store.present(.progress)
+
+        store.openCalls()
+
+        XCTAssertEqual(store.mode, .calls)
+        XCTAssertNil(store.presentedFeature)
+        XCTAssertEqual(store.timelineRepresentation, .activities)
+
+        store.openAsk()
+        XCTAssertEqual(store.mode, .ask)
+
+        store.openCalls()
+        XCTAssertEqual(store.mode, .calls)
+        XCTAssertEqual(store.timelineRepresentation, .activities)
+    }
+
     func testSecondaryFeaturesHaveOneWorkspaceOwnedRouteAndDismissInPlace() {
         let expected: Set<WorkspaceFeature> = [
             .insights,

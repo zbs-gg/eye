@@ -23,12 +23,31 @@ final class CallExportTests: XCTestCase {
 
         XCTAssertEqual(manifest.formatVersion, 1)
         XCTAssertEqual(manifest.call.identifier, "call-\(callID)")
+        XCTAssertEqual(manifest.context?.captureOwner, .automatic)
+        XCTAssertEqual(manifest.context?.disposition, .confirmed)
+        XCTAssertEqual(manifest.context?.title, "Visa call")
+        XCTAssertEqual(manifest.context?.participants, ["Olga", "Nikita"])
+        XCTAssertEqual(manifest.context?.sourceApp, "Telegram")
         XCTAssertEqual(mic.availability, .availableWithGaps)
         XCTAssertEqual(mic.gaps.map(\.reason), ["dropped_frames"])
         XCTAssertEqual(system.availability, .unavailable)
         XCTAssertEqual(manifest.bookmarks.map(\.ordinal), [1])
         XCTAssertEqual(manifest.transcript.status, .final)
         XCTAssertEqual(manifest.transcript.segments.map(\.text), ["hello from mic"])
+        let speakerRevision = try XCTUnwrap(manifest.preferredSpeakerRevision)
+        XCTAssertEqual(speakerRevision.state, .ready)
+        XCTAssertEqual(speakerRevision.engine, "fixture-diarizer")
+        XCTAssertEqual(speakerRevision.modelRevision, "fixture-speakers-v1")
+        XCTAssertFalse(speakerRevision.speakersTruncated)
+        XCTAssertFalse(speakerRevision.intervalsTruncated)
+        let speaker = try XCTUnwrap(speakerRevision.speakers.first)
+        XCTAssertEqual(speaker.clusterKey, "cluster-0")
+        XCTAssertEqual(speaker.label, "Olga")
+        XCTAssertEqual(speaker.namingProvenance, .manual)
+        XCTAssertEqual(
+            speaker.intervals,
+            [CallExportSpeakerInterval(source: .me, startMs: 1_100, endMs: 1_900)]
+        )
         XCTAssertEqual(manifest.audio.count, 1)
         XCTAssertEqual(report.audioFiles, 1)
 
@@ -43,6 +62,10 @@ final class CallExportTests: XCTestCase {
         XCTAssertFalse(json.contains(fixture.mediaRoot.path))
         XCTAssertFalse(json.contains(fixture.sourceRelativePath))
         XCTAssertFalse(json.localizedCaseInsensitiveContains("scratch"))
+        XCTAssertFalse(json.contains("PRIVATE-DETECTOR-FINGERPRINT"))
+        XCTAssertFalse(json.contains("org.telegram.private"))
+        XCTAssertFalse(json.contains("private-origin.example"))
+        XCTAssertFalse(json.localizedCaseInsensitiveContains("voiceprint"))
 
         let metadataOnly = try await fixture.export.exportCall(
             id: callID,
@@ -111,6 +134,50 @@ final class CallExportTests: XCTestCase {
             XCTAssertEqual(error, .callStillRecording)
         }
     }
+
+    func testSpeakerProjectionIsBoundedAndReportsTruncation() async throws {
+        let fixture = try CallExportFixture()
+        let callID = try await fixture.makeReadyMicOnlyCall()
+        try await fixture.installLargePreferredSpeakerRevision(callID: callID, intervalCount: 5_001)
+
+        let report = try await fixture.export.exportCall(
+            id: callID,
+            into: fixture.root.appendingPathComponent("bounded", isDirectory: true),
+            includeAudio: false
+        )
+        let manifest = try JSONDecoder().decode(
+            CallExportManifest.self,
+            from: Data(
+                contentsOf: URL(fileURLWithPath: report.path)
+                    .appendingPathComponent("manifest.json")
+            )
+        )
+        let revision = try XCTUnwrap(manifest.preferredSpeakerRevision)
+        XCTAssertEqual(revision.speakers.count, 1)
+        XCTAssertEqual(revision.speakers[0].intervals.count, 5_000)
+        XCTAssertFalse(revision.speakersTruncated)
+        XCTAssertTrue(revision.intervalsTruncated)
+    }
+
+    func testDoesNotExportPreferredSpeakerRevisionThatIsNoLongerReady() async throws {
+        let fixture = try CallExportFixture()
+        let callID = try await fixture.makeReadyMicOnlyCall()
+        try await fixture.markPreferredSpeakerRevisionNotReady(callID: callID)
+
+        let report = try await fixture.export.exportCall(
+            id: callID,
+            into: fixture.root.appendingPathComponent("stale", isDirectory: true),
+            includeAudio: false
+        )
+        let manifest = try JSONDecoder().decode(
+            CallExportManifest.self,
+            from: Data(
+                contentsOf: URL(fileURLWithPath: report.path)
+                    .appendingPathComponent("manifest.json")
+            )
+        )
+        XCTAssertNil(manifest.preferredSpeakerRevision)
+    }
 }
 
 private final class CallExportFixture {
@@ -140,6 +207,21 @@ private final class CallExportFixture {
     func makeReadyMicOnlyCall() async throws -> Int64 {
         let call = try await repository.createCall(startedAtMs: 1_000, idempotencyKey: "export")
         let callID = try XCTUnwrap(call.id)
+        try await repository.upsertCallContext(
+            CallContextRow(
+                callId: callID,
+                captureOwner: .automatic,
+                disposition: .confirmed,
+                detectorFingerprintHash: "PRIVATE-DETECTOR-FINGERPRINT",
+                sourceAppBundleID: "org.telegram.private",
+                sourceAppName: "Telegram",
+                trustedOriginHost: "private-origin.example",
+                title: "Visa call",
+                participantsJSON: "[\" Olga \",\"Nikita\"]",
+                createdAtMs: 1_000,
+                updatedAtMs: 1_000
+            )
+        )
         let span = try await repository.recordSourceSpan(
             .init(
                 callId: callID,
@@ -208,6 +290,27 @@ private final class CallExportFixture {
             degraded: true,
             nowMs: 2_200
         )
+        let speakerRevision = try await repository.createSpeakerRevision(
+            callID: callID,
+            mediaGeneration: 0,
+            engine: "fixture-diarizer",
+            modelRevision: "fixture-speakers-v1",
+            clusters: [
+                CallSpeakerClusterDraft(
+                    clusterKey: "cluster-0",
+                    displayName: "Olga",
+                    namingProvenance: .manual,
+                    intervals: [
+                        CallSpeakerIntervalDraft(source: .me, startMs: 1_100, endMs: 1_900),
+                    ]
+                ),
+            ],
+            nowMs: 2_200
+        )
+        try await repository.setPreferredSpeakerRevision(
+            callID: callID,
+            revisionID: try XCTUnwrap(speakerRevision.id)
+        )
         try await database.pool.write { db in
             var gap = CallSourceGapRow(
                 id: nil,
@@ -222,5 +325,48 @@ private final class CallExportFixture {
             try gap.insert(db)
         }
         return callID
+    }
+
+    func installLargePreferredSpeakerRevision(callID: Int64, intervalCount: Int) async throws {
+        var intervals: [CallSpeakerIntervalDraft] = []
+        intervals.reserveCapacity(intervalCount)
+        for ordinal in 0..<intervalCount {
+            let startMs = Int64(1_000) + Int64(ordinal) * 2
+            intervals.append(CallSpeakerIntervalDraft(
+                source: .me,
+                startMs: startMs,
+                endMs: startMs + 1
+            ))
+        }
+        let cluster = CallSpeakerClusterDraft(
+            clusterKey: "large-cluster",
+            displayName: nil,
+            namingProvenance: .anonymous,
+            intervals: intervals
+        )
+        let revision = try await repository.createSpeakerRevision(
+            callID: callID,
+            mediaGeneration: 0,
+            engine: "fixture-diarizer",
+            modelRevision: "fixture-large-v1",
+            clusters: [cluster],
+            nowMs: 2_300
+        )
+        try await repository.setPreferredSpeakerRevision(
+            callID: callID,
+            revisionID: try XCTUnwrap(revision.id)
+        )
+    }
+
+    func markPreferredSpeakerRevisionNotReady(callID: Int64) async throws {
+        try await database.pool.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE call_speaker_revisions SET state = ?
+                    WHERE id = (SELECT preferredSpeakerRevisionId FROM calls WHERE id = ?)
+                    """,
+                arguments: [CallSpeakerRevisionState.writing.rawValue, callID]
+            )
+        }
     }
 }

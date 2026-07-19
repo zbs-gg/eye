@@ -30,6 +30,37 @@ struct CallExportEnvelope: Codable, Sendable, Equatable {
     let mediaGeneration: Int
 }
 
+struct CallExportContext: Codable, Sendable, Equatable {
+    let captureOwner: CallCaptureOwner
+    let disposition: CallCaptureDisposition
+    let title: String?
+    let participants: [String]
+    let sourceApp: String?
+}
+
+struct CallExportSpeakerInterval: Codable, Sendable, Equatable {
+    let source: CallAudioSource
+    let startMs: Int64
+    let endMs: Int64
+}
+
+struct CallExportSpeaker: Codable, Sendable, Equatable {
+    let clusterKey: String
+    let label: String
+    let namingProvenance: CallSpeakerNamingProvenance
+    let intervals: [CallExportSpeakerInterval]
+}
+
+struct CallExportSpeakerRevision: Codable, Sendable, Equatable {
+    let identifier: String
+    let state: CallSpeakerRevisionState
+    let engine: String
+    let modelRevision: String
+    let speakers: [CallExportSpeaker]
+    let speakersTruncated: Bool
+    let intervalsTruncated: Bool
+}
+
 struct CallExportSourceSpan: Codable, Sendable, Equatable {
     let epoch: Int
     let sampleRate: Int
@@ -99,9 +130,11 @@ struct CallExportManifest: Codable, Sendable, Equatable {
 
     let formatVersion: Int
     let call: CallExportEnvelope
+    let context: CallExportContext?
     let sources: [CallExportSource]
     let bookmarks: [CallExportBookmark]
     let transcript: CallExportTranscript
+    let preferredSpeakerRevision: CallExportSpeakerRevision?
     let audio: [CallExportAudioReference]
 }
 
@@ -114,6 +147,9 @@ struct CallExportReport: Sendable, Equatable {
 /// transcripts) + optionally media files. Reuses DailySummaryService's collect-grouping.
 actor ExportService {
     typealias DayCollector = @Sendable (Date) async throws -> CollectedDay
+
+    private static let maximumExportedSpeakers = 128
+    private static let maximumExportedSpeakerIntervals = 5_000
 
     private let db: ZBSEyeDatabase
     private let collectDay: DayCollector?
@@ -297,6 +333,7 @@ actor ExportService {
 
     private struct CallExportSnapshot: Sendable {
         let call: CallRow
+        let context: CallContextRow?
         let spans: [CallSourceSpanRow]
         let gaps: [CallSourceGapRow]
         let bookmarks: [CallBookmarkRow]
@@ -304,6 +341,9 @@ actor ExportService {
         let transcriptGaps: [CallTranscriptProjectionGapRow]
         let segments: [CallTranscriptSegmentRow]
         let chunks: [CallAudioChunkRow]
+        let speakerRevision: CallSpeakerRevisionRow?
+        let speakerClusters: [CallSpeakerClusterRow]
+        let speakerIntervals: [CallSpeakerIntervalRow]
     }
 
     private func callSnapshot(id callID: Int64) async throws -> CallExportSnapshot {
@@ -311,6 +351,7 @@ actor ExportService {
             guard let call = try CallRow.fetchOne(dbc, key: callID) else {
                 throw CallExportError.callNotFound
             }
+            let context = try CallContextRow.fetchOne(dbc, key: callID)
             let spans = try CallSourceSpanRow.fetchAll(
                 dbc,
                 sql: "SELECT * FROM call_source_spans WHERE callId = ? ORDER BY source, epoch, id",
@@ -380,15 +421,57 @@ actor ExportService {
                     """,
                 arguments: [callID, call.mediaGeneration]
             )
+            let speakerRevision = try call.preferredSpeakerRevisionId.flatMap { revisionID in
+                try CallSpeakerRevisionRow.fetchOne(
+                    dbc,
+                    sql: """
+                        SELECT * FROM call_speaker_revisions
+                        WHERE id = ? AND callId = ? AND mediaGeneration = ? AND state = ?
+                        """,
+                    arguments: [
+                        revisionID,
+                        callID,
+                        call.mediaGeneration,
+                        CallSpeakerRevisionState.ready.rawValue,
+                    ]
+                )
+            }
+            let speakerClusters: [CallSpeakerClusterRow]
+            let speakerIntervals: [CallSpeakerIntervalRow]
+            if let speakerRevisionID = speakerRevision?.id {
+                speakerClusters = try CallSpeakerClusterRow.fetchAll(
+                    dbc,
+                    sql: """
+                        SELECT * FROM call_speaker_clusters
+                        WHERE revisionId = ? ORDER BY ordinal, id LIMIT ?
+                        """,
+                    arguments: [speakerRevisionID, Self.maximumExportedSpeakers + 1]
+                )
+                speakerIntervals = try CallSpeakerIntervalRow.fetchAll(
+                    dbc,
+                    sql: """
+                        SELECT * FROM call_speaker_intervals
+                        WHERE revisionId = ? ORDER BY ordinal, id LIMIT ?
+                        """,
+                    arguments: [speakerRevisionID, Self.maximumExportedSpeakerIntervals + 1]
+                )
+            } else {
+                speakerClusters = []
+                speakerIntervals = []
+            }
             return CallExportSnapshot(
                 call: call,
+                context: context,
                 spans: spans,
                 gaps: gaps,
                 bookmarks: bookmarks,
                 revision: revision,
                 transcriptGaps: transcriptGaps,
                 segments: segments,
-                chunks: chunks
+                chunks: chunks,
+                speakerRevision: speakerRevision,
+                speakerClusters: speakerClusters,
+                speakerIntervals: speakerIntervals
             )
         }
     }
@@ -455,6 +538,16 @@ actor ExportService {
         case .final: transcriptStatus = .final
         case .interval, .none: transcriptStatus = .none
         }
+        let context = snapshot.context.map {
+            CallExportContext(
+                captureOwner: $0.captureOwner,
+                disposition: $0.disposition,
+                title: $0.title,
+                participants: Self.decodeParticipants($0.participantsJSON),
+                sourceApp: $0.sourceAppName
+            )
+        }
+        let preferredSpeakerRevision = Self.speakerProjection(snapshot: snapshot)
         return CallExportManifest(
             formatVersion: CallExportManifest.currentFormatVersion,
             call: CallExportEnvelope(
@@ -466,6 +559,7 @@ actor ExportService {
                 degradationReason: snapshot.call.degradationReason,
                 mediaGeneration: snapshot.call.mediaGeneration
             ),
+            context: context,
             sources: sources,
             bookmarks: snapshot.bookmarks.map {
                 CallExportBookmark(
@@ -499,8 +593,57 @@ actor ExportService {
                     )
                 }
             ),
+            preferredSpeakerRevision: preferredSpeakerRevision,
             audio: audio
         )
+    }
+
+    private static func speakerProjection(
+        snapshot: CallExportSnapshot
+    ) -> CallExportSpeakerRevision? {
+        guard let revision = snapshot.speakerRevision,
+              let revisionID = revision.id,
+              revision.state == .ready,
+              revision.callId == snapshot.call.id,
+              revision.mediaGeneration == snapshot.call.mediaGeneration else {
+            return nil
+        }
+        let clusters = Array(snapshot.speakerClusters.prefix(maximumExportedSpeakers))
+        let intervals = Array(snapshot.speakerIntervals.prefix(maximumExportedSpeakerIntervals))
+        let intervalsByCluster = Dictionary(grouping: intervals, by: \.clusterId)
+        return CallExportSpeakerRevision(
+            identifier: "speaker-revision-\(revisionID)",
+            state: revision.state,
+            engine: revision.engine,
+            modelRevision: revision.modelRevision,
+            speakers: clusters.compactMap { cluster in
+                guard let clusterID = cluster.id else { return nil }
+                return CallExportSpeaker(
+                    clusterKey: cluster.clusterKey,
+                    label: cluster.displayName ?? "Speaker \(cluster.ordinal + 1)",
+                    namingProvenance: cluster.namingProvenance,
+                    intervals: (intervalsByCluster[clusterID] ?? []).map {
+                        CallExportSpeakerInterval(
+                            source: $0.source,
+                            startMs: $0.startMs,
+                            endMs: $0.endMs
+                        )
+                    }
+                )
+            },
+            speakersTruncated: snapshot.speakerClusters.count > maximumExportedSpeakers,
+            intervalsTruncated: snapshot.speakerIntervals.count > maximumExportedSpeakerIntervals
+        )
+    }
+
+    private static func decodeParticipants(_ json: String) -> [String] {
+        guard let data = json.data(using: .utf8),
+              let names = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return names.lazy
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .prefix(12)
+            .map { String($0.prefix(80)) }
     }
 
     private func copyCallAudio(

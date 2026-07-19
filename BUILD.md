@@ -9,8 +9,8 @@ The project is generated from `project.yml` via [XcodeGen](https://github.com/yo
 - `brew install xcodegen`
 - The built-in local model is not needed to compile or run ordinary tests. Real-model qualification is
   opt-in and uses an already downloaded, manifest-verified directory; see [`docs/LOCAL_AI.md`](docs/LOCAL_AI.md).
-- Explicit call recording also works without a speech model. The optional Whisper model is downloaded and
-  verified only after the person asks for it; fixture tests never download it.
+- Call recording works without speech or speaker models. Optional Whisper and FluidAudio speaker assets are
+  downloaded and checksum-verified only after the person asks for them; fixture tests never download weights.
 
 ## Build
 ```bash
@@ -39,7 +39,7 @@ ZBSEyeApp/
   App/        ZBSEyeApp (@main), AppEnvironment (@Observable root)
   Capture/    CaptureCoordinator, FramePipeline (capture+HEIC+phash), AXReader
   Audio/      AudioCoordinator, mic/system engines, VADSegmenter, TranscriptionService
-  Calls/      CallCoordinator, durable dual-source spool, Bookmark/final jobs, Whisper helper, evidence read model
+  Calls/      CallCoordinator, lifecycle policy, dual-source spool, Calls projection, Whisper/diarization helpers
   Data/       ZBSEyeDatabase, StorageLocation, StorageManager, BackupManager, RetentionManager, IngestService
   Search/     SearchService (FTS+vector RRF), EmbeddingService (e5), TimelineService, VectorBackfill
   Server/     ZBSEyeHTTPServer (FlyingFox REST, 127.0.0.1, Bearer), KeychainStore
@@ -79,3 +79,17 @@ ZBS_EYE_CALL_PHYSICAL_GATE=YES scripts/verify-call-recording.sh --physical-prefl
 That command only verifies the installed stable signature and creates an ignored local checklist. The operator
 then runs the short, 60-minute, and 120-minute synthetic calls against `/Applications/ZBS Eye.app`; personal
 audio/transcripts and the local physical report are never committed.
+
+### Optional speaker diarization
+
+The app pins FluidAudio `0.15.5` (commit `19600a485baa4998812e4654b70d2bab8f2c9949`) and the
+`FluidInference/speaker-diarization-coreml` model revision
+`1ed7a662fdc7109e36d822db793ee6eebdaf8594`. The exact 21-file, 21,599,417-byte manifest is verified before
+use. It is not bundled or installed by default. Processing runs offline through `--diarization-job` in the
+same signed executable; the GUI process remains the only database writer, and helper output contains timed
+anonymous clusters rather than embeddings.
+
+The physical qualification command is intentionally opt-in and requires an already verified local model
+directory plus synthetic/public PCM. Aggregate results and limitations are in
+[`docs/CALL_DIARIZATION_QUALIFICATION.md`](docs/CALL_DIARIZATION_QUALIFICATION.md); no private corpus is
+committed.

@@ -47,12 +47,15 @@ fixture_gate() {
     -only-testing:ZBSEyeTests/CallTimelineTests
     -only-testing:ZBSEyeTests/CallTranscriptProjectionTests
     -only-testing:ZBSEyeTests/CallTranscriptWorkerTests
+    -only-testing:ZBSEyeTests/DiarizationHelperCommandTests
     -only-testing:ZBSEyeTests/MCPCallEvidenceRoutingTests
     -only-testing:ZBSEyeTests/MCPHistorySearchRoutingTests
     -only-testing:ZBSEyeTests/MCPReadOnlyDatabaseTests
     -only-testing:ZBSEyeTests/MCPReadinessServiceTests
     -only-testing:ZBSEyeTests/ReleaseConfigurationTests
     -only-testing:ZBSEyeTests/RetentionManagerTests
+    -only-testing:ZBSEyeTests/SpeakerDiarizationModelManifestTests
+    -only-testing:ZBSEyeTests/SpeakerDiarizationWorkerTests
     -only-testing:ZBSEyeTests/LoopbackWebhookTransportTests
     -only-testing:ZBSEyeTests/SystemAudioCaptureLifecycleTests
     -only-testing:ZBSEyeTests/TranscriptOverlapReconcilerTests

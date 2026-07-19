@@ -41,6 +41,25 @@ final class CallRecordingStoreTests: XCTestCase {
         XCTAssertEqual(count, 0)
         XCTAssertEqual(store.snapshot.phase, .idle)
     }
+
+    func testFailedAutomaticRejectStillReturnsCallIDForPrivacyCleanup() async throws {
+        let fixture = try CallRecordingStoreFixture()
+        defer { fixture.cleanup() }
+        let store = CallRecordingStore()
+        store.attach(fixture.coordinator)
+        store.requestedSources = { CallSourceSelection(me: true, system: false) }
+
+        let startedCandidate = await store.startAutomatic(idempotencyKey: "automatic:test")
+        let started = try XCTUnwrap(startedCandidate)
+        let callID = try XCTUnwrap(started.callID)
+        try fixture.database.pool.close()
+
+        let rejectedID = await store.rejectAutomaticAndWait()
+
+        XCTAssertEqual(rejectedID, callID)
+        XCTAssertEqual(store.snapshot.phase, .idle)
+        XCTAssertNotNil(store.errorMessage)
+    }
 }
 
 @MainActor

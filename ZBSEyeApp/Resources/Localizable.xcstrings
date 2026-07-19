@@ -9811,6 +9811,189 @@
     "Use http://127.0.0.1 with an explicit port of 1024 or higher.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Используйте http://127.0.0.1 и явно укажите порт 1024 или выше." } } }
     },
+    "%lld bookmarks": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Закладок: %lld" } } }
+    },
+    "Assign to %@": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Назначить спикеру %@" } } }
+    },
+    "Audio and derived transcript/speaker evidence inside the selected range will be physically removed. This cannot be undone.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Аудио и производные данные расшифровки и спикеров в выбранном диапазоне будут физически удалены. Это нельзя отменить." } } }
+    },
+    "Call ended automatically": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Запись звонка завершена автоматически" } } }
+    },
+    "Call may have ended": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Возможно, звонок завершился" } } }
+    },
+    "Call recording started": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Запись звонка началась" } } }
+    },
+    "Call service is still starting. Try again in a moment.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Сервис звонков ещё запускается. Повторите через мгновение." } } }
+    },
+    "Calls": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонки" } } }
+    },
+    "Calls and transcripts are safe. The model can be retried.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонки и расшифровки сохранены. Установку модели можно повторить." } } }
+    },
+    "Calls are still initializing.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонки ещё инициализируются." } } }
+    },
+    "Calls unavailable": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонки недоступны" } } }
+    },
+    "Choose the exact unwanted range. Recording outside it stays intact.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Выберите точный ненужный диапазон. Остальная запись останется без изменений." } } }
+    },
+    "Click a name to correct the whole speaker. Use an interval menu to move only that piece.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Нажмите имя, чтобы исправить спикера целиком. Через меню интервала можно перенести только выбранный фрагмент." } } }
+    },
+    "Create & assign": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Создать и назначить" } } }
+    },
+    "Create speaker…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Создать спикера…" } } }
+    },
+    "Detected calls and calls you start manually will appear here.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Здесь появятся автоматически найденные и запущенные вручную звонки." } } }
+    },
+    "Download paused at %@.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Загрузка приостановлена на %@." } } }
+    },
+    "Downloading %1$@ of %2$@…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Загружено %1$@ из %2$@…" } } }
+    },
+    "Eye could not separate speakers for this call. The transcript and source labels remain available.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Eye не смог разделить спикеров в этом звонке. Расшифровка и подписи источников доступны." } } }
+    },
+    "Eye found call controls and microphone use.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Eye обнаружил элементы звонка и использование микрофона." } } }
+    },
+    "Finding speakers": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Определяем спикеров" } } }
+    },
+    "Finding speakers locally. Unknown voices stay anonymous until you name them.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Спикеры определяются локально. Неизвестные голоса останутся анонимными, пока вы их не назовёте." } } }
+    },
+    "FluidAudio · local · %@ on disk": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "FluidAudio · локально · %@ на диске" } } }
+    },
+    "In progress": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Идёт сейчас" } } }
+    },
+    "Install · %@": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Установить · %@" } } }
+    },
+    "Install the small local model once to separate anonymous speakers. The transcript already works without it.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Один раз установите маленькую локальную модель, чтобы разделять анонимных спикеров. Расшифровка уже работает без неё." } } }
+    },
+    "LOCAL · THIS CALL ONLY": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "ЛОКАЛЬНО · ТОЛЬКО ЭТОТ ЗВОНОК" } } }
+    },
+    "Loading more calls…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Загружаем ещё звонки…" } } }
+    },
+    "No calls yet": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонков пока нет" } } }
+    },
+    "Not a call": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Это не звонок" } } }
+    },
+    "Only the selected interval moves. The original microphone/system source stays unchanged.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Переносится только выбранный интервал. Исходная метка микрофона или системного звука не меняется." } } }
+    },
+    "Open call": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Открыть звонок" } } }
+    },
+    "Optional local model. Installs only when you choose; no voiceprints leave this call.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Необязательная локальная модель. Устанавливается только по вашему выбору; голосовые отпечатки не покидают этот звонок." } } }
+    },
+    "Preparing the local speaker model. Recording and transcripts remain available.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Подготавливаем локальную модель спикеров. Запись и расшифровка остаются доступны." } } }
+    },
+    "Processing": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Обработка" } } }
+    },
+    "Ready · gaps": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Готово · есть разрывы" } } }
+    },
+    "Ready · source labels": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Готово · подписи источников" } } }
+    },
+    "Recording": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Запись" } } }
+    },
+    "Refreshing calls": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Обновляем звонки" } } }
+    },
+    "Resume the same call without losing its end boundary": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Продолжить тот же звонок, сохранив границу завершения" } } }
+    },
+    "Retry speaker model": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Повторить установку модели спикеров" } } }
+    },
+    "Retry speaker processing": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Повторить определение спикеров" } } }
+    },
+    "Search calls, people, apps, and transcripts": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Искать звонки, людей, приложения и расшифровки" } } }
+    },
+    "Separate speakers": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Разделять спикеров" } } }
+    },
+    "Separate speakers · %@": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Разделить спикеров · %@" } } }
+    },
+    "Some speaker intervals are omitted from this view; agent/API reads report the truncation honestly.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Часть интервалов спикеров не показана; агент и API явно сообщают об усечении." } } }
+    },
+    "Speaker name": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Имя спикера" } } }
+    },
+    "Speaker processing is unavailable. The transcript remains available without invented names.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Определение спикеров недоступно. Расшифровка остаётся доступна без выдуманных имён." } } }
+    },
+    "Speakers": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Спикеры" } } }
+    },
+    "Start a call": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Начать звонок" } } }
+    },
+    "Stop and permanently remove only this automatically detected call": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Остановить и навсегда удалить только этот автоматически найденный звонок" } } }
+    },
+    "The false call stopped, but its local evidence still needs deletion.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Ложный звонок остановлен, но его локальные данные ещё нужно удалить." } } }
+    },
+    "The name applies only to this call. Eye does not create a reusable voiceprint.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Имя применяется только к этому звонку. Eye не создаёт повторно используемый голосовой отпечаток." } } }
+    },
+    "Trim end": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Конец обрезки" } } }
+    },
+    "Trim permanently": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Удалить навсегда" } } }
+    },
+    "Trim recording": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Обрезать запись" } } }
+    },
+    "Trim selected range…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Удалить выбранный диапазон…" } } }
+    },
+    "Trim start": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Начало обрезки" } } }
+    },
+    "Undo is available for 15 seconds. Recording is not split.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Отменить завершение можно 15 секунд. Запись не разделяется." } } }
+    },
+    "Verifying every model file locally…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Проверяем каждый файл модели локально…" } } }
+    },
+    "Waiting 30 seconds for the call to resume.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Ждём 30 секунд на случай продолжения звонка." } } }
+    },
     "%lld blocked": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Заблокировано: %lld" } } }
     },

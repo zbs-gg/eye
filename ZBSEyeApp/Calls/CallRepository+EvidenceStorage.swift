@@ -543,11 +543,20 @@ extension CallRepository {
             try mutation.insert(db)
 
             call.preferredRevisionId = nil
+            call.preferredSpeakerRevisionId = nil
             call.mediaGeneration = manifest.toGeneration
             call.state = .failed
             call.degradationReason = "redaction_pending"
             call.updatedAtMs = nowMs
             try call.update(db)
+
+            // Speaker revisions are derived from the generation being redacted.
+            // Revoke and erase them in this initial privacy transaction so a
+            // crash before file rewriting cannot expose stale speaker evidence.
+            try db.execute(
+                sql: "DELETE FROM call_speaker_revisions WHERE callId = ?",
+                arguments: [manifest.callID]
+            )
 
             try db.execute(
                 sql: """
@@ -926,11 +935,19 @@ extension CallRepository {
             }
 
             call.preferredRevisionId = nil
+            call.preferredSpeakerRevisionId = nil
             call.mediaGeneration = nextGeneration
             call.state = .failed
             call.degradationReason = "erase_pending"
             call.updatedAtMs = nowMs
             try call.update(db)
+
+            // Logical privacy deletion completes before any physical cleanup.
+            // Cascades remove clusters and intervals together with revisions.
+            try db.execute(
+                sql: "DELETE FROM call_speaker_revisions WHERE callId = ?",
+                arguments: [callID]
+            )
 
             // Privacy erasure wins over delivery. Claims exclude erase-pending calls, and every
             // undelivered row is removed in this same initial erasure transaction.

@@ -1,6 +1,6 @@
 import Foundation
 import CoreAudio
-import AppKit   // NSRunningApplication
+import AppKit   // NSRunningApplication, Accessibility
 import Darwin   // proc_pidinfo — resolve a helper/renderer pid up to its owning app
 
 /// Detects whether a call/meeting is happening right now — on-device, with NO new permission.
@@ -23,37 +23,18 @@ import Darwin   // proc_pidinfo — resolve a helper/renderer pid up to its owni
 /// Use the menu-bar "Force audio on" for those. Native apps and browser calls that also open the
 /// native app are covered.
 ///
-/// Emits a DEBOUNCED Bool over an AsyncStream: start is immediate; stop waits a 10s grace (absorbs
-/// Zoom reconnects / network blips); only settled state changes are emitted. Sendable actor.
+/// Emits typed evidence every two seconds. The pure `CallDetectionPolicy` and automatic lifecycle own
+/// confidence, suppression, and the 30-second end grace; this adapter never persists a call by itself.
 actor MeetingDetector {
-    /// Bundle-id PREFIXES of apps that hold the mic only during an actual call. Prefixes (not exact ids)
-    /// so audio helper/XPC processes — e.g. "us.zoom.helper", "com.tinyspeck.slack.helper2" — still match
-    /// once we resolve them to their owning app.
-    static let meetingPrefixes: [String] = [
-        "us.zoom",                 // Zoom (+ helpers)
-        "com.microsoft.teams",     // Teams classic + new (teams2)
-        "com.apple.FaceTime",      // FaceTime
-        "com.hnc.Discord",         // Discord
-        "com.tinyspeck.slack",     // Slack (+ helpers)
-        "com.cisco.webex",         // Webex
-        "com.webex",               // Webex (older)
-        "com.skype",               // Skype
-    ]
-
-    private let stopGrace: TimeInterval = 10
-
     private var pollTask: Task<Void, Never>?
-    private var continuation: AsyncStream<Bool>.Continuation?
-    private var settled = false            // last emitted state
-    private var pendingStopSince: Date?    // when raw first went false while settled == true
+    private var continuation: AsyncStream<CallEvidenceSnapshot>.Continuation?
 
-    /// Start polling (2s) and return a stream of settled meeting-active booleans. Initial state is
-    /// treated as "not active"; the first value is emitted only when a meeting is actually detected.
-    func start() -> AsyncStream<Bool> {
-        let (stream, cont) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    /// Start polling (2s) and return the latest bounded evidence snapshot.
+    func start() -> AsyncStream<CallEvidenceSnapshot> {
+        let (stream, cont) = AsyncStream<CallEvidenceSnapshot>.makeStream(
+            bufferingPolicy: .bufferingNewest(1)
+        )
         continuation = cont
-        settled = false
-        pendingStopSince = nil
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -67,44 +48,79 @@ actor MeetingDetector {
     func stop() {
         pollTask?.cancel(); pollTask = nil
         continuation?.finish(); continuation = nil
-        settled = false
-        pendingStopSince = nil
     }
 
-    /// One debounce step. `now` is injected so tests can drive the grace window deterministically.
+    /// One collection step. `now` is injected so policy tests can remain deterministic.
     func tick(now: Date) async {
-        let raw = await Self.detectRaw()
-        if raw {
-            pendingStopSince = nil
-            if !settled { settled = true; continuation?.yield(true) }
-        } else if settled {
-            if let since = pendingStopSince {
-                if now.timeIntervalSince(since) >= stopGrace {
-                    settled = false; pendingStopSince = nil; continuation?.yield(false)
-                }
-            } else {
-                pendingStopSince = now      // start the grace window
-            }
-        }
+        continuation?.yield(await Self.collectEvidence(now: now))
     }
 
     /// Testing seam: raw (undebounced) detection — is a known meeting app holding the mic right now?
     static func detectRaw() async -> Bool {
-        await MainActor.run { meetingAppHoldingMic() }
+        let owner = await MainActor.run { meetingAppHoldingMic() }
+        guard let owner else { return false }
+        return await NativeCallSurfaceInspector.hasCallControls(pid: owner.pid)
+    }
+
+    static func collectEvidence(now: Date) async -> CallEvidenceSnapshot {
+        let observedAt = now.timeIntervalSince1970
+        guard let owner = await MainActor.run(body: { meetingAppHoldingMic() }) else {
+            return CallEvidenceSnapshot(
+                now: observedAt,
+                microphoneOwnerBundleID: nil,
+                surface: nil,
+                microphoneAudioActive: false,
+                systemAudioActive: false,
+                calendarHint: false,
+                isStale: false,
+                fingerprint: "idle"
+            )
+        }
+        let marker: CallStateMarker? = await NativeCallSurfaceInspector.hasCallControls(pid: owner.pid)
+            ? .nativeCallControls
+            : nil
+        let session = "pid:\(owner.pid)"
+        return CallEvidenceSnapshot(
+            now: observedAt,
+            microphoneOwnerBundleID: owner.bundleID,
+            surface: CallSurfaceEvidence(
+                kind: .native,
+                ownerBundleID: owner.bundleID,
+                trustedOrigin: nil,
+                marker: marker,
+                observedAt: observedAt
+            ),
+            microphoneAudioActive: true,
+            systemAudioActive: false,
+            calendarHint: false,
+            isStale: false,
+            fingerprint: CallDetectorFingerprint.make(
+                bundleID: owner.bundleID,
+                sessionMarker: session,
+                originHost: nil
+            )
+        )
     }
 
     // MARK: implementation
 
+    private struct MicrophoneOwner: Sendable {
+        let pid: pid_t
+        let bundleID: String
+    }
+
     @MainActor
-    private static func meetingAppHoldingMic() -> Bool {
+    private static func meetingAppHoldingMic() -> MicrophoneOwner? {
         let mine = ProcessInfo.processInfo.processIdentifier
         for obj in processObjects() where isRunningInput(obj) {
             let pid = pidOf(obj)
             if pid == mine || pid <= 0 { continue }
             guard let bid = owningBundleId(for: pid) else { continue }
-            if meetingPrefixes.contains(where: { bid.hasPrefix($0) }) { return true }
+            if CallSurfaceCatalog.nativeBundlePrefixes.contains(where: { bid.hasPrefix($0) }) {
+                return MicrophoneOwner(pid: pid, bundleID: bid)
+            }
         }
-        return false
+        return nil
     }
 
     /// Bundle id of the app that OWNS `pid`, walking up the parent chain — a mic-holding process is often
@@ -159,5 +175,68 @@ actor MeetingDetector {
         var pid: pid_t = -1
         var size = UInt32(MemoryLayout<pid_t>.size)
         return AudioObjectGetPropertyData(obj, &addr, 0, nil, &size, &pid) == noErr ? pid : -1
+    }
+}
+
+/// A bounded, non-prompting Accessibility probe for an independent native call marker. It runs on a
+/// dedicated queue because AX calls may block, and it never copies the discovered labels into logs or DB.
+private enum NativeCallSurfaceInspector {
+    private static let queue = DispatchQueue(label: "gg.zbs.eye.call-surface-ax", qos: .utility)
+    private static let hardMarkers = [
+        "end call", "hang up", "leave call", "leave meeting",
+        "завершить звонок", "положить трубку", "покинуть звонок", "выйти из конференции",
+    ]
+    private static let softMarkers = [
+        "mute", "unmute", "participants", "camera", "share screen",
+        "микрофон", "выключить звук", "участники", "камера", "демонстрация экрана",
+    ]
+
+    static func hasCallControls(pid: pid_t) async -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        return await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: inspect(pid: pid))
+            }
+        }
+    }
+
+    private static func inspect(pid: pid_t) -> Bool {
+        let app = AXUIElementCreateApplication(pid)
+        var pending = [app]
+        var index = 0
+        var softHits = Set<String>()
+        while index < pending.count, index < 500 {
+            let element = pending[index]
+            index += 1
+            let text = searchableText(element)
+            if hardMarkers.contains(where: text.contains) { return true }
+            for marker in softMarkers where text.contains(marker) { softHits.insert(marker) }
+            if softHits.count >= 2 { return true }
+            if pending.count < 500 {
+                pending.append(contentsOf: children(element).prefix(500 - pending.count))
+            }
+        }
+        return false
+    }
+
+    private static func searchableText(_ element: AXUIElement) -> String {
+        [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute, kAXValueAttribute]
+            .compactMap { stringAttribute($0 as CFString, from: element) }
+            .joined(separator: " ")
+            .lowercased()
+    }
+
+    private static func stringAttribute(_ attribute: CFString, from element: AXUIElement) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
+        return value as? String
+    }
+
+    private static func children(_ element: AXUIElement) -> [AXUIElement] {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success,
+              let children = value as? [AXUIElement]
+        else { return [] }
+        return children
     }
 }

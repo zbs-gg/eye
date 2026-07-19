@@ -63,4 +63,40 @@ extension CallRepository {
             db: db
         )
     }
+
+    /// Enqueues once both authoritative local projections refer to the current
+    /// media generation. The semantic identity makes retries and either
+    /// completion order (transcript first or speakers first) idempotent.
+    static func enqueueProcessingReadyAutomationIfComplete(
+        callID: Int64,
+        occurredAtMs: Int64,
+        db: Database
+    ) throws {
+        guard let call = try CallRow.fetchOne(db, key: callID),
+              call.state == .ready,
+              let transcriptRevisionID = call.preferredRevisionId,
+              let speakerRevisionID = call.preferredSpeakerRevisionId,
+              let transcript = try CallTranscriptRevisionRow.fetchOne(db, key: transcriptRevisionID),
+              transcript.callId == callID,
+              transcript.mediaGeneration == call.mediaGeneration,
+              transcript.kind == .final,
+              transcript.state == .ready,
+              let speakers = try CallSpeakerRevisionRow.fetchOne(db, key: speakerRevisionID),
+              speakers.callId == callID,
+              speakers.mediaGeneration == call.mediaGeneration,
+              speakers.state == .ready else { return }
+
+        try CallAutomationOutbox.enqueueIfEnabled(
+            eventType: .processingReady,
+            semanticIdentity: "processing-ready:\(callID):\(call.mediaGeneration):\(transcriptRevisionID):\(speakerRevisionID)",
+            callID: callID,
+            occurredAtMs: occurredAtMs,
+            data: CallProcessingReadyAutomationData(
+                state: call.state.rawValue,
+                transcriptRevisionID: transcriptRevisionID,
+                speakerRevisionID: speakerRevisionID
+            ),
+            db: db
+        )
+    }
 }

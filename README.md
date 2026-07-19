@@ -21,12 +21,11 @@ ZBS Eye quietly keeps an "eternal memory" of your work at the computer:
 
 - **Screen** → accessibility text (accurate and battery-friendly) + OCR where AX is unavailable, frames in HEIC.
 - **Audio** → system audio (calls, meetings, video) and microphone → on-device transcription.
-  **Meetings-only by default**: audio is captured only while a call is detected (a meeting app is
-  using the mic), the engine is fully off otherwise — saving disk. Switch to always / off, or force
-  it on/off from the menu bar.
-  For a call you explicitly want to keep, press **Start Call**: Eye records microphone and system audio
-  as separate durable sources until **End Call**. **Bookmark** schedules a local checkpoint transcript
-  without interrupting either source; the optional one-click Whisper Large V3 Turbo model produces the
+  **Meetings-only by default**: trusted native call evidence can start a Call Envelope automatically;
+  ordinary playback, a calendar event, or generic microphone use cannot. Browser calls stay manual unless
+  Eye can verify an allowlisted HTTPS origin, an independent call-state marker, and two-sided audio.
+  Eye records microphone and system audio as separate durable sources. **Bookmark** schedules a local
+  checkpoint transcript without interrupting recording; optional Whisper Large V3 Turbo produces the
   preferred whole-call transcript after the call.
 - **Search** → hybrid full-text + semantic (cross-lingual: search in one language, find another),
   a scrubbable timeline, frames served as images.
@@ -61,9 +60,13 @@ native alternative that **never goes to the cloud** — your activity history is
 - 🎙️ **Audio + transcription** — system + microphone, VAD, on-device speech. **Meetings-only by
   default** (auto-detected on-device) — records during calls, off otherwise to save disk; always / off
   modes + a menu-bar force on/off.
-- 🔖 **Explicit call recording** — Start / Bookmark / End in one compact strip. Bookmark never pauses
-  recording; it creates a provisional local checkpoint, while an optional 1.62 GB Whisper model performs
-  the final whole-call pass after End. Mic-only calls remain valid and clearly report the missing source.
+- 📞 **Calls library** — `Timeline · Calls · Ask` keeps calls out of the all-activity haystack. Automatic
+  native-call capture has an immediate **Not a call** escape; automatic ending has a 30-second grace and
+  bounded **Undo** tail. Manual Start / Bookmark / End remains available for every app.
+- 🔖 **Post-call transcript and speakers** — Bookmark never pauses recording. Optional 1.62 GB Whisper
+  performs the authoritative whole-call pass; optional 20.6 MiB local diarization adds anonymous per-call
+  speaker lanes. Names are manual/current-call evidence only, corrections are revisioned, and no voiceprint
+  survives processing. Mic-only calls remain valid and clearly report the missing source.
 - 🔍 **Hybrid search** — FTS5 + multilingual-e5 (384-dim) via RRF; cross-lingual.
 - 🕰️ **Timeline** — scrub through time, frame + text + app/URL, a player.
 - 🔌 **REST + MCP** — a local API (127.0.0.1, Bearer token) for agents; MCP over stdio. Call tools are
@@ -89,10 +92,11 @@ native alternative that **never goes to the cloud** — your activity history is
 
 ### Calls, without turning Eye into a CRM
 
-Eye's job is to preserve and expose trustworthy local evidence. It does not show a live transcript,
-build a call map, manage contacts, join meetings as a bot, infer speaker identity inside the system track,
-or inspect your calendar. Those are consumers that can use Eye's authenticated REST/MCP evidence later;
-they are not part of this tiny recorder.
+Eye's job is to preserve and expose trustworthy local evidence. It provides a compact Calls library,
+playback, physical Trim, final transcript, anonymous per-call speaker lanes, and manual speaker correction.
+It does not show a live transcript, build a call map, manage contacts, join meetings as a bot, maintain
+cross-call voice identities, or add a calendar-management surface. Those are consumers that can use Eye's
+authenticated REST/MCP evidence later; they are not part of this tiny recorder.
 
 ## Own it: fix and extend Eye with your agent
 
@@ -161,7 +165,7 @@ Architecture and contributor/agent guide — [`AGENTS.md`](AGENTS.md). Distribut
 ## Tech
 
 Swift 6 (strict concurrency), SwiftUI, macOS 15+ · GRDB (DatabasePool + WAL) + FTS5 + sqlite-vec ·
-ScreenCaptureKit · Accessibility API · Vision OCR · SFSpeech · whisper.cpp · multilingual-e5 (swift-embeddings) ·
+ScreenCaptureKit · Accessibility API · Vision OCR · SFSpeech · whisper.cpp · FluidAudio · multilingual-e5 (swift-embeddings) ·
 MLX Swift LM (built-in generation) · FlyingFox (REST) · MCP swift-sdk · Hardened Runtime without App Sandbox.
 
 ## Status
@@ -169,9 +173,11 @@ MLX Swift LM (built-in generation) · FlyingFox (REST) · MCP swift-sdk · Harde
 Working: capture (screen + audio), hybrid search, timeline, REST + MCP, import of previous history,
 retention (5 GB local media budget by default, with explicit Forever), relocatable storage, iCloud backup, size tracking, daily summary,
 export, and one global provider/model pair for Ask, Daily Insights, summaries, and generated labels.
-Explicit Call Envelopes, uninterrupted Bookmark checkpoints, optional post-call Whisper transcription,
-preferred-only call search, and read-only agent evidence are implemented; physical 60/120-minute release
-qualification is tracked separately and must pass before this call feature is declared field-qualified.
+Call Envelopes, uninterrupted Bookmark checkpoints, the Calls library, optional post-call Whisper,
+per-call speaker corrections, physical Trim, and read-only agent evidence are implemented. The pinned local
+diarization runtime has passed 15- and 60-minute synthetic Apple Silicon qualification; real-app detection
+coverage remains explicitly allowlisted rather than claimed universal. See
+[`docs/CALL_DIARIZATION_QUALIFICATION.md`](docs/CALL_DIARIZATION_QUALIFICATION.md).
 The default path is a one-click built-in local model on qualified hardware; external local and cloud
 providers remain choices. Distribution — **notarized Developer ID** (`scripts/build-notarized.sh`).
 
