@@ -9967,6 +9967,21 @@
     "The false call stopped, but its local evidence still needs deletion.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Ложный звонок остановлен, но его локальные данные ещё нужно удалить." } } }
     },
+    "The false call is stopped. Permanent local deletion is retrying.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Ложный звонок остановлен. Повторяем окончательное локальное удаление." } } }
+    },
+    "The call is already finishing. Remove it from Calls when it appears.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонок уже завершается. Когда он появится в разделе «Звонки», удалите его там." } } }
+    },
+    "The call is still recording because its privacy receipt could not be saved.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонок продолжает записываться: не удалось сохранить подтверждение приватного удаления." } } }
+    },
+    "The call stopped, but permanent removal was not confirmed.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонок остановлен, но окончательное удаление не подтверждено." } } }
+    },
+    "This call ending operation is no longer current.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Эта операция завершения звонка уже неактуальна." } } }
+    },
     "The name applies only to this call. Eye does not create a reusable voiceprint.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Имя применяется только к этому звонку. Eye не создаёт повторно используемый голосовой отпечаток." } } }
     },
@@ -9985,6 +10000,9 @@
     "Trim start": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Начало обрезки" } } }
     },
+    "Undo": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Отменить" } } }
+    },
     "Undo is available for 15 seconds. Recording is not split.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Отменить завершение можно 15 секунд. Запись не разделяется." } } }
     },
@@ -9993,6 +10011,9 @@
     },
     "Waiting 30 seconds for the call to resume.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Ждём 30 секунд на случай продолжения звонка." } } }
+    },
+    "Wait for the false call to finish permanent deletion before moving storage.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Дождитесь окончательного удаления ложного звонка перед переносом хранилища." } } }
     },
     "%lld blocked": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Заблокировано: %lld" } } }

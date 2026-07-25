@@ -112,6 +112,11 @@ actor CallAutomationRepository {
                       AND o.nextAttemptAtMs <= ?
                       AND o.endpointFingerprint = ?
                       AND (c.degradationReason IS NULL OR c.degradationReason != 'erase_pending')
+                      AND COALESCE(c.degradationReason, '') NOT LIKE 'automatic_reject%'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM call_context x
+                          WHERE x.callId = c.id AND x.disposition = 'rejected'
+                      )
                       AND NOT EXISTS (
                           SELECT 1
                           FROM call_automation_outbox earlier
@@ -248,6 +253,11 @@ actor CallAutomationRepository {
                     WHERE c.enabled = 1 AND o.state = 'pending'
                       AND o.endpointFingerprint = c.endpointFingerprint
                       AND (call.degradationReason IS NULL OR call.degradationReason != 'erase_pending')
+                      AND COALESCE(call.degradationReason, '') NOT LIKE 'automatic_reject%'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM call_context x
+                          WHERE x.callId = call.id AND x.disposition = 'rejected'
+                      )
                       AND NOT EXISTS (
                           SELECT 1
                           FROM call_automation_outbox earlier
@@ -267,6 +277,11 @@ actor CallAutomationRepository {
                     WHERE c.enabled = 1 AND o.state = 'sending'
                       AND o.endpointFingerprint = c.endpointFingerprint
                       AND (call.degradationReason IS NULL OR call.degradationReason != 'erase_pending')
+                      AND COALESCE(call.degradationReason, '') NOT LIKE 'automatic_reject%'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM call_context x
+                          WHERE x.callId = call.id AND x.disposition = 'rejected'
+                      )
                     """
             )
             return [pending, leaseExpiry].compactMap { $0 }.min()

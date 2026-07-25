@@ -1,6 +1,47 @@
 import XCTest
 
 final class AppTerminationReplyPlanTests: XCTestCase {
+    func testPrivacyGateAtomicallyExcludesAutomaticRejectionAcrossTerminationAwaits() {
+        var gate = AppTerminationPrivacyGate()
+
+        XCTAssertTrue(gate.allowsAutomaticRejection)
+        XCTAssertTrue(
+            gate.acquireTerminationLease(
+                automaticRejectionTaskActive: false,
+                automaticRejectionCallID: nil
+            )
+        )
+        XCTAssertFalse(gate.allowsAutomaticRejection)
+        XCTAssertFalse(
+            gate.acquireTerminationLease(
+                automaticRejectionTaskActive: false,
+                automaticRejectionCallID: nil
+            )
+        )
+
+        gate.releaseTerminationLease()
+        XCTAssertTrue(gate.allowsAutomaticRejection)
+    }
+
+    func testPrivacyGateRejectsQuitWhileAutomaticRejectionOwnsEitherStateMarker() {
+        var gate = AppTerminationPrivacyGate()
+
+        XCTAssertFalse(
+            gate.acquireTerminationLease(
+                automaticRejectionTaskActive: true,
+                automaticRejectionCallID: nil
+            )
+        )
+        XCTAssertTrue(gate.allowsAutomaticRejection)
+        XCTAssertFalse(
+            gate.acquireTerminationLease(
+                automaticRejectionTaskActive: false,
+                automaticRejectionCallID: 42
+            )
+        )
+        XCTAssertTrue(gate.allowsAutomaticRejection)
+    }
+
     func testRecordingDrainDeadlineCoversObservedScreenCaptureKitTeardown() {
         XCTAssertGreaterThanOrEqual(
             AppTerminationDeadlinePolicy.recordingDrain,

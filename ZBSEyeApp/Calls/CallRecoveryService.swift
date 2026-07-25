@@ -19,6 +19,18 @@ actor CallRecoveryService {
     }
 
     func recover(nowMs: Int64 = Int64(Date().timeIntervalSince1970 * 1_000)) async throws -> CallRecoveryReport {
+        // File receipts survive the exact failure mode SQLite cannot represent: both runtime
+        // rejection writes failed and the process died. Project them before any generic recovery
+        // can create final transcript work or webhook outbox rows.
+        let privacyReceipts = try await CallPrivacyIntentJournalExecutor(
+            mediaRoot: mediaRoot,
+            fileManager: fileManager
+        ).pendingAutomaticRejections()
+        try await repository.reconcileAutomaticRejectionIntents(
+            privacyReceipts,
+            nowMs: nowMs
+        )
+
         _ = try CallHelperScratchStore(
             dataRoot: mediaRoot.deletingLastPathComponent(),
             fileManager: fileManager
@@ -79,13 +91,22 @@ actor CallRecoveryService {
 
         let mutationReport = try await replayMutationJournal(nowMs: nowMs)
         let databaseReport = try await repository.recoverDatabaseState(nowMs: nowMs)
+        let privacyDeletion = CallEvidenceDeletionService(
+            repository: repository,
+            mediaRoot: mediaRoot
+        )
+        var rejectedErasesCompleted = 0
+        for callID in try await repository.rejectedCallIDsPendingErase() {
+            _ = try await privacyDeletion.erase(callID: callID, nowMs: nowMs)
+            rejectedErasesCompleted += 1
+        }
         return CallRecoveryReport(
             callsInterrupted: databaseReport.callsInterrupted,
             jobsReset: databaseReport.jobsReset,
             finalJobsCreated: databaseReport.finalJobsCreated,
             chunksFinalized: chunksFinalized,
             chunksDiscarded: chunksDiscarded,
-            mutationsCompleted: mutationReport.completed,
+            mutationsCompleted: mutationReport.completed + rejectedErasesCompleted,
             mutationsRolledBack: mutationReport.rolledBack
         )
     }

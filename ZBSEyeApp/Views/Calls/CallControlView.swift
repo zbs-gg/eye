@@ -83,7 +83,7 @@ struct CallControlView: View {
             .help("End call")
             .accessibilityLabel("End call")
         case .recoveryTail:
-            Button("Undo") { env.calls.undoAutomaticEnd() }
+            Button("Undo") { env.undoDetectedCallEnd() }
                 .controlSize(.small)
                 .help("Continue the same call without losing the boundary")
         case .pendingTranscription, .ready, .readyDegraded, .failed:

@@ -15,6 +15,7 @@ enum CallRepositoryError: LocalizedError, Sendable, Equatable {
     case noSpeakerCorrectionToUndo(Int64)
     case activeCallMustEnd(Int64)
     case invalidMediaMutation(Int64)
+    case invalidPrivacyIntent(Int64)
 
     var errorDescription: String? {
         switch self {
@@ -44,6 +45,8 @@ enum CallRepositoryError: LocalizedError, Sendable, Equatable {
             return "End the active call before deleting its evidence. Nothing was deleted."
         case .invalidMediaMutation:
             return "The call deletion journal is inconsistent."
+        case .invalidPrivacyIntent:
+            return "The call privacy receipt does not match its recorded call."
         }
     }
 }
@@ -799,6 +802,11 @@ actor CallRepository {
                     WHERE j.state = ?
                       AND j.coverageFrozen = 1
                       AND j.mediaGeneration = c.mediaGeneration
+                      AND COALESCE(c.degradationReason, '') NOT LIKE 'automatic_reject%'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM call_context x
+                          WHERE x.callId = c.id AND x.disposition = 'rejected'
+                      )
                     ORDER BY j.priority, j.createdAtMs, j.id
                     LIMIT 1
                     """,
@@ -835,6 +843,11 @@ actor CallRepository {
                         WHERE j.kind = ? AND j.state = ?
                           AND j.coverageFrozen = 1
                           AND j.mediaGeneration = c.mediaGeneration
+                          AND COALESCE(c.degradationReason, '') NOT LIKE 'automatic_reject%'
+                          AND NOT EXISTS (
+                              SELECT 1 FROM call_context x
+                              WHERE x.callId = c.id AND x.disposition = 'rejected'
+                          )
                     )
                     """,
                 arguments: [
@@ -1247,6 +1260,26 @@ actor CallRepository {
                     callID,
                 ]
             )
+            let interrupted = db.changesCount > 0
+            if interrupted, reason.hasPrefix("automatic_reject") {
+                // "Not a call" is a durable privacy/erase intent, not merely a terminal label.
+                // Persist it in the same transaction as the interrupted transition so a crash can
+                // never route the rejected envelope into recovered transcription or automation.
+                try db.execute(
+                    sql: """
+                        INSERT INTO call_context(
+                            callId, captureOwner, disposition, detectorFingerprintHash,
+                            sourceAppBundleID, sourceAppName, trustedOriginHost, title,
+                            participantsJSON, createdAtMs, updatedAtMs
+                        ) VALUES (?, 'automatic', 'rejected', NULL, NULL, NULL, NULL, NULL, '[]', ?, ?)
+                        ON CONFLICT(callId) DO UPDATE SET
+                            captureOwner = 'automatic',
+                            disposition = 'rejected',
+                            updatedAtMs = excluded.updatedAtMs
+                        """,
+                    arguments: [callID, nowMs, nowMs]
+                )
+            }
         }
     }
 

@@ -29,6 +29,34 @@ enum AppTerminationDeadlinePolicy {
     static let recordingDrain: Duration = .seconds(15)
 }
 
+struct AppTerminationPrivacyGate: Sendable {
+    private(set) var terminationLeaseActive = false
+
+    var allowsAutomaticRejection: Bool {
+        !terminationLeaseActive
+    }
+
+    /// Acquires exclusion synchronously on MainActor before Quit performs its first await.
+    /// A normal Quit must not borrow and later release worker suspensions owned by an in-flight
+    /// automatic false-call deletion. A force-quit/crash remains safe because the fsync'd privacy
+    /// receipt is replayed before workers start on the next launch.
+    mutating func acquireTerminationLease(
+        automaticRejectionTaskActive: Bool,
+        automaticRejectionCallID: Int64?
+    ) -> Bool {
+        guard !terminationLeaseActive,
+              !automaticRejectionTaskActive,
+              automaticRejectionCallID == nil
+        else { return false }
+        terminationLeaseActive = true
+        return true
+    }
+
+    mutating func releaseTerminationLease() {
+        terminationLeaseActive = false
+    }
+}
+
 enum AppTerminationCriticalPhaseOutcome: Sendable, Equatable {
     case completed(Bool)
     case timedOut

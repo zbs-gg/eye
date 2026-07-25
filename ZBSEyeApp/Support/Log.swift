@@ -8,6 +8,7 @@ enum Log {
     static let capture = Logger(subsystem: "gg.zbs.eye", category: "capture")
     static let ingest = Logger(subsystem: "gg.zbs.eye", category: "ingest")
     static let audio = Logger(subsystem: "gg.zbs.eye", category: "audio")
+    static let meetingDetection = Logger(subsystem: "gg.zbs.eye", category: "meeting-detection")
     static let server = Logger(subsystem: "gg.zbs.eye", category: "server")
     static let retention = Logger(subsystem: "gg.zbs.eye", category: "retention")
 }
