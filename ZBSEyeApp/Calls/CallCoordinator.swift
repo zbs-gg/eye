@@ -42,6 +42,63 @@ enum CallStopReason: String, Sendable, Equatable {
         case .lowDisk: "low_disk_stop"
         }
     }
+
+    /// A later, stronger terminal intent must win while one physical teardown is shared.
+    /// In particular, an explicit user/privacy stop can never be downgraded to a recoverable
+    /// low-disk pause merely because the low-disk request reached the audio engine first.
+    func merged(with requested: CallStopReason) -> CallStopReason {
+        requested.priority > priority ? requested : self
+    }
+
+    private var priority: Int {
+        switch self {
+        case .lowDisk: 0
+        case .automatic: 1
+        case .maintenance: 2
+        case .privacy: 3
+        case .user: 4
+        }
+    }
+}
+
+enum SealedCallEndDisposition: Sendable, Equatable {
+    case finish(CallStopReason)
+    case rejectAutomatic
+
+    var stopReason: CallStopReason {
+        switch self {
+        case .finish(let reason): reason
+        case .rejectAutomatic: .privacy
+        }
+    }
+
+    func merged(with requested: SealedCallEndDisposition) -> SealedCallEndDisposition {
+        switch (self, requested) {
+        case (.rejectAutomatic, _), (_, .rejectAutomatic):
+            .rejectAutomatic
+        case let (.finish(current), .finish(next)):
+            .finish(current.merged(with: next))
+        }
+    }
+}
+
+struct PreparedCallEnd: Sendable, Equatable {
+    fileprivate let token: UUID
+    let callID: Int64
+    let me: CallSourceState
+    let system: CallSourceState
+    let bookmarkCount: Int
+
+    func finalizingSnapshot(disposition: SealedCallEndDisposition) -> CallCoordinatorSnapshot {
+        CallCoordinatorSnapshot(
+            phase: .finalizing,
+            callID: callID,
+            me: me,
+            system: system,
+            bookmarkCount: bookmarkCount,
+            stopReason: disposition.stopReason
+        )
+    }
 }
 
 enum CallCoordinatorError: LocalizedError, Sendable, Equatable {
@@ -51,6 +108,7 @@ enum CallCoordinatorError: LocalizedError, Sendable, Equatable {
     case bookmarkClosed
     case missingIdentity
     case evidencePersistenceFailed
+    case stalePreparedEnd
 
     var errorDescription: String? {
         switch self {
@@ -60,6 +118,7 @@ enum CallCoordinatorError: LocalizedError, Sendable, Equatable {
         case .bookmarkClosed: String(localized: "This call is already ending.")
         case .missingIdentity: String(localized: "The call could not create a durable identity.")
         case .evidencePersistenceFailed: String(localized: "Call evidence could not be saved safely.")
+        case .stalePreparedEnd: String(localized: "This call ending operation is no longer current.")
         }
     }
 }
@@ -99,6 +158,7 @@ actor CallCoordinator {
         var lastBookmarkEndMs: Int64
         var bookmarkCount: Int
         var softEnd: SoftEnd?
+        var evidenceDegradationReason: String?
     }
 
     private struct SoftEnd: Sendable {
@@ -107,13 +167,23 @@ actor CallCoordinator {
         let tail: CallRecoveryTail
     }
 
+    private struct PreparedEndState: Sendable {
+        let publicValue: PreparedCallEnd
+        let idempotencyKey: String
+        let endedAtMs: Int64
+        let finished: CallSpoolCoverage
+        let evidenceDegradationReason: String?
+    }
+
     private let repository: CallRepository
     private let mediaRoot: URL
     private let audio: CallAudioControl
     private let now: @Sendable () -> Date
     private let barrierTimeout: Duration
+    private let beforeSoftEndUndo: @Sendable () async -> Void
     private let afterSourceTransition: @Sendable () async -> Void
     private var active: ActiveCall?
+    private var preparedEnd: PreparedEndState?
     private var current = CallCoordinatorSnapshot.idle
     private var commandTail: Task<Void, Never>?
 
@@ -123,6 +193,7 @@ actor CallCoordinator {
         audio: CallAudioControl,
         now: @escaping @Sendable () -> Date = Date.init,
         barrierTimeout: Duration = .seconds(2),
+        beforeSoftEndUndo: @escaping @Sendable () async -> Void = {},
         afterSourceTransition: @escaping @Sendable () async -> Void = {}
     ) {
         self.repository = repository
@@ -130,6 +201,7 @@ actor CallCoordinator {
         self.audio = audio
         self.now = now
         self.barrierTimeout = barrierTimeout
+        self.beforeSoftEndUndo = beforeSoftEndUndo
         self.afterSourceTransition = afterSourceTransition
     }
 
@@ -156,8 +228,40 @@ actor CallCoordinator {
         idempotencyKey: String = UUID().uuidString,
         reason: CallStopReason
     ) async throws -> CallCoordinatorSnapshot {
+        guard active != nil || preparedEnd != nil else { return current }
+        let prepared: PreparedCallEnd
+        do {
+            prepared = try await prepareEnd(
+                idempotencyKey: idempotencyKey,
+                initialReason: reason
+            )
+        } catch CallCoordinatorError.notRecording {
+            return current
+        }
+        return try await commitPreparedEnd(
+            prepared,
+            disposition: .finish(reason)
+        )
+    }
+
+    func prepareEnd(
+        idempotencyKey: String = UUID().uuidString,
+        initialReason: CallStopReason
+    ) async throws -> PreparedCallEnd {
         try await enqueue { [self] in
-            try await performEnd(idempotencyKey: idempotencyKey, reason: reason)
+            try await performPrepareEnd(
+                idempotencyKey: idempotencyKey,
+                initialReason: initialReason
+            )
+        }
+    }
+
+    func commitPreparedEnd(
+        _ prepared: PreparedCallEnd,
+        disposition: SealedCallEndDisposition
+    ) async throws -> CallCoordinatorSnapshot {
+        try await enqueue { [self] in
+            try await performCommitPreparedEnd(prepared, disposition: disposition)
         }
     }
 
@@ -172,16 +276,21 @@ actor CallCoordinator {
     func commitSoftEnd(
         idempotencyKey: String = UUID().uuidString
     ) async throws -> CallCoordinatorSnapshot {
-        try await enqueue { [self] in
-            try await performEnd(idempotencyKey: idempotencyKey, reason: .automatic)
-        }
+        try await end(idempotencyKey: idempotencyKey, reason: .automatic)
     }
 
     /// Stops an automatically-created false positive without creating final transcript work or lifecycle
     /// webhooks. The caller must immediately run physical call erasure; the interrupted row is only a
     /// crash-forward bridge that makes the evidence eligible for safe deletion.
     func rejectAutomatic() async throws -> CallCoordinatorSnapshot {
-        try await enqueue { [self] in try await performRejectAutomatic() }
+        guard active != nil || preparedEnd != nil else { return current }
+        let prepared: PreparedCallEnd
+        do {
+            prepared = try await prepareEnd(initialReason: .privacy)
+        } catch CallCoordinatorError.notRecording {
+            return current
+        }
+        return try await commitPreparedEnd(prepared, disposition: .rejectAutomatic)
     }
 
     private func performStart(
@@ -251,7 +360,8 @@ actor CallCoordinator {
             spool: spool,
             lastBookmarkEndMs: startedAtMs,
             bookmarkCount: 0,
-            softEnd: nil
+            softEnd: nil,
+            evidenceDegradationReason: partial ? "source_unavailable" : nil
         )
         current = CallCoordinatorSnapshot(
             phase: .recording,
@@ -265,6 +375,9 @@ actor CallCoordinator {
     }
 
     private func performBookmark(idempotencyKey: String) async throws -> CallBookmarkRow {
+        guard preparedEnd == nil, current.phase != .finalizing else {
+            throw CallCoordinatorError.bookmarkClosed
+        }
         if active?.softEnd != nil {
             _ = try await performUndoSoftEnd()
         }
@@ -299,6 +412,9 @@ actor CallCoordinator {
                 reason: "source_gap",
                 nowMs: milliseconds(now())
             )
+            if active.evidenceDegradationReason == nil {
+                active.evidenceDegradationReason = "source_gap"
+            }
         }
         guard let bookmarkID = creation.bookmark.id,
               let jobID = creation.job.id else {
@@ -373,8 +489,12 @@ actor CallCoordinator {
     }
 
     private func performUndoSoftEnd() async throws -> CallCoordinatorSnapshot {
+        guard preparedEnd == nil, current.phase == .recoveryTail else {
+            throw CallCoordinatorError.bookmarkClosed
+        }
         guard var active else { throw CallCoordinatorError.notRecording }
         guard let softEnd = active.softEnd else { return current }
+        await beforeSoftEndUndo()
         let spool = active.spool
         await softEnd.tail.forward { frame in await spool.consume(frame) }
         active.softEnd = nil
@@ -390,18 +510,21 @@ actor CallCoordinator {
         return current
     }
 
-    private func performEnd(
+    private func performPrepareEnd(
         idempotencyKey: String,
-        reason: CallStopReason
-    ) async throws -> CallCoordinatorSnapshot {
-        guard let active else { return current }
+        initialReason: CallStopReason
+    ) async throws -> PreparedCallEnd {
+        if let preparedEnd {
+            return preparedEnd.publicValue
+        }
+        guard let active else { throw CallCoordinatorError.notRecording }
         current = CallCoordinatorSnapshot(
             phase: .finalizing,
             callID: active.id,
             me: current.me,
             system: current.system,
             bookmarkCount: active.bookmarkCount,
-            stopReason: reason
+            stopReason: initialReason
         )
 
         let finalCoverage: CallSpoolCoverage
@@ -425,16 +548,6 @@ actor CallCoordinator {
             await active.spool.closeAdmission()
             finished = try await active.spool.finish()
             await audio.stop()
-            _ = try await repository.endCall(
-                callID: active.id,
-                idempotencyKey: idempotencyKey,
-                endedAtMs: endedAtMs,
-                meEndSample: finished.meEndSample,
-                systemEndSample: finished.systemEndSample,
-                degradationReason: reason.persistenceCode
-                    ?? ((finalCoverage.degraded || finished.degraded) ? "source_gap" : nil)
-            )
-            await afterSourceTransition()
         } catch {
             await audio.installSink(nil)
             await active.spool.closeAdmission()
@@ -453,13 +566,15 @@ actor CallCoordinator {
                 me: current.me == .disabled ? .disabled : .gap,
                 system: current.system == .disabled ? .disabled : .gap,
                 bookmarkCount: active.bookmarkCount,
-                stopReason: reason
+                stopReason: initialReason
             )
             throw error
         }
-        self.active = nil
-        current = CallCoordinatorSnapshot(
-            phase: .pendingTranscription,
+        let evidenceDegradationReason =
+            active.evidenceDegradationReason
+                ?? ((finalCoverage.degraded || finished.degraded) ? "source_gap" : nil)
+        let prepared = PreparedCallEnd(
+            token: UUID(),
             callID: active.id,
             me: sourceStateAfterCoverage(
                 current.me,
@@ -471,52 +586,93 @@ actor CallCoordinator {
                 endSample: finished.systemEndSample,
                 gap: finished.systemGap
             ),
-            bookmarkCount: active.bookmarkCount,
-            stopReason: reason
+            bookmarkCount: active.bookmarkCount
         )
-        return current
+        preparedEnd = PreparedEndState(
+            publicValue: prepared,
+            idempotencyKey: idempotencyKey,
+            endedAtMs: endedAtMs,
+            finished: finished,
+            evidenceDegradationReason: evidenceDegradationReason
+        )
+        current = prepared.finalizingSnapshot(disposition: .finish(initialReason))
+        return prepared
     }
 
-    private func performRejectAutomatic() async throws -> CallCoordinatorSnapshot {
-        guard let active else { return current }
-        current = CallCoordinatorSnapshot(
-            phase: .finalizing,
-            callID: active.id,
-            me: current.me,
-            system: current.system,
-            bookmarkCount: active.bookmarkCount,
-            stopReason: .privacy
-        )
+    private func performCommitPreparedEnd(
+        _ prepared: PreparedCallEnd,
+        disposition: SealedCallEndDisposition
+    ) async throws -> CallCoordinatorSnapshot {
+        guard let preparedState = preparedEnd else { return current }
+        guard preparedState.publicValue.token == prepared.token,
+              preparedState.publicValue.callID == prepared.callID
+        else { throw CallCoordinatorError.stalePreparedEnd }
+        current = prepared.finalizingSnapshot(disposition: disposition)
         do {
-            if let softEnd = active.softEnd { await softEnd.tail.discard() }
-            await audio.installSink(nil)
-            await active.spool.closeAdmission()
-            _ = try await active.spool.finish()
-            await audio.stop()
-            let rejectedAtMs = milliseconds(now())
-            try await repository.markCallInterrupted(
-                callID: active.id,
-                endedAtMs: rejectedAtMs,
-                reason: "automatic_rejected",
-                nowMs: rejectedAtMs
-            )
+            switch disposition {
+            case .rejectAutomatic:
+                let rejectedAtMs = milliseconds(now())
+                try await repository.markCallInterrupted(
+                    callID: prepared.callID,
+                    endedAtMs: rejectedAtMs,
+                    reason: "automatic_rejected",
+                    nowMs: rejectedAtMs
+                )
+
+            case .finish(let reason):
+                _ = try await repository.endCall(
+                    callID: prepared.callID,
+                    idempotencyKey: preparedState.idempotencyKey,
+                    endedAtMs: preparedState.endedAtMs,
+                    meEndSample: preparedState.finished.meEndSample,
+                    systemEndSample: preparedState.finished.systemEndSample,
+                    degradationReason:
+                        reason.persistenceCode
+                            ?? preparedState.evidenceDegradationReason
+                )
+                // The call.ended row is inserted in the same transaction above. Only now may the
+                // dispatcher observe it; no mutable stop-reason reconciliation follows.
+                await afterSourceTransition()
+            }
         } catch {
-            await audio.installSink(nil)
-            await active.spool.closeAdmission()
-            await audio.stop()
             let failedAtMs = milliseconds(now())
             try? await repository.markCallInterrupted(
-                callID: active.id,
+                callID: prepared.callID,
                 endedAtMs: failedAtMs,
-                reason: "automatic_reject_incomplete",
+                reason: disposition == .rejectAutomatic
+                    ? "automatic_reject_incomplete"
+                    : "evidence_persistence_failed",
                 nowMs: failedAtMs
             )
             self.active = nil
-            current = .idle
+            self.preparedEnd = nil
+            current = disposition == .rejectAutomatic
+                ? .idle
+                : CallCoordinatorSnapshot(
+                    phase: .failed,
+                    callID: prepared.callID,
+                    me: prepared.me == .disabled ? .disabled : .gap,
+                    system: prepared.system == .disabled ? .disabled : .gap,
+                    bookmarkCount: prepared.bookmarkCount,
+                    stopReason: disposition.stopReason
+                )
             throw error
         }
         self.active = nil
-        current = .idle
+        self.preparedEnd = nil
+        switch disposition {
+        case .rejectAutomatic:
+            current = .idle
+        case .finish(let reason):
+            current = CallCoordinatorSnapshot(
+                phase: .pendingTranscription,
+                callID: prepared.callID,
+                me: prepared.me,
+                system: prepared.system,
+                bookmarkCount: prepared.bookmarkCount,
+                stopReason: reason
+            )
+        }
         return current
     }
 

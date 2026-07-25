@@ -29,8 +29,17 @@ final class AppEnvironment {
     let privacy = PrivacyStore()
     let rewards = RewardsStore()   // cosmetic rewards (theme/icon/menu-bar) — independent of the DB
     let workspace = WorkspaceStore()
-    private(set) var automaticCallBanner: AutomaticCallBannerState?
+    private(set) var automaticCallBanner: AutomaticCallBannerState? {
+        didSet { publishAutomaticCallPopup() }
+    }
+    private(set) var automaticCallRejectionCallID: Int64? {
+        didSet { publishAutomaticCallPopup() }
+    }
+    var automaticCallRejectionInProgress: Bool {
+        automaticCallRejectionCallID == automaticCallBanner?.callID
+    }
     @ObservationIgnored private let keepMediaPolicyCoordinator = KeepMediaPolicyCoordinator()
+    @ObservationIgnored private var automaticCallPopupPresenter: AutomaticCallPopupPresenter?
 
     init() {
         let storageSettings = StorageSettingsStore()
@@ -41,6 +50,28 @@ final class AppEnvironment {
         audioSettings.onCaptureConfigurationChanged = { [weak self] in
             self?.recording.syncAudio()
         }
+    }
+
+    /// The banner state is authoritative. The popup is only a lazily-created mirror and never
+    /// requests notification permission or activates Eye.
+    private func publishAutomaticCallPopup() {
+        guard let state = automaticCallBanner else {
+            automaticCallPopupPresenter?.update(
+                state: nil,
+                rejectionInProgress: false
+            )
+            return
+        }
+        if automaticCallPopupPresenter == nil {
+            automaticCallPopupPresenter = AutomaticCallPopupPresenter(
+                onReject: { [weak self] in self?.rejectDetectedCall() },
+                onUndo: { [weak self] in self?.undoDetectedCallEnd() }
+            )
+        }
+        automaticCallPopupPresenter?.update(
+            state: state,
+            rejectionInProgress: automaticCallRejectionInProgress
+        )
     }
     var presentedCallID: Int64?
     /// First launch → onboarding (consent "everything gets recorded" + permissions). Persist: shown until completed.
@@ -127,8 +158,19 @@ final class AppEnvironment {
     @ObservationIgnored private var meetingTask: Task<Void, Never>?
     @ObservationIgnored private var callDetectionPolicy = CallDetectionPolicy()
     @ObservationIgnored private var automaticCallFingerprint: String?
+    @ObservationIgnored private var claimedCallDetectorFingerprint: String?
+    @ObservationIgnored private var pendingUserEndDetectorFingerprint: String?
+    @ObservationIgnored private var lowDiskSuspendedDetectorFingerprint: String?
+    @ObservationIgnored private var maintenanceSuspendedDetectorFingerprint: String?
     @ObservationIgnored private var automaticCallEndGraceTask: Task<Void, Never>?
     @ObservationIgnored private var automaticCallRecoveryTask: Task<Void, Never>?
+    @ObservationIgnored private var automaticCallRecoveryGeneration: UInt64 = 0
+    @ObservationIgnored private var automaticCallRejectionTask: Task<Void, Never>?
+    @ObservationIgnored private var automaticCallRejectionReceipt: CallPrivacyIntentReceipt?
+    @ObservationIgnored private var automaticCallRejectionOwnsAutomationSuspension = false
+    @ObservationIgnored private var automaticCallRejectionOwnsTranscriptSuspension = false
+    @ObservationIgnored private var automaticCallRejectionOwnsSpeakerSuspension = false
+    @ObservationIgnored private var terminationPrivacyGate = AppTerminationPrivacyGate()
     @ObservationIgnored private(set) var browserHistoryImporter: BrowserHistoryImporter?
     @ObservationIgnored private var browserHistoryTask: Task<Void, Never>?
     @ObservationIgnored private var lowDiskTask: Task<Void, Never>?
@@ -263,9 +305,21 @@ final class AppEnvironment {
         recordingTerminationRecoveryTask?.cancel()
         recordingTerminationRecoveryTask = phase.recoveryTask { @MainActor [weak self] in
             guard let self else { return }
-            self.recording.resumeAfterMaintenance()
+            await self.resumeRecordingAfterCancelledTermination()
             self.recordingTerminationRecoveryTask = nil
         }
+    }
+
+    /// Reopens capture after macOS cancels Quit. A maintenance call end has already closed the
+    /// Call Envelope, so its detector identity must be released at the same boundary as recording
+    /// admission. Otherwise the browser can stay pinned forever after a later shutdown phase fails.
+    private func resumeRecordingAfterCancelledTermination() async {
+        if let fingerprint = maintenanceSuspendedDetectorFingerprint {
+            await meetingDetector?.releaseSession(fingerprint: fingerprint)
+            callDetectionPolicy.resetAfterCompletion()
+            maintenanceSuspendedDetectorFingerprint = nil
+        }
+        recording.resumeAfterMaintenance()
     }
 
     /// 👁 Delighter: once per crossed "round" memory milestone — a friendly local notification
@@ -393,6 +447,21 @@ final class AppEnvironment {
             // dies (willTerminate would be too late — the process dies synchronously there). With a 30s timeout.
             ZBSEyeAppDelegate.onTerminate = { [weak self] in
                 guard let self else { return true }
+                guard self.terminationPrivacyGate.acquireTerminationLease(
+                    automaticRejectionTaskActive: self.automaticCallRejectionTask != nil,
+                    automaticRejectionCallID: self.automaticCallRejectionCallID
+                ) else {
+                    Log.audio.error(
+                        "termination cancelled: false-call privacy deletion is still completing"
+                    )
+                    return false
+                }
+                var keepTerminationLeaseUntilProcessExit = false
+                defer {
+                    if !keepTerminationLeaseUntilProcessExit {
+                        self.terminationPrivacyGate.releaseTerminationLease()
+                    }
+                }
                 let recoveryOwner: AppTerminationRecoveryOwner =
                     self.relocationTerminationHandoffInProgress
                         ? .relocationHandoff
@@ -458,7 +527,7 @@ final class AppEnvironment {
                         if case .completed = localRuntimePhase.outcome {
                             await self.builtInModels.refresh()
                         }
-                        self.recording.resumeAfterMaintenance()
+                        await self.resumeRecordingAfterCancelledTermination()
                         await self.whisperModelStore?.resumeAfterDrain()
                         await self.speakerDiarizationModelStore?.resumeAfterDrain()
                         await self.callTranscriptWorker?.resume()
@@ -492,7 +561,7 @@ final class AppEnvironment {
                             resumeCompute: true
                         )
                         await self.builtInModels.refresh()
-                        self.recording.resumeAfterMaintenance()
+                        await self.resumeRecordingAfterCancelledTermination()
                         await self.whisperModelStore?.resumeAfterDrain()
                         await self.speakerDiarizationModelStore?.resumeAfterDrain()
                         await self.callTranscriptWorker?.resume()
@@ -515,11 +584,13 @@ final class AppEnvironment {
                 if let owner = self.processProviderRuntimeOwner {
                     _ = await owner.shutdown(timeout: .seconds(5))
                 }
-                guard self.backupSettings.enabled, BackupManager.iCloudAvailable() else { return true }
-                let keep = self.backupSettings.keepN
-                await Self.withTimeout(seconds: 30) {
-                    _ = try? await backupManager.makeBackup(keepN: keep)
+                if self.backupSettings.enabled, BackupManager.iCloudAvailable() {
+                    let keep = self.backupSettings.keepN
+                    await Self.withTimeout(seconds: 30) {
+                        _ = try? await backupManager.makeBackup(keepN: keep)
+                    }
                 }
+                keepTerminationLeaseUntilProcessExit = true
                 return true
             }
             ZBSEyeHTTPServer.log("bootstrap: db ok")
@@ -843,8 +914,7 @@ final class AppEnvironment {
                     guard let audioCoordinator else { return .none }
                     let permitted = await MainActor.run { [weak self] in
                         guard let self else { return CallSourceSelection.none }
-                        let diskOK = storage.freeBytes() >= DiskReservePolicy.standard.pauseBytes
-                        guard !self.recording.lowDiskPaused, diskOK else {
+                        guard !self.isCallDiskAdmissionClosed else {
                             return CallSourceSelection.none
                         }
                         return CallSourceSelection(
@@ -882,13 +952,19 @@ final class AppEnvironment {
             calls.onManualStartWhileActive = { [weak self] callID in
                 self?.claimAutomaticCall(callID: callID)
             }
+            calls.onUserEndRequested = { [weak self] in
+                self?.handleUserRequestedCallEnd()
+            }
+            calls.onEndCompleted = { [weak self] reason, didFinish in
+                self?.handleCallEndCompleted(reason: reason, didFinish: didFinish)
+            }
             // Clear the session-scoped manual audio override when recording truly stops (NOT on every
             // syncAudio re-sync — that fires each meeting edge and would wipe the override).
             recording.onSessionStop = { [weak self] in self?.audioSettings.clearManualOverride() }
 
-            // Meeting detection → drives meetings-only capture. On-device (CoreAudio mic-in-use +
-            // frontmost call app), no new permission. Runs for the app's lifetime; the consumer only
-            // re-syncs audio while recording, and syncAudio() itself no-ops when not capturing.
+            // Meeting detection drives meetings-only capture. CoreAudio identifies native apps or
+            // qualified Chromium roots; bounded Accessibility confirms a real call surface without
+            // prompting or persisting browser text. syncAudio() itself no-ops when not capturing.
             let detector = MeetingDetector()
             self.meetingDetector = detector
             self.meetingTask = Task { [weak self] in
@@ -1297,6 +1373,12 @@ final class AppEnvironment {
     func relocate(to chosen: URL) async {
         guard let db, let storage, let ingest,
               !storageSettings.relocationInProgress else { return }
+        guard automaticCallRejectionTask == nil,
+              automaticCallRejectionCallID == nil else {
+            storageSettings.relocationError =
+                "Wait for the false call to finish permanent deletion before moving storage."
+            return
+        }
         guard !calls.isActive else {
             storageSettings.relocationError = "End the active call before moving storage. The recording was not interrupted."
             return
@@ -1457,6 +1539,14 @@ final class AppEnvironment {
                 Log.audio.error("low-disk recovery withheld: capture teardown is still unconfirmed")
                 return
             }
+            // Low disk is a temporary admission barrier, not a user rejection. Drop only the
+            // detector's pre-pause active identity and reset the pure reducer immediately before
+            // reopening capture, so the same still-running call can be qualified again.
+            if let fingerprint = lowDiskSuspendedDetectorFingerprint {
+                await meetingDetector?.releaseSession(fingerprint: fingerprint)
+                callDetectionPolicy.resetAfterCompletion()
+                lowDiskSuspendedDetectorFingerprint = nil
+            }
             recording.resumeAfterLowDisk()
             await callTranscriptWorker?.resume()
             await speakerDiarizationWorker?.resume()
@@ -1473,38 +1563,91 @@ final class AppEnvironment {
 
         case let .start(fingerprint):
             audioSettings.meetingActive = true
-            guard automaticCallFingerprint == nil,
-                  let snapshot = await calls.startAutomatic(
-                    idempotencyKey: "automatic:\(fingerprint)"
-                  ),
-                  let callID = snapshot.callID
-            else { return }
-            automaticCallFingerprint = fingerprint
-            let nowMs = msFromDate(Date())
-            let bundleID = evidence.surface?.ownerBundleID
-            let appName = bundleID.flatMap {
-                NSRunningApplication.runningApplications(withBundleIdentifier: $0).first?.localizedName
+            if isAutomaticCallAdmissionTemporarilyClosed {
+                // A call first appearing while a temporary admission barrier is closed is not a
+                // failed/rejected call. Release only this detector identity so the same still-
+                // running surface can qualify again after privacy pause/relocation/low disk ends.
+                audioSettings.meetingActive = false
+                callDetectionPolicy.resetAfterCompletion()
+                await meetingDetector?.releaseSession(fingerprint: fingerprint)
+                return
             }
-            try? await callRepository?.upsertCallContext(
-                CallContextRow(
-                    callId: callID,
-                    captureOwner: .automatic,
-                    disposition: .active,
-                    detectorFingerprintHash: fingerprint,
-                    sourceAppBundleID: bundleID,
-                    sourceAppName: appName,
-                    trustedOriginHost: evidence.surface?.trustedOrigin?.host,
-                    title: nil,
-                    participantsJSON: "[]",
-                    createdAtMs: nowMs,
-                    updatedAtMs: nowMs
+            guard automaticCallFingerprint == nil else { return }
+            // Publish detector ownership before the first await. If privacy/maintenance joins this
+            // start, `onEndCompleted` now owns suppression and releases it only after audio teardown.
+            automaticCallFingerprint = fingerprint
+            let startResult = await calls.startAutomatic(
+                idempotencyKey: "automatic:\(fingerprint)"
+            )
+            switch startResult {
+            case .interruptedByEnd:
+                return
+            case .admissionClosed:
+                audioSettings.meetingActive = false
+                // The Store latches the exact failed admission check. Do not re-read the current
+                // barrier after the await: it may already have reopened.
+                callDetectionPolicy.resetAfterCompletion()
+                await meetingDetector?.releaseSession(fingerprint: fingerprint)
+                if automaticCallFingerprint == fingerprint {
+                    automaticCallFingerprint = nil
+                }
+                Log.meetingDetection.info(
+                    "automatic_call_start_deferred transient_admission_barrier=true"
                 )
-            )
-            automaticCallBanner = AutomaticCallBannerState(
-                phase: .started,
-                callID: callID,
-                deadline: nil
-            )
+                return
+            case .failed:
+                audioSettings.meetingActive = false
+                // A real capture failure (sources off or coordinator failure) is suppressed until
+                // disappearance so the detector does not spin on the same surface.
+                callDetectionPolicy.reject(fingerprint: fingerprint)
+                await meetingDetector?.suppressSession(fingerprint: fingerprint)
+                if automaticCallFingerprint == fingerprint {
+                    automaticCallFingerprint = nil
+                }
+                Log.meetingDetection.error(
+                    "automatic_call_start_failed suppressed_until_idle=true"
+                )
+                return
+            case let .started(snapshot):
+                guard let callID = snapshot.callID,
+                      automaticCallFingerprint == fingerprint,
+                      calls.canPublishAutomaticStart(callID: callID)
+                else {
+                    // A terminal end began after `startAutomatic` produced its success. The
+                    // completion callback owns detector teardown; never suppress early here.
+                    return
+                }
+                let nowMs = msFromDate(Date())
+                let bundleID = evidence.surface?.ownerBundleID
+                let appName = bundleID.flatMap {
+                    NSRunningApplication.runningApplications(withBundleIdentifier: $0).first?.localizedName
+                }
+                try? await callRepository?.upsertCallContext(
+                    CallContextRow(
+                        callId: callID,
+                        captureOwner: .automatic,
+                        disposition: .active,
+                        detectorFingerprintHash: fingerprint,
+                        sourceAppBundleID: bundleID,
+                        sourceAppName: appName,
+                        trustedOriginHost: evidence.surface?.trustedOrigin?.host,
+                        title: nil,
+                        participantsJSON: "[]",
+                        createdAtMs: nowMs,
+                        updatedAtMs: nowMs
+                    )
+                )
+                guard calls.canPublishAutomaticStart(callID: callID),
+                      automaticCallFingerprint == fingerprint
+                else {
+                    return
+                }
+                automaticCallBanner = AutomaticCallBannerState(
+                    phase: .started,
+                    callID: callID,
+                    deadline: nil
+                )
+            }
 
         case let .activity(fingerprint):
             guard automaticCallFingerprint == fingerprint else { return }
@@ -1512,11 +1655,23 @@ final class AppEnvironment {
             automaticCallEndGraceTask?.cancel()
             automaticCallEndGraceTask = nil
             if calls.snapshot.phase == .recoveryTail {
-                automaticCallRecoveryTask?.cancel()
-                automaticCallRecoveryTask = nil
-                _ = await calls.undoAutomaticEndAndWait()
+                guard let undoRequest = calls.requestAutomaticUndo() else {
+                    // The deadline may already own physical teardown. Do not cancel that owner's
+                    // post-commit cleanup; a later detector tick can qualify a successor normally.
+                    return
+                }
+                cancelAutomaticCallRecovery()
+                guard await calls.undoAutomaticEndAndWait(request: undoRequest) != nil else {
+                    restoreAutomaticCallRecoveryAfterFailedUndo(
+                        callID: undoRequest.callID,
+                        fingerprint: fingerprint
+                    )
+                    return
+                }
             }
-            if let callID = calls.snapshot.callID {
+            if let callID = calls.snapshot.callID,
+               calls.canPublishAutomaticResume(callID: callID),
+               automaticCallFingerprint == fingerprint {
                 automaticCallBanner = AutomaticCallBannerState(
                     phase: .started,
                     callID: callID,
@@ -1549,12 +1704,37 @@ final class AppEnvironment {
 
         case .becameIdle:
             audioSettings.meetingActive = false
+            await meetingDetector?.releaseSession()
         }
+    }
+
+    private var isCallDiskAdmissionClosed: Bool {
+        recording.lowDiskPaused
+            || (storage?.freeBytes() ?? 0) < DiskReservePolicy.standard.pauseBytes
+    }
+
+    private var isAutomaticCallAdmissionTemporarilyClosed: Bool {
+        isCallDiskAdmissionClosed
+            || recording.pausedUntil != nil
+            || storageSettings.relocationInProgress
+    }
+
+    private func cancelAutomaticCallRecovery() {
+        automaticCallRecoveryGeneration &+= 1
+        automaticCallRecoveryTask?.cancel()
+        automaticCallRecoveryTask = nil
     }
 
     private func beginAutomaticRecoveryTail(callID: Int64, fingerprint: String) async {
         guard automaticCallFingerprint == fingerprint,
               await calls.softEndAutomaticAndWait() != nil
+        else { return }
+        scheduleAutomaticCallRecovery(callID: callID, fingerprint: fingerprint)
+    }
+
+    private func scheduleAutomaticCallRecovery(callID: Int64, fingerprint: String) {
+        guard automaticCallFingerprint == fingerprint,
+              calls.canScheduleAutomaticEnd
         else { return }
         let deadline = Date().addingTimeInterval(15)
         automaticCallBanner = AutomaticCallBannerState(
@@ -1562,62 +1742,343 @@ final class AppEnvironment {
             callID: callID,
             deadline: deadline
         )
-        automaticCallRecoveryTask?.cancel()
+        cancelAutomaticCallRecovery()
+        let recoveryGeneration = automaticCallRecoveryGeneration
         automaticCallRecoveryTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(15))
             guard !Task.isCancelled,
                   let self,
+                  self.automaticCallFingerprint == fingerprint,
+                  self.automaticCallRecoveryGeneration == recoveryGeneration
+            else { return }
+            let committed = await self.calls.commitAutomaticEndAndWait()
+            guard !Task.isCancelled,
+                  self.automaticCallRecoveryGeneration == recoveryGeneration,
                   self.automaticCallFingerprint == fingerprint
             else { return }
+            if committed?.phase != .pendingTranscription
+                || committed?.stopReason != .automatic {
+                if self.calls.canScheduleAutomaticEnd {
+                    // No end was admitted (for example, a transient competing claim disappeared).
+                    // Keep the exact lifecycle owner alive and give it one fresh bounded deadline.
+                    self.automaticCallRecoveryTask = nil
+                    self.scheduleAutomaticCallRecovery(
+                        callID: callID,
+                        fingerprint: fingerprint
+                    )
+                    return
+                }
+                guard !self.calls.isActive else { return }
+                // Physical teardown failed after closing audio. Preserve the failed Call row, but
+                // suppress only this detector surface and release the active slot so a different
+                // call can still start without relaunching Eye.
+                self.automaticCallRecoveryTask = nil
+                self.automaticCallFingerprint = nil
+                self.automaticCallBanner = nil
+                self.audioSettings.meetingActive = false
+                self.callDetectionPolicy.reject(fingerprint: fingerprint)
+                await self.meetingDetector?.suppressSession(fingerprint: fingerprint)
+                return
+            }
             self.automaticCallRecoveryTask = nil
-            _ = await self.calls.commitAutomaticEndAndWait()
             self.automaticCallFingerprint = nil
             self.automaticCallBanner = nil
             self.callDetectionPolicy.resetAfterCompletion()
+            await self.meetingDetector?.releaseSession(fingerprint: fingerprint)
         }
     }
 
+    private func restoreAutomaticCallRecoveryAfterFailedUndo(
+        callID: Int64,
+        fingerprint: String
+    ) {
+        // A coordinator error must not strand a call in recoveryTail forever. If a stronger
+        // terminal owner invalidated Undo, canScheduleAutomaticEnd is false and that owner keeps
+        // exclusive responsibility for cleanup.
+        scheduleAutomaticCallRecovery(callID: callID, fingerprint: fingerprint)
+    }
+
     func rejectDetectedCall() {
+        guard terminationPrivacyGate.allowsAutomaticRejection else { return }
+        guard !automaticCallRejectionInProgress else { return }
         guard let fingerprint = automaticCallFingerprint else { return }
-        callDetectionPolicy.reject(fingerprint: fingerprint)
+        guard let storage,
+              let callID = calls.automaticRejectionCandidateCallID(),
+              automaticCallBanner?.callID == callID
+        else {
+            // The one join window has already sealed. Never make a late click look accepted:
+            // this call remains available in Calls for an explicit permanent delete.
+            calls.setExternalError(
+                String(localized: "The call is already finishing. Remove it from Calls when it appears.")
+            )
+            return
+        }
+        let journalExecutor = CallPrivacyIntentJournalExecutor(
+            mediaRoot: storage.mediaDirectory
+        )
+        automaticCallRejectionCallID = callID
+        automaticCallRejectionReceipt = nil
+        automaticCallRejectionOwnsAutomationSuspension = false
+        automaticCallRejectionOwnsTranscriptSuspension = false
+        automaticCallRejectionOwnsSpeakerSuspension = false
+        guard let rejectionRequest = calls.requestAutomaticRejection(
+            preflight: { @MainActor [weak self] in
+                guard let self,
+                      self.automaticCallRejectionCallID == callID
+                else { return false }
+                if let dispatcher = self.callAutomationDispatcher {
+                    // Close outbound admission before the potentially slow receipt fsync. A
+                    // previously queued checkpoint/transcript event must not escape after the
+                    // user has clicked "Not a call".
+                    await dispatcher.suspendAndDrainForRelocation()
+                    self.automaticCallRejectionOwnsAutomationSuspension = true
+                }
+                do {
+                    self.automaticCallRejectionReceipt =
+                        try await journalExecutor.persistAutomaticRejection(
+                            callID: callID,
+                            detectorFingerprint: fingerprint
+                        )
+                } catch {
+                    if self.automaticCallRejectionOwnsAutomationSuspension {
+                        await self.callAutomationDispatcher?.resumeAfterRelocation()
+                        self.automaticCallRejectionOwnsAutomationSuspension = false
+                    }
+                    self.calls.setExternalError(
+                        String(localized: "The call is still recording because its privacy receipt could not be saved.")
+                    )
+                    return false
+                }
+
+                // The dispatcher is already drained, and the receipt is durable before any
+                // physical stop. Only now suppress the detector and drain evidence workers.
+                self.audioSettings.meetingActive = false
+                self.callDetectionPolicy.reject(fingerprint: fingerprint)
+                self.automaticCallEndGraceTask?.cancel()
+                self.automaticCallEndGraceTask = nil
+                self.cancelAutomaticCallRecovery()
+                self.automaticCallRejectionOwnsTranscriptSuspension =
+                    await self.callTranscriptWorker?.suspendAndDrainForEvidenceMutation() ?? false
+                self.automaticCallRejectionOwnsSpeakerSuspension =
+                    await self.speakerDiarizationWorker?.suspendAndDrainForEvidenceMutation() ?? false
+                return true
+            }
+        ),
+              rejectionRequest.callID == callID
+        else {
+            clearAutomaticCallRejection(callID: callID)
+            calls.setExternalError(
+                String(localized: "The call is already finishing. Remove it from Calls when it appears.")
+            )
+            return
+        }
+
+        automaticCallRejectionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let rejectedCallID = await self.calls.rejectAutomaticAndWait(
+                request: rejectionRequest
+            )
+            guard rejectedCallID == callID,
+                  let receipt = self.automaticCallRejectionReceipt
+            else {
+                await self.releaseAutomaticCallRejectionSuspensions()
+                self.clearAutomaticCallRejection(callID: callID)
+                self.automaticCallRejectionTask = nil
+                self.automaticCallRejectionReceipt = nil
+                return
+            }
+            var retryDelaySeconds: Double = 1
+            while !Task.isCancelled {
+                do {
+                    guard let callRepository = self.callRepository,
+                          let deletionService = self.callEvidenceDeletionService
+                    else {
+                        throw CallPrivacyIntentJournalError.invalidReceipt
+                    }
+                    let nowMs = msFromDate(Date())
+                    try await callRepository.reconcileAutomaticRejectionIntents(
+                        [receipt],
+                        nowMs: nowMs
+                    )
+                    let durableIDs = try await callRepository.rejectedCallIDsPendingErase()
+                    guard durableIDs.contains(callID) else {
+                        throw CallPrivacyIntentJournalError.invalidReceipt
+                    }
+                    _ = try await deletionService.erase(
+                        callID: callID,
+                        nowMs: nowMs
+                    )
+                    break
+                } catch {
+                    self.calls.setExternalError(
+                        String(localized: "The false call is stopped. Permanent local deletion is retrying.")
+                    )
+                    do {
+                        try await Task.sleep(for: .seconds(retryDelaySeconds))
+                    } catch {
+                        return
+                    }
+                    if retryDelaySeconds < 2 {
+                        retryDelaySeconds = 2
+                    } else if retryDelaySeconds < 5 {
+                        retryDelaySeconds = 5
+                    } else if retryDelaySeconds < 10 {
+                        retryDelaySeconds = 10
+                    } else if retryDelaySeconds < 20 {
+                        retryDelaySeconds = 20
+                    } else {
+                        retryDelaySeconds = 30
+                    }
+                    continue
+                }
+            }
+            guard !Task.isCancelled else { return }
+
+            self.calls.setExternalError(nil)
+            if self.automaticCallBanner?.callID == callID {
+                self.automaticCallBanner = nil
+            }
+            await self.meetingDetector?.suppressSession(fingerprint: fingerprint)
+            if self.automaticCallFingerprint == fingerprint {
+                self.automaticCallFingerprint = nil
+            }
+            if self.pendingUserEndDetectorFingerprint == fingerprint {
+                self.pendingUserEndDetectorFingerprint = nil
+            }
+            // Keep the exclusion markers live through the final await. Otherwise Quit can acquire
+            // its lease and have this older task resume workers during shutdown.
+            await self.releaseAutomaticCallRejectionSuspensions()
+            self.clearAutomaticCallRejection(callID: callID)
+            self.automaticCallRejectionTask = nil
+            self.automaticCallRejectionReceipt = nil
+        }
+    }
+
+    private func releaseAutomaticCallRejectionSuspensions() async {
+        if automaticCallRejectionOwnsAutomationSuspension {
+            await callAutomationDispatcher?.resumeAfterRelocation()
+            automaticCallRejectionOwnsAutomationSuspension = false
+        }
+        let workersMayResume =
+            !recording.lowDiskPaused
+                && !storageSettings.relocationInProgress
+        if workersMayResume, automaticCallRejectionOwnsTranscriptSuspension {
+            await callTranscriptWorker?.resume()
+        }
+        if workersMayResume, automaticCallRejectionOwnsSpeakerSuspension {
+            await speakerDiarizationWorker?.resume()
+        }
+        automaticCallRejectionOwnsTranscriptSuspension = false
+        automaticCallRejectionOwnsSpeakerSuspension = false
+    }
+
+    private func clearAutomaticCallRejection(callID: Int64) {
+        if automaticCallRejectionCallID == callID {
+            automaticCallRejectionCallID = nil
+        }
+    }
+
+    /// A user Stop is definitive for the current detector surface. Policy rejection is synchronous,
+    /// but the detector keeps that surface in its active slot until CallRecordingStore confirms its
+    /// audio teardown. This serializes A's teardown before B can be admitted.
+    private func handleUserRequestedCallEnd() {
+        guard let fingerprint = automaticCallFingerprint ?? claimedCallDetectorFingerprint else {
+            return
+        }
+        audioSettings.meetingActive = false
         automaticCallEndGraceTask?.cancel()
         automaticCallEndGraceTask = nil
-        automaticCallRecoveryTask?.cancel()
-        automaticCallRecoveryTask = nil
+        cancelAutomaticCallRecovery()
         automaticCallBanner = nil
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            if let callID = self.calls.snapshot.callID {
-                try? await self.callRepository?.updateCallCaptureContext(
-                    callID: callID,
-                    owner: .automatic,
-                    disposition: .rejected,
-                    nowMs: msFromDate(Date())
-                )
+        pendingUserEndDetectorFingerprint = fingerprint
+        callDetectionPolicy.reject(fingerprint: fingerprint)
+    }
+
+    private func handleCallEndCompleted(reason: CallStopReason, didFinish: Bool) {
+        // Defense in depth for a user click that lands after physical stop has crossed its durable
+        // boundary but before the MainActor completion callback runs. Such a click is terminal and
+        // must never be converted back into a recoverable low-disk pause.
+        let effectiveReason: CallStopReason =
+            pendingUserEndDetectorFingerprint == nil ? reason : .user
+        let fingerprint: String?
+        if effectiveReason == .user {
+            fingerprint = pendingUserEndDetectorFingerprint
+        } else {
+            fingerprint = automaticCallFingerprint ?? claimedCallDetectorFingerprint
+        }
+        guard let fingerprint else { return }
+        guard didFinish else {
+            Log.meetingDetection.error(
+                "call_end_unconfirmed detector_surface_retained=true"
+            )
+            return
+        }
+
+        audioSettings.meetingActive = false
+        automaticCallEndGraceTask?.cancel()
+        automaticCallEndGraceTask = nil
+        cancelAutomaticCallRecovery()
+        automaticCallBanner = nil
+        pendingUserEndDetectorFingerprint = nil
+        if effectiveReason == .lowDisk {
+            // Keep the exact detector session alive while capture admission is closed. Recovery
+            // releases and re-arms it atomically; rejecting here would suppress a continuing call
+            // for the full two-minute disappearance tombstone.
+            lowDiskSuspendedDetectorFingerprint = fingerprint
+            if automaticCallFingerprint == fingerprint {
+                automaticCallFingerprint = nil
             }
-            guard let rejectedID = await self.calls.rejectAutomaticAndWait() else { return }
-            do {
-                _ = try await self.callEvidenceDeletionService?.erase(
-                    callID: rejectedID,
-                    nowMs: msFromDate(Date())
-                )
-            } catch {
-                self.calls.setExternalError(
-                    String(localized: "The false call stopped, but its local evidence still needs deletion.")
-                )
+            if claimedCallDetectorFingerprint == fingerprint {
+                claimedCallDetectorFingerprint = nil
             }
-            self.automaticCallFingerprint = nil
+            return
+        }
+        if effectiveReason == .maintenance {
+            // Quit is still cancellable after the Call Envelope closes. Preserve ownership without
+            // suppressing the surface; cancelled-termination recovery releases and requalifies it.
+            maintenanceSuspendedDetectorFingerprint = fingerprint
+            if automaticCallFingerprint == fingerprint {
+                automaticCallFingerprint = nil
+            }
+            if claimedCallDetectorFingerprint == fingerprint {
+                claimedCallDetectorFingerprint = nil
+            }
+            return
+        }
+        callDetectionPolicy.reject(fingerprint: fingerprint)
+        if automaticCallFingerprint == fingerprint {
+            automaticCallFingerprint = nil
+        }
+        if claimedCallDetectorFingerprint == fingerprint {
+            claimedCallDetectorFingerprint = nil
+        }
+        Task { [weak meetingDetector] in
+            await meetingDetector?.suppressSession(fingerprint: fingerprint)
         }
     }
 
     func undoDetectedCallEnd() {
-        automaticCallRecoveryTask?.cancel()
-        automaticCallRecoveryTask = nil
+        guard let fingerprint = automaticCallFingerprint,
+              let undoRequest = calls.requestAutomaticUndo()
+        else {
+            // Once the automatic deadline owns teardown, Undo is no longer accepted and must not
+            // cancel the task that clears detector state after its durable commit.
+            return
+        }
+        cancelAutomaticCallRecovery()
         Task { @MainActor [weak self] in
-            guard let self,
-                  await self.calls.undoAutomaticEndAndWait() != nil,
-                  let callID = self.calls.snapshot.callID
-            else { return }
+            guard let self else { return }
+            guard await self.calls.undoAutomaticEndAndWait(request: undoRequest) != nil,
+                  let callID = self.calls.snapshot.callID,
+                  self.calls.canPublishAutomaticResume(callID: callID)
+            else {
+                self.restoreAutomaticCallRecoveryAfterFailedUndo(
+                    callID: undoRequest.callID,
+                    fingerprint: fingerprint
+                )
+                return
+            }
+            guard self.automaticCallFingerprint == fingerprint else { return }
             self.automaticCallBanner = AutomaticCallBannerState(
                 phase: .started,
                 callID: callID,
@@ -1627,14 +2088,13 @@ final class AppEnvironment {
     }
 
     private func claimAutomaticCall(callID: Int64) {
-        guard automaticCallFingerprint != nil else { return }
+        guard let fingerprint = automaticCallFingerprint else { return }
         automaticCallEndGraceTask?.cancel()
         automaticCallEndGraceTask = nil
-        automaticCallRecoveryTask?.cancel()
-        automaticCallRecoveryTask = nil
+        cancelAutomaticCallRecovery()
+        claimedCallDetectorFingerprint = fingerprint
         automaticCallFingerprint = nil
         automaticCallBanner = nil
-        callDetectionPolicy.resetAfterCompletion()
         Task { [weak callRepository] in
             try? await callRepository?.updateCallCaptureContext(
                 callID: callID,

@@ -5,6 +5,9 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 ## [Unreleased]
 
 ### Added
+- **OS-only Chromium call detection.** Chrome, Dia, and Edge can start local call capture for
+  verified Google Meet, Zoom, and Microsoft Teams surfaces using CoreAudio plus bounded
+  Accessibility evidence — without a browser extension, AppleScript, or another permission prompt.
 - **Automatic, correctable local call capture.** Eye starts only from a supported call surface plus
   microphone evidence, shows a dismissible “Not a call” banner, waits through a 30-second end grace,
   and offers a 15-second Undo without splitting the recording.
@@ -17,6 +20,10 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 ### Changed
 - The post-call automation can fire a signed `call.processing.ready` event after both transcript and
   speaker work settle. Failed diarization is durable and retryable instead of looking permanently busy.
+- **Known native-call limitation:** after **Not a call**, Eye suppresses the same native app/window
+  until the old call control is authoritatively absent or the app/audio boundary ends. A back-to-back
+  native call reusing that exact surface may need Manual Start. This privacy-first guard does not apply
+  to the qualified Chromium path above.
 
 ## [0.5.0] — 2026-07-16
 

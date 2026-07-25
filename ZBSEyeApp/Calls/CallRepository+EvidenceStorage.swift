@@ -25,6 +25,103 @@ final class CallRepositoryEvidenceStorage: Sendable {
 }
 
 extension CallRepository {
+    /// Projects fsync'd "Not a call" receipts into SQLite before generic crash recovery can create
+    /// transcript work or automation. One transaction makes the privacy tombstone, terminal call
+    /// state, worker cancellation, and undelivered-outbox removal visible together.
+    func reconcileAutomaticRejectionIntents(
+        _ receipts: [CallPrivacyIntentReceipt],
+        nowMs: Int64
+    ) async throws {
+        guard !receipts.isEmpty else { return }
+        try await evidenceStorage.write { db in
+            for receipt in receipts {
+                guard receipt.callID > 0,
+                      receipt.detectorFingerprint.count == 64,
+                      receipt.detectorFingerprint.utf8.allSatisfy({
+                          ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+                      }),
+                      let call = try CallRow.fetchOne(db, key: receipt.callID),
+                      call.startIdempotencyKey
+                        == "automatic:\(receipt.detectorFingerprint)"
+                else {
+                    throw CallRepositoryError.invalidPrivacyIntent(receipt.callID)
+                }
+                if let context = try CallContextRow.fetchOne(db, key: receipt.callID),
+                   let persistedFingerprint = context.detectorFingerprintHash,
+                   persistedFingerprint != receipt.detectorFingerprint {
+                    throw CallRepositoryError.invalidPrivacyIntent(receipt.callID)
+                }
+
+                try db.execute(
+                    sql: """
+                        INSERT INTO call_context(
+                            callId, captureOwner, disposition, detectorFingerprintHash,
+                            sourceAppBundleID, sourceAppName, trustedOriginHost, title,
+                            participantsJSON, createdAtMs, updatedAtMs
+                        ) VALUES (?, 'automatic', 'rejected', ?, NULL, NULL, NULL, NULL, '[]', ?, ?)
+                        ON CONFLICT(callId) DO UPDATE SET
+                            captureOwner = 'automatic',
+                            disposition = 'rejected',
+                            detectorFingerprintHash = COALESCE(
+                                call_context.detectorFingerprintHash,
+                                excluded.detectorFingerprintHash
+                            ),
+                            updatedAtMs = excluded.updatedAtMs
+                        """,
+                    arguments: [
+                        receipt.callID,
+                        receipt.detectorFingerprint,
+                        nowMs,
+                        nowMs,
+                    ]
+                )
+                try db.execute(
+                    sql: """
+                        UPDATE calls
+                        SET state = CASE
+                                WHEN state IN ('recording', 'finalizing') THEN 'interrupted'
+                                ELSE state
+                            END,
+                            interrupted = CASE
+                                WHEN state IN ('recording', 'finalizing', 'interrupted') THEN 1
+                                ELSE interrupted
+                            END,
+                            endTs = CASE
+                                WHEN state IN ('recording', 'finalizing')
+                                    THEN MAX(startTs, COALESCE(endTs, ?))
+                                ELSE endTs
+                            END,
+                            degradationReason = CASE
+                                WHEN state IN ('recording', 'finalizing', 'interrupted')
+                                    THEN 'automatic_rejected'
+                                ELSE degradationReason
+                            END,
+                            updatedAtMs = MAX(updatedAtMs, ?)
+                        WHERE id = ?
+                        """,
+                    arguments: [nowMs, nowMs, receipt.callID]
+                )
+                try db.execute(
+                    sql: """
+                        UPDATE call_transcript_jobs
+                        SET state = 'cancelled', errorCode = 'automatic_rejected',
+                            updatedAtMs = MAX(updatedAtMs, ?)
+                        WHERE callId = ?
+                          AND state NOT IN ('cancelled', 'satisfied_by_final')
+                        """,
+                    arguments: [nowMs, receipt.callID]
+                )
+                try db.execute(
+                    sql: """
+                        DELETE FROM call_automation_outbox
+                        WHERE callId = ? AND state != 'delivered'
+                        """,
+                    arguments: [receipt.callID]
+                )
+            }
+        }
+    }
+
     func recordSourceSpan(_ draft: CallSourceSpanDraft) async throws -> CallSourceSpanRow {
         try await evidenceStorage.write { db in
             if let existing = try CallSourceSpanRow.filter(
@@ -203,6 +300,16 @@ extension CallRepository {
             )
             let newlyInterruptedCallIDs = Set(interruptedCallIDs)
             for callID in interruptedCallIDs {
+                let rejected = try Bool.fetchOne(
+                    db,
+                    sql: """
+                        SELECT EXISTS(
+                            SELECT 1 FROM call_context
+                            WHERE callId = ? AND disposition = 'rejected'
+                        )
+                        """,
+                    arguments: [callID]
+                ) ?? false
                 let durableEnd = try Int64.fetchOne(
                     db,
                     sql: "SELECT MAX(endMs) FROM call_audio_chunks WHERE callId = ? AND finalized = 1",
@@ -212,11 +319,16 @@ extension CallRepository {
                     sql: """
                         UPDATE calls
                         SET state = 'interrupted', interrupted = 1,
-                            degradationReason = 'recovered_after_interruption',
+                            degradationReason = ?,
                             endTs = MAX(startTs, COALESCE(?, startTs)), updatedAtMs = ?
                         WHERE id = ? AND state = 'recording'
                         """,
-                    arguments: [durableEnd, nowMs, callID]
+                    arguments: [
+                        rejected ? "automatic_rejected" : "recovered_after_interruption",
+                        durableEnd,
+                        nowMs,
+                        callID,
+                    ]
                 )
             }
 
@@ -302,6 +414,11 @@ extension CallRepository {
                 SELECT c.id, c.startTs, c.endTs, c.mediaGeneration
                 FROM calls c
                 WHERE c.state = 'interrupted'
+                  AND COALESCE(c.degradationReason, '') NOT LIKE 'automatic_reject%'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM call_context x
+                    WHERE x.callId = c.id AND x.disposition = 'rejected'
+                  )
                   AND EXISTS (
                     SELECT 1 FROM call_audio_chunks a
                     WHERE a.callId = c.id AND a.finalized = 1 AND a.bytes > 0
@@ -348,6 +465,28 @@ extension CallRepository {
                 callsInterrupted: interruptedCallIDs.count,
                 jobsReset: runningReset,
                 finalJobsCreated: finalJobsCreated
+            )
+        }
+    }
+
+    /// Rejected automatic calls are durable erase intents. Bootstrap consumes this list before
+    /// transcript workers or automation dispatchers start, and the erase journal makes cleanup
+    /// crash-forward from that point onward.
+    func rejectedCallIDsPendingErase() async throws -> [Int64] {
+        try await evidenceStorage.read { db in
+            try Int64.fetchAll(
+                db,
+                sql: """
+                    SELECT DISTINCT c.id
+                    FROM calls c
+                    LEFT JOIN call_context x ON x.callId = c.id
+                    WHERE c.state != 'recording'
+                      AND (
+                        COALESCE(c.degradationReason, '') LIKE 'automatic_reject%'
+                        OR x.disposition = 'rejected'
+                      )
+                    ORDER BY c.id
+                    """
             )
         }
     }

@@ -220,6 +220,7 @@ targets:
       - path: ZBSEyeApp/Calls/CallRepository+AutomationTransitions.swift
       - path: ZBSEyeApp/Calls/CallRepository+EvidenceStorage.swift
       - path: ZBSEyeApp/Calls/CallRecoveryService.swift
+      - path: ZBSEyeApp/Calls/CallPrivacyIntentJournal.swift
       - path: ZBSEyeApp/Calls/CallMediaMutationJournal.swift
       - path: ZBSEyeApp/Calls/CallEvidenceDeletionService.swift
       - path: ZBSEyeApp/Audio/AudioIngressPublisher.swift
@@ -263,6 +264,9 @@ targets:
       - path: ZBSEyeApp/State/CallPlaybackStore.swift
       - path: ZBSEyeApp/State/WorkspaceStore.swift
       - path: ZBSEyeApp/Meeting/CallDetectionPolicy.swift
+      - path: ZBSEyeApp/Meeting/CallAudioProcessEvidence.swift
+      - path: ZBSEyeApp/Meeting/BrowserCallSurfaceInspector.swift
+      - path: ZBSEyeApp/Meeting/NativeCallSurfaceInspector.swift
       - path: ZBSEyeApp/Calls/Diarization/SpeakerDiarizationModelManifest.swift
       - path: ZBSEyeApp/Calls/Diarization/SpeakerDiarizationModelStore.swift
       - path: ZBSEyeApp/Calls/Diarization/DiarizationHelperCommand.swift

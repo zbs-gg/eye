@@ -17,9 +17,10 @@ final class CallStorageRelocationTests: XCTestCase {
         let database = try ZBSEyeDatabase(path: databaseURL.path)
         defer { try? database.pool.close() }
         let repository = CallRepository(database: database)
+        let detectorFingerprint = String(repeating: "b", count: 64)
         let call = try await repository.createCall(
             startedAtMs: 1_000,
-            idempotencyKey: "relocate"
+            idempotencyKey: "automatic:\(detectorFingerprint)"
         )
         let callID = try XCTUnwrap(call.id)
         let span = try await repository.recordSourceSpan(
@@ -65,6 +66,11 @@ final class CallStorageRelocationTests: XCTestCase {
             idempotencyKey: "relocate-end",
             endedAtMs: 3_000
         )
+        let privacyReceipt = try CallPrivacyIntentJournal(mediaRoot: sourceMedia)
+            .persistAutomaticRejection(
+                callID: callID,
+                detectorFingerprint: detectorFingerprint
+            )
 
         let generativeRoot = StorageLocation.builtInModelRoot(under: sourceRoot)
         let generativeFile = generativeRoot.appendingPathComponent("model.fixture")
@@ -93,7 +99,7 @@ final class CallStorageRelocationTests: XCTestCase {
             progress: { _, _ in }
         )
 
-        XCTAssertEqual(report.mediaFilesCopied, 1)
+        XCTAssertEqual(report.mediaFilesCopied, 2)
         XCTAssertEqual(report.modelFilesCopied, 1)
         XCTAssertEqual(report.modelBytesCopied, Int64(generativeBytes.count))
         XCTAssertEqual(report.speechModelFilesCopied, 1)
@@ -101,6 +107,16 @@ final class CallStorageRelocationTests: XCTestCase {
         XCTAssertEqual(
             try Data(contentsOf: report.newDataRoot.appendingPathComponent("media/\(relativePath)")),
             pcm
+        )
+        let relocatedMedia = report.newDataRoot.appendingPathComponent(
+            "media",
+            isDirectory: true
+        )
+        let relocatedPrivacyJournal = try CallPrivacyIntentJournal(mediaRoot: relocatedMedia)
+        XCTAssertTrue(try relocatedPrivacyJournal.contains(privacyReceipt))
+        XCTAssertEqual(
+            try relocatedPrivacyJournal.pendingAutomaticRejections(),
+            [privacyReceipt]
         )
         XCTAssertEqual(
             try Data(

@@ -369,6 +369,230 @@ final class CallRecoveryTests: XCTestCase {
         XCTAssertEqual(secondReport.mutationsCompleted, 0)
         XCTAssertEqual(secondReport.mutationsRolledBack, 0)
     }
+
+    func testRecoveryErasesRejectedAutomaticCallsWithoutTranscriptOrWebhookWork() async throws {
+        let store = try CallRecoveryTestStore()
+        let repository = CallRepository(database: store.database)
+        try await store.database.pool.write { db in
+            var config = try XCTUnwrap(CallAutomationConfigRow.fetchOne(db, key: 1))
+            config.enabled = true
+            config.endpointURL = "http://127.0.0.1:9876/call-event"
+            config.endpointFingerprint = "fixture-receiver"
+            config.updatedAtMs = 1
+            try config.update(db)
+        }
+
+        let committed = try await repository.createCall(
+            startedAtMs: 1_000,
+            idempotencyKey: "rejected-committed"
+        )
+        let committedID = try XCTUnwrap(committed.id)
+        let committedPath = "calls/\(committedID)/me/committed.pcm"
+        try store.write(Data([1, 2]), relativePath: committedPath)
+        try await installReferencedChunk(
+            repository,
+            database: store.database,
+            callID: committedID,
+            relativePath: committedPath,
+            generation: 0
+        )
+        try await repository.markCallInterrupted(
+            callID: committedID,
+            endedAtMs: 2_000,
+            reason: "automatic_rejected",
+            nowMs: 2_000
+        )
+
+        // Simulate a crash after AppEnvironment durably marked the privacy intent, but before the
+        // coordinator's interrupted transition committed.
+        let preCommit = try await repository.createCall(
+            startedAtMs: 3_000,
+            idempotencyKey: "rejected-before-commit"
+        )
+        let preCommitID = try XCTUnwrap(preCommit.id)
+        let preCommitPath = "calls/\(preCommitID)/system/pre-commit.pcm"
+        try store.write(Data([3, 4]), relativePath: preCommitPath)
+        try await installReferencedChunk(
+            repository,
+            database: store.database,
+            callID: preCommitID,
+            relativePath: preCommitPath,
+            generation: 0
+        )
+        try await repository.upsertCallContext(
+            CallContextRow(
+                callId: preCommitID,
+                captureOwner: .automatic,
+                disposition: .rejected,
+                detectorFingerprintHash: nil,
+                sourceAppBundleID: nil,
+                sourceAppName: nil,
+                trustedOriginHost: nil,
+                title: nil,
+                participantsJSON: "[]",
+                createdAtMs: 3_500,
+                updatedAtMs: 3_500
+            )
+        )
+
+        let dispositions = try await store.database.pool.read { db in
+            try String.fetchAll(
+                db,
+                sql: """
+                    SELECT disposition FROM call_context
+                    WHERE callId IN (?, ?)
+                    ORDER BY callId
+                    """,
+                arguments: [committedID, preCommitID]
+            )
+        }
+        XCTAssertEqual(dispositions, ["rejected", "rejected"])
+
+        let report = try await CallRecoveryService(
+            repository: repository,
+            mediaRoot: store.mediaRoot
+        ).recover(nowMs: 5_000)
+
+        let remaining = try await store.database.pool.read { db in
+            (
+                calls: try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM calls WHERE id IN (?, ?)",
+                    arguments: [committedID, preCommitID]
+                ) ?? -1,
+                jobs: try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM call_transcript_jobs WHERE callId IN (?, ?)",
+                    arguments: [committedID, preCommitID]
+                ) ?? -1,
+                events: try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM call_automation_outbox WHERE callId IN (?, ?)",
+                    arguments: [committedID, preCommitID]
+                ) ?? -1
+            )
+        }
+        XCTAssertEqual(report.callsInterrupted, 1)
+        XCTAssertEqual(report.finalJobsCreated, 0)
+        XCTAssertEqual(report.mutationsCompleted, 2)
+        XCTAssertEqual(remaining.calls, 0)
+        XCTAssertEqual(remaining.jobs, 0)
+        XCTAssertEqual(remaining.events, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.url(for: committedPath).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.url(for: preCommitPath).path))
+    }
+
+    func testRecoveryErasesReceiptAfterBothRuntimeDatabaseWritesFailed() async throws {
+        let store = try CallRecoveryTestStore()
+        let repository = CallRepository(database: store.database)
+        let fingerprint = String(repeating: "b", count: 64)
+        try await store.database.pool.write { db in
+            var config = try XCTUnwrap(CallAutomationConfigRow.fetchOne(db, key: 1))
+            config.enabled = true
+            config.endpointURL = "http://127.0.0.1:9876/call-event"
+            config.endpointFingerprint = "fixture-receiver"
+            config.updatedAtMs = 1
+            try config.update(db)
+        }
+        let call = try await repository.createCall(
+            startedAtMs: 1_000,
+            idempotencyKey: "automatic:\(fingerprint)"
+        )
+        let callID = try XCTUnwrap(call.id)
+        let path = "calls/\(callID)/me/receipt-only.pcm"
+        try store.write(Data([1, 2]), relativePath: path)
+        try await installReferencedChunk(
+            repository,
+            database: store.database,
+            callID: callID,
+            relativePath: path,
+            generation: 0
+        )
+        let receipt = try CallPrivacyIntentJournal(mediaRoot: store.mediaRoot)
+            .persistAutomaticRejection(
+                callID: callID,
+                detectorFingerprint: fingerprint
+            )
+
+        let report = try await CallRecoveryService(
+            repository: repository,
+            mediaRoot: store.mediaRoot
+        ).recover(nowMs: 5_000)
+
+        let remaining = try await store.database.pool.read { db in
+            (
+                calls: try CallRow.filter(Column("id") == callID).fetchCount(db),
+                jobs: try CallTranscriptJobRow
+                    .filter(Column("callId") == callID)
+                    .fetchCount(db),
+                events: try CallAutomationOutboxRow
+                    .filter(Column("callId") == callID)
+                    .fetchCount(db)
+            )
+        }
+        XCTAssertEqual(report.callsInterrupted, 0)
+        XCTAssertEqual(report.finalJobsCreated, 0)
+        XCTAssertEqual(report.mutationsCompleted, 1)
+        XCTAssertEqual(remaining.calls, 0)
+        XCTAssertEqual(remaining.jobs, 0)
+        XCTAssertEqual(remaining.events, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.url(for: path).path))
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: store.url(for: receipt.relativePath).path
+            )
+        )
+    }
+
+    func testMismatchedReceiptBlocksRecoveryBeforeFinalJobOrWebhook() async throws {
+        let store = try CallRecoveryTestStore()
+        let repository = CallRepository(database: store.database)
+        let expected = String(repeating: "c", count: 64)
+        let mismatched = String(repeating: "d", count: 64)
+        let call = try await repository.createCall(
+            startedAtMs: 1_000,
+            idempotencyKey: "automatic:\(expected)"
+        )
+        let callID = try XCTUnwrap(call.id)
+        let receipt = try CallPrivacyIntentJournal(mediaRoot: store.mediaRoot)
+            .persistAutomaticRejection(
+                callID: callID,
+                detectorFingerprint: mismatched
+            )
+
+        do {
+            _ = try await CallRecoveryService(
+                repository: repository,
+                mediaRoot: store.mediaRoot
+            ).recover(nowMs: 5_000)
+            XCTFail("A mismatched privacy receipt must fail recovery closed.")
+        } catch {
+            XCTAssertEqual(
+                error as? CallRepositoryError,
+                .invalidPrivacyIntent(callID)
+            )
+        }
+
+        let remaining = try await store.database.pool.read { db in
+            (
+                call: try XCTUnwrap(CallRow.fetchOne(db, key: callID)),
+                jobs: try CallTranscriptJobRow
+                    .filter(Column("callId") == callID)
+                    .fetchCount(db),
+                events: try CallAutomationOutboxRow
+                    .filter(Column("callId") == callID)
+                    .fetchCount(db)
+            )
+        }
+        XCTAssertEqual(remaining.call.state, .recording)
+        XCTAssertEqual(remaining.jobs, 0)
+        XCTAssertEqual(remaining.events, 0)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: store.url(for: receipt.relativePath).path
+            )
+        )
+    }
 }
 
 private final class CallRecoveryTestStore {
