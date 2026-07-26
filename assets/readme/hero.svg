@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="420" viewBox="0 0 1200 420"
+     role="img" aria-labelledby="title desc">
+  <title id="title">ZBS Eye — tiny, local memory for your Mac</title>
+  <desc id="desc">A dark technical title board with a synthetic timeline, call, and agent-evidence view.</desc>
+
+  <rect width="1200" height="420" rx="28" fill="#0B0D10"/>
+  <rect x="1" y="1" width="1198" height="418" rx="27" fill="none" stroke="#2B3139" stroke-width="2"/>
+
+  <g id="title-block" transform="translate(62 55)">
+    <g aria-label="ZBS Eye mark">
+      <ellipse cx="32" cy="27" rx="30" ry="19" fill="none" stroke="#5B8CFF" stroke-width="4"/>
+      <circle cx="32" cy="27" r="9" fill="#5B8CFF"/>
+      <circle cx="35" cy="24" r="3" fill="#F5F7FA"/>
+    </g>
+    <text x="80" y="16" fill="#A2AAB5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="18" letter-spacing="2">NATIVE macOS · LOCAL-FIRST</text>
+    <text x="0" y="112" fill="#F5F7FA" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+          font-size="68" font-weight="750">ZBS Eye</text>
+    <text x="0" y="158" fill="#D9DEE5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+          font-size="27" font-weight="500">Your screen and calls, remembered.</text>
+    <text x="0" y="198" fill="#D9DEE5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+          font-size="27" font-weight="500">Searchable locally. Readable by your agents.</text>
+
+    <g transform="translate(0 250)">
+      <rect width="154" height="42" rx="21" fill="#16233E"/>
+      <circle cx="23" cy="21" r="6" fill="#34C759"/>
+      <text x="39" y="28" fill="#DDE7FF" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+            font-size="18" font-weight="650">CAPTURING</text>
+
+      <rect x="168" width="178" height="42" rx="21" fill="#161A20" stroke="#343B45"/>
+      <text x="190" y="28" fill="#C8CED7" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+            font-size="18">AI IS OPTIONAL</text>
+    </g>
+  </g>
+
+  <g id="project-proof" transform="translate(664 42)">
+    <rect width="476" height="336" rx="22" fill="#12161C" stroke="#303743" stroke-width="2"/>
+    <text x="28" y="40" fill="#A2AAB5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="18" letter-spacing="1">TODAY · SYNTHETIC EXAMPLE</text>
+
+    <g transform="translate(28 68)">
+      <line x1="13" y1="0" x2="13" y2="182" stroke="#343B45" stroke-width="4"/>
+      <circle cx="13" cy="18" r="8" fill="#5B8CFF"/>
+      <circle cx="13" cy="83" r="8" fill="#FF9F43"/>
+      <circle cx="13" cy="148" r="8" fill="#9B7BFF"/>
+
+      <text x="40" y="14" fill="#87909C" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+            font-size="18">09:12</text>
+      <text x="115" y="14" fill="#F5F7FA" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+            font-size="21" font-weight="650">Research notes</text>
+      <text x="40" y="38" fill="#A2AAB5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+            font-size="18">screen · text · app context</text>
+
+      <text x="40" y="79" fill="#87909C" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+            font-size="18">10:05</text>
+      <text x="115" y="79" fill="#F5F7FA" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+            font-size="21" font-weight="650">Design review</text>
+      <text x="40" y="103" fill="#A2AAB5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+            font-size="18">38 min call · 2 sources</text>
+
+      <text x="40" y="144" fill="#87909C" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+            font-size="18">11:30</text>
+      <text x="115" y="144" fill="#F5F7FA" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+            font-size="21" font-weight="650">Decision found</text>
+      <text x="40" y="168" fill="#A2AAB5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+            font-size="18">local REST / MCP evidence</text>
+    </g>
+
+    <g transform="translate(28 276)">
+      <rect width="420" height="36" rx="10" fill="#18243C"/>
+      <text x="17" y="24" fill="#DDE7FF" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+            font-size="18">“When did we choose the launch scope?” → 10:31</text>
+    </g>
+  </g>
+</svg>

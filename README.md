@@ -1,214 +1,133 @@
-<div align="center">
+<p align="center">
+  <img src="./assets/readme/hero.svg" width="100%" alt="ZBS Eye — tiny, local memory for your Mac">
+</p>
 
-<img src="docs/hero.gif" alt="ZBS Eye — the all-seeing eye of your Mac, in ASCII" width="720">
+<p align="center">
+  <strong>macOS 15+</strong> · Swift 6 · local capture and index · optional AI · MIT
+</p>
 
-# ZBS Eye
+<p align="center">
+  <a href="https://github.com/zbs-gg/eye/releases/latest"><strong>Download current stable release</strong></a>
+  ·
+  <a href="./BUILD.md">Build from source</a>
+  ·
+  <a href="./docs/ABOUT.md">Product details</a>
+</p>
 
-**Eternal memory for your Mac.** Continuously records what happens on your computer — and lets you
-find any moment in seconds. 100% local, no cloud, no account.
+ZBS Eye is a tiny native recorder for people who want a searchable memory of their Mac without sending
+their life to somebody else's cloud. It quietly captures screen moments, accessible text, OCR fallback,
+microphone and optional system audio. Everything is indexed locally and can be explored in the Timeline,
+opened as a call, searched in Ask, or read by your own agent over localhost.
 
-> 👁 **One Eye to remember them all.**
-> It sees every screen. It hears every sound. It keeps everything.
-> And it tells no one — because all of it stays with you.
+> **Release status:** this README documents the upcoming 0.5.0 source on `main`. The download link continues
+> to serve the stable 0.4.5 build until the installed 0.5.0 browser-call qualification is complete.
 
-</div>
+<p align="center">
+  <img src="./assets/readme/product-proof.svg" width="100%"
+       alt="Synthetic ZBS Eye example showing Timeline, Calls, and local agent evidence">
+</p>
 
----
+The example above is synthetic. No personal history, real meeting, URL, transcript, or participant name is
+stored in this repository.
 
-## What it is
+## One job, done quietly
 
-ZBS Eye quietly keeps an "eternal memory" of your work at the computer:
+Eye records useful evidence and gives it back. It is not a CRM, a calendar manager, or a meeting bot.
 
-- **Screen** → accessibility text (accurate and battery-friendly) + OCR where AX is unavailable, frames in HEIC.
-- **Audio** → system audio (calls, meetings, video) and microphone → on-device transcription.
-  **Meetings-only by default**: trusted native call evidence can start a Call Envelope automatically;
-  ordinary playback, a calendar event, or generic microphone use cannot. Browser calls stay manual unless
-  Eye can verify an allowlisted HTTPS origin, an independent call-state marker, and two-sided audio.
-  Eye records microphone and system audio as separate durable sources. **Bookmark** schedules a local
-  checkpoint transcript without interrupting recording; optional Whisper Large V3 Turbo produces the
-  preferred whole-call transcript after the call.
-- **Search** → hybrid full-text + semantic (cross-lingual: search in one language, find another),
-  a scrubbable timeline, frames served as images.
-- **Access for AI agents** → a local REST + read-only MCP surface so LLMs/agents can find Call Envelopes,
-  bookmarks, source health, and paginated transcript evidence without scraping the UI.
-- **Built-in local AI, with provider choice** → one click downloads a verified on-device model for Ask,
-  Daily Insights, summaries, and activity labels. Or choose Codex, OpenRouter, Anthropic, Kimi, GLM,
-  MiMo, OpenAI, Claude Code, Ollama, or LM Studio. Providers own their model lists; cloud and signed-in
-  CLI providers receive history excerpts only after an explicit, recipient-specific opt-in.
+- **Timeline** combines screen frames, extracted text, app context, audio density, call spans, and bookmarks
+  in one scrubbable view.
+- **Calls** keeps meetings out of the all-day activity stream. Microphone and system audio remain separate;
+  a bookmark schedules a checkpoint transcript without interrupting the recording.
+- **Search** combines FTS5 with local multilingual semantic retrieval, so a query in one language can find
+  evidence written in another.
+- **REST and MCP** let local agents retrieve bounded, typed evidence instead of scraping the UI. The server
+  binds to `127.0.0.1`; everything except `/health` requires a Keychain-backed Bearer token.
+- **Storage stays yours.** Fresh installs use a 5 GB media budget. You can choose another cap, keep media
+  forever, move the data root to an external SSD, or create consistent compressed backups.
 
-Capture, index and storage stay on the device — zero egress, no subscription, no account. AI is
-local-first: cloud providers exist only behind an explicit per-provider opt-in and receive prompt
-excerpts, never your recordings.
+Screen capture is adaptive: Accessibility text is the cheap first path, while Vision OCR handles apps whose
+UI trees are empty. Images use HEIC and perceptual-hash deduplication. Static screens do not become thousands
+of duplicate files.
 
-## Why
+## Calls without a visible bot
 
-The "personal computer memory" category was orphaned: the leader was acquired by a big corporation, and
-the nearest alternatives moved to a subscription ($25–50/mo) plus a mandatory cloud. ZBS Eye is a light,
-native alternative that **never goes to the cloud** — your activity history is too personal to hand off.
+Manual Start, Bookmark, and End work with any call app. In the qualified Chromium path, Eye can also begin
+automatically without an extension or AppleScript. CoreAudio first proves that the browser owns current
+input and output activity; a bounded Accessibility pass then requires a trusted HTTPS origin and the real
+site-specific Leave or End control. A calendar page, podcast, voice message, look-alike domain, or microphone
+alone is not enough.
 
-| | ZBS Eye | proprietary alternatives |
-|---|---|---|
-| Cloud / account | ✅ not required | ❌ mandatory |
-| Subscription | ✅ free | ❌ $25–50/mo |
-| Accumulated memory | ✅ yours, local | ❌ behind a paywall |
-| Stack | ✅ native Swift/SwiftUI | ❌ web wrapper (Electron/Tauri) |
+| Browser and service | 0.5.0 candidate status |
+| --- | --- |
+| Chrome, Dia, or Edge × Meet, Zoom Web, or Teams Web | Implemented and fixture-qualified; live-qualified pairs will be named at release |
+| Safari or another browser | Manual Start only |
 
-## Features
+Detection is local. Its call context retains the normalized trusted service host and an opaque fingerprint
+hash, but not the full URL or path, meeting code, window title, or participant names; detector diagnostics
+log neither private form. The ordinary Timeline capture still records visible screen content and may locally
+retain browser URL, title, and text.
 
-- 🎥 **Screen capture** — AX text + OCR, HEIC, perceptual-hash dedup, adaptive per-app (AX where it works,
-  OCR where it doesn't).
-- 🎙️ **Audio + transcription** — system + microphone, VAD, on-device speech. **Meetings-only by
-  default** (auto-detected on-device) — records during calls, off otherwise to save disk; always / off
-  modes + a menu-bar force on/off.
-- 📞 **Calls library** — `Timeline · Calls · Ask` keeps calls out of the all-activity haystack. Automatic
-  native-call capture has an immediate **Not a call** escape; automatic ending has a 30-second grace and
-  bounded **Undo** tail. Manual Start / Bookmark / End remains available for every app.
-- 🔖 **Post-call transcript and speakers** — Bookmark never pauses recording. Optional 1.62 GB Whisper
-  performs the authoritative whole-call pass; optional 20.6 MiB local diarization adds anonymous per-call
-  speaker lanes. Names are manual/current-call evidence only, corrections are revisioned, and no voiceprint
-  survives processing. Mic-only calls remain valid and clearly report the missing source.
-- 🔍 **Hybrid search** — FTS5 + multilingual-e5 (384-dim) via RRF; cross-lingual.
-- 🕰️ **Timeline** — scrub through time, frame + text + app/URL, a player.
-- 🔌 **REST + MCP** — a local API (127.0.0.1, Bearer token) for agents; MCP over stdio. Call tools are
-  read-only, use typed IDs, never return absolute paths, and cannot select another database or storage root.
-- 🧠 **Built-in local AI** — the headline path in "AI Models" downloads a pinned, verified MLX model and
-  then runs fully offline on supported Macs. The same provider-first screen keeps real choice: Codex,
-  OpenRouter, Anthropic, Kimi, GLM, MiMo, OpenAI, Claude Code, and separate Ollama / LM Studio connections.
-  A recommendation lives inside its provider and never silently changes the active provider/model pair.
-- ♾️ **Storage** — no age cutoff with a small **5 GB local media budget** on fresh installs; choose
-  **Forever · no limit** to keep media until you delete it; **move to an external SSD** in one click;
-  **iCloud auto-backup** (a compressed snapshot, without uploading the live database); size tracking.
-- 📥 **Import previous history** — bring your accumulated history (text + metadata) over.
-- 📝 **Automations** — daily summary to a file/Obsidian; export.
-- 🔒 **Privacy** — pause per app, delete by time range, all local.
-- 📊 **Usage stats** — an on-device breakdown of the last 7 days: where the time actually went (browsers
-  split by **real site**, not lumped as one app), active minutes/day, context switches, busiest hour.
-  Front-and-center on the Daily Insights screen.
-- 🧭 **Daily Insights** — a daily local-LLM read of your activity (2–3 concrete observations), on-device.
-- 🛠️ **Self-repair** — something broke? Describe it and Eye hands **your own AI agent** a ready-to-run
-  fix prompt (it reads the public source and fixes it), or opens a pre-filled GitHub issue. No dead ends.
-  Reachable from a **main-window button**, the **menu bar**, and Settings; agents can also pull live state
-  over MCP (`get_diagnostics`).
+If Eye is wrong, **Not a call** permanently stops and deletes that automatically detected call, then
+suppresses only its current session fingerprint. Separately, after a normal automatic end, **Undo** is
+available for 15 seconds without splitting the recording. Normal ending uses a 30-second grace.
 
-### Calls, without turning Eye into a CRM
+Optional Whisper Large V3 Turbo can produce a whole-call transcript after the call. Optional local
+diarization creates anonymous per-call speaker lanes; you may name or correct them for that call. Eye does
+not keep a reusable voiceprint and does not show a live transcript.
 
-Eye's job is to preserve and expose trustworthy local evidence. It provides a compact Calls library,
-playback, physical Trim, final transcript, anonymous per-call speaker lanes, and manual speaker correction.
-It does not show a live transcript, build a call map, manage contacts, join meetings as a bot, maintain
-cross-call voice identities, or add a calendar-management surface. Those are consumers that can use Eye's
-authenticated REST/MCP evidence later; they are not part of this tiny recorder.
+## Local capture; AI only when you choose it
 
-## Own it: fix and extend Eye with your agent
+Recording, indexing, Timeline, Calls, search, REST, and MCP do not require an AI provider. AI starts off.
+On qualified Apple Silicon hardware, one click can download the pinned ZBS Eye Local model. You may instead
+connect a local server, signed-in CLI, or cloud API provider.
 
-ZBS Eye assumes you have your own coding agent (Claude Code, Cursor, …) — so a broken or missing
-thing is never a dead end. The flow:
-
-1. Something breaks → click **"Something wrong?"** (toolbar / menu bar / Settings), describe it.
-2. Eye collects on-device diagnostics and copies a prompt for your agent — a **quick repair prompt**,
-   or **"Set up a dev workspace"** for a longer job.
-3. The workspace prompt has your agent clone this repo — which ships with a **ready-made harness**:
-   `CLAUDE.md` + [`AGENTS.md`](AGENTS.md) (rules, invariants, gotchas), `.claude/skills/`
-   (`eye-build`, `eye-diagnose`, `eye-db-validate`, `eye-review-loop`, `eye-release`), a hostile
-   `swift6-reviewer` subagent, and a find→verify review workflow.
-4. Your agent reproduces the bug, fixes it, self-reviews, and opens a PR — or just builds you a
-   feature nobody else needs. Your recorder, your rules.
+That choice changes only generation features such as Ask and Daily Insights. Before any non-local provider
+receives a prompt excerpt, Eye names the recipient and asks for scoped consent. Raw recordings, the database,
+and storage never become provider uploads. API credentials live in the macOS data-protection Keychain.
 
 ## Install
 
-<div align="center">
-<img src="docs/open-anyway.png" alt="macOS Gatekeeper — click Open Anyway" width="640">
-</div>
+1. Open the [current stable release](https://github.com/zbs-gg/eye/releases/latest), download the notarized ZIP,
+   move **ZBS Eye.app** to `/Applications`, and launch it.
+2. Grant Screen Recording and Accessibility. Microphone is optional; system audio has its own switch.
+3. Press **Start**. Open Timeline and change windows once to see the first moments appear.
 
-**ZBS Eye is not in the Mac App Store — and can't be.** Reading other apps' screens (cross-app
-Accessibility) and a "record everything" profile don't fit the App Sandbox the App Store requires. So
-macOS may show the dialog above on first launch. **It's expected and safe — click "Open Anyway"**
-(it's outside the App Store, not malware). Want certainty? **Ask your own agent to read the source and
-do a security review first** — it's all here, nothing to hide.
+ZBS Eye is distributed outside the Mac App Store because cross-app Accessibility and continuous capture are
+incompatible with the App Sandbox. Release artifacts use Developer ID, Hardened Runtime, Apple notarization,
+and a stapled ticket. Exact artifact verification is documented in [docs/NOTARIZE.md](./docs/NOTARIZE.md).
 
-**Release — notarized Developer ID (double-click to launch, no "Open Anyway"):**
+The app pauses on lock, display sleep, and system sleep. It resumes only after macOS reports a real unlocked
+console session; `loginwindow` and screen-saver shells are rejected again at the final write boundary.
 
-1. Build it: `bash scripts/build-notarized.sh` (needs a "Developer ID Application" certificate +
-   a notarytool profile — one-time setup in [`docs/NOTARIZE.md`](docs/NOTARIZE.md)).
-2. Use only the exact version/build/source ZIP path and matching `.manifest.json` path printed by the script,
-   then run `bash scripts/verify-release-artifact.sh "$ZIP" "$MANIFEST"`. The verifier checks the hashes and
-   independently pins the actual Developer ID Team, designated requirement, CDHash, stapled ticket, and
-   Gatekeeper result. Never select a release asset by wildcard or by "newest file".
-3. Unzip that verified exact ZIP into `/Applications` and launch with a **double-click** (Gatekeeper passes
-   it, even offline — the ticket is stapled).
-4. Before publishing, qualify the installed artifact in both directions: prove an ordinary unlocked app
-   creates a new moment, then lock the Mac long enough for several capture intervals and prove no new moment
-   is written; after unlock, prove capture resumes with an ordinary app and zero `loginwindow` / screen-saver
-   rows. Restore the previous recording setting when done. The complete gate is in
-   [`docs/NOTARIZE.md`](docs/NOTARIZE.md).
-5. Grant **Screen Recording** + **Accessibility** (optionally Microphone) once. The notarized signature
-   is stable: rebuilds do NOT reset permissions.
+## Give your agent read-only memory
 
-**Dev build without a paid account (self-signed):** `bash scripts/make-signing-cert.sh` (once) →
-`bash scripts/build-release.sh` → unzip into `/Applications` → launch → **System Settings → Privacy &
-Security → "Open Anyway"**. Downside: changing the signature sometimes resets TCC permissions (notarization removes this).
+The installed binary can serve MCP over stdio:
 
-**Full product description** — [`docs/ABOUT.md`](docs/ABOUT.md). Build details — [`BUILD.md`](BUILD.md).
-Architecture and contributor/agent guide — [`AGENTS.md`](AGENTS.md). Distribution — [`docs/NOTARIZE.md`](docs/NOTARIZE.md).
+```bash
+"/Applications/ZBS Eye.app/Contents/MacOS/ZBS Eye" --mcp-read-only
+```
 
-## Privacy
+Use that command in Codex, Claude Code, Claude Desktop, or another MCP client. Read-only mode exposes Timeline,
+search, calls, bookmarks, source health, and paginated transcript evidence. Frame-image access and the global
+capture toggle require the separate `--mcp-full` mode. For localhost integrations, inspect `GET /health`,
+then use the authenticated REST surface described by the app's **MCP & AI Tools** settings.
 
-- Everything on the device. The server listens only on `127.0.0.1`; everything except `/health` requires
-  a Bearer token (in the Keychain). No outbound traffic by default.
-- Built-in AI is local-first and offline after its one-time model download. If you deliberately activate
-  a cloud, broker, or signed-in CLI provider in "AI Models", ZBS Eye names the real recipient and asks for
-  scoped consent before sending generation excerpts. Recordings, the index, and storage never leave the
-  Mac; API credentials live in the data-protection Keychain.
-- The iCloud backup (optional, on by default if iCloud is present) goes out as a **compressed snapshot** —
-  the live database stays local (you must not put a live SQLite file in iCloud Drive — corruption).
-- A password or sensitive conversation captured by accident can be wiped by time range or by app.
+## Build and review
 
-## Tech
+```bash
+xcodegen generate
+xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Debug build
+```
 
-Swift 6 (strict concurrency), SwiftUI, macOS 15+ · GRDB (DatabasePool + WAL) + FTS5 + sqlite-vec ·
-ScreenCaptureKit · Accessibility API · Vision OCR · SFSpeech · whisper.cpp · FluidAudio · multilingual-e5 (swift-embeddings) ·
-MLX Swift LM (built-in generation) · FlyingFox (REST) · MCP swift-sdk · Hardened Runtime without App Sandbox.
+The codebase is Swift 6 with strict concurrency, SwiftUI, ScreenCaptureKit, Vision, GRDB/SQLite, sqlite-vec,
+whisper.cpp, FluidAudio, FlyingFox, and the Swift MCP SDK. Start with [AGENTS.md](./AGENTS.md) for architecture,
+data-safety invariants, and review risks; use [BUILD.md](./BUILD.md) for the complete build path.
 
-## Status
-
-Working: capture (screen + audio), hybrid search, timeline, REST + MCP, import of previous history,
-retention (5 GB local media budget by default, with explicit Forever), relocatable storage, iCloud backup, size tracking, daily summary,
-export, and one global provider/model pair for Ask, Daily Insights, summaries, and generated labels.
-Call Envelopes, uninterrupted Bookmark checkpoints, the Calls library, optional post-call Whisper,
-per-call speaker corrections, physical Trim, and read-only agent evidence are implemented. The pinned local
-diarization runtime has passed 15- and 60-minute synthetic Apple Silicon qualification; real-app detection
-coverage remains explicitly allowlisted rather than claimed universal. See
-[`docs/CALL_DIARIZATION_QUALIFICATION.md`](docs/CALL_DIARIZATION_QUALIFICATION.md).
-The default path is a one-click built-in local model on qualified hardware; external local and cloud
-providers remain choices. Distribution — **notarized Developer ID** (`scripts/build-notarized.sh`).
+Privacy and data-loss review matter more here than feature count. Capture has one writer, every live
+data-root path is resolved through `StorageLocation`, live SQLite is never copied directly, and the HTTP
+surface is localhost-only with authentication. iCloud snapshots and user exports are intentional
+out-of-root exceptions.
 
 ## License
 
-Private project `zbs-gg`. © 2026.
-
----
-
-<div align="center">
-
-```
-                              -==++=::.
-                               :=##%###+=:
-                                 .:+#@%%%#=:
-                :-==++++++=---===:..:-#@@%%*:
-             :+*#*+++++===+*####*++=:.:-#@##*:
-           -*#+=====------==++*#%%***=:.:=%*+=
-         .*#=-==---::.. .:--===++*@%++:   :*=--
-        .*#--+::-.          :=--+++%%-.    .- .
-        +%=-+:--              -=:*=+@*  :
-        ##:+=:=                =:=*-%%:
-        ##:+-.=                =:=*-%#.  .
-     .  +@=-+:=-              --:+==%+
-        .#%==+:-=.          .--:==-##.  .
-         .*%+-==----:.  .::----=-+#*.
-           -*#+====--------====+#*- .
-             :+***+++====+++*##+:
-                :-==++**++==-:
-```
-
-**`Z B S   E Y E`** — _it sees everything. it remembers everything. and it all stays with you._ 👁
-
-</div>
+[MIT](./LICENSE) © 2026 zbs-gg.

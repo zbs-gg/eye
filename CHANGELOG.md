@@ -8,28 +8,16 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 - **OS-only Chromium call detection.** Chrome, Dia, and Edge can start local call capture for
   verified Google Meet, Zoom, and Microsoft Teams surfaces using CoreAudio plus bounded
   Accessibility evidence — without a browser extension, AppleScript, or another permission prompt.
-- **Automatic, correctable local call capture.** Eye starts only from a supported call surface plus
-  microphone evidence, shows a dismissible “Not a call” banner, waits through a 30-second end grace,
-  and offers a 15-second Undo without splitting the recording.
+- **Automatic, correctable browser-call capture.** In the Chromium path, Eye starts only when the same
+  supported browser group has current microphone input and output, a trusted origin, and a real
+  call-control. It shows a “Not a call” action that permanently stops and deletes that detected call.
+  Normal automatic ending waits through a 30-second grace and then offers a separate 15-second Undo
+  without splitting recording.
 - **A focused Calls workspace.** Calls can be searched and opened independently of the full Timeline,
   played by source, trimmed permanently by an exact range, and opened back at their Timeline moment.
 - **Optional per-call speaker separation.** A one-click, checksum-verified FluidAudio model assigns
   anonymous speakers locally. Names and interval corrections apply only to the current call; no reusable
   voiceprint is stored. REST, MCP, export, and the loopback automation report speaker readiness honestly.
-
-### Changed
-- Codex and Claude Code subprocess providers now admit the exact locally qualified signed releases
-  (`codex-cli 0.144.6` and Claude Code `2.1.220`) with refreshed native-binary hashes.
-- The post-call automation can fire a signed `call.processing.ready` event after both transcript and
-  speaker work settle. Failed diarization is durable and retryable instead of looking permanently busy.
-- **Known native-call limitation:** after **Not a call**, Eye suppresses the same native app/window
-  until the old call control is authoritatively absent or the app/audio boundary ends. A back-to-back
-  native call reusing that exact surface may need Manual Start. This privacy-first guard does not apply
-  to the qualified Chromium path above.
-
-## [0.5.0] — 2026-07-16
-
-### Added
 - **Durable local call recording.** Start, Bookmark, and End create one Call Envelope with separately
   attributable microphone/system PCM. Bookmark schedules a local checkpoint transcript without pausing
   either source; End schedules one retryable whole-call transcript.
@@ -41,6 +29,14 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   stable Call Envelope manifests and optional verified current-generation audio.
 
 ### Changed
+- Codex and Claude Code subprocess providers now admit the exact locally qualified signed releases
+  (`codex-cli 0.144.6` and Claude Code `2.1.220`) with refreshed native-binary hashes.
+- The post-call automation can fire a signed `call.processing.ready` event after both transcript and
+  speaker work settle. Failed diarization is durable and retryable instead of looking permanently busy.
+- **Known native-call limitation:** after **Not a call**, Eye suppresses the same native app/window
+  until the old call control is authoritatively absent or the app/audio boundary ends. A back-to-back
+  native call reusing that exact surface may need Manual Start. This privacy-first guard does not apply
+  to the qualified Chromium path above.
 - Calls appear as compact Timeline spans and localized details. Search exposes only the preferred transcript;
   authenticated REST and read-only MCP expose bounded typed evidence without absolute paths or invented
   speaker identity.
@@ -262,7 +258,7 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 - Renamed the in-app **"Cartographer"** feature to **"Daily Insights"** (nav + view), to disambiguate
   from the standalone Cartographer person-mapping project.
 
-## [Unreleased] — 2026-07-01
+## [Pre-0.2.0] — 2026-07-01
 
 ### Added
 - **Meetings-only audio (new default).** Audio capture is now a tri-state mode — **off /
@@ -277,7 +273,7 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 ### Changed
 - Screen capture is unaffected — it still records continuously; only audio is gated by the mode.
 
-## [Unreleased] — 2026-06-25
+## [0.1.0] — 2026-06-25
 
 ### Fixed
 - **Live-recording crash (self-AX reentrancy).** While actively recording, ZBS Eye stayed frontmost →
