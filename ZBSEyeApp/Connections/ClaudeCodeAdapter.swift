@@ -46,8 +46,8 @@ struct ClaudeCodeFileIdentity: Sendable, Equatable {
 }
 
 enum ClaudeCodeSecurityPolicy {
-    static let allowedVersion = "2.1.207"
-    static let allowedSHA256 = "1397a062c6889675055e3314dd956376ac51262a7734ad9e819c26975d71547a"
+    static let allowedVersion = "2.1.220"
+    static let allowedSHA256 = "8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081"
     static let signingIdentifier = "com.anthropic.claude-code"
     static let teamIdentifier = "Q6L2SF6YDW"
     static let maximumInputBytes = 2 * 1_024 * 1_024
@@ -156,8 +156,8 @@ struct SystemClaudeCodeExecutableInspector: ClaudeCodeExecutableInspecting {
     }
 
     /// The official standalone installer uses a version-named executable
-    /// (`.../versions/2.1.207`); packaged layouts may use
-    /// `.../2.1.207/claude`. Identity/hash/signature checks still pin the exact
+    /// (`.../versions/2.1.220`); packaged layouts may use
+    /// `.../2.1.220/claude`. Identity/hash/signature checks still pin the exact
     /// artifact after this layout-only extraction.
     static func releaseVersion(at canonicalURL: URL) -> String {
         canonicalURL.lastPathComponent == "claude"
