@@ -3,6 +3,53 @@ import GRDB
 import XCTest
 
 final class AskDatabaseRetrievalTests: XCTestCase {
+    func testLegacyAuthenticationFrameIsNeverExpandedIntoAskEvidence() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.remove() }
+        let timestampMs: Int64 = 1_500_000
+        try await fixture.db.pool.write { db in
+            try db.execute(
+                sql: "INSERT INTO apps(bundleId, name) VALUES (?, ?)",
+                arguments: ["com.apple.LocalAuthentication.UIAgent", "LocalAuthentication UIAgent"]
+            )
+            let appID = db.lastInsertedRowID
+            try db.execute(
+                sql: """
+                    INSERT INTO screen_captures(id, ts, appId, monitorId, windowTitle, relativePath)
+                    VALUES (77, ?, ?, 'main', 'Authentication', 'screens/77.heic')
+                    """,
+                arguments: [timestampMs, appID]
+            )
+            try db.execute(
+                sql: "INSERT INTO text_blocks(captureId, source, text) VALUES (77, 'ocr', 'private auth text')"
+            )
+        }
+        let retrieval = AskDatabaseRetrieval(
+            search: RecordingAskSearch(hits: [
+                SearchResult(
+                    id: 77,
+                    kind: .screen,
+                    ts: dateFromMs(timestampMs),
+                    bundleId: "com.apple.LocalAuthentication.UIAgent",
+                    appName: "LocalAuthentication UIAgent",
+                    windowTitle: "Authentication",
+                    browserURL: nil,
+                    snippet: "cached private auth text",
+                    relativePath: "screens/77.heic"
+                )
+            ]),
+            db: fixture.db
+        )
+
+        let evidence = try await retrieval.retrieve(
+            question: "auth",
+            scope: .allHistory,
+            limit: 10
+        )
+
+        XCTAssertTrue(evidence.isEmpty)
+    }
+
     func testScopedRetrievalPassesExactFiltersAndRevalidatesBothKindsInclusively() async throws {
         let fixture = try makeFixture()
         defer { fixture.remove() }

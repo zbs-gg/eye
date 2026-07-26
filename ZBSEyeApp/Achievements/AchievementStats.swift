@@ -55,8 +55,14 @@ actor AchievementStatsService {
 
         let d: DBDerived? = try? await db.pool.read { dbc -> DBDerived in
             var r = DBDerived()
+            let protectedIDs = try SystemAppFilter.protectedAppIDs(in: dbc)
+            let visible = SystemAppFilter.visibleCapturePredicate(
+                .c,
+                protectedAppIDs: protectedIDs
+            )
             guard let row = try Row.fetchOne(dbc, sql: """
-                SELECT COUNT(*) AS n, MIN(ts) AS minTs, COUNT(DISTINCT appId) AS apps FROM screen_captures
+                SELECT COUNT(*) AS n, MIN(c.ts) AS minTs, COUNT(DISTINCT c.appId) AS apps
+                FROM screen_captures c WHERE \(visible)
                 """) else { return r }
             r.totalFrames = row["n"] ?? 0
             r.distinctAppsAllTime = row["apps"] ?? 0
@@ -67,8 +73,8 @@ actor AchievementStatsService {
             guard r.totalFrames > 0 else { return r }
 
             let days = try String.fetchAll(dbc, sql: """
-                SELECT DISTINCT date(ts/1000,'unixepoch','localtime') AS d
-                FROM screen_captures ORDER BY d DESC
+                SELECT DISTINCT date(c.ts/1000,'unixepoch','localtime') AS d
+                FROM screen_captures c WHERE \(visible) ORDER BY d DESC
                 """)
             r.activeDays = days.count
             let cal = Calendar.current
@@ -81,30 +87,35 @@ actor AchievementStatsService {
             }
 
             r.maxFramesInOneDay = try Int.fetchOne(dbc, sql: """
-                SELECT MAX(c) FROM (SELECT COUNT(*) c FROM screen_captures
-                GROUP BY date(ts/1000,'unixepoch','localtime'))
+                SELECT MAX(n) FROM (SELECT COUNT(*) n FROM screen_captures c
+                WHERE \(visible)
+                GROUP BY date(c.ts/1000,'unixepoch','localtime'))
                 """) ?? 0
             r.maxDistinctAppsInDay = try Int.fetchOne(dbc, sql: """
-                SELECT MAX(c) FROM (SELECT COUNT(DISTINCT appId) c FROM screen_captures
-                GROUP BY date(ts/1000,'unixepoch','localtime'))
+                SELECT MAX(n) FROM (SELECT COUNT(DISTINCT c.appId) n FROM screen_captures c
+                WHERE \(visible)
+                GROUP BY date(c.ts/1000,'unixepoch','localtime'))
                 """) ?? 0
 
             r.hadNight = (try Int.fetchOne(dbc, sql: """
-                SELECT EXISTS(SELECT 1 FROM screen_captures
-                WHERE CAST(strftime('%H', ts/1000, 'unixepoch','localtime') AS INTEGER) < 5)
+                SELECT EXISTS(SELECT 1 FROM screen_captures c
+                WHERE \(visible)
+                  AND CAST(strftime('%H', c.ts/1000, 'unixepoch','localtime') AS INTEGER) < 5)
                 """) ?? 0) == 1
             r.hadEarly = (try Int.fetchOne(dbc, sql: """
-                SELECT EXISTS(SELECT 1 FROM screen_captures
-                WHERE CAST(strftime('%H', ts/1000, 'unixepoch','localtime') AS INTEGER) BETWEEN 5 AND 6)
+                SELECT EXISTS(SELECT 1 FROM screen_captures c
+                WHERE \(visible)
+                  AND CAST(strftime('%H', c.ts/1000, 'unixepoch','localtime') AS INTEGER) BETWEEN 5 AND 6)
                 """) ?? 0) == 1
             r.hadWeekend = (try Int.fetchOne(dbc, sql: """
-                SELECT EXISTS(SELECT 1 FROM screen_captures
-                WHERE strftime('%w', ts/1000, 'unixepoch','localtime') IN ('0','6'))
+                SELECT EXISTS(SELECT 1 FROM screen_captures c
+                WHERE \(visible)
+                  AND strftime('%w', c.ts/1000,'unixepoch','localtime') IN ('0','6'))
                 """) ?? 0) == 1
 
             let urls = try String.fetchAll(dbc, sql: """
-                SELECT DISTINCT browserUrl FROM screen_captures
-                WHERE browserUrl IS NOT NULL AND browserUrl <> '' LIMIT 5000
+                SELECT DISTINCT c.browserUrl FROM screen_captures c
+                WHERE \(visible) AND c.browserUrl IS NOT NULL AND c.browserUrl <> '' LIMIT 5000
                 """)
             var hosts = Set<String>()
             for u in urls { if let h = URL(string: u)?.host { hosts.insert(h) } }

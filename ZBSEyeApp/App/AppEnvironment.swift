@@ -1162,7 +1162,9 @@ final class AppEnvironment {
                         )
                     }
                     // 👁 delighter: warmly mark a crossed "round" memory milestone (once each)
-                    if let frames = try? await db.pool.read({ try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM screen_captures") ?? 0 }) {
+                    if let frames = try? await db.pool.read({
+                        try SystemAppFilter.visibleScreenCaptureStats(in: $0).frames
+                    }) {
                         await MainActor.run { self?.celebrateMilestoneIfNeeded(frames: frames) }
                         if let progressStore = await MainActor.run(body: { self?.progress }) {
                             await progressStore.refresh()

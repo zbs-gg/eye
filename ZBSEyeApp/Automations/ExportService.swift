@@ -183,9 +183,14 @@ actor ExportService {
 
         // Clamp to the start of data: "all history" from epoch-0 would spin ~20,000 empty iterations from 1970.
         let oldestMs: Int64? = try await db.pool.read { dbc in
-            try Int64.fetchOne(dbc, sql: """
+            let protectedIDs = try SystemAppFilter.protectedAppIDs(in: dbc)
+            let visible = SystemAppFilter.visibleCapturePredicate(
+                .c,
+                protectedAppIDs: protectedIDs
+            )
+            return try Int64.fetchOne(dbc, sql: """
                 SELECT MIN(t) FROM (
-                    SELECT MIN(ts) AS t FROM screen_captures
+                    SELECT MIN(c.ts) AS t FROM screen_captures c WHERE \(visible)
                     UNION ALL SELECT MIN(ts) FROM audio_captures
                     UNION ALL SELECT MIN(startTs) FROM calls
                 ) WHERE t IS NOT NULL
@@ -705,10 +710,18 @@ actor ExportService {
     private func copyMedia(day: Date, next: Date, into folder: URL) async throws -> (copied: Int, errors: Int) {
         let startMs = msFromDate(day), endMs = msFromDate(next) - 1
         let paths: [String] = try await db.pool.read { dbc in
-            let frames = try String.fetchAll(dbc, sql: """
-                SELECT relativePath FROM screen_captures
-                WHERE ts BETWEEN ? AND ? AND relativePath IS NOT NULL
+            let frameRows = try Row.fetchAll(dbc, sql: """
+                SELECT c.relativePath AS relativePath, a.bundleId AS bundleId, a.name AS appName
+                FROM screen_captures c LEFT JOIN apps a ON a.id = c.appId
+                WHERE c.ts BETWEEN ? AND ? AND c.relativePath IS NOT NULL
                 """, arguments: [startMs, endMs])
+            let frames: [String] = frameRows.compactMap { row in
+                guard !SystemAppFilter.isProtectedCaptureSurface(
+                    bundleId: row["bundleId"],
+                    appName: row["appName"]
+                ) else { return nil }
+                return row["relativePath"]
+            }
             let audio = try String.fetchAll(dbc, sql:
                 "SELECT relativePath FROM audio_captures WHERE ts BETWEEN ? AND ?",
                 arguments: [startMs, endMs])

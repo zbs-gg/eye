@@ -517,11 +517,10 @@ actor ZBSEyeHTTPServer {
     private func handleStats() async -> HTTPResponse {
         let counts = (try? await deps.db.pool.read { db -> APIDTO.Stats in
             func c(_ t: String) -> Int { (try? Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(t)")) ?? 0 }
-            let oldest = try? Int64.fetchOne(db, sql: "SELECT MIN(ts) FROM screen_captures")
-            let newest = try? Int64.fetchOne(db, sql: "SELECT MAX(ts) FROM screen_captures")
-            return APIDTO.Stats(frames: c("screen_captures"), textBlocks: c("text_blocks"),
+            let screen = try SystemAppFilter.visibleScreenCaptureStats(in: db)
+            return APIDTO.Stats(frames: screen.frames, textBlocks: screen.textBlocks,
                                 audioChunks: c("audio_captures"), transcriptions: c("transcriptions"),
-                                apps: c("apps"), oldestTs: oldest ?? nil, newestTs: newest ?? nil,
+                                apps: screen.apps, oldestTs: screen.oldestMs, newestTs: screen.newestMs,
                                 mediaBytes: 0)
         })
         guard var stats = counts else { return Self.error(.internalServerError, "db") }

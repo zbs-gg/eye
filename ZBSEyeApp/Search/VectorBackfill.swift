@@ -244,6 +244,14 @@ actor VectorBackfill {
     private func dequeue(_ item: QueueItem) async -> Bool {
         do {
             try await db.pool.write { dbc in
+                if item.kind == Kind.screen.rawValue {
+                    // A screen item with no admissible text may be a legacy authentication capture.
+                    // Keep its source history, but remove any stale derived vector with the queue row.
+                    try dbc.execute(
+                        sql: "DELETE FROM vec_screen WHERE capture_id = ?",
+                        arguments: [item.rowId]
+                    )
+                }
                 try dbc.execute(sql: "DELETE FROM embed_queue WHERE row_id = ? AND kind = ?",
                                 arguments: [item.rowId, item.kind])
             }
@@ -277,8 +285,10 @@ actor VectorBackfill {
         try await db.pool.read { dbc in
             switch item.kind {
             case Kind.screen.rawValue:
-                return try String.fetchOne(dbc, sql:
-                    "SELECT group_concat(text, ' ') FROM text_blocks WHERE captureId = ?", arguments: [item.rowId])
+                return try ZBSEyeDatabase.screenTextForSemanticIndexing(
+                    captureID: item.rowId,
+                    in: dbc
+                )
             case Kind.transcript.rawValue:
                 return try String.fetchOne(dbc, sql: "SELECT text FROM transcriptions WHERE id = ?", arguments: [item.rowId])
             case Kind.callTranscript.rawValue:
@@ -302,12 +312,12 @@ actor VectorBackfill {
         try await db.pool.write { dbc in
             switch item.kind {
             case Kind.screen.rawValue:
-                if try Bool.fetchOne(dbc, sql: "SELECT EXISTS(SELECT 1 FROM screen_captures WHERE id = ?)",
-                                     arguments: [item.rowId]) ?? false {
-                    try dbc.execute(sql: "DELETE FROM vec_screen WHERE capture_id = ?", arguments: [item.rowId])
-                    try dbc.execute(sql: "INSERT INTO vec_screen(capture_id, bucket_month, embedding) VALUES (?, ?, ?)",
-                                    arguments: [item.rowId, bucket, blob])
-                }
+                try ZBSEyeDatabase.replaceScreenSemanticVectorIfVisible(
+                    captureID: item.rowId,
+                    bucket: bucket,
+                    blob: blob,
+                    in: dbc
+                )
             case Kind.transcript.rawValue:
                 if try Bool.fetchOne(dbc, sql: "SELECT EXISTS(SELECT 1 FROM transcriptions WHERE id = ?)",
                                      arguments: [item.rowId]) ?? false {
@@ -346,12 +356,28 @@ actor VectorBackfill {
     /// queue is complete (the usual steady state, since all live write sites enqueue at write time).
     private func reconcile() async {
         guard !suspended else { return }
-        await reconcileGaps(kind: Kind.screen.rawValue, sql: """
-            SELECT c.id AS id, c.ts AS ts FROM screen_captures c
-            WHERE EXISTS (SELECT 1 FROM text_blocks tb WHERE tb.captureId = c.id)
-              AND c.id NOT IN (SELECT capture_id FROM vec_screen)
-              AND c.id NOT IN (SELECT row_id FROM embed_queue WHERE kind = 0)
-            """)
+        do {
+            let visiblePredicate = try await db.pool.write { dbc in
+                // v14 repairs existing stores once; this repeat is intentionally idempotent so imports and
+                // queue races cannot reintroduce protected screen vectors between app versions.
+                try ZBSEyeDatabase.purgeProtectedScreenSemanticState(in: dbc)
+                let protectedAppIDs = try SystemAppFilter.protectedAppIDs(in: dbc)
+                return SystemAppFilter.visibleCapturePredicate(
+                    .c,
+                    protectedAppIDs: protectedAppIDs
+                )
+            }
+            await reconcileGaps(kind: Kind.screen.rawValue, sql: """
+                SELECT c.id AS id, c.ts AS ts FROM screen_captures c
+                WHERE \(visiblePredicate)
+                  AND EXISTS (SELECT 1 FROM text_blocks tb WHERE tb.captureId = c.id)
+                  AND c.id NOT IN (SELECT capture_id FROM vec_screen)
+                  AND c.id NOT IN (SELECT row_id FROM embed_queue WHERE kind = 0)
+                """)
+        } catch {
+            // Fail closed for screen reconciliation. Transcript queues are independent and may still heal.
+            Log.app.error("protected semantic-index reconciliation failed: \(String(describing: error), privacy: .public)")
+        }
         guard !suspended else { return }
         await reconcileGaps(kind: Kind.transcript.rawValue, sql: """
             SELECT t.id AS id, a.ts AS ts FROM transcriptions t JOIN audio_captures a ON a.id = t.audioId
@@ -379,6 +405,23 @@ actor VectorBackfill {
             let chunk = gaps[i..<min(i + batchSize, gaps.count)]
             try? await db.pool.write { dbc in
                 for (id, ts) in chunk {
+                    if kind == Kind.screen.rawValue,
+                       !(try ZBSEyeDatabase.isScreenCaptureVisibleForSemanticIndexing(
+                           captureID: id,
+                           in: dbc
+                       )) {
+                        // The candidate list was read before this write transaction. Re-attest identity so
+                        // an app-row change cannot race a protected capture back into the durable queue.
+                        try dbc.execute(
+                            sql: "DELETE FROM vec_screen WHERE capture_id = ?",
+                            arguments: [id]
+                        )
+                        try dbc.execute(
+                            sql: "DELETE FROM embed_queue WHERE row_id = ? AND kind = 0",
+                            arguments: [id]
+                        )
+                        continue
+                    }
                     try dbc.execute(sql: "INSERT OR IGNORE INTO embed_queue(row_id, kind, ts) VALUES (?, ?, ?)",
                                     arguments: [id, kind, ts])
                 }

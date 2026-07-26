@@ -45,6 +45,10 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 
 ### Fixed
 - MCP failure responses no longer interpolate raw system errors that could disclose local paths or native details.
+- Screen capture now resumes automatically after unlock even if macOS drops the distributed unlock
+  notification, while failed or still-locked session queries continue to suspend capture fail-closed.
+- Touch ID, SecurityAgent, authorizationhost, loginwindow, and screen-saver surfaces are rejected at
+  the capture boundary, so their Accessibility text and pixels never enter new history records.
 
 ## [0.4.5] — 2026-07-15
 

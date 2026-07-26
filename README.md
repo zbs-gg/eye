@@ -95,6 +95,8 @@ and storage never become provider uploads. API credentials live in the macOS dat
 ZBS Eye is distributed outside the Mac App Store because cross-app Accessibility and continuous capture are
 incompatible with the App Sandbox. Release artifacts use Developer ID, Hardened Runtime, Apple notarization,
 and a stapled ticket. Exact artifact verification is documented in [docs/NOTARIZE.md](./docs/NOTARIZE.md).
+Maintainers must use the exact ZIP and matching `.manifest.json` path printed by the script, never select a
+release asset by wildcard, and run `scripts/verify-release-artifact.sh` before installation or publication.
 
 The app pauses on lock, display sleep, and system sleep. It resumes only after macOS reports a real unlocked
 console session; `loginwindow` and screen-saver shells are rejected again at the final write boundary.

@@ -1,6 +1,56 @@
 import XCTest
 
 final class CallTimelineTests: XCTestCase {
+    func testTimelineAndDayRepositorySkipLegacyAuthenticationFrames() async throws {
+        let fixture = try CallTimelineFixture()
+        let ordinaryID = try await fixture.insertScreen(
+            timestampMs: 1_000,
+            bundleID: "com.example.editor",
+            appName: "Editor"
+        )
+        let protectedID = try await fixture.insertScreen(
+            timestampMs: 2_000,
+            bundleID: "com.apple.LocalAuthentication.UIAgent",
+            appName: "LocalAuthentication UIAgent"
+        )
+        let importedProtectedID = try await fixture.insertScreen(
+            timestampMs: 2_500,
+            bundleID: "imported.LocalAuthenticationRemoteService",
+            appName: "LocalAuthenticationRemoteService"
+        )
+
+        let nearest = try await fixture.timeline.frameAt(dateFromMs(3_000))
+        let directProtected = try await fixture.timeline.frameDetail(id: protectedID)
+        let directImportedProtected = try await fixture.timeline.frameDetail(id: importedProtectedID)
+        let bounds = try await fixture.timeline.bounds()
+        let density = try await fixture.timeline.density(
+            from: dateFromMs(0),
+            to: dateFromMs(3_000),
+            bucketMs: 1_000
+        )
+        let visibleStats = try await fixture.database.pool.read {
+            try SystemAppFilter.visibleScreenCaptureStats(in: $0)
+        }
+        let captures = try await DayActivityRepository(db: fixture.database).captures(
+            fromMs: 0,
+            toMs: 3_000
+        )
+
+        XCTAssertEqual(nearest?.id, ordinaryID)
+        XCTAssertNil(directProtected)
+        XCTAssertNil(directImportedProtected)
+        XCTAssertEqual(bounds.oldest, dateFromMs(1_000))
+        XCTAssertEqual(bounds.newest, dateFromMs(1_000))
+        XCTAssertEqual(density.count, 1)
+        XCTAssertEqual(density.first?.ts, dateFromMs(1_000))
+        XCTAssertEqual(density.first?.count, 1)
+        XCTAssertEqual(visibleStats.frames, 1)
+        XCTAssertEqual(visibleStats.apps, 1)
+        XCTAssertEqual(visibleStats.oldestMs, 1_000)
+        XCTAssertEqual(visibleStats.newestMs, 1_000)
+        XCTAssertEqual(captures.map(\.id), [ordinaryID])
+    }
+
     func testCallOnlyHistoryContributesBoundsAndBookmarkMarkers() async throws {
         let fixture = try CallTimelineFixture()
         let call = try await fixture.repository.createCall(
@@ -136,6 +186,28 @@ private final class CallTimelineFixture {
             )
         }
         return id
+    }
+
+    func insertScreen(
+        timestampMs: Int64,
+        bundleID: String,
+        appName: String
+    ) async throws -> Int64 {
+        try await database.pool.write { db in
+            try db.execute(
+                sql: "INSERT INTO apps(bundleId, name) VALUES (?, ?)",
+                arguments: [bundleID, appName]
+            )
+            let appID = db.lastInsertedRowID
+            try db.execute(
+                sql: """
+                    INSERT INTO screen_captures(ts, appId, monitorId, windowTitle)
+                    VALUES (?, ?, 'main', 'Fixture')
+                    """,
+                arguments: [timestampMs, appID]
+            )
+            return db.lastInsertedRowID
+        }
     }
 
     deinit {

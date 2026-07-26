@@ -137,6 +137,10 @@ actor SearchService {
 
     /// Exact check of a result against the filters (the semantic legs are only filtered coarsely in SQL).
     private func matches(_ r: SearchResult, _ f: SearchFilters) -> Bool {
+        if r.kind == .screen,
+           SystemAppFilter.isProtectedCaptureSurface(bundleId: r.bundleId, appName: r.appName) {
+            return false
+        }
         if let k = f.kind, r.kind != k { return false }
         if let from = f.from, (r.endTs ?? r.ts) < from { return false }
         if let to = f.to, r.ts > to { return false }
@@ -158,10 +162,38 @@ actor SearchService {
         let (b0, b1) = (filters.from != nil || filters.to != nil) ? Self.bucketRange(filters)
                        : (buckets ?? Self.bucketRange(filters))
         return try await db.pool.read { db in
-            try Int64.fetchAll(db, sql: """
+            // KNN's k is applied before Swift can inspect app identity. Use a
+            // bounded privacy headroom rather than scaling work with an
+            // arbitrarily large legacy protected corpus.
+            // `searchWithMetadata` can legitimately request a 600-item window
+            // for app-filtered pagination. Keep that caller-visible window
+            // intact while capping only the privacy headroom above it.
+            let boundedLimit = min(max(limit, 0), 600)
+            let candidateLimit = min(max(boundedLimit * 4, boundedLimit + 64), 1_000)
+            let candidates = try Int64.fetchAll(db, sql: """
                 SELECT capture_id FROM vec_screen
                 WHERE bucket_month BETWEEN ? AND ? AND embedding MATCH ? AND k = ? ORDER BY distance
-                """, arguments: [b0, b1, blob, limit])
+                """, arguments: [b0, b1, blob, candidateLimit])
+            guard !candidates.isEmpty else { return [] }
+
+            // Classify only the bounded KNN window; never materialize the whole
+            // legacy protected corpus just to reject a handful of candidates.
+            let candidateIDs = candidates.map(String.init).joined(separator: ",")
+            let visibleIDs = Set(try Row.fetchAll(db, sql: """
+                SELECT c.id, a.bundleId, a.name
+                FROM screen_captures c
+                LEFT JOIN apps a ON a.id = c.appId
+                WHERE c.id IN (\(candidateIDs))
+                """).compactMap { row -> Int64? in
+                    let bundleID: String? = row["bundleId"]
+                    let appName: String? = row["name"]
+                    guard !SystemAppFilter.isProtectedCaptureSurface(
+                        bundleId: bundleID,
+                        appName: appName
+                    ) else { return nil }
+                    return row["id"]
+                })
+            return Array(candidates.lazy.filter { visibleIDs.contains($0) }.prefix(limit))
         }
     }
 
@@ -270,15 +302,37 @@ actor SearchService {
             var audio: [SearchResult] = []
             var call: [SearchResult] = []
             if wantScreen {
-                // snippet()/bm25() are computed in the subquery PURELY over the FTS table (hits): extra conditions on
-                // joined tables (ts BETWEEN) change the plan and SQLite loses the FTS context —
-                // "unable to use function snippet" (caught by a live run on 50k imported blocks).
+                let protectedIDs = try SystemAppFilter.protectedAppIDs(in: db)
+                let protectedTextBlocksClause: String
+                if protectedIDs.isEmpty {
+                    protectedTextBlocksClause = ""
+                } else {
+                    let ids = protectedIDs.map(String.init).joined(separator: ",")
+                    protectedTextBlocksClause = """
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM text_blocks protected_tb
+                        JOIN screen_captures protected_c ON protected_c.id = protected_tb.captureId
+                        WHERE protected_tb.id = text_fts.rowid
+                          AND protected_c.appId IN (\(ids))
+                    )
+                    """
+                }
+                let visible = SystemAppFilter.visibleCapturePredicate(
+                    .c,
+                    protectedAppIDs: protectedIDs
+                )
+                // snippet()/bm25() stay in a SELECT whose only FROM source is text_fts. The correlated
+                // rowid check rejects legacy protected blocks before LIMIT 5000 without joining
+                // another table into the FTS cursor (which loses snippet()/bm25() context).
                 let screenSQL = """
                 WITH hits AS (
                     SELECT rowid AS tbid, snippet(text_fts, 0, '⟦', '⟧', '…', 12) AS snip,
                            bm25(text_fts) AS rank
-                    FROM text_fts WHERE text_fts MATCH ?
-                    ORDER BY rank LIMIT 5000
+                    FROM text_fts
+                    WHERE text_fts MATCH ?
+                    \(protectedTextBlocksClause)
+                    ORDER BY rank LIMIT ?
                 ),
                 ranked AS (
                     SELECT c.id AS id, c.ts AS ts, a.bundleId AS bundleId, a.name AS appName,
@@ -289,13 +343,13 @@ actor SearchService {
                     JOIN text_blocks tb ON tb.id = h.tbid
                     JOIN screen_captures c ON c.id = tb.captureId
                     LEFT JOIN apps a ON a.id = c.appId
-                    WHERE c.ts BETWEEN ? AND ? \(appIdsClause)
+                    WHERE c.ts BETWEEN ? AND ? AND \(visible) \(appIdsClause)
                 )
                 SELECT id, ts, bundleId, appName, windowTitle, browserUrl, relativePath, snip, rank
                 FROM ranked WHERE rn = 1 ORDER BY rank LIMIT ?
                 """
                 for row in try Row.fetchAll(db, sql: screenSQL,
-                                            arguments: [match, fromMs, toMs, limit]) {
+                                            arguments: [match, 5_000, fromMs, toMs, limit]) {
                     screen.append(SearchResult(
                         id: row["id"], kind: .screen, ts: dateFromMs(row["ts"]),
                         bundleId: row["bundleId"], appName: row["appName"],

@@ -2,6 +2,160 @@ import XCTest
 import GRDB
 
 final class CallSearchTests: XCTestCase {
+    func testLegacyAuthenticationFramesAreAbsentFromFTSSearch() async throws {
+        let fixture = try CallSearchFixture()
+        let ordinaryID = try await fixture.makeScreen(
+            bundleID: "com.example.editor",
+            appName: "Editor",
+            timestampMs: 1_000,
+            text: "ordinary visibility needle"
+        )
+        _ = try await fixture.makeScreen(
+            bundleID: "com.apple.LocalAuthentication.UIAgent",
+            appName: "LocalAuthentication UIAgent",
+            timestampMs: 2_000,
+            text: "protected visibility needle"
+        )
+
+        let results = try await fixture.search.search(
+            query: "visibility needle",
+            filters: SearchFilters(kind: .screen)
+        )
+        let protectedOnly = try await fixture.search.search(
+            query: "protected visibility",
+            filters: SearchFilters(kind: .screen)
+        )
+
+        XCTAssertEqual(results.map(\.id), [ordinaryID])
+        XCTAssertTrue(protectedOnly.isEmpty)
+    }
+
+    func testProtectedFTSCandidatesCannotDisplaceAVisibleResultBelowTheWindow() async throws {
+        let fixture = try CallSearchFixture()
+        for index in 0..<50 {
+            _ = try await fixture.makeScreen(
+                bundleID: "com.apple.localauthentication.fixture\(index)",
+                appName: "LocalAuthentication UIAgent",
+                timestampMs: Int64(index + 1) * 1_000,
+                text: "displacement needle"
+            )
+        }
+        let ordinaryID = try await fixture.makeScreen(
+            bundleID: "com.example.visible",
+            appName: "Visible Editor",
+            timestampMs: 100_000,
+            text: "displacement needle"
+        )
+
+        let results = try await fixture.search.search(
+            query: "displacement needle",
+            filters: SearchFilters(kind: .screen, limit: 1)
+        )
+
+        XCTAssertEqual(results.map(\.id), [ordinaryID])
+    }
+
+    func testMoreThanFiveThousandProtectedFTSHitsCannotSaturateTheCandidateLimit() async throws {
+        let fixture = try CallSearchFixture()
+        let ordinaryID = try await fixture.makeProtectedFTSSaturation(count: 5_001)
+
+        let results = try await fixture.search.search(
+            query: "saturation",
+            filters: SearchFilters(kind: .screen, limit: 1)
+        )
+
+        XCTAssertEqual(results.map(\.id), [ordinaryID])
+        XCTAssertTrue(results.first?.snippet.contains("⟦saturation⟧") == true)
+    }
+
+    func testProtectedSemanticCandidatesAreSkippedWithoutConsumingTheWindow() async throws {
+        let fixture = try CallSearchFixture()
+        var protectedIDs: [Int64] = []
+        for index in 0..<50 {
+            protectedIDs.append(try await fixture.makeScreen(
+                bundleID: "com.apple.localauthentication.semantic\(index)",
+                appName: "LocalAuthentication UIAgent",
+                timestampMs: Int64(index + 1) * 1_000,
+                text: "lexically unrelated protected frame"
+            ))
+        }
+        let ordinaryID = try await fixture.makeScreen(
+            bundleID: "com.example.semantic-visible",
+            appName: "Visible Editor",
+            timestampMs: 100_000,
+            text: "lexically unrelated ordinary frame"
+        )
+        let queryVector: [Float] = [1] + Array(
+            repeating: 0,
+            count: ZBSEyeDatabase.embeddingDim - 1
+        )
+        let ordinaryVector: [Float] = [0.9] + Array(
+            repeating: 0,
+            count: ZBSEyeDatabase.embeddingDim - 1
+        )
+        let protectedCaptureIDs = protectedIDs
+        try await fixture.database.pool.write { db in
+            for captureID in protectedCaptureIDs {
+                try db.execute(
+                    sql: "INSERT INTO vec_screen(capture_id, bucket_month, embedding) VALUES (?, ?, ?)",
+                    arguments: [captureID, 197001, floatBlob(queryVector)]
+                )
+            }
+            try db.execute(
+                sql: "INSERT INTO vec_screen(capture_id, bucket_month, embedding) VALUES (?, ?, ?)",
+                arguments: [ordinaryID, 197001, floatBlob(ordinaryVector)]
+            )
+        }
+        let hybridSearch = SearchService(
+            db: fixture.database,
+            embedder: FixedCallSearchEmbedder(vector: queryVector)
+        )
+
+        let results = try await hybridSearch.search(
+            query: "meaning-only",
+            filters: SearchFilters(kind: .screen, limit: 1)
+        )
+
+        XCTAssertEqual(results.map(\.id), [ordinaryID])
+    }
+
+    func testSemanticPaginationBeyondTwoHundredFiftyKeepsItsCallerWindow() async throws {
+        let fixture = try CallSearchFixture()
+        let queryVector: [Float] = [1] + Array(
+            repeating: 0,
+            count: ZBSEyeDatabase.embeddingDim - 1
+        )
+        var captureIDs: [Int64] = []
+        for index in 0..<292 {
+            captureIDs.append(try await fixture.makeScreen(
+                bundleID: "com.example.pagination.\(index)",
+                appName: "Pagination Fixture",
+                timestampMs: Int64(index + 1) * 1_000,
+                text: "unrelated pagination fixture \(index)"
+            ))
+        }
+        let immutableCaptureIDs = captureIDs
+        try await fixture.database.pool.write { db in
+            for captureID in immutableCaptureIDs {
+                try db.execute(
+                    sql: "INSERT INTO vec_screen(capture_id, bucket_month, embedding) VALUES (?, ?, ?)",
+                    arguments: [captureID, 197001, floatBlob(queryVector)]
+                )
+            }
+        }
+        let semanticSearch = SearchService(
+            db: fixture.database,
+            embedder: FixedCallSearchEmbedder(vector: queryVector)
+        )
+
+        let results = try await semanticSearch.search(
+            query: "meaning-only-offset",
+            filters: SearchFilters(kind: .screen, limit: 1, offset: 251)
+        )
+
+        XCTAssertEqual(results.count, 1)
+    }
+
     func testPreferredCheckpointTranscriptIsSearchableAsCall() async throws {
         let fixture = try CallSearchFixture()
         let callID = try await fixture.makeCall(startedAtMs: 1_000)
@@ -236,6 +390,83 @@ private final class CallSearchFixture {
             idempotencyKey: "call-\(startedAtMs)"
         )
         return try XCTUnwrap(call.id)
+    }
+
+    func makeScreen(
+        bundleID: String,
+        appName: String,
+        timestampMs: Int64,
+        text: String
+    ) async throws -> Int64 {
+        try await database.pool.write { db in
+            try db.execute(
+                sql: "INSERT INTO apps(bundleId, name) VALUES (?, ?)",
+                arguments: [bundleID, appName]
+            )
+            let appID = db.lastInsertedRowID
+            try db.execute(
+                sql: """
+                    INSERT INTO screen_captures(ts, appId, monitorId, windowTitle)
+                    VALUES (?, ?, 'main', 'Fixture')
+                    """,
+                arguments: [timestampMs, appID]
+            )
+            let captureID = db.lastInsertedRowID
+            try db.execute(
+                sql: "INSERT INTO text_blocks(captureId, source, text) VALUES (?, 'ocr', ?)",
+                arguments: [captureID, text]
+            )
+            return captureID
+        }
+    }
+
+    func makeProtectedFTSSaturation(count: Int) async throws -> Int64 {
+        try await database.pool.write { db in
+            try db.execute(
+                sql: "INSERT INTO apps(bundleId, name) VALUES (?, ?)",
+                arguments: ["com.apple.LocalAuthentication.UIAgent", "LocalAuthentication UIAgent"]
+            )
+            let protectedAppID = db.lastInsertedRowID
+            for index in 0..<count {
+                try db.execute(
+                    sql: """
+                        INSERT INTO screen_captures(ts, appId, monitorId, windowTitle)
+                        VALUES (?, ?, 'main', 'Authentication')
+                        """,
+                    arguments: [Int64(index + 1) * 1_000, protectedAppID]
+                )
+                let captureID = db.lastInsertedRowID
+                try db.execute(
+                    sql: """
+                        INSERT INTO text_blocks(captureId, source, text)
+                        VALUES (?, 'ocr', 'saturation saturation saturation saturation saturation')
+                        """,
+                    arguments: [captureID]
+                )
+            }
+
+            try db.execute(
+                sql: "INSERT INTO apps(bundleId, name) VALUES (?, ?)",
+                arguments: ["com.example.visible", "Visible Editor"]
+            )
+            let visibleAppID = db.lastInsertedRowID
+            try db.execute(
+                sql: """
+                    INSERT INTO screen_captures(ts, appId, monitorId, windowTitle)
+                    VALUES (?, ?, 'main', 'Visible')
+                    """,
+                arguments: [Int64(count + 1) * 1_000, visibleAppID]
+            )
+            let visibleCaptureID = db.lastInsertedRowID
+            try db.execute(
+                sql: """
+                    INSERT INTO text_blocks(captureId, source, text)
+                    VALUES (?, 'ocr', 'saturation')
+                    """,
+                arguments: [visibleCaptureID]
+            )
+            return visibleCaptureID
+        }
     }
 
     func commitCheckpoint(
