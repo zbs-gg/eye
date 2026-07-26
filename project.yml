@@ -103,7 +103,7 @@ targets:
         INFOPLIST_KEY_CFBundleName: "ZBS Eye"
         GENERATE_INFOPLIST_FILE: YES
         MARKETING_VERSION: "0.5.0"          # CFBundleShortVersionString
-        CURRENT_PROJECT_VERSION: "12"       # CFBundleVersion
+        CURRENT_PROJECT_VERSION: "13"       # CFBundleVersion
         CODE_SIGN_ENTITLEMENTS: ZBSEyeApp/ZBSEye.entitlements
         # Default — ad-hoc for development. scripts/build-release.sh can use the legacy self-signed
         # "ZBS Eye Dev" identity; distributable releases must use scripts/build-notarized.sh with the
@@ -298,7 +298,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye.tests
         MARKETING_VERSION: "0.5.0"
-        CURRENT_PROJECT_VERSION: "12"
+        CURRENT_PROJECT_VERSION: "13"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: ZBSEyeTests/Info.plist
         ZBS_EYE_MODEL_DIR: ""
