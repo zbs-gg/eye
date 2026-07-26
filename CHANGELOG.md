@@ -2,7 +2,7 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
-## [Unreleased]
+## [0.5.0] — 2026-07-26
 
 ### Added
 - **OS-only Chromium call detection.** Chrome, Dia, and Edge can start local call capture for
