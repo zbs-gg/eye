@@ -79,13 +79,19 @@ final class ProgressStore {
 
     nonisolated private static func compute(db: ZBSEyeDatabase) async -> ProgressSnapshot {
         guard let raw = try? await db.pool.read({ dbc -> RawStats? in
+            let protectedIDs = try SystemAppFilter.protectedAppIDs(in: dbc)
+            let visible = SystemAppFilter.visibleCapturePredicate(
+                .c,
+                protectedAppIDs: protectedIDs
+            )
             // Single-pass aggregate: COUNT, MIN, MAX ts + distinct calendar days + streak
             guard let row = try Row.fetchOne(dbc, sql: """
                 SELECT
                   COUNT(*) AS totalFrames,
-                  MIN(ts)  AS minTs,
-                  MAX(ts)  AS maxTs
-                FROM screen_captures
+                  MIN(c.ts)  AS minTs,
+                  MAX(c.ts)  AS maxTs
+                FROM screen_captures c
+                WHERE \(visible)
                 """) else { return nil }
 
             let totalFrames: Int = row["totalFrames"] ?? 0
@@ -97,8 +103,9 @@ final class ProgressStore {
             // (activeDays = their count). There used to be a separate COUNT(DISTINCT date(...)) — an extra
             // full history scan (Pro review #8).
             let dayStrings = try String.fetchAll(dbc, sql: """
-                SELECT DISTINCT date(ts / 1000, 'unixepoch', 'localtime') AS d
-                FROM screen_captures
+                SELECT DISTINCT date(c.ts / 1000, 'unixepoch', 'localtime') AS d
+                FROM screen_captures c
+                WHERE \(visible)
                 ORDER BY d DESC
                 """)
             let activeDays = dayStrings.count

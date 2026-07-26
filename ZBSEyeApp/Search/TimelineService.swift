@@ -10,10 +10,15 @@ actor TimelineService {
     /// moves the timeline tail (otherwise a call recording wouldn't appear on the strip until a new frame).
     func bounds() async throws -> TimeBounds {
         try await db.pool.read { db in
+            let protectedIDs = try SystemAppFilter.protectedAppIDs(in: db)
+            let visible = SystemAppFilter.visibleCapturePredicate(
+                .c,
+                protectedAppIDs: protectedIDs
+            )
             let row = try Row.fetchOne(db, sql: """
                 SELECT MIN(t) AS lo, MAX(t) AS hi FROM (
-                    SELECT MIN(ts) AS t FROM screen_captures
-                    UNION ALL SELECT MAX(ts) FROM screen_captures
+                    SELECT MIN(c.ts) AS t FROM screen_captures c WHERE \(visible)
+                    UNION ALL SELECT MAX(c.ts) FROM screen_captures c WHERE \(visible)
                     UNION ALL SELECT MIN(ts) FROM audio_captures
                     UNION ALL SELECT MAX(ts) FROM audio_captures
                     UNION ALL SELECT MIN(startTs) FROM calls
@@ -117,9 +122,15 @@ actor TimelineService {
         let f = msFromDate(from), t = msFromDate(to)
         let b = max(1000, bucketMs)
         return try await db.pool.read { db in
-            try Row.fetchAll(db, sql: """
-                SELECT (ts / ?) * ? AS bucket, COUNT(*) AS c
-                FROM screen_captures WHERE ts BETWEEN ? AND ?
+            let protectedIDs = try SystemAppFilter.protectedAppIDs(in: db)
+            let visible = SystemAppFilter.visibleCapturePredicate(
+                .c,
+                protectedAppIDs: protectedIDs
+            )
+            return try Row.fetchAll(db, sql: """
+                SELECT (c.ts / ?) * ? AS bucket, COUNT(*) AS c
+                FROM screen_captures c
+                WHERE c.ts BETWEEN ? AND ? AND \(visible)
                 GROUP BY bucket ORDER BY bucket
                 """, arguments: [b, b, f, t]).map {
                 DensityBucket(ts: dateFromMs($0["bucket"]), count: $0["c"])
@@ -129,7 +140,11 @@ actor TimelineService {
 
     /// The nearest frame ≤ the time + its aggregated text and context.
     func frameAt(_ time: Date) async throws -> FrameDetail? {
-        try await fetchFrame(where: "c.ts <= ? ORDER BY c.ts DESC, c.id DESC", args: [msFromDate(time)])
+        try await fetchFrame(
+            where: "c.ts <= ?",
+            orderBy: "c.ts DESC, c.id DESC",
+            args: [msFromDate(time)]
+        )
     }
 
     /// Strictly the next frame — for stepping forward and the player. Tie-break (ts,id): frames with equal ts
@@ -138,10 +153,15 @@ actor TimelineService {
         let t = msFromDate(time)
         if let id = afterId {
             return try await fetchFrame(
-                where: "(c.ts > ? OR (c.ts = ? AND c.id > ?)) ORDER BY c.ts ASC, c.id ASC",
+                where: "(c.ts > ? OR (c.ts = ? AND c.id > ?))",
+                orderBy: "c.ts ASC, c.id ASC",
                 args: [t, t, id])
         }
-        return try await fetchFrame(where: "c.ts > ? ORDER BY c.ts ASC, c.id ASC", args: [t])
+        return try await fetchFrame(
+            where: "c.ts > ?",
+            orderBy: "c.ts ASC, c.id ASC",
+            args: [t]
+        )
     }
 
     /// Strictly the previous frame — for stepping back (mirrored tie-break).
@@ -149,14 +169,19 @@ actor TimelineService {
         let t = msFromDate(time)
         if let id = beforeId {
             return try await fetchFrame(
-                where: "(c.ts < ? OR (c.ts = ? AND c.id < ?)) ORDER BY c.ts DESC, c.id DESC",
+                where: "(c.ts < ? OR (c.ts = ? AND c.id < ?))",
+                orderBy: "c.ts DESC, c.id DESC",
                 args: [t, t, id])
         }
-        return try await fetchFrame(where: "c.ts < ? ORDER BY c.ts DESC, c.id DESC", args: [t])
+        return try await fetchFrame(
+            where: "c.ts < ?",
+            orderBy: "c.ts DESC, c.id DESC",
+            args: [t]
+        )
     }
 
     func frameDetail(id: Int64) async throws -> FrameDetail? {
-        try await fetchFrame(where: "c.id = ?", args: [id])
+        try await fetchFrame(where: "c.id = ?", orderBy: nil, args: [id])
     }
 
     /// AUDIO activity density (the density strip's second track): where in history there's speech.
@@ -190,16 +215,32 @@ actor TimelineService {
         }
     }
 
-    // Shared mapping: one frame by a predicate + its concatenated text. clause doesn't need to include ORDER/LIMIT —
-    // we add LIMIT 1 here; ORDER is set in clause before LIMIT. clause — the compile-time constants above.
-    private func fetchFrame(where clause: String, args: [Int64]) async throws -> FrameDetail? {
+    // Shared mapping: privacy visibility is applied in SQL before ORDER/LIMIT, so a protected legacy row
+    // is skipped rather than turning the nearest/next/previous lookup into a false nil.
+    private func fetchFrame(
+        where predicate: String,
+        orderBy: String?,
+        args: [Int64]
+    ) async throws -> FrameDetail? {
         try await db.pool.read { db in
+            let protectedIDs = try SystemAppFilter.protectedAppIDs(in: db)
+            let visible = SystemAppFilter.visibleCapturePredicate(
+                .c,
+                protectedAppIDs: protectedIDs
+            )
+            let ordering = orderBy.map { "ORDER BY \($0)" } ?? ""
             guard let row = try Row.fetchOne(db, sql: """
                 SELECT c.id AS id, c.ts AS ts, c.relativePath AS relativePath, c.windowTitle AS windowTitle,
                        c.browserUrl AS browserUrl, c.axQuality AS axQuality, a.bundleId AS bundleId, a.name AS appName
                 FROM screen_captures c LEFT JOIN apps a ON a.id = c.appId
-                WHERE \(clause) LIMIT 1
+                WHERE \(predicate) AND \(visible)
+                \(ordering)
+                LIMIT 1
                 """, arguments: StatementArguments(args)) else { return nil }
+            guard !SystemAppFilter.isProtectedCaptureSurface(
+                bundleId: row["bundleId"],
+                appName: row["appName"]
+            ) else { return nil }
             let id: Int64 = row["id"]
             let text = try String.fetchOne(db, sql:
                 "SELECT group_concat(text, '\n') FROM text_blocks WHERE captureId = ?", arguments: [id]) ?? ""

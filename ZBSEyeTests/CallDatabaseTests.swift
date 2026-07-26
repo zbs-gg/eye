@@ -2,6 +2,178 @@ import XCTest
 import GRDB
 
 final class CallDatabaseTests: XCTestCase {
+    func testV14RemovesMoreThanOneThousandProtectedDerivedRowsAndPreservesSources() async throws {
+        let store = try CallDatabaseTestStore(runMigrations: false)
+        try ZBSEyeDatabase.migrator.migrate(
+            store.database.pool,
+            upTo: "v13_call_processing_ready_event"
+        )
+        let protectedCount = 1_001
+        let vector = floatBlob(
+            [1] + Array(repeating: 0, count: ZBSEyeDatabase.embeddingDim - 1)
+        )
+
+        let fixture = try await store.database.pool.write { db -> (protectedIDs: [Int64], visibleID: Int64) in
+            try db.execute(
+                sql: "INSERT INTO apps(bundleId, name) VALUES (?, ?)",
+                arguments: ["com.apple.LocalAuthentication.UIAgent", "LocalAuthentication UIAgent"]
+            )
+            let protectedAppID = db.lastInsertedRowID
+            try db.execute(
+                sql: "INSERT INTO apps(bundleId, name) VALUES (?, ?)",
+                arguments: ["com.example.visible", "Visible Editor"]
+            )
+            let visibleAppID = db.lastInsertedRowID
+
+            var protectedIDs: [Int64] = []
+            protectedIDs.reserveCapacity(protectedCount)
+            for index in 0..<protectedCount {
+                try db.execute(
+                    sql: "INSERT INTO screen_captures(ts, appId, monitorId) VALUES (?, ?, 'main')",
+                    arguments: [Int64(index + 1) * 1_000, protectedAppID]
+                )
+                let captureID = db.lastInsertedRowID
+                protectedIDs.append(captureID)
+                try db.execute(
+                    sql: "INSERT INTO text_blocks(captureId, source, text) VALUES (?, 'ocr', ?)",
+                    arguments: [captureID, "protected source \(index)"]
+                )
+                try db.execute(
+                    sql: "INSERT INTO embed_queue(row_id, kind, ts) VALUES (?, 0, ?)",
+                    arguments: [captureID, Int64(index + 1) * 1_000]
+                )
+                try db.execute(
+                    sql: "INSERT INTO vec_screen(capture_id, bucket_month, embedding) VALUES (?, 197001, ?)",
+                    arguments: [captureID, vector]
+                )
+            }
+
+            try db.execute(
+                sql: "INSERT INTO screen_captures(ts, appId, monitorId) VALUES (2000000, ?, 'main')",
+                arguments: [visibleAppID]
+            )
+            let visibleID = db.lastInsertedRowID
+            try db.execute(
+                sql: "INSERT INTO text_blocks(captureId, source, text) VALUES (?, 'ocr', 'visible source')",
+                arguments: [visibleID]
+            )
+            try db.execute(
+                sql: "INSERT INTO embed_queue(row_id, kind, ts) VALUES (?, 0, 2000000)",
+                arguments: [visibleID]
+            )
+            try db.execute(
+                sql: "INSERT INTO vec_screen(capture_id, bucket_month, embedding) VALUES (?, 197001, ?)",
+                arguments: [visibleID, vector]
+            )
+            return (protectedIDs, visibleID)
+        }
+
+        try ZBSEyeDatabase.migrator.migrate(store.database.pool)
+
+        let snapshot = try await store.database.pool.read { db in
+            (
+                captureCount: try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM screen_captures") ?? -1,
+                textCount: try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM text_blocks") ?? -1,
+                vectorIDs: try Int64.fetchAll(db, sql: "SELECT capture_id FROM vec_screen ORDER BY capture_id"),
+                queueIDs: try Int64.fetchAll(
+                    db,
+                    sql: "SELECT row_id FROM embed_queue WHERE kind = 0 ORDER BY row_id"
+                )
+            )
+        }
+
+        XCTAssertEqual(snapshot.captureCount, protectedCount + 1)
+        XCTAssertEqual(snapshot.textCount, protectedCount + 1)
+        XCTAssertEqual(snapshot.vectorIDs, [fixture.visibleID])
+        XCTAssertEqual(snapshot.queueIDs, [fixture.visibleID])
+        XCTAssertEqual(fixture.protectedIDs.count, protectedCount)
+    }
+
+    func testVectorBackfillRejectsProtectedTextAndReattestsBeforeVectorWrite() async throws {
+        let store = try CallDatabaseTestStore()
+        let vector = floatBlob(
+            [1] + Array(repeating: 0, count: ZBSEyeDatabase.embeddingDim - 1)
+        )
+        let fixture = try await store.database.pool.write { db -> (protectedID: Int64, visibleID: Int64) in
+            // Exercise the process-name fallback too: legacy rows may not carry a canonical auth bundle id.
+            try db.execute(
+                sql: "INSERT INTO apps(bundleId, name) VALUES (?, ?)",
+                arguments: ["com.example.legacy-auth", "SecurityAgent"]
+            )
+            let protectedAppID = db.lastInsertedRowID
+            try db.execute(
+                sql: "INSERT INTO apps(bundleId, name) VALUES (?, ?)",
+                arguments: ["com.example.notes", "Notes"]
+            )
+            let visibleAppID = db.lastInsertedRowID
+
+            try db.execute(
+                sql: "INSERT INTO screen_captures(ts, appId, monitorId) VALUES (1000, ?, 'main')",
+                arguments: [protectedAppID]
+            )
+            let protectedID = db.lastInsertedRowID
+            try db.execute(
+                sql: "INSERT INTO text_blocks(captureId, source, text) VALUES (?, 'ocr', 'private auth words')",
+                arguments: [protectedID]
+            )
+            try db.execute(
+                sql: "INSERT INTO vec_screen(capture_id, bucket_month, embedding) VALUES (?, 197001, ?)",
+                arguments: [protectedID, vector]
+            )
+
+            try db.execute(
+                sql: "INSERT INTO screen_captures(ts, appId, monitorId) VALUES (2000, ?, 'main')",
+                arguments: [visibleAppID]
+            )
+            let visibleID = db.lastInsertedRowID
+            try db.execute(
+                sql: "INSERT INTO text_blocks(captureId, source, text) VALUES (?, 'ocr', 'ordinary notes')",
+                arguments: [visibleID]
+            )
+            return (protectedID, visibleID)
+        }
+
+        let result = try await store.database.pool.write { db in
+            let protectedText = try ZBSEyeDatabase.screenTextForSemanticIndexing(
+                captureID: fixture.protectedID,
+                in: db
+            )
+            let visibleText = try ZBSEyeDatabase.screenTextForSemanticIndexing(
+                captureID: fixture.visibleID,
+                in: db
+            )
+            let protectedInserted = try ZBSEyeDatabase.replaceScreenSemanticVectorIfVisible(
+                captureID: fixture.protectedID,
+                bucket: 197001,
+                blob: vector,
+                in: db
+            )
+            let visibleInserted = try ZBSEyeDatabase.replaceScreenSemanticVectorIfVisible(
+                captureID: fixture.visibleID,
+                bucket: 197001,
+                blob: vector,
+                in: db
+            )
+            return (
+                protectedText,
+                visibleText,
+                protectedInserted,
+                visibleInserted,
+                vectorIDs: try Int64.fetchAll(db, sql: "SELECT capture_id FROM vec_screen ORDER BY capture_id"),
+                sourceCount: try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM screen_captures") ?? -1,
+                textCount: try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM text_blocks") ?? -1
+            )
+        }
+
+        XCTAssertNil(result.0)
+        XCTAssertEqual(result.1, "ordinary notes")
+        XCTAssertFalse(result.2)
+        XCTAssertTrue(result.3)
+        XCTAssertEqual(result.vectorIDs, [fixture.visibleID])
+        XCTAssertEqual(result.sourceCount, 2)
+        XCTAssertEqual(result.textCount, 2)
+    }
+
     func testFreshAndV6StoresMigrateWithoutLosingExistingRows() async throws {
         let fresh = try CallDatabaseTestStore()
         let freshTables = try await fresh.database.pool.read { db in
@@ -42,7 +214,7 @@ final class CallDatabaseTests: XCTestCase {
             )
         }
         XCTAssertEqual(snapshot.appCount, 1)
-        XCTAssertEqual(snapshot.migrations.last, "v13_call_processing_ready_event")
+        XCTAssertEqual(snapshot.migrations.last, "v14_protected_capture_vector_cleanup")
         XCTAssertGreaterThanOrEqual(snapshot.triggerCount, 6)
     }
 

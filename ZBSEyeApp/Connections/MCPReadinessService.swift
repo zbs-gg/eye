@@ -286,6 +286,24 @@ struct SystemMCPInstalledApplicationInspector: MCPInstalledApplicationInspecting
 }
 
 struct SystemMCPDataRootResolver: MCPDataRootResolving {
+    static func latestVisibleFrameWitness(in db: Database) throws -> MCPFrameWitness? {
+        let protectedIDs = try SystemAppFilter.protectedAppIDs(in: db)
+        let visible = SystemAppFilter.visibleCapturePredicate(
+            .c,
+            protectedAppIDs: protectedIDs
+        )
+        guard let row = try Row.fetchOne(
+            db,
+            sql: """
+                SELECT c.id AS id, c.ts AS ts
+                FROM screen_captures c
+                WHERE \(visible)
+                ORDER BY c.ts DESC, c.id DESC LIMIT 1
+                """
+        ) else { return nil }
+        return MCPFrameWitness(frameID: row["id"], timestampMs: row["ts"])
+    }
+
     func resolve() async throws -> MCPDataRootIdentity {
         try await Task.detached(priority: .utility) {
             let root = try StorageLocation.requireExistingDataRoot()
@@ -308,11 +326,7 @@ struct SystemMCPDataRootResolver: MCPDataRootResolving {
                 access: .readOnly
             )
             let witness = try database.pool.read { db -> MCPFrameWitness? in
-                guard let row = try Row.fetchOne(
-                    db,
-                    sql: "SELECT id, ts FROM screen_captures ORDER BY ts DESC, id DESC LIMIT 1"
-                ) else { return nil }
-                return MCPFrameWitness(frameID: row["id"], timestampMs: row["ts"])
+                try Self.latestVisibleFrameWitness(in: db)
             }
             return MCPDataRootIdentity(
                 url: root,

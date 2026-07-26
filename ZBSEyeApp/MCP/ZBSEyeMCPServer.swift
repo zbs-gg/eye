@@ -523,14 +523,13 @@ enum ZBSEyeMCPServer {
             func count(_ table: String) throws -> Int {
                 try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(table)") ?? 0
             }
-            let oldest = try Int64.fetchOne(db, sql: "SELECT MIN(ts) FROM screen_captures")
-            let newest = try Int64.fetchOne(db, sql: "SELECT MAX(ts) FROM screen_captures")
+            let screen = try SystemAppFilter.visibleScreenCaptureStats(in: db)
             return (
-                try count("screen_captures"),
-                try count("text_blocks"),
+                screen.frames,
+                screen.textBlocks,
                 try count("audio_captures"),
-                oldest,
-                newest
+                screen.oldestMs,
+                screen.newestMs
             )
         }
         let recording = await mainInstanceCaptureStatus(dataRoot: dataRoot)
@@ -657,10 +656,11 @@ enum ZBSEyeMCPServer {
                     d,
                     sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid"
                 )
+                let screen = try SystemAppFilter.visibleScreenCaptureStats(in: d)
                 return (
                     migrations.joined(separator: ", "),
-                    try count("screen_captures"),
-                    try count("text_blocks"),
+                    screen.frames,
+                    screen.textBlocks,
                     try count("audio_captures"),
                     try count("transcriptions"),
                     try count("browser_visits")

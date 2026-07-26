@@ -80,6 +80,10 @@ actor AskDatabaseRetrieval: AskRetrievalProviding {
 
                     let bundleID: String? = row["bundleId"]
                     let appName: String? = row["appName"]
+                    guard !SystemAppFilter.isProtectedCaptureSurface(
+                        bundleId: bundleID,
+                        appName: appName
+                    ) else { return nil }
                     let windowTitle: String? = row["windowTitle"]
                     let label = [appName ?? bundleID ?? "screen", windowTitle]
                         .compactMap { $0 }

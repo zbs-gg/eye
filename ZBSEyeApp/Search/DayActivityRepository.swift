@@ -54,7 +54,7 @@ actor DayActivityRepository {
     /// One scan of the range's frames (ts ASC). Lightweight fields — no text.
     func captures(fromMs: Int64, toMs: Int64) async throws -> [CaptureLite] {
         try await db.pool.read { dbc in
-            try Row.fetchAll(dbc, sql: """
+            let captures = try Row.fetchAll(dbc, sql: """
                 SELECT c.id AS id, c.ts AS ts, c.appId AS appId,
                        a.name AS appName, a.bundleId AS bundleId,
                        c.windowTitle AS windowTitle, c.browserUrl AS browserUrl
@@ -65,6 +65,7 @@ actor DayActivityRepository {
                             appName: $0["appName"], bundleId: $0["bundleId"],
                             windowTitle: $0["windowTitle"], browserUrl: $0["browserUrl"])
             }
+            return captures.filter { !SystemAppFilter.isProtectedCaptureSurface($0) }
         }
     }
 
@@ -82,9 +83,16 @@ actor DayActivityRepository {
         guard !ids.isEmpty else { return [:] }
         return try await db.pool.read { dbc -> [Int64: String] in
             let ph = ids.map { _ in "?" }.joined(separator: ",")
+            let protectedIDs = try SystemAppFilter.protectedAppIDs(in: dbc)
+            let visible = SystemAppFilter.visibleCapturePredicate(
+                .c,
+                protectedAppIDs: protectedIDs
+            )
             let rows = try Row.fetchAll(dbc, sql: """
-                SELECT captureId, group_concat(text, ' ') AS txt
-                FROM text_blocks WHERE captureId IN (\(ph)) GROUP BY captureId
+                SELECT t.captureId AS captureId, group_concat(t.text, ' ') AS txt
+                FROM text_blocks t JOIN screen_captures c ON c.id = t.captureId
+                WHERE t.captureId IN (\(ph)) AND \(visible)
+                GROUP BY t.captureId
                 """, arguments: StatementArguments(ids))
             var out: [Int64: String] = [:]
             for r in rows { out[r["captureId"]] = r["txt"] ?? "" }

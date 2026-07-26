@@ -35,6 +35,8 @@ actor FramePipeline {
     private let config: CaptureConfig
     private let ciContext: CIContext
     private var cachedContent: SCShareableContent?
+    private var cachedProtectedApplicationSnapshot: ProtectedCaptureApplicationSnapshot?
+    private var contentEpoch = CaptureContentEpoch()
     private var lastHashes: [Int: [UInt64]] = [:]   // [full, 4 quadrants] per display
 
     init(config: CaptureConfig) {
@@ -50,21 +52,106 @@ actor FramePipeline {
         }
     }
 
-    func invalidateContent() { cachedContent = nil }
+    func invalidateContent() {
+        contentEpoch.invalidate()
+        cachedContent = nil
+        cachedProtectedApplicationSnapshot = nil
+    }
 
-    private func currentContent() async throws -> SCShareableContent {
-        if let c = cachedContent { return c }
-        let c = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+    /// A verified login-session boundary must produce a fresh ordinary frame.
+    /// Reset only here: clearing hashes on every app activation would defeat dedup.
+    func invalidateSessionBoundary() {
+        contentEpoch.invalidate()
+        cachedContent = nil
+        cachedProtectedApplicationSnapshot = nil
+        lastHashes.removeAll(keepingCapacity: true)
+    }
+
+    private func currentContent(
+        expectedGeneration: UInt64,
+        protectedApplicationSnapshot: ProtectedCaptureApplicationSnapshot
+    ) async throws -> SCShareableContent? {
+        if cachedProtectedApplicationSnapshot != protectedApplicationSnapshot {
+            cachedContent = nil
+            cachedProtectedApplicationSnapshot = nil
+        }
+        if let c = cachedContent {
+            guard Self.contentCoversProtectedApplications(
+                c,
+                expected: protectedApplicationSnapshot
+            ) else {
+                invalidateAfterProtectedApplicationChange()
+                return nil
+            }
+            return c
+        }
+        // Keep the complete application inventory. LocalAuthentication helpers
+        // are often long-lived with only offscreen windows, and therefore vanish
+        // from an on-screen-only inventory just before their sheet appears.
+        let c = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        guard contentEpoch.contains(expectedGeneration) else { return nil }
+        guard Self.contentCoversProtectedApplications(
+            c,
+            expected: protectedApplicationSnapshot
+        ) else {
+            invalidateAfterProtectedApplicationChange()
+            return nil
+        }
         cachedContent = c
+        cachedProtectedApplicationSnapshot = protectedApplicationSnapshot
         return c
+    }
+
+    private static func contentCoversProtectedApplications(
+        _ content: SCShareableContent,
+        expected: ProtectedCaptureApplicationSnapshot
+    ) -> Bool {
+        let represented: Set<ProtectedCaptureApplicationIdentity> = Set(
+            content.applications.compactMap { application -> ProtectedCaptureApplicationIdentity? in
+                guard CaptureSessionPolicy.isProtectedCaptureSurface(
+                    bundleId: application.bundleIdentifier,
+                    appName: application.applicationName
+                ) else { return nil }
+                return ProtectedCaptureApplicationIdentity(
+                    bundleIdentifier: application.bundleIdentifier,
+                    applicationName: application.applicationName,
+                    processIdentifier: Int32(application.processID)
+                )
+            }
+        )
+        return CaptureSessionPolicy.contentCoversProtectedApplications(
+            expected: expected,
+            represented: represented
+        )
+    }
+
+    private func invalidateAfterProtectedApplicationChange() {
+        contentEpoch.invalidate()
+        cachedContent = nil
+        cachedProtectedApplicationSnapshot = nil
     }
 
     /// Capture + dedup + HEIC + (opt) OCR. displayID — the display of the focused window (NSScreen.main);
     /// nil/not found → the first one. Returns nil if there is no display. On a duplicate — heicData is empty,
     /// isDuplicate=true (the Coordinator decides whether to write a context-only record).
     func process(displayID: CGDirectDisplayID?, needsOCR: Bool,
-                 excludedBundleIds: Set<String> = []) async throws -> ProcessedFrame? {
-        let content = try await currentContent()
+                 excludedBundleIds: Set<String> = [],
+                 protectedApplicationSnapshot: ProtectedCaptureApplicationSnapshot) async throws -> ProcessedFrame? {
+        let expectedGeneration = contentEpoch.value
+        guard let content = try await currentContent(
+            expectedGeneration: expectedGeneration,
+            protectedApplicationSnapshot: protectedApplicationSnapshot
+        ) else { return nil }
+        guard contentEpoch.contains(expectedGeneration) else { return nil }
+
+        // Attest the process set after the potentially suspending content fetch.
+        // A newly launched authentication helper cannot reuse a snapshot that
+        // predates it; the next cycle fetches a fresh SCK application list.
+        guard await CaptureSessionPolicy.protectedRunningApplicationSnapshot()
+                == protectedApplicationSnapshot else {
+            invalidateAfterProtectedApplicationChange()
+            return nil
+        }
         guard let display = content.displays.first(where: { displayID == nil || $0.displayID == displayID })
                 ?? content.displays.first else { throw CaptureError.noDisplay }
         let dedupKey = Int(display.displayID)
@@ -73,8 +160,17 @@ actor FramePipeline {
 
         // Privacy exclusions natively via SCK: the pixels of excluded apps' windows don't make it
         // into the frame AT ALL (and there's physically nothing for OCR to leak) — even when the window is visible behind another in the background.
-        let excludedApps = excludedBundleIds.isEmpty ? [] :
-            content.applications.filter { excludedBundleIds.contains($0.bundleIdentifier) }
+        // Authentication and lock surfaces are excluded at the SCK filter as
+        // well as the coordinator gate. A process-set change invalidates the
+        // frame before OCR or persistence, even when macOS reports the underlying
+        // app as frontmost while an authentication sheet overlays it.
+        let excludedApps = content.applications.filter {
+            excludedBundleIds.contains($0.bundleIdentifier)
+                || CaptureSessionPolicy.isProtectedCaptureSurface(
+                    bundleId: $0.bundleIdentifier,
+                    appName: $0.applicationName
+                )
+        }
         let filter = SCContentFilter(display: display, excludingApplications: excludedApps,
                                      exceptingWindows: [])
         // Cap the captured size to maxCaptureDim on the longest side: SCK renders the smaller frame directly, so the
@@ -86,6 +182,13 @@ actor FramePipeline {
         cfg.pixelFormat = kCVPixelFormatType_32BGRA
         cfg.showsCursor = false
         let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: cfg)
+        guard contentEpoch.contains(expectedGeneration) else { return nil }
+        guard await CaptureSessionPolicy.protectedRunningApplicationSnapshot()
+                == protectedApplicationSnapshot else {
+            invalidateAfterProtectedApplicationChange()
+            return nil
+        }
+        guard contentEpoch.contains(expectedGeneration) else { return nil }
         let ciImage = CIImage(cgImage: cgImage)
 
         // Per-tile dedup: aHash of the whole screen is blind to small changes (a new message in the corner of a 4K
@@ -96,21 +199,41 @@ actor FramePipeline {
         let prev = lastHashes[dedupKey]   // per-display dedup: a monitor switch isn't a "duplicate" of the previous one
         let isDup = prev != nil && prev!.count == hashes.count &&
             zip(prev!, hashes).allSatisfy { Self.hamming($0, $1) <= config.dedupHammingThreshold }
-        lastHashes[dedupKey] = hashes
-
         if isDup {
+            guard contentEpoch.contains(expectedGeneration) else { return nil }
+            guard await CaptureSessionPolicy.protectedRunningApplicationSnapshot()
+                    == protectedApplicationSnapshot else {
+                invalidateAfterProtectedApplicationChange()
+                return nil
+            }
+            guard contentEpoch.contains(expectedGeneration) else { return nil }
+            lastHashes[dedupKey] = hashes
             return ProcessedFrame(heicData: Data(), phash: phash, isDuplicate: true,
                                   width: capW, height: capH, ocr: [],
                                   displayID: display.displayID)
         }
 
         guard let heic = encodeHEIC(ciImage) else { throw CaptureError.encodeFailed }
+        guard await CaptureSessionPolicy.protectedRunningApplicationSnapshot()
+                == protectedApplicationSnapshot else {
+            invalidateAfterProtectedApplicationChange()
+            return nil
+        }
+        guard contentEpoch.contains(expectedGeneration) else { return nil }
 
         var ocr: [OCRLine] = []
         if needsOCR, let small = downscaledForOCR(ciImage) {
             // OCR leaves the actor executor (dedicated queue) — the actor is free for the next capture
             ocr = await Self.runOCR(SendableCGImage(image: small), languages: config.ocrLanguages)
         }
+        guard contentEpoch.contains(expectedGeneration) else { return nil }
+        guard await CaptureSessionPolicy.protectedRunningApplicationSnapshot()
+                == protectedApplicationSnapshot else {
+            invalidateAfterProtectedApplicationChange()
+            return nil
+        }
+        guard contentEpoch.contains(expectedGeneration) else { return nil }
+        lastHashes[dedupKey] = hashes
         return ProcessedFrame(heicData: heic, phash: phash, isDuplicate: false,
                               width: capW, height: capH, ocr: ocr,
                               displayID: display.displayID)

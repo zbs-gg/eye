@@ -1,6 +1,38 @@
 import XCTest
 
 final class MCPReadinessServiceTests: XCTestCase {
+    func testLatestWitnessSkipsMoreThanSixtyFourProtectedFrames() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ZBSEyeMCPWitnessTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let database = try ZBSEyeDatabase(path: root.appendingPathComponent("eye.sqlite").path)
+        let witness = try await database.pool.write { db -> MCPFrameWitness? in
+            try db.execute(
+                sql: "INSERT INTO apps(id, bundleId, name) VALUES (?, ?, ?)",
+                arguments: [1, "com.example.editor", "Editor"]
+            )
+            try db.execute(
+                sql: "INSERT INTO apps(id, bundleId, name) VALUES (?, ?, ?)",
+                arguments: [2, "com.apple.LocalAuthentication.UIAgent", "LocalAuthentication UIAgent"]
+            )
+            try db.execute(
+                sql: "INSERT INTO screen_captures(id, ts, appId, monitorId, width, height) VALUES (?, ?, ?, ?, ?, ?)",
+                arguments: [1, 1_000, 1, "fixture", 100, 100]
+            )
+            for id in 2...82 {
+                try db.execute(
+                    sql: "INSERT INTO screen_captures(id, ts, appId, monitorId, width, height) VALUES (?, ?, ?, ?, ?, ?)",
+                    arguments: [id, id * 1_000, 2, "fixture", 100, 100]
+                )
+            }
+            return try SystemMCPDataRootResolver.latestVisibleFrameWitness(in: db)
+        }
+
+        XCTAssertEqual(witness, MCPFrameWitness(frameID: 1, timestampMs: 1_000))
+    }
+
     func testReadyStateRequiresExpectedReadOnlyToolContractAndRetrieval() async {
         let selfTest = MCPFakeSelfTester(result: .success(Self.successfulSelfTest))
         let service = Self.service(selfTester: selfTest)

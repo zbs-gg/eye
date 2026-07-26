@@ -86,6 +86,7 @@ final class ZBSEyeDatabase: Sendable {
             "v10_call_preferred_vector_guard", "v11_call_automation_outbox",
             "v12_call_context_speakers",
             "v13_call_processing_ready_event",
+            "v14_protected_capture_vector_cleanup",
         ]
     private static func warnIfNewerSchema(_ pool: DatabasePool) {
         let applied = (try? pool.read { db in
@@ -100,6 +101,105 @@ final class ZBSEyeDatabase: Sendable {
     /// Standard DB location — via the single StorageLocation (accounts for relocate). Media is separate.
     static func defaultURL() throws -> URL {
         StorageLocation.databaseURL()
+    }
+
+    /// Removes privacy-sensitive screen captures from derived semantic state only. The source capture,
+    /// text, and media remain intact so this repair never destroys history. `vec_screen` is a vec0 virtual
+    /// table and is deliberately deleted one capture at a time; batching the source-id scan bounds memory
+    /// without relying on virtual-table support for a large `IN` delete.
+    static func purgeProtectedScreenSemanticState(
+        in db: Database,
+        batchSize: Int = 300
+    ) throws {
+        precondition(batchSize > 0)
+        let protectedAppIDs = try SystemAppFilter.protectedAppIDs(in: db)
+        guard !protectedAppIDs.isEmpty else { return }
+
+        let appIDs = protectedAppIDs.map(String.init).joined(separator: ",")
+        var cursor: Int64 = 0
+        while true {
+            let captureIDs = try Int64.fetchAll(db, sql: """
+                SELECT id
+                FROM screen_captures
+                WHERE id > ? AND appId IN (\(appIDs))
+                ORDER BY id
+                LIMIT ?
+                """, arguments: [cursor, batchSize])
+            guard !captureIDs.isEmpty else { return }
+
+            for captureID in captureIDs {
+                try db.execute(
+                    sql: "DELETE FROM vec_screen WHERE capture_id = ?",
+                    arguments: [captureID]
+                )
+            }
+            let placeholders = Array(repeating: "?", count: captureIDs.count).joined(separator: ",")
+            try db.execute(
+                sql: "DELETE FROM embed_queue WHERE kind = 0 AND row_id IN (\(placeholders))",
+                arguments: StatementArguments(captureIDs)
+            )
+            cursor = captureIDs[captureIDs.index(before: captureIDs.endIndex)]
+        }
+    }
+
+    /// Returns text only when the source capture still has an admissible app identity. Protected,
+    /// missing, and empty sources all fail closed so the queue worker can remove stale derived state.
+    static func screenTextForSemanticIndexing(captureID: Int64, in db: Database) throws -> String? {
+        guard let row = try Row.fetchOne(db, sql: """
+            SELECT group_concat(tb.text, ' ') AS text,
+                   a.bundleId AS bundleId,
+                   a.name AS appName
+            FROM screen_captures c
+            LEFT JOIN apps a ON a.id = c.appId
+            JOIN text_blocks tb ON tb.captureId = c.id
+            WHERE c.id = ?
+            GROUP BY c.id, a.bundleId, a.name
+            """, arguments: [captureID]) else { return nil }
+        let bundleID: String? = row["bundleId"]
+        let appName: String? = row["appName"]
+        guard !SystemAppFilter.isProtectedCaptureSurface(
+            bundleId: bundleID,
+            appName: appName
+        ) else { return nil }
+        return row["text"]
+    }
+
+    static func isScreenCaptureVisibleForSemanticIndexing(
+        captureID: Int64,
+        in db: Database
+    ) throws -> Bool {
+        guard let identity = try Row.fetchOne(db, sql: """
+            SELECT a.bundleId AS bundleId, a.name AS appName
+            FROM screen_captures c
+            LEFT JOIN apps a ON a.id = c.appId
+            WHERE c.id = ?
+            """, arguments: [captureID]) else { return false }
+        let bundleID: String? = identity["bundleId"]
+        let appName: String? = identity["appName"]
+        return !SystemAppFilter.isProtectedCaptureSurface(
+            bundleId: bundleID,
+            appName: appName
+        )
+    }
+
+    /// Re-attests app identity in the same transaction as vector replacement. The source history is
+    /// never touched; a protected or deleted capture only loses derived semantic state.
+    @discardableResult
+    static func replaceScreenSemanticVectorIfVisible(
+        captureID: Int64,
+        bucket: Int,
+        blob: Data,
+        in db: Database
+    ) throws -> Bool {
+        try db.execute(sql: "DELETE FROM vec_screen WHERE capture_id = ?", arguments: [captureID])
+        guard try isScreenCaptureVisibleForSemanticIndexing(captureID: captureID, in: db) else {
+            return false
+        }
+        try db.execute(
+            sql: "INSERT INTO vec_screen(capture_id, bucket_month, embedding) VALUES (?, ?, ?)",
+            arguments: [captureID, bucket, blob]
+        )
+        return true
     }
 
     static var migrator: DatabaseMigrator {
@@ -847,6 +947,14 @@ final class ZBSEyeDatabase: Sendable {
                     ON call_automation_outbox(deliveredAtMs)
                     WHERE state = 'delivered';
                 """)
+        }
+
+        // v14: authentication and lock surfaces were historically capturable. Keep the immutable source
+        // history for recovery, but remove their derived embeddings and pending embedding work so protected
+        // rows cannot consume a bounded semantic-search candidate window. VectorBackfill maintains this
+        // invariant for legacy imports and future queue races.
+        m.registerMigration("v14_protected_capture_vector_cleanup") { db in
+            try purgeProtectedScreenSemanticState(in: db)
         }
         return m
     }

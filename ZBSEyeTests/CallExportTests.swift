@@ -3,6 +3,62 @@ import GRDB
 import XCTest
 
 final class CallExportTests: XCTestCase {
+    func testHistoryMediaExportOmitsLegacyAuthenticationFrames() async throws {
+        let fixture = try CallExportFixture()
+        let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_752_000_000))
+        let timestamp = msFromDate(day.addingTimeInterval(3_600))
+        try await fixture.addScreenFrame(
+            timestampMs: timestamp,
+            bundleID: "com.example.editor",
+            appName: "Editor",
+            relativePath: "ordinary.heic",
+            data: Data("ordinary".utf8)
+        )
+        try await fixture.addScreenFrame(
+            timestampMs: timestamp + 1,
+            bundleID: "com.apple.LocalAuthentication.UIAgent",
+            appName: "LocalAuthentication UIAgent",
+            relativePath: "authentication.heic",
+            data: Data("private-authentication-frame".utf8)
+        )
+        let exporter = ExportService(
+            db: fixture.database,
+            mediaDirectory: fixture.mediaRoot,
+            collectDay: { requestedDay in
+                CollectedDay(
+                    day: requestedDay,
+                    slices: [],
+                    totalCaptures: 1,
+                    totalSlices: 0
+                )
+            }
+        )
+        let destination = fixture.root.appendingPathComponent("privacy-export", isDirectory: true)
+
+        let report = try await exporter.export(
+            from: day,
+            to: day,
+            into: destination,
+            includeMedia: true
+        )
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        let mediaFolder = URL(fileURLWithPath: report.path)
+            .appendingPathComponent(formatter.string(from: day), isDirectory: true)
+        XCTAssertEqual(report.mediaFiles, 1)
+        XCTAssertEqual(report.mediaErrors, 0)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: mediaFolder.appendingPathComponent("ordinary.heic").path
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: mediaFolder.appendingPathComponent("authentication.heic").path
+        ))
+    }
+
     func testExportsDegradedMicOnlyEnvelopeWithRelativeEvidenceReferences() async throws {
         let fixture = try CallExportFixture()
         let callID = try await fixture.makeReadyMicOnlyCall()
@@ -325,6 +381,31 @@ private final class CallExportFixture {
             try gap.insert(db)
         }
         return callID
+    }
+
+    func addScreenFrame(
+        timestampMs: Int64,
+        bundleID: String,
+        appName: String,
+        relativePath: String,
+        data: Data
+    ) async throws {
+        try data.write(to: mediaRoot.appendingPathComponent(relativePath), options: .atomic)
+        try await database.pool.write { db in
+            try db.execute(
+                sql: "INSERT INTO apps(bundleId, name) VALUES (?, ?)",
+                arguments: [bundleID, appName]
+            )
+            let appID = db.lastInsertedRowID
+            try db.execute(
+                sql: """
+                    INSERT INTO screen_captures(
+                        ts, appId, monitorId, relativePath, width, height, bytes, axQuality
+                    ) VALUES (?, ?, 'main', ?, 1, 1, ?, 'none')
+                    """,
+                arguments: [timestampMs, appID, relativePath, data.count]
+            )
+        }
     }
 
     func installLargePreferredSpeakerRevision(callID: Int64, intervalCount: Int) async throws {
