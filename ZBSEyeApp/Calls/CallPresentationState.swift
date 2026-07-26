@@ -114,3 +114,33 @@ struct CallPresentationState: Sendable, Equatable {
         )
     }
 }
+
+struct CallLibraryStatusPresentation: Sendable, Equatable {
+    let title: String
+
+    static func resolve(
+        call: CallEvidenceSummary,
+        modelState: WhisperModelLifecycleState
+    ) -> CallLibraryStatusPresentation {
+        if call.status == .ready, call.speakerStatus == .processing {
+            return state("Finding speakers")
+        }
+        if call.status == .ready, call.speakerStatus == .degraded {
+            return state("Ready · source labels")
+        }
+        if call.status == .processing, call.endTs != nil, modelState != .ready {
+            return state("Recording saved · Whisper needed")
+        }
+        switch call.status {
+        case .recording: return state("Recording")
+        case .processing: return state("Processing")
+        case .retryable: return state("Retry needed")
+        case .ready: return state("Ready")
+        case .degraded: return state("Ready · gaps")
+        }
+    }
+
+    private static func state(_ title: LocalizedStringResource) -> CallLibraryStatusPresentation {
+        CallLibraryStatusPresentation(title: String(localized: title))
+    }
+}

@@ -39,7 +39,10 @@ struct CallsLibraryView: View {
                     Button {
                         store.open(call)
                     } label: {
-                        CallLibraryRow(call: call)
+                        CallLibraryRow(
+                            call: call,
+                            modelState: env.speechModel.snapshot.state
+                        )
                     }
                     .buttonStyle(.plain)
                     .accessibilityHint("Open call")
@@ -131,6 +134,7 @@ struct CallsLibraryView: View {
 
 private struct CallLibraryRow: View {
     let call: CallEvidenceSummary
+    let modelState: WhisperModelLifecycleState
 
     var body: some View {
         HStack(alignment: .center, spacing: 16) {
@@ -203,19 +207,10 @@ private struct CallLibraryRow: View {
     }
 
     private var statusTitle: String {
-        if call.status == .ready, call.speakerStatus == .processing {
-            return String(localized: "Finding speakers")
-        }
-        if call.status == .ready, call.speakerStatus == .degraded {
-            return String(localized: "Ready · source labels")
-        }
-        switch call.status {
-        case .recording: return String(localized: "Recording")
-        case .processing: return String(localized: "Processing")
-        case .retryable: return String(localized: "Retry needed")
-        case .ready: return String(localized: "Ready")
-        case .degraded: return String(localized: "Ready · gaps")
-        }
+        CallLibraryStatusPresentation.resolve(
+            call: call,
+            modelState: modelState
+        ).title
     }
 
     private var statusIcon: String {

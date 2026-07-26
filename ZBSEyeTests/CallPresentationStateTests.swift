@@ -122,6 +122,45 @@ final class CallPresentationStateTests: XCTestCase {
         XCTAssertNotEqual(failed, retried)
     }
 
+    func testCallsLibraryNamesMissingWhisperInsteadOfGenericProcessing() {
+        let pending = summary(
+            state: .finalizing,
+            status: .processing,
+            endTs: 2_000
+        )
+
+        XCTAssertEqual(
+            CallLibraryStatusPresentation.resolve(
+                call: pending,
+                modelState: .absent
+            ).title,
+            "Recording saved · Whisper needed"
+        )
+        XCTAssertEqual(
+            CallLibraryStatusPresentation.resolve(
+                call: pending,
+                modelState: .ready
+            ).title,
+            "Processing"
+        )
+    }
+
+    func testCallsLibraryDoesNotCallAnActiveRecordingWhisperBlocked() {
+        let recording = summary(
+            state: .recording,
+            status: .recording,
+            endTs: nil
+        )
+
+        XCTAssertEqual(
+            CallLibraryStatusPresentation.resolve(
+                call: recording,
+                modelState: .absent
+            ).title,
+            "Recording"
+        )
+    }
+
     private func evidence(
         callState: CallLifecycleState,
         finalJobState: CallTranscriptJobState,
@@ -180,6 +219,27 @@ final class CallPresentationStateTests: XCTestCase {
             segments: [],
             segmentOffset: 0,
             hasMoreSegments: false
+        )
+    }
+
+    private func summary(
+        state: CallLifecycleState,
+        status: CallEvidenceStatus,
+        endTs: Int64?
+    ) -> CallEvidenceSummary {
+        CallEvidenceSummary(
+            callId: "call:1",
+            startTs: 1_000,
+            endTs: endTs,
+            state: state,
+            status: status,
+            retryable: false,
+            preferredRevisionKind: nil,
+            title: nil,
+            participants: [],
+            sourceApp: nil,
+            bookmarkCount: 0,
+            speakerStatus: .unavailable
         )
     }
 }
