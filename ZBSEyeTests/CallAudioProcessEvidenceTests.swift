@@ -1,6 +1,126 @@
 import XCTest
 
 final class CallAudioProcessEvidenceTests: XCTestCase {
+    func testBrowserContinuationKeepsMicOnlyButRequiresTwoSidedSuccessorProof() {
+        let microphoneOnly = CallAudioApplicationGroup(
+            rootPID: 10,
+            ownerBundleID: "com.google.Chrome",
+            ownerKind: .browser,
+            inputActive: true,
+            outputActive: false,
+            memberCount: 1,
+            inputAudioObjectIDs: [1],
+            outputAudioObjectIDs: []
+        )
+        XCTAssertEqual(
+            CallAudioContinuationEvidence.evaluate(kind: .browser, group: microphoneOnly),
+            CallAudioContinuationEvidence(
+                hasContinuationAudio: true,
+                hasFreshTwoSidedBrowserAudio: false
+            )
+        )
+
+        let outputOnly = CallAudioApplicationGroup(
+            rootPID: 10,
+            ownerBundleID: "com.google.Chrome",
+            ownerKind: .browser,
+            inputActive: false,
+            outputActive: true,
+            memberCount: 1,
+            inputAudioObjectIDs: [],
+            outputAudioObjectIDs: [2]
+        )
+        XCTAssertEqual(
+            CallAudioContinuationEvidence.evaluate(kind: .browser, group: outputOnly),
+            CallAudioContinuationEvidence(
+                hasContinuationAudio: false,
+                hasFreshTwoSidedBrowserAudio: false
+            )
+        )
+    }
+
+    func testQuietBrowserSequencePreservesBoundaryAndSeparatesFreshSuccessor() {
+        var baseline = CallAudioCarrierBaseline(
+            inputAudioObjectIDs: [1],
+            outputAudioObjectIDs: [2]
+        )
+        let quietAfterMicrophoneSwitch = CallAudioApplicationGroup(
+            rootPID: 10,
+            ownerBundleID: "com.google.Chrome",
+            ownerKind: .browser,
+            inputActive: true,
+            outputActive: false,
+            memberCount: 1,
+            inputAudioObjectIDs: [3],
+            outputAudioObjectIDs: []
+        )
+        let quietEvidence = CallAudioContinuationEvidence.evaluate(
+            kind: .browser,
+            group: quietAfterMicrophoneSwitch
+        )
+
+        XCTAssertTrue(quietEvidence.hasContinuationAudio)
+        XCTAssertFalse(
+            baseline.isFullyReplaced(
+                by: quietAfterMicrophoneSwitch,
+                kind: .browser
+            ),
+            "Mic-only evidence cannot prove successor B even after a microphone switch."
+        )
+        XCTAssertEqual(
+            CallAudioSessionLiveness.decide(
+                hasRequiredAudio: quietEvidence.hasContinuationAudio,
+                missingSince: nil,
+                now: 90,
+                maximumMissingRetention: 60
+            ),
+            .continueActive,
+            "A confirmed browser call stays active beyond grace and recovery while its mic remains."
+        )
+
+        baseline = baseline.refreshingConfirmedSide(from: quietAfterMicrophoneSwitch)
+        XCTAssertEqual(baseline.inputAudioObjectIDs, [3])
+        XCTAssertEqual(
+            baseline.outputAudioObjectIDs,
+            [2],
+            "Output silence must not erase A's last positive output carrier."
+        )
+
+        let freshSuccessor = CallAudioApplicationGroup(
+            rootPID: 10,
+            ownerBundleID: "com.google.Chrome",
+            ownerKind: .browser,
+            inputActive: true,
+            outputActive: true,
+            memberCount: 2,
+            inputAudioObjectIDs: [4],
+            outputAudioObjectIDs: [5]
+        )
+        XCTAssertTrue(
+            baseline.isFullyReplaced(by: freshSuccessor, kind: .browser),
+            "Fresh two-sided B must remain distinguishable after A's quiet interval."
+        )
+
+        XCTAssertEqual(
+            BrowserControlLifecycle.activeMatch(
+                state: .ended,
+                audioCarriersFullyReplaced: false
+            ),
+            false,
+            "An exact Leave/End boundary remains terminal during output silence."
+        )
+        XCTAssertEqual(
+            CallAudioSessionLiveness.decide(
+                hasRequiredAudio: false,
+                missingSince: 100,
+                now: 161,
+                maximumMissingRetention: 60
+            ),
+            .release,
+            "Input loss remains a bounded terminal path."
+        )
+    }
+
     func testStaleProbeBatchCannotAdmitAfterStopReleaseOrAnotherAdmission() {
         XCTAssertTrue(
             MeetingDetectorLifecycleFence.permitsAdmission(

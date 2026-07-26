@@ -143,7 +143,7 @@ final class CallDetectionPolicyTests: XCTestCase {
         )
     }
 
-    func testOneSidedBrowserAudioStartsGraceAndRecoveryKeepsFingerprint() {
+    func testOutputOnlyBrowserAudioStartsGraceAndRecoveryKeepsFingerprint() {
         var policy = CallDetectionPolicy()
         let initial = browser(origin: "https://meet.google.com/abc-defg-hij")
         XCTAssertEqual(policy.reduce(initial), .start(fingerprint: "browser-session"))
@@ -165,6 +165,38 @@ final class CallDetectionPolicyTests: XCTestCase {
         XCTAssertEqual(
             policy.reduce(recovered),
             .activity(fingerprint: "browser-session")
+        )
+    }
+
+    func testConfirmedBrowserCallContinuesThroughLongOutputSilence() {
+        var policy = CallDetectionPolicy()
+        let initial = browser(origin: "https://meet.google.com/abc-defg-hij")
+        XCTAssertEqual(policy.reduce(initial), .start(fingerprint: "browser-session"))
+
+        // More than the 30-second end grace plus the 15-second recovery window. The detector only
+        // emits this same-fingerprint evidence while the mic and exact trusted call control remain.
+        for elapsed in [20.0, 46.0, 90.0] {
+            var quietCall = initial
+            quietCall.now = elapsed
+            quietCall.monotonicNow = elapsed
+            quietCall.surface = nil
+            quietCall.systemAudioActive = false
+            XCTAssertEqual(
+                policy.reduce(quietCall),
+                .activity(fingerprint: "browser-session")
+            )
+        }
+
+        var realEnd = initial
+        realEnd.now = 92
+        realEnd.monotonicNow = 92
+        realEnd.surface = nil
+        realEnd.microphoneAudioActive = false
+        realEnd.systemAudioActive = false
+        realEnd.isRetainedMissing = true
+        XCTAssertEqual(
+            policy.reduce(realEnd),
+            .strongEnd(fingerprint: "browser-session")
         )
     }
 

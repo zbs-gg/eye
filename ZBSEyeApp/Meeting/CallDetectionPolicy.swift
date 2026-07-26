@@ -321,7 +321,11 @@ struct CallDetectionPolicy: Sendable {
         guard !evidence.isStale, evidence.fingerprint == fingerprint else { return false }
         switch kind {
         case .browser:
-            return evidence.hasTwoSidedAudio
+            // Admission remains strictly two-sided. Once the detector has retained and revalidated
+            // the exact trusted browser surface, an active microphone is sufficient continuation
+            // evidence: a quiet call may legitimately have no running browser output process.
+            return evidence.microphoneOwnerBundleID != nil
+                && evidence.microphoneAudioActive
         case .native:
             return evidence.microphoneOwnerBundleID != nil
                 || evidence.surface?.marker != nil
