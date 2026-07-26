@@ -45,6 +45,9 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 
 ### Fixed
 - MCP failure responses no longer interpolate raw system errors that could disclose local paths or native details.
+- Confirmed Chromium calls no longer enter the end grace when browser output goes quiet while the
+  microphone and exact trusted call control remain active. The last complete audio-carrier baseline is
+  preserved so a later call still receives a new session boundary.
 - Screen capture now resumes automatically after unlock even if macOS drops the distributed unlock
   notification, while failed or still-locked session queries continue to suspend capture fail-closed.
 - Touch ID, SecurityAgent, authorizationhost, loginwindow, and screen-saver surfaces are rejected at

@@ -101,6 +101,79 @@ struct CallAudioApplicationGroup: Equatable, Sendable {
     }
 }
 
+struct CallAudioContinuationEvidence: Equatable, Sendable {
+    let hasContinuationAudio: Bool
+    let hasFreshTwoSidedBrowserAudio: Bool
+
+    static func evaluate(
+        kind: CallAudioApplicationKind,
+        group: CallAudioApplicationGroup?
+    ) -> CallAudioContinuationEvidence {
+        guard let group else {
+            return CallAudioContinuationEvidence(
+                hasContinuationAudio: false,
+                hasFreshTwoSidedBrowserAudio: false
+            )
+        }
+        return CallAudioContinuationEvidence(
+            // Output-only playback never keeps a call alive. Once a browser call was admitted,
+            // however, its mic plus retained trusted control survives a quiet output interval.
+            hasContinuationAudio: group.inputActive,
+            // Carrier replacement remains a two-sided boundary proof. An empty output set during
+            // silence must not make an ordinary microphone switch look like successor call B.
+            hasFreshTwoSidedBrowserAudio: kind == .browser
+                && group.inputActive
+                && group.outputActive
+        )
+    }
+}
+
+struct CallAudioCarrierBaseline: Equatable, Sendable {
+    let inputAudioObjectIDs: Set<UInt32>
+    let outputAudioObjectIDs: Set<UInt32>
+
+    init(
+        inputAudioObjectIDs: Set<UInt32>,
+        outputAudioObjectIDs: Set<UInt32>
+    ) {
+        self.inputAudioObjectIDs = inputAudioObjectIDs
+        self.outputAudioObjectIDs = outputAudioObjectIDs
+    }
+
+    /// A quiet browser interval can omit one side from the current HAL sample. Keep the last
+    /// positively observed carrier set for that side instead of erasing the session boundary.
+    func refreshingConfirmedSide(from group: CallAudioApplicationGroup) -> Self {
+        Self(
+            inputAudioObjectIDs: group.inputAudioObjectIDs.isEmpty
+                ? inputAudioObjectIDs
+                : group.inputAudioObjectIDs,
+            outputAudioObjectIDs: group.outputAudioObjectIDs.isEmpty
+                ? outputAudioObjectIDs
+                : group.outputAudioObjectIDs
+        )
+    }
+
+    /// Only a fresh two-sided browser sample can prove A -> B. A mic switch observed while the
+    /// output carrier is quiet must never be promoted into a successor-call boundary.
+    func isFullyReplaced(
+        by group: CallAudioApplicationGroup?,
+        kind: CallAudioApplicationKind
+    ) -> Bool {
+        guard let group,
+              CallAudioContinuationEvidence.evaluate(
+                  kind: kind,
+                  group: group
+              ).hasFreshTwoSidedBrowserAudio
+        else { return false }
+        return BrowserSurfaceRevalidation.baselineAudioSessionWasFullyReplaced(
+            baselineInput: inputAudioObjectIDs,
+            baselineOutput: outputAudioObjectIDs,
+            currentInput: group.inputAudioObjectIDs,
+            currentOutput: group.outputAudioObjectIDs
+        )
+    }
+}
+
 enum CallAudioSessionLivenessDecision: Equatable, Sendable {
     case continueActive
     case retainMissing(since: TimeInterval)

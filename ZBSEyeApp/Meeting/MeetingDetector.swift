@@ -323,30 +323,18 @@ actor MeetingDetector {
                     && $0.ownerBundleID == activeSession.bundleID
                     && $0.ownerKind == activeSession.kind
             })
-            let hasRequiredAudio: Bool
-            switch activeSession.kind {
-            case .browser:
-                hasRequiredAudio = activeGroup?.inputActive == true
-                    && activeGroup?.outputActive == true
-            case .native:
-                // Output-only playback is never continuing evidence for a native call.
-                hasRequiredAudio = activeGroup?.inputActive == true
-            }
+            let continuationAudio = CallAudioContinuationEvidence.evaluate(
+                kind: activeSession.kind,
+                group: activeGroup
+            )
 
-            let browserAudioCarriersFullyReplaced: Bool
-            if activeSession.kind == .browser,
-               hasRequiredAudio,
-               let activeGroup {
-                browserAudioCarriersFullyReplaced =
-                    BrowserSurfaceRevalidation.baselineAudioSessionWasFullyReplaced(
-                        baselineInput: activeSession.inputAudioObjectIDs,
-                        baselineOutput: activeSession.outputAudioObjectIDs,
-                        currentInput: activeGroup.inputAudioObjectIDs,
-                        currentOutput: activeGroup.outputAudioObjectIDs
-                    )
-            } else {
-                browserAudioCarriersFullyReplaced = false
-            }
+            let browserAudioCarriersFullyReplaced = CallAudioCarrierBaseline(
+                inputAudioObjectIDs: activeSession.inputAudioObjectIDs,
+                outputAudioObjectIDs: activeSession.outputAudioObjectIDs
+            ).isFullyReplaced(
+                by: activeGroup,
+                kind: activeSession.kind
+            )
             if BrowserControlLifecycle.establishesSuccessorBoundary(
                 state: .active,
                 audioCarriersFullyReplaced: browserAudioCarriersFullyReplaced
@@ -374,7 +362,7 @@ actor MeetingDetector {
 
             var latestSurfaceMatch: Bool?
             var surfaceTrustReadFailed = false
-            if hasRequiredAudio,
+            if continuationAudio.hasContinuationAudio,
                let activeGroup,
                shouldProbeSurface(activeGroup, now: monotonicNow) {
                 // Audio is only the cheap gate. Re-confirm the exact surface periodically so a
@@ -459,8 +447,12 @@ actor MeetingDetector {
                     }
                 }
                 if latestSurfaceMatch == true {
-                    activeSession.inputAudioObjectIDs = activeGroup.inputAudioObjectIDs
-                    activeSession.outputAudioObjectIDs = activeGroup.outputAudioObjectIDs
+                    let refreshedBaseline = CallAudioCarrierBaseline(
+                        inputAudioObjectIDs: activeSession.inputAudioObjectIDs,
+                        outputAudioObjectIDs: activeSession.outputAudioObjectIDs
+                    ).refreshingConfirmedSide(from: activeGroup)
+                    activeSession.inputAudioObjectIDs = refreshedBaseline.inputAudioObjectIDs
+                    activeSession.outputAudioObjectIDs = refreshedBaseline.outputAudioObjectIDs
                 }
             }
             let trust = CallSurfaceTrustWindow.decide(
@@ -475,7 +467,7 @@ actor MeetingDetector {
             activeSession.surfaceTrustUnknownSince = trust.unknownSince
 
             switch CallAudioSessionLiveness.decide(
-                hasRequiredAudio: hasRequiredAudio && trust.surfaceConfirmed,
+                hasRequiredAudio: continuationAudio.hasContinuationAudio && trust.surfaceConfirmed,
                 missingSince: activeSession.missingSince,
                 now: monotonicNow,
                 maximumMissingRetention: Self.activeSessionMissingRetention
@@ -886,13 +878,13 @@ actor MeetingDetector {
 
         case .browser:
             var retainedControlState: BrowserCallControlState?
-            let audioCarriersFullyReplaced =
-                BrowserSurfaceRevalidation.baselineAudioSessionWasFullyReplaced(
-                    baselineInput: session.inputAudioObjectIDs,
-                    baselineOutput: session.outputAudioObjectIDs,
-                    currentInput: group.inputAudioObjectIDs,
-                    currentOutput: group.outputAudioObjectIDs
-                )
+            let audioCarriersFullyReplaced = CallAudioCarrierBaseline(
+                inputAudioObjectIDs: session.inputAudioObjectIDs,
+                outputAudioObjectIDs: session.outputAudioObjectIDs
+            ).isFullyReplaced(
+                by: group,
+                kind: session.kind
+            )
             if let token = session.browserControlHandleToken {
                 let controlState = await BrowserCallSurfaceInspector.revalidateControl(
                     token,
@@ -1122,13 +1114,13 @@ actor MeetingDetector {
                 guard suppressedSessions[surfaceKey]?.fingerprint == session.fingerprint else {
                     continue
                 }
-                let audioCarriersFullyReplaced =
-                    BrowserSurfaceRevalidation.baselineAudioSessionWasFullyReplaced(
-                        baselineInput: session.inputAudioObjectIDs,
-                        baselineOutput: session.outputAudioObjectIDs,
-                        currentInput: group?.inputAudioObjectIDs ?? [],
-                        currentOutput: group?.outputAudioObjectIDs ?? []
-                    )
+                let audioCarriersFullyReplaced = CallAudioCarrierBaseline(
+                    inputAudioObjectIDs: session.inputAudioObjectIDs,
+                    outputAudioObjectIDs: session.outputAudioObjectIDs
+                ).isFullyReplaced(
+                    by: group,
+                    kind: session.kind
+                )
                 let carrierCorroboratedRelease =
                     BrowserControlLifecycle.shouldReleaseSuppression(
                     state: controlState,
@@ -1147,9 +1139,13 @@ actor MeetingDetector {
                 case .active, .rebound:
                     // Exact/root continuity proves that route changes still belong to A. Future
                     // replacement checks compare against this latest proof, not admission-time IDs.
-                    if hasRequiredAudio, let group {
-                        session.inputAudioObjectIDs = group.inputAudioObjectIDs
-                        session.outputAudioObjectIDs = group.outputAudioObjectIDs
+                    if group?.inputActive == true, let group {
+                        let refreshedBaseline = CallAudioCarrierBaseline(
+                            inputAudioObjectIDs: session.inputAudioObjectIDs,
+                            outputAudioObjectIDs: session.outputAudioObjectIDs
+                        ).refreshingConfirmedSide(from: group)
+                        session.inputAudioObjectIDs = refreshedBaseline.inputAudioObjectIDs
+                        session.outputAudioObjectIDs = refreshedBaseline.outputAudioObjectIDs
                     }
                     session.controlEndedSince = nil
                     session.fullAudioBoundarySince = nil
@@ -1210,13 +1206,13 @@ actor MeetingDetector {
                rootApplicationRunning,
                session.browserControlHandleToken == nil,
                session.controlEndedSince != nil {
-                let audioCarriersFullyReplaced =
-                    BrowserSurfaceRevalidation.baselineAudioSessionWasFullyReplaced(
-                        baselineInput: session.inputAudioObjectIDs,
-                        baselineOutput: session.outputAudioObjectIDs,
-                        currentInput: group?.inputAudioObjectIDs ?? [],
-                        currentOutput: group?.outputAudioObjectIDs ?? []
-                    )
+                let audioCarriersFullyReplaced = CallAudioCarrierBaseline(
+                    inputAudioObjectIDs: session.inputAudioObjectIDs,
+                    outputAudioObjectIDs: session.outputAudioObjectIDs
+                ).isFullyReplaced(
+                    by: group,
+                    kind: session.kind
+                )
                 switch DetachedSuppressionBoundary.decide(
                     freshTwoSidedReplacement:
                         hasRequiredAudio && audioCarriersFullyReplaced,
