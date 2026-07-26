@@ -10,6 +10,14 @@ final class CodexAppServerClientTests: XCTestCase {
         authorizationEpoch: AuthorizationEpoch(rawValue: 9)
     )
 
+    func testQualifiedReleasePinIsExact() {
+        XCTAssertEqual(CodexBinaryPolicy.allowedVersion, "0.144.6")
+        XCTAssertEqual(
+            CodexBinaryPolicy.allowedSHA256,
+            "80a3933d11a9d13ef806aa24f7bb8afc9169cfe4e9b09d6da6a92922cbde9cff"
+        )
+    }
+
     func testRealStdinWriterChecksCancellationAtFileDescriptorBoundary() async throws {
         var descriptors = [Int32](repeating: -1, count: 2)
         XCTAssertEqual(pipe(&descriptors), 0)
@@ -42,7 +50,7 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertNoThrow(try CodexBinaryPolicy.validate(trusted, currentUID: 501))
 
         let hostile: [CodexBinaryInspection] = [
-            trusted.with(version: "0.137.0-darwin-arm64"),
+            trusted.with(version: "0.144.7-darwin-arm64"),
             trusted.with(sha256: String(repeating: "0", count: 64)),
             trusted.with(teamIdentifier: "EVILTEAM"),
             trusted.with(signingAuthority: "Developer ID Application: Not OpenAI (EVILTEAM)"),
@@ -441,11 +449,17 @@ final class CodexAppServerClientTests: XCTestCase {
             methods,
             ["initialize", "initialized", "account/read", "model/list", "thread/start", "turn/start"]
         )
+        let receivedInitialize = await fixture.connection.sentParams(for: "initialize")
+        let initialize = try XCTUnwrap(receivedInitialize)
+        let capabilities = try XCTUnwrap(initialize.object(for: "capabilities"))
+        XCTAssertEqual(capabilities.bool(for: "experimentalApi"), true)
+        XCTAssertEqual(capabilities.bool(for: "requestAttestation"), false)
         let receivedThreadStart = await fixture.connection.sentParams(for: "thread/start")
         let threadStart = try XCTUnwrap(receivedThreadStart)
         XCTAssertEqual(threadStart.string(for: "model"), selection.modelID)
         XCTAssertEqual(threadStart.bool(for: "ephemeral"), true)
         XCTAssertEqual(threadStart.string(for: "approvalPolicy"), "never")
+        XCTAssertEqual(threadStart.string(for: "approvalsReviewer"), "user")
         XCTAssertEqual(threadStart.string(for: "sandbox"), "read-only")
         XCTAssertEqual(threadStart.array(for: "runtimeWorkspaceRoots")?.count, 0)
         XCTAssertEqual(threadStart.array(for: "environments")?.count, 0)
@@ -454,6 +468,8 @@ final class CodexAppServerClientTests: XCTestCase {
 
         let receivedTurnStart = await fixture.connection.sentParams(for: "turn/start")
         let turnStart = try XCTUnwrap(receivedTurnStart)
+        XCTAssertEqual(turnStart.string(for: "approvalPolicy"), "never")
+        XCTAssertEqual(turnStart.string(for: "approvalsReviewer"), "user")
         XCTAssertEqual(turnStart.array(for: "environments")?.count, 0)
         XCTAssertEqual(turnStart.array(for: "runtimeWorkspaceRoots")?.count, 0)
         XCTAssertEqual(turnStart.object(for: "additionalContext")?.objectCount, 0)
@@ -548,6 +564,50 @@ final class CodexAppServerClientTests: XCTestCase {
             let isUnavailable = await fixture.client.isUnavailable
             XCTAssertEqual(terminationCount, 1)
             XCTAssertTrue(isUnavailable)
+        }
+    }
+
+    func testThreadEffectivePermissionMismatchFailsClosed() async {
+        for mutation in [
+            "approvalPolicy",
+            "approvalsReviewer",
+            "sandboxType",
+            "sandboxNetwork",
+            "sandboxExtraField",
+            "activePermissionProfile",
+            "missingActivePermissionProfile",
+            "multiAgentMode",
+        ] {
+            let fixture = Fixture(selection: selection)
+            await fixture.connection.enqueue(contentsOf: [
+                fixture.initializeFrame(),
+                fixture.accountFrame(),
+                fixture.modelListFrame(models: [selection.modelID]),
+                fixture.threadStartFrame(mutation: mutation),
+            ])
+            let request = makeRequest()
+            let client = fixture.client
+            let expectedSelection = selection
+
+            await assertError(
+                .capabilityMismatch,
+                from: Task {
+                    try await client.generate(
+                        request: request,
+                        selection: expectedSelection
+                    )
+                }
+            )
+            let methods = await fixture.connection.sentMethods()
+            let terminationCount = await fixture.connection.terminationCount()
+            let isUnavailable = await fixture.client.isUnavailable
+            XCTAssertEqual(
+                methods,
+                ["initialize", "initialized", "account/read", "model/list", "thread/start"],
+                mutation
+            )
+            XCTAssertEqual(terminationCount, 1, mutation)
+            XCTAssertTrue(isUnavailable, mutation)
         }
     }
 
@@ -1184,24 +1244,7 @@ private struct Fixture {
             initializeFrame(),
             accountFrame(),
             modelListFrame(models: [selection.modelID]),
-            Self.response(
-                id: 4,
-                result: [
-                    "thread": [
-                        "id": "thread-1",
-                        "ephemeral": true,
-                        "modelProvider": "openai",
-                        "cwd": "/safe/work",
-                        "cliVersion": "0.136.0",
-                        "path": NSNull(),
-                    ],
-                    "model": selection.modelID,
-                    "modelProvider": "openai",
-                    "cwd": "/safe/work",
-                    "runtimeWorkspaceRoots": [],
-                    "instructionSources": [],
-                ]
-            ),
+            threadStartFrame(),
             Self.response(
                 id: 5,
                 result: ["turn": ["id": "turn-1", "status": "inProgress"]]
@@ -1209,14 +1252,65 @@ private struct Fixture {
         ]
     }
 
+    func threadStartFrame(mutation: String? = nil) -> CodexProcessFrame {
+        var result: [String: Any] = [
+            "thread": [
+                "id": "thread-1",
+                "ephemeral": true,
+                "modelProvider": "openai",
+                "cwd": "/safe/work",
+                "cliVersion": "0.144.6",
+                "path": NSNull(),
+            ],
+            "model": selection.modelID,
+            "modelProvider": "openai",
+            "cwd": "/safe/work",
+            "approvalPolicy": "never",
+            "approvalsReviewer": "user",
+            "sandbox": [
+                "type": "readOnly",
+                "networkAccess": false,
+            ],
+            "activePermissionProfile": NSNull(),
+            "multiAgentMode": "explicitRequestOnly",
+            "runtimeWorkspaceRoots": [],
+            "instructionSources": [],
+        ]
+        switch mutation {
+        case "approvalPolicy":
+            result["approvalPolicy"] = "on-request"
+        case "approvalsReviewer":
+            result["approvalsReviewer"] = "auto_review"
+        case "sandboxType":
+            result["sandbox"] = ["type": "workspaceWrite", "networkAccess": false]
+        case "sandboxNetwork":
+            result["sandbox"] = ["type": "readOnly", "networkAccess": true]
+        case "sandboxExtraField":
+            result["sandbox"] = [
+                "type": "readOnly",
+                "networkAccess": false,
+                "writableRoots": ["/"],
+            ]
+        case "activePermissionProfile":
+            result["activePermissionProfile"] = ["id": ":workspace"]
+        case "missingActivePermissionProfile":
+            result.removeValue(forKey: "activePermissionProfile")
+        case "multiAgentMode":
+            result["multiAgentMode"] = "proactive"
+        default:
+            break
+        }
+        return Self.response(id: 4, result: result)
+    }
+
     func initializeFrame(mutation: String? = nil) -> CodexProcessFrame {
         var result: [String: Any] = [
-            "userAgent": "zbs-eye/0.136.0 (Mac OS; arm64)",
+            "userAgent": "zbs-eye/0.144.6 (Mac OS; arm64)",
             "codexHome": "/safe/home",
             "platformFamily": "unix",
             "platformOs": "macos",
         ]
-        if mutation == "version" { result["userAgent"] = "zbs-eye/0.137.0" }
+        if mutation == "version" { result["userAgent"] = "zbs-eye/0.144.7" }
         if mutation == "home" { result["codexHome"] = "/Users/victim/.codex" }
         if mutation == "platform" { result["platformOs"] = "linux" }
         return Self.response(id: 1, result: result)
@@ -1592,7 +1686,7 @@ private extension CodexBinaryInspection {
             ownerUID: identity.ownerUID,
             mode: identity.mode,
             packageLayoutIsCanonical: true,
-            version: "0.136.0-darwin-arm64",
+            version: "0.144.6-darwin-arm64",
             sha256: CodexBinaryPolicy.allowedSHA256,
             teamIdentifier: CodexBinaryPolicy.allowedTeamIdentifier,
             signingAuthority: CodexBinaryPolicy.allowedSigningAuthority

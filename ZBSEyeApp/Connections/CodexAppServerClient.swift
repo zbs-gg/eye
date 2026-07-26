@@ -92,8 +92,8 @@ struct CodexBinaryInspection: Sendable, Equatable {
 }
 
 enum CodexBinaryPolicy {
-    static let allowedVersion = "0.136.0"
-    static let allowedSHA256 = "2c056bf3bd3a0ba04cdaa6d1db84c81974e6785f5fd72deaa2a3fcdcfb573d10"
+    static let allowedVersion = "0.144.6"
+    static let allowedSHA256 = "80a3933d11a9d13ef806aa24f7bb8afc9169cfe4e9b09d6da6a92922cbde9cff"
     static let allowedTeamIdentifier = "2DC432GLL2"
     static let allowedSigningAuthority = "Developer ID Application: OpenAI OpCo, LLC (2DC432GLL2)"
 
@@ -1857,7 +1857,9 @@ actor CodexAppServerClient: LLMAdapter {
                         "version": "1",
                     ],
                     "capabilities": [
-                        "experimentalApi": false,
+                        // 0.144.6 gates the empty runtimeWorkspaceRoots attestation behind this
+                        // capability. Unknown events still fail closed in the receive loop.
+                        "experimentalApi": true,
                         "requestAttestation": false,
                         "optOutNotificationMethods": Self.suppressedNotificationMethods,
                     ],
@@ -1892,7 +1894,7 @@ actor CodexAppServerClient: LLMAdapter {
         home: CodexPreparedHome
     ) throws {
         guard let userAgent = result["userAgent"] as? String,
-              userAgent.contains("zbs-eye/0.136.0 ("),
+              userAgent.contains("zbs-eye/\(CodexBinaryPolicy.allowedVersion) ("),
               result["platformFamily"] as? String == "unix",
               result["platformOs"] as? String == "macos",
               let reportedHome = result["codexHome"] as? String,
@@ -2092,6 +2094,7 @@ actor CodexAppServerClient: LLMAdapter {
                 "cwd": session.home.workingDirectoryURL.path,
                 "runtimeWorkspaceRoots": [],
                 "approvalPolicy": "never",
+                "approvalsReviewer": "user",
                 "sandbox": "read-only",
                 "config": [
                     "include_apps_instructions": false,
@@ -2125,6 +2128,14 @@ actor CodexAppServerClient: LLMAdapter {
               result["modelProvider"] as? String == "openai",
               let cwd = result["cwd"] as? String,
               canonicalPath(cwd) == canonicalPath(session.home.workingDirectoryURL.path),
+              result["approvalPolicy"] as? String == "never",
+              result["approvalsReviewer"] as? String == "user",
+              let sandbox = result["sandbox"] as? [String: Any],
+              sandbox.count == 2,
+              sandbox["type"] as? String == "readOnly",
+              sandbox["networkAccess"] as? Bool == false,
+              result["activePermissionProfile"] is NSNull,
+              result["multiAgentMode"] as? String == "explicitRequestOnly",
               let roots = result["runtimeWorkspaceRoots"] as? [Any], roots.isEmpty,
               let instructions = result["instructionSources"] as? [Any], instructions.isEmpty else {
             throw CodexAppServerError.capabilityMismatch
@@ -2161,6 +2172,7 @@ actor CodexAppServerClient: LLMAdapter {
                 "cwd": session.home.workingDirectoryURL.path,
                 "runtimeWorkspaceRoots": [],
                 "approvalPolicy": "never",
+                "approvalsReviewer": "user",
                 "model": selection.modelID,
                 "outputSchema": [
                     "type": "object",

@@ -10,11 +10,19 @@ final class ClaudeCodeAdapterTests: XCTestCase {
         authorizationEpoch: AuthorizationEpoch(rawValue: 9)
     )
 
+    func testQualifiedReleasePinIsExact() {
+        XCTAssertEqual(ClaudeCodeSecurityPolicy.allowedVersion, "2.1.220")
+        XCTAssertEqual(
+            ClaudeCodeSecurityPolicy.allowedSHA256,
+            "8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081"
+        )
+    }
+
     func testExactSignedIdentityIsTheOnlyAllowedExecutable() throws {
         let accepted = ClaudeCodeExecutableIdentity(
             canonicalURL: URL(fileURLWithPath: "/trusted/claude"),
             fileIdentity: .fixture(),
-            version: "2.1.207",
+            version: "2.1.220",
             sha256: ClaudeCodeSecurityPolicy.allowedSHA256,
             signingIdentifier: ClaudeCodeSecurityPolicy.signingIdentifier,
             teamIdentifier: ClaudeCodeSecurityPolicy.teamIdentifier,
@@ -34,7 +42,7 @@ final class ClaudeCodeAdapterTests: XCTestCase {
             accepted.replacing(permissions: 0o775),
             accepted.replacing(isRegularFile: false),
             accepted.replacing(isArm64MachO: false),
-            accepted.replacing(version: "2.1.208"),
+            accepted.replacing(version: "2.1.221"),
         ]
         for identity in rejected {
             XCTAssertThrowsError(try ClaudeCodeSecurityPolicy.validate(identity))
@@ -44,13 +52,13 @@ final class ClaudeCodeAdapterTests: XCTestCase {
     func testOfficialStandaloneInstallDerivesVersionFromCanonicalExecutableName() {
         XCTAssertEqual(
             SystemClaudeCodeExecutableInspector.releaseVersion(
-                at: URL(fileURLWithPath: "/Users/test/.local/share/claude/versions/2.1.207")
+                at: URL(fileURLWithPath: "/Users/test/.local/share/claude/versions/2.1.220")
             ),
             ClaudeCodeSecurityPolicy.allowedVersion
         )
         XCTAssertEqual(
             SystemClaudeCodeExecutableInspector.releaseVersion(
-                at: URL(fileURLWithPath: "/opt/claude/2.1.207/claude")
+                at: URL(fileURLWithPath: "/opt/claude/2.1.220/claude")
             ),
             ClaudeCodeSecurityPolicy.allowedVersion
         )
@@ -634,7 +642,7 @@ private struct FixedClaudeInspector: ClaudeCodeExecutableInspecting {
     static let identity = ClaudeCodeExecutableIdentity(
         canonicalURL: URL(fileURLWithPath: "/trusted/claude"),
         fileIdentity: .fixture(),
-        version: "2.1.207",
+        version: "2.1.220",
         sha256: ClaudeCodeSecurityPolicy.allowedSHA256,
         signingIdentifier: ClaudeCodeSecurityPolicy.signingIdentifier,
         teamIdentifier: ClaudeCodeSecurityPolicy.teamIdentifier,

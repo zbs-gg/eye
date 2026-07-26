@@ -18,6 +18,8 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   voiceprint is stored. REST, MCP, export, and the loopback automation report speaker readiness honestly.
 
 ### Changed
+- Codex and Claude Code subprocess providers now admit the exact locally qualified signed releases
+  (`codex-cli 0.144.6` and Claude Code `2.1.220`) with refreshed native-binary hashes.
 - The post-call automation can fire a signed `call.processing.ready` event after both transcript and
   speaker work settle. Failed diarization is durable and retryable instead of looking permanently busy.
 - **Known native-call limitation:** after **Not a call**, Eye suppresses the same native app/window
