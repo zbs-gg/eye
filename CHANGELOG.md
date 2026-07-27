@@ -2,13 +2,22 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
-## [0.5.3] — 2026-07-27
+## [0.5.4] — 2026-07-27
+
+### Fixed
+- Eye now discovers the Whisper model selected by current Handy releases, whose preferences live under
+  `settings.selected_model`. The older top-level schema remains supported; conflicting shapes fail closed.
+- The failed, never-published 0.5.3 candidate was withdrawn instead of replacing its notarized bytes.
+
+## [0.5.3] — 2026-07-27 (withdrawn)
 
 ### Fixed
 - Reusing Handy's downloaded Whisper model no longer starts Handy.app. Eye resolves the selected immutable
   Hugging Face cache snapshot itself and loads it inside Eye's existing short-lived helper process through
   the matching universal `transcribe.cpp` runtime. No model weights are copied or downloaded a second time.
 - The failed, never-published 0.5.2 candidate was withdrawn instead of replacing its notarized bytes.
+- This candidate was never published because its probe understood Handy's legacy flat settings shape but not
+  the nested shape used by the installed app. Version 0.5.4 adds the real schema and live qualification.
 
 ## [0.5.2] — 2026-07-27 (withdrawn)
 
