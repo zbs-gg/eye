@@ -122,7 +122,6 @@ actor CallTranscriptWorker {
         afterSourceTransition: @escaping @Sendable () async -> Void = {}
     ) {
         let builtInRunner = WhisperHelperProcessRunner(executablePath: executablePath)
-        let handyRunner = HandyWhisperHelperProcessRunner(executablePath: executablePath)
         self.repository = repository
         self.computeCoordinator = computeCoordinator
         self.dataRoot = dataRoot.standardizedFileURL
@@ -136,13 +135,6 @@ actor CallTranscriptWorker {
             return .handy(reference)
         }
         helperLauncher = { manifest, relativePath, root in
-            if manifest.handyBackend != nil {
-                return try await handyRunner.run(
-                    manifest: manifest,
-                    manifestRelativePath: relativePath,
-                    dataRoot: root
-                )
-            }
             return try await builtInRunner.run(
                 manifest: manifest,
                 manifestRelativePath: relativePath,
@@ -151,7 +143,6 @@ actor CallTranscriptWorker {
         }
         cancelHelper = {
             builtInRunner.cancel()
-            handyRunner.cancel()
         }
         self.afterSourceTransition = afterSourceTransition
     }

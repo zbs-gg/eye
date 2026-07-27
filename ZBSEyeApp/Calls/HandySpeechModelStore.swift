@@ -22,9 +22,9 @@ struct HandySpeechModelSnapshot: Sendable, Equatable {
     static let unavailable = HandySpeechModelSnapshot(state: .unavailable, backend: nil)
 }
 
-/// Discovers an already-installed Handy speech model without copying it into Eye's storage.
-/// Discovery is explicit and local: Handy's documented headless model-list command returns only
-/// catalog metadata, never recordings or transcript text.
+/// Discovers the Whisper model Handy has already downloaded without starting
+/// Handy or copying its weights. The helper process later resolves the same
+/// immutable Hugging Face snapshot and loads it with Eye's bundled runtime.
 actor HandySpeechModelStore {
     private(set) var current: HandySpeechModelSnapshot = .checking
 
@@ -43,117 +43,176 @@ actor HandySpeechModelStore {
 
 enum HandySpeechModelProbe {
     static let bundleIdentifier = "com.pais.handy"
-    static let maximumCatalogBytes = 2 * 1_024 * 1_024
-    static let maximumProbeSeconds: TimeInterval = 20
+    static let runtimeRelease = "transcribe.cpp-v0.1.3"
+    static let maximumSettingsBytes = 1 * 1_024 * 1_024
+    static let minimumModelBytes: Int64 = 1 * 1_024 * 1_024
 
-    struct ModelInfo: Decodable, Sendable, Equatable {
-        let id: String
-        let name: String
-        let isDownloaded: Bool
-        let engineType: String
+    private struct Settings: Decodable {
+        let selectedModel: String
 
         enum CodingKeys: String, CodingKey {
-            case id, name
-            case isDownloaded = "is_downloaded"
-            case engineType = "engine_type"
+            case selectedModel = "selected_model"
         }
     }
 
+    private struct ResolvedModel {
+        let url: URL
+        let modelID: String
+        let revision: String
+        let size: Int64
+    }
+
     static func discover(fileManager: FileManager = .default) -> HandySpeechModelSnapshot {
-        guard let executable = executableURL(fileManager: fileManager),
-              let appBundle = Bundle(url: executable
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()),
-              appBundle.bundleIdentifier == bundleIdentifier,
-              let version = appBundle.infoDictionary?["CFBundleShortVersionString"] as? String,
-              let data = modelCatalog(executable: executable, fileManager: fileManager),
-              let models = try? JSONDecoder().decode([ModelInfo].self, from: data),
-              let selected = preferredDownloadedModel(models)
+        discover(
+            settingsURL: defaultSettingsURL(fileManager: fileManager),
+            hubRoot: defaultHubRoot(fileManager: fileManager),
+            fileManager: fileManager
+        )
+    }
+
+    static func discover(
+        settingsURL: URL,
+        hubRoot: URL,
+        fileManager: FileManager = .default
+    ) -> HandySpeechModelSnapshot {
+        guard let values = try? settingsURL.resourceValues(forKeys: [.fileSizeKey]),
+              let size = values.fileSize,
+              size > 0,
+              size <= maximumSettingsBytes,
+              let data = try? Data(contentsOf: settingsURL),
+              let settings = try? JSONDecoder().decode(Settings.self, from: data),
+              settings.selectedModel.lowercased().contains("whisper"),
+              let resolved = resolve(
+                  modelID: settings.selectedModel,
+                  hubRoot: hubRoot,
+                  fileManager: fileManager
+              )
         else { return .unavailable }
 
-        let identity = SHA256.hash(data: Data(selected.id.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
+        let identity = identitySHA256(for: resolved)
         return HandySpeechModelSnapshot(
             state: .ready,
             backend: HandySpeechBackendReference(
-                modelID: selected.id,
-                displayName: selected.name,
+                modelID: resolved.modelID,
+                displayName: displayName(for: resolved.modelID),
                 identitySHA256: identity,
-                runtimeRelease: "handy-\(version)/transcribe-cpp"
+                runtimeRelease: runtimeRelease
             )
         )
     }
 
-    static func executableURL(fileManager: FileManager = .default) -> URL? {
-        let home = fileManager.homeDirectoryForCurrentUser
-        let candidates = [
-            URL(fileURLWithPath: "/Applications/Handy.app/Contents/MacOS/handy"),
-            home.appendingPathComponent("Applications/Handy.app/Contents/MacOS/handy"),
-        ]
-        return candidates.first { candidate in
-            fileManager.isExecutableFile(atPath: candidate.path)
+    static func resolvedModelURL(
+        for reference: HandySpeechBackendReference,
+        hubRoot: URL? = nil,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        guard reference.runtimeRelease == runtimeRelease,
+              reference.identitySHA256.count == 64,
+              let resolved = resolve(
+                  modelID: reference.modelID,
+                  hubRoot: hubRoot ?? defaultHubRoot(fileManager: fileManager),
+                  fileManager: fileManager
+              ),
+              identitySHA256(for: resolved) == reference.identitySHA256 else {
+            return nil
         }
+        return resolved.url
     }
 
-    static func preferredDownloadedModel(_ models: [ModelInfo]) -> ModelInfo? {
-        let compatible = models.filter {
-            $0.isDownloaded
-                && $0.engineType == "TranscribeCpp"
-                && $0.id.lowercased().contains("whisper")
-        }
-        return compatible.sorted { lhs, rhs in
-            (rank(lhs), lhs.id) < (rank(rhs), rhs.id)
-        }.first
+    static func defaultSettingsURL(fileManager: FileManager = .default) -> URL {
+        fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.pais.handy")
+            .appendingPathComponent("settings_store.json")
     }
 
-    private static func rank(_ model: ModelInfo) -> Int {
-        let id = model.id.lowercased()
-        if id.contains("large-v3-turbo") && id.contains("q8") { return 0 }
-        if id.contains("large-v3-turbo") { return 1 }
-        return 2
+    static func defaultHubRoot(fileManager: FileManager = .default) -> URL {
+        fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/huggingface/hub", isDirectory: true)
     }
 
-    private static func modelCatalog(
-        executable: URL,
+    private static func resolve(
+        modelID: String,
+        hubRoot: URL,
         fileManager: FileManager
-    ) -> Data? {
-        let temporary = fileManager.temporaryDirectory
-            .appendingPathComponent("zbs-eye-handy-models-\(UUID().uuidString).json")
-        guard fileManager.createFile(
-            atPath: temporary.path,
-            contents: nil,
-            attributes: [.posixPermissions: 0o600]
-        ),
-        let output = try? FileHandle(forWritingTo: temporary) else { return nil }
-        defer {
-            try? output.close()
-            try? fileManager.removeItem(at: temporary)
-        }
+    ) -> ResolvedModel? {
+        guard modelID.utf8.count <= 512 else { return nil }
+        let components = modelID.split(separator: "/", omittingEmptySubsequences: false)
+            .map(String.init)
+        guard components.count >= 3,
+              components.allSatisfy(isSafeComponent) else { return nil }
 
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = ["--list-models", "--json"]
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
-        do {
-            try process.run()
-        } catch {
-            return nil
+        let repository = "models--\(components[0])--\(components[1])"
+        let canonicalHub = hubRoot.standardizedFileURL.resolvingSymlinksInPath()
+        let repositoryRoot = hubRoot.appendingPathComponent(repository, isDirectory: true)
+        let referenceURL = repositoryRoot.appendingPathComponent("refs/main")
+        guard let referenceValues = try? referenceURL.resourceValues(forKeys: [
+                  .isRegularFileKey,
+                  .fileSizeKey,
+              ]),
+              referenceValues.isRegularFile == true,
+              let referenceSize = referenceValues.fileSize,
+              referenceSize > 0,
+              referenceSize <= 128,
+              let referenceData = try? Data(contentsOf: referenceURL),
+              referenceData.count <= 128,
+              let rawRevision = String(data: referenceData, encoding: .utf8) else { return nil }
+        let revision = rawRevision.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard revision.count >= 7,
+              revision.count <= 64,
+              revision.unicodeScalars.allSatisfy({
+                  "0123456789abcdefABCDEF".unicodeScalars.contains($0)
+              })
+        else { return nil }
+
+        var candidate = repositoryRoot
+            .appendingPathComponent("snapshots", isDirectory: true)
+            .appendingPathComponent(revision, isDirectory: true)
+        for component in components.dropFirst(2) {
+            candidate.appendPathComponent(component)
         }
-        if exited.wait(timeout: .now() + maximumProbeSeconds) == .timedOut {
-            process.terminate()
-            _ = exited.wait(timeout: .now() + 2)
-            return nil
+        let resolved = candidate.standardizedFileURL.resolvingSymlinksInPath()
+        guard isContained(resolved, in: canonicalHub),
+              let values = try? resolved.resourceValues(forKeys: [
+                  .isRegularFileKey,
+                  .fileSizeKey,
+              ]),
+              values.isRegularFile == true,
+              let fileSize = values.fileSize,
+              Int64(fileSize) >= minimumModelBytes else { return nil }
+
+        return ResolvedModel(
+            url: resolved,
+            modelID: modelID,
+            revision: revision,
+            size: Int64(fileSize)
+        )
+    }
+
+    private static func identitySHA256(for model: ResolvedModel) -> String {
+        let value = "\(model.modelID)\u{0}\(model.revision)\u{0}\(model.size)"
+        return SHA256.hash(data: Data(value.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    private static func isSafeComponent(_ component: String) -> Bool {
+        guard !component.isEmpty,
+              component != ".",
+              component != "..",
+              component.utf8.count <= 255 else { return false }
+        return component.unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.contains($0) || "._-".unicodeScalars.contains($0)
         }
-        guard process.terminationStatus == 0,
-              let size = try? temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-              size > 0,
-              size <= maximumCatalogBytes else { return nil }
-        try? output.synchronize()
-        return try? Data(contentsOf: temporary)
+    }
+
+    private static func isContained(_ child: URL, in parent: URL) -> Bool {
+        let root = parent.path.hasSuffix("/") ? parent.path : parent.path + "/"
+        return child.path.hasPrefix(root)
+    }
+
+    private static func displayName(for modelID: String) -> String {
+        let lowercased = modelID.lowercased()
+        if lowercased.contains("large-v3-turbo") { return "Whisper Large V3 Turbo (Handy)" }
+        return modelID.split(separator: "/").last.map(String.init) ?? "Handy Whisper"
     }
 }

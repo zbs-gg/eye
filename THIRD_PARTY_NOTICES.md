@@ -3,6 +3,18 @@
 ZBS Eye uses open-source software and optional model assets. This file records the attribution required
 for the call-speaker feature; dependency source distributions retain their own license files.
 
+## transcribe.cpp
+
+- Project: [handy-computer/transcribe.cpp](https://github.com/handy-computer/transcribe.cpp)
+- Version: `0.1.3`
+- Copyright: 2026 The transcribe.cpp authors
+- License: MIT
+- Changes in ZBS Eye: no vendored source modification. ZBS Eye links the checksum-pinned universal
+  framework and uses it only in a short-lived local helper to read a compatible model already present
+  in Handy's Hugging Face cache. Handy.app is never launched and model weights are not copied.
+- Full transcribe.cpp, ggml, and miniz license texts are bundled in
+  `ZBSEyeApp/Resources/LOCAL_AI_NOTICES.txt`.
+
 ## FluidAudio
 
 - Project: [FluidInference/FluidAudio](https://github.com/FluidInference/FluidAudio)
