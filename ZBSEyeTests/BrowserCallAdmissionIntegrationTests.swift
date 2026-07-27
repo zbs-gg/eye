@@ -132,6 +132,39 @@ final class BrowserCallAdmissionIntegrationTests: XCTestCase {
         }
     }
 
+    func testChromeDiaAndEdgeAdmitUnlabelledZoomEndControlFromExactInCallWindow() throws {
+        let browsers = [
+            "com.google.Chrome",
+            "company.thebrowser.dia",
+            "com.microsoft.edgemac",
+        ]
+
+        for (index, bundleID) in browsers.enumerated() {
+            let group = try XCTUnwrap(twoSidedGroup(bundleID: bundleID))
+            let inspection = BrowserCallSurfaceInspector.inspect(snapshots: [
+                .init(nodes: [
+                    .init(role: "AXWindow", title: "Zoom Meeting Example"),
+                    webURL("https://app.zoom.us/wc/12345678901/start?fromPWA=1"),
+                    button(title: ""),
+                ]),
+            ])
+            XCTAssertEqual(inspection.service, .zoom, bundleID)
+
+            let fingerprint = "zoom-window-\(index)"
+            let evidence = try XCTUnwrap(
+                BrowserCallAdmission.evidence(
+                    group: group,
+                    inspection: inspection,
+                    observedAt: 10,
+                    monotonicNow: 10,
+                    fingerprint: fingerprint
+                )
+            )
+            var policy = CallDetectionPolicy()
+            XCTAssertEqual(policy.reduce(evidence), .start(fingerprint: fingerprint))
+        }
+    }
+
     func testDiaAssistantInputPlusPlaybackOutputCannotPromoteTrustedPrejoinOrigin() throws {
         let identity = try XCTUnwrap(
             CallAudioOwnerResolution.resolve(

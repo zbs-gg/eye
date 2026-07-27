@@ -29,7 +29,7 @@ struct BrowserCallSurfaceInspection: Equatable, Sendable {
     /// True only when every exposed window/node was traversed without AX errors or budget loss.
     /// It says "no call in the authoritative exposed tree", not "every background tab is visible".
     let authoritativeNoMatch: Bool
-    /// Opaque in-memory capability for revalidating the exact admitted call control. It contains
+    /// Opaque in-memory capability for revalidating the exact admitted call surface. It contains
     /// no URL/title text and is never logged or persisted.
     let controlHandleToken: String?
 
@@ -77,6 +77,14 @@ enum BrowserCallControlState: Equatable, Sendable {
 /// The caller supplies the root PID of a supported browser. Raw Accessibility strings never leave this
 /// type: the result contains only a normalized origin, a service enum, and bounded numeric diagnostics.
 enum BrowserCallSurfaceInspector {
+    private enum RetainedSurfaceKind: Equatable {
+        case hardControl
+        /// Zoom Web currently exposes its visible End control without any AX label. Admission
+        /// therefore uses the exact in-call window marker plus a session-bearing `/wc/.../start`
+        /// document, then retains that document root as the opaque continuity capability.
+        case zoomInCallDocument
+    }
+
     enum RetainedDocumentState: Equatable, Sendable {
         case same
         case replaced
@@ -174,6 +182,7 @@ enum BrowserCallSurfaceInspector {
         let allowsCrossRootReconciliation: Bool
         let controlNodeIndex: Int
         let webContentRootID: Int
+        let retainedSurfaceKind: RetainedSurfaceKind
     }
 
     private struct PendingAXNode {
@@ -243,6 +252,7 @@ enum BrowserCallSurfaceInspector {
             let webContentRoot: AXUIElement
             let service: BrowserCallService
             let sessionDiscriminator: String
+            let retainedSurfaceKind: RetainedSurfaceKind
             var pinned: Bool
         }
 
@@ -258,7 +268,8 @@ enum BrowserCallSurfaceInspector {
             element: AXUIElement,
             webContentRoot: AXUIElement,
             service: BrowserCallService,
-            sessionDiscriminator: String
+            sessionDiscriminator: String,
+            retainedSurfaceKind: RetainedSurfaceKind = .hardControl
         ) -> String? {
             dispatchPrecondition(condition: .onQueue(BrowserCallSurfaceInspector.queue))
             lock.lock()
@@ -281,6 +292,7 @@ enum BrowserCallSurfaceInspector {
                 webContentRoot: webContentRoot,
                 service: service,
                 sessionDiscriminator: sessionDiscriminator,
+                retainedSurfaceKind: retainedSurfaceKind,
                 pinned: false
             )
             insertionOrder.append(token)
@@ -490,6 +502,13 @@ enum BrowserCallSurfaceInspector {
                     continuation.resume(returning: .unknown)
                     return
                 }
+                if entry.retainedSurfaceKind == .zoomInCallDocument {
+                    // The exact retained AXWebArea is the capability. Its trusted session-bearing
+                    // document identity was revalidated above, so tab focus/title changes are not
+                    // allowed to manufacture a false end.
+                    continuation.resume(returning: .active)
+                    return
+                }
                 let read = snapshot(
                     entry.element,
                     deadline: deadline,
@@ -628,7 +647,10 @@ enum BrowserCallSurfaceInspector {
                 }
                 visitedNodes[windowIndex].append(node)
 
-                if let match = classifyWindow(visitedNodes[windowIndex]) {
+                if let match = classifyWindow(
+                    visitedNodes[windowIndex],
+                    allowZoomWindowFallback: false
+                ) {
                     let endedAt = clock()
                     guard endedAt < deadline else {
                         timedOut = true
@@ -900,7 +922,10 @@ enum BrowserCallSurfaceInspector {
                         )
                     )
 
-                    if let match = classifyWindow(traversals[windowIndex].snapshots) {
+                    if let match = classifyWindow(
+                        traversals[windowIndex].snapshots,
+                        allowZoomWindowFallback: false
+                    ) {
                         let endedAt = DispatchTime.now().uptimeNanoseconds
                         guard endedAt < deadline else {
                             timedOut = true
@@ -919,7 +944,8 @@ enum BrowserCallSurfaceInspector {
                             element: traversals[windowIndex].elements[match.controlNodeIndex],
                             webContentRoot: webContentRoot,
                             service: match.service,
-                            sessionDiscriminator: match.sessionDiscriminator
+                            sessionDiscriminator: match.sessionDiscriminator,
+                            retainedSurfaceKind: match.retainedSurfaceKind
                         )
                         return BrowserCallSurfaceInspection(
                             trustedOrigin: match.origin,
@@ -1039,7 +1065,8 @@ enum BrowserCallSurfaceInspector {
                         element: traversal.elements[match.controlNodeIndex],
                         webContentRoot: webContentRoot,
                         service: match.service,
-                        sessionDiscriminator: match.sessionDiscriminator
+                        sessionDiscriminator: match.sessionDiscriminator,
+                        retainedSurfaceKind: match.retainedSurfaceKind
                     )
                     return BrowserCallSurfaceInspection(
                         trustedOrigin: match.origin,
@@ -1443,9 +1470,11 @@ enum BrowserCallSurfaceInspector {
 
     private static func classifyWindow(
         _ nodes: [NodeSnapshot],
-        allowAddressBarFallback: Bool = false
+        allowAddressBarFallback: Bool = false,
+        allowZoomWindowFallback: Bool = true
     ) -> Match? {
         struct DocumentCandidate {
+            let nodeIndex: Int
             let rootID: Int?
             let depth: Int
             let rawValue: String
@@ -1454,6 +1483,7 @@ enum BrowserCallSurfaceInspector {
         var documents: [DocumentCandidate] = []
         var addressBarOrigins: [(TrustedCallOrigin, BrowserCallService, String)] = []
         var controlsByRoot: [Int: [(index: Int, node: NodeSnapshot)]] = [:]
+        let hasZoomMeetingWindow = nodes.first.map(isZoomMeetingWindow) ?? false
 
         for (nodeIndex, node) in nodes.enumerated() {
             if normalized(node.role) == "axwebarea",
@@ -1463,6 +1493,7 @@ enum BrowserCallSurfaceInspector {
             {
                 documents.append(
                     DocumentCandidate(
+                        nodeIndex: nodeIndex,
                         rootID: node.webContentRootID,
                         depth: node.webContentTreeDepth ?? -1,
                         rawValue: document
@@ -1526,9 +1557,45 @@ enum BrowserCallSurfaceInspector {
                             allowsCrossRootReconciliation(
                                 rawURL: document.rawValue,
                                 service: service
-                            ),
+                        ),
                         controlNodeIndex: control.index,
-                        webContentRootID: rootID
+                        webContentRootID: rootID,
+                        retainedSurfaceKind: .hardControl
+                    )
+                }
+            }
+
+            // Zoom Web renders a real visible End control but currently exposes no title,
+            // description, help, or identifier for it through Chromium AX. Fail closed to the
+            // exact root window marker and a session-bearing in-call route observed in the same
+            // bounded window. CoreAudio's fresh input+output requirement is enforced by admission.
+            if allowZoomWindowFallback,
+               hasZoomMeetingWindow,
+               topLevelDocuments.count == 1
+            {
+                let candidates = topLevelDocuments.compactMap {
+                    document -> (DocumentCandidate, TrustedCallOrigin)? in
+                    guard let origin = TrustedCallOrigin.normalize(document.rawValue),
+                          service(for: origin) == .zoom,
+                          isZoomInCallRoute(document.rawValue)
+                    else { return nil }
+                    return (document, origin)
+                }
+                if candidates.count == 1,
+                   let candidate = candidates.first,
+                   let rootID = candidate.0.rootID
+                {
+                    return Match(
+                        origin: candidate.1,
+                        service: .zoom,
+                        sessionDiscriminator: sessionDiscriminator(
+                            rawURL: candidate.0.rawValue,
+                            origin: candidate.1
+                        ),
+                        allowsCrossRootReconciliation: true,
+                        controlNodeIndex: candidate.0.nodeIndex,
+                        webContentRootID: rootID,
+                        retainedSurfaceKind: .zoomInCallDocument
                     )
                 }
             }
@@ -1570,8 +1637,34 @@ enum BrowserCallSurfaceInspector {
                 service: service
             ),
             controlNodeIndex: control.index,
-            webContentRootID: onlyRootID
+            webContentRootID: onlyRootID,
+            retainedSurfaceKind: .hardControl
         )
+    }
+
+    private static func isZoomMeetingWindow(_ node: NodeSnapshot) -> Bool {
+        guard normalized(node.role) == normalized(kAXWindowRole as String),
+              !node.inBrowserChrome,
+              !node.inBrowserWebContent,
+              node.webContentRootID == nil,
+              node.webContentTreeDepth == nil
+        else { return false }
+        let title = normalized(node.title)
+        return title == "zoom meeting" || title.hasPrefix("zoom meeting ")
+    }
+
+    private static func isZoomInCallRoute(_ rawURL: String) -> Bool {
+        guard let components = URLComponents(string: rawURL) else { return false }
+        let segments = components.percentEncodedPath
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+        guard segments.count == 3,
+              segments[0].lowercased() == "wc",
+              segments[2].lowercased() == "start"
+        else { return false }
+        let meetingID = segments[1]
+        return (9...12).contains(meetingID.count)
+            && meetingID.utf8.allSatisfy { (48...57).contains($0) }
     }
 
     private static func sessionDiscriminator(

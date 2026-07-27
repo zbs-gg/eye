@@ -29,6 +29,73 @@ final class BrowserCallSurfaceInspectorTests: XCTestCase {
         XCTAssertEqual(result.service, .googleMeet)
     }
 
+    func testClassifiesZoomWebFromExactInCallWindowWhenEndControlIsUnlabelled() {
+        let result = inspect([
+            zoomWindow("Zoom Meeting Example"),
+            webURL("https://app.zoom.us/wc/12345678901/start?fromPWA=1"),
+            .init(
+                role: "AXButton",
+                inBrowserWebContent: true,
+                webContentRootID: 0,
+                webContentTreeDepth: 1
+            ),
+        ])
+
+        XCTAssertTrue(result.isTrustedCall)
+        XCTAssertEqual(result.service, .zoom)
+        XCTAssertEqual(result.sessionDiscriminator?.count, 64)
+    }
+
+    func testZoomWindowFallbackRejectsPrejoinLookalikeAndLooseTitles() {
+        let falsePositiveWindows: [[BrowserCallSurfaceInspector.NodeSnapshot]] = [
+            [
+                zoomWindow("Zoom Meeting Example"),
+                webURL("https://app.zoom.us/wc/12345678901/join"),
+            ],
+            [
+                zoomWindow("Zoom Meeting Example"),
+                webURL("https://app.zoom.us/wc/not-a-session/start"),
+            ],
+            [
+                zoomWindow("Zoom Meeting Example"),
+                webURL("https://app.zoom.us.evil.example/wc/12345678901/start"),
+            ],
+            [
+                zoomWindow("My Zoom Meeting notes"),
+                webURL("https://app.zoom.us/wc/12345678901/start"),
+            ],
+            [
+                webURL("https://app.zoom.us/wc/12345678901/start"),
+                .init(
+                    role: "AXWindow",
+                    title: "Zoom Meeting Example",
+                    inBrowserWebContent: true,
+                    webContentRootID: 0,
+                    webContentTreeDepth: 1
+                ),
+            ],
+            [
+                zoomWindow("Zoom Meeting Example"),
+                webURL("https://app.zoom.us/wc/12345678901/start"),
+                webURL("https://evil.example/not-a-call", rootID: 1),
+            ],
+        ]
+
+        for (index, nodes) in falsePositiveWindows.enumerated() {
+            XCTAssertFalse(inspect(nodes).isTrustedCall, "false-positive fixture \(index)")
+        }
+    }
+
+    func testZoomWindowFallbackRequiresRootWindowAsFirstTraversedNode() {
+        let result = inspect([
+            .init(role: "AXGroup", title: "Browser root"),
+            zoomWindow("Zoom Meeting Example"),
+            webURL("https://app.zoom.us/wc/12345678901/start"),
+        ])
+
+        XCTAssertFalse(result.isTrustedCall)
+    }
+
     func testAXURLCannotSupplyOriginOutsideTopLevelWebArea() {
         let nestedWebArea = inspect([
             webURL("https://meet.google.com/abc-defg-hij", depth: 2),
@@ -126,6 +193,31 @@ final class BrowserCallSurfaceInspectorTests: XCTestCase {
                 expectedSessionDiscriminator: discriminator
             ),
             .unknown
+        )
+    }
+
+    func testRetainedZoomDocumentSurvivesQueryChangesButRejectsAnotherRoute() throws {
+        let admitted = inspect([
+            zoomWindow("Zoom Meeting Example"),
+            webURL("https://app.zoom.us/wc/12345678901/start?fromPWA=1"),
+        ])
+        let discriminator = try XCTUnwrap(admitted.sessionDiscriminator)
+
+        XCTAssertEqual(
+            BrowserCallSurfaceInspector.retainedDocumentState(
+                rawDocument: "https://app.zoom.us/wc/12345678901/start?ref=background",
+                expectedService: .zoom,
+                expectedSessionDiscriminator: discriminator
+            ),
+            .same
+        )
+        XCTAssertEqual(
+            BrowserCallSurfaceInspector.retainedDocumentState(
+                rawDocument: "https://app.zoom.us/wc/10987654321/start",
+                expectedService: .zoom,
+                expectedSessionDiscriminator: discriminator
+            ),
+            .replaced
         )
     }
 
@@ -627,5 +719,11 @@ final class BrowserCallSurfaceInspectorTests: XCTestCase {
             webContentRootID: rootID,
             webContentTreeDepth: depth
         )
+    }
+
+    private func zoomWindow(
+        _ title: String
+    ) -> BrowserCallSurfaceInspector.NodeSnapshot {
+        .init(role: "AXWindow", title: title)
     }
 }
