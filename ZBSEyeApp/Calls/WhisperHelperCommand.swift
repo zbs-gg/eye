@@ -77,6 +77,7 @@ struct WhisperHelperRuntimeSession: @unchecked Sendable {
 /// Test/runtime dependency container used synchronously by `execute()`.
 struct WhisperHelperRuntime: @unchecked Sendable {
     let makeSession: (URL) throws -> WhisperHelperRuntimeSession
+    let makeSharedSession: (URL) throws -> WhisperHelperRuntimeSession
 
     init(
         _ run: @escaping (
@@ -87,20 +88,42 @@ struct WhisperHelperRuntime: @unchecked Sendable {
         makeSession = { modelURL in
             WhisperHelperRuntimeSession { inputs in try run(modelURL, inputs) }
         }
+        makeSharedSession = makeSession
     }
 
     init(
         makeSession: @escaping (URL) throws -> WhisperHelperRuntimeSession
     ) {
         self.makeSession = makeSession
+        makeSharedSession = makeSession
     }
 
-    static let native = WhisperHelperRuntime(makeSession: { modelURL in
-        let session = try WhisperSession(modelURL: modelURL)
-        return WhisperHelperRuntimeSession { inputs in
+    init(
+        makeSession: @escaping (URL) throws -> WhisperHelperRuntimeSession,
+        makeSharedSession: @escaping (URL) throws -> WhisperHelperRuntimeSession
+    ) {
+        self.makeSession = makeSession
+        self.makeSharedSession = makeSharedSession
+    }
+
+    static let native = WhisperHelperRuntime(
+        makeSession: { modelURL in
+            let session = try WhisperSession(modelURL: modelURL)
+            return runtimeSession(transcribe: session.transcribe)
+        },
+        makeSharedSession: { modelURL in
+            let session = try TranscribeCppSession(modelURL: modelURL)
+            return sharedRuntimeSession(transcribe: session.transcribe)
+        }
+    )
+
+    private static func runtimeSession(
+        transcribe: @escaping ([Float]) throws -> [WhisperSegment]
+    ) -> WhisperHelperRuntimeSession {
+        WhisperHelperRuntimeSession { inputs in
             try inputs.flatMap { input in
                 let base = Double(input.startSample) / Double(input.sampleRate)
-                return try session.transcribe(samples: input.samples).map { segment in
+                return try transcribe(input.samples).map { segment in
                     WhisperHelperResultSegment(
                         source: input.source,
                         startSeconds: base + segment.startSeconds,
@@ -110,7 +133,75 @@ struct WhisperHelperRuntime: @unchecked Sendable {
                 }
             }
         }
-    })
+    }
+
+    /// Shared Handy recordings used to be sent to its CLI in contiguous
+    /// one-minute WAVs. Keep the same context window when using the runtime
+    /// directly; feeding capture chunks independently makes Whisper both
+    /// slower and substantially less accurate.
+    static func sharedRuntimeSession(
+        transcribe: @escaping ([Float]) throws -> [WhisperSegment]
+    ) -> WhisperHelperRuntimeSession {
+        WhisperHelperRuntimeSession { inputs in
+            try sharedBatches(inputs).flatMap { input in
+                let base = Double(input.startSample) / Double(input.sampleRate)
+                return try transcribe(input.samples).map { segment in
+                    WhisperHelperResultSegment(
+                        source: input.source,
+                        startSeconds: base + segment.startSeconds,
+                        endSeconds: base + segment.endSeconds,
+                        text: segment.text
+                    )
+                }
+            }
+        }
+    }
+
+    static func sharedBatches(
+        _ inputs: [WhisperHelperPreparedInput]
+    ) -> [WhisperHelperPreparedInput] {
+        let maximumSamples = 60 * 16_000
+        var batches: [WhisperHelperPreparedInput] = []
+
+        for input in inputs {
+            var consumed = 0
+            while consumed < input.samples.count {
+                if let last = batches.last {
+                    let expectedStart = last.startSample + Int64(last.samples.count)
+                    let canAppend = last.source == input.source
+                        && last.sampleRate == input.sampleRate
+                        && input.startSample + Int64(consumed) == expectedStart
+                        && last.samples.count < maximumSamples
+                    if canAppend {
+                        let count = min(
+                            maximumSamples - last.samples.count,
+                            input.samples.count - consumed
+                        )
+                        var samples = last.samples
+                        samples.append(contentsOf: input.samples[consumed..<(consumed + count)])
+                        batches[batches.count - 1] = WhisperHelperPreparedInput(
+                            source: last.source,
+                            sampleRate: last.sampleRate,
+                            startSample: last.startSample,
+                            samples: samples
+                        )
+                        consumed += count
+                        continue
+                    }
+                }
+
+                let count = min(maximumSamples, input.samples.count - consumed)
+                batches.append(WhisperHelperPreparedInput(
+                    source: input.source,
+                    sampleRate: input.sampleRate,
+                    startSample: input.startSample + Int64(consumed),
+                    samples: Array(input.samples[consumed..<(consumed + count)])
+                ))
+                consumed += count
+            }
+        }
+        return batches
+    }
 }
 
 enum WhisperHelperCommandError: Error, Sendable, Equatable {
@@ -183,6 +274,7 @@ struct WhisperHelperCommand {
         arguments: [String],
         dataRoot: URL,
         expectedModel: WhisperModelManifest = .largeV3Turbo,
+        handyHubRoot: URL? = nil,
         fileManager: FileManager = .default
     ) throws {
         guard let flagIndex = arguments.firstIndex(of: Self.flag),
@@ -223,50 +315,62 @@ struct WhisperHelperCommand {
             throw WhisperHelperCommandError.invalidManifestPath
         }
 
-        let expectedModelPath = "ai/speech/v1/\(expectedModel.relativePath)"
-        guard decoded.modelRelativePath == expectedModelPath,
-              decoded.modelSHA256 == expectedModel.sha256,
-              decoded.handyBackend == nil else {
-            throw WhisperHelperCommandError.invalidModelIdentity
-        }
         let resolvedModel: URL
-        do {
-            resolvedModel = try ManagedAssetVerifier.containedURL(
-                root: root,
-                relativePath: decoded.modelRelativePath
+        if let handyBackend = decoded.handyBackend {
+            guard decoded.modelRelativePath == "external/handy",
+                  decoded.modelSHA256 == handyBackend.identitySHA256,
+                  let sharedModel = HandySpeechModelProbe.resolvedModelURL(
+                      for: handyBackend,
+                      hubRoot: handyHubRoot,
+                      fileManager: fileManager
+                  ) else {
+                throw WhisperHelperCommandError.invalidModelIdentity
+            }
+            resolvedModel = sharedModel
+        } else {
+            let expectedModelPath = "ai/speech/v1/\(expectedModel.relativePath)"
+            guard decoded.modelRelativePath == expectedModelPath,
+                  decoded.modelSHA256 == expectedModel.sha256 else {
+                throw WhisperHelperCommandError.invalidModelIdentity
+            }
+            do {
+                resolvedModel = try ManagedAssetVerifier.containedURL(
+                    root: root,
+                    relativePath: decoded.modelRelativePath
+                )
+            } catch {
+                throw WhisperHelperCommandError.invalidModelIdentity
+            }
+            guard let modelSize = try? resolvedModel.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                  Int64(modelSize) == expectedModel.expectedBytes else {
+                throw WhisperHelperCommandError.invalidModelIdentity
+            }
+            do {
+                _ = try ManagedAssetVerifier.verifyFile(
+                    root: root,
+                    relativePath: decoded.modelRelativePath,
+                    expectedBytes: expectedModel.expectedBytes,
+                    sha256: expectedModel.sha256
+                )
+            } catch {
+                throw WhisperHelperCommandError.invalidModelIdentity
+            }
+            let installationURL = root.appendingPathComponent(
+                "ai/speech/v1/installation.json",
+                isDirectory: false
             )
-        } catch {
-            throw WhisperHelperCommandError.invalidModelIdentity
-        }
-        guard let modelSize = try? resolvedModel.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-              Int64(modelSize) == expectedModel.expectedBytes else {
-            throw WhisperHelperCommandError.invalidModelIdentity
-        }
-        do {
-            _ = try ManagedAssetVerifier.verifyFile(
-                root: root,
-                relativePath: decoded.modelRelativePath,
-                expectedBytes: expectedModel.expectedBytes,
-                sha256: expectedModel.sha256
-            )
-        } catch {
-            throw WhisperHelperCommandError.invalidModelIdentity
-        }
-        let installationURL = root.appendingPathComponent(
-            "ai/speech/v1/installation.json",
-            isDirectory: false
-        )
-        guard let installationData = try? Data(contentsOf: installationURL),
-              let installation = try? JSONDecoder().decode(
-                  WhisperModelInstallation.self,
-                  from: installationData
-              ),
-              installation.manifestID == expectedModel.id,
-              installation.revision == expectedModel.revision,
-              installation.sha256 == expectedModel.sha256,
-              installation.expectedBytes == expectedModel.expectedBytes,
-              installation.runtimeRelease == expectedModel.runtimeRelease else {
-            throw WhisperHelperCommandError.invalidModelIdentity
+            guard let installationData = try? Data(contentsOf: installationURL),
+                  let installation = try? JSONDecoder().decode(
+                      WhisperModelInstallation.self,
+                      from: installationData
+                  ),
+                  installation.manifestID == expectedModel.id,
+                  installation.revision == expectedModel.revision,
+                  installation.sha256 == expectedModel.sha256,
+                  installation.expectedBytes == expectedModel.expectedBytes,
+                  installation.runtimeRelease == expectedModel.runtimeRelease else {
+                throw WhisperHelperCommandError.invalidModelIdentity
+            }
         }
 
         guard decoded.resultRelativePath == "\(jobRoot)/result.json" else {
@@ -312,7 +416,9 @@ struct WhisperHelperCommand {
         runtime: WhisperHelperRuntime = .native,
         fileManager: FileManager = .default
     ) throws {
-        let session = try runtime.makeSession(modelURL)
+        let session = try manifest.handyBackend == nil
+            ? runtime.makeSession(modelURL)
+            : runtime.makeSharedSession(modelURL)
         var segments: [WhisperHelperResultSegment] = []
         for ranges in Self.batches(manifest.audioRanges) {
             let inputs = try ranges.map(loadRange)
@@ -324,7 +430,8 @@ struct WhisperHelperCommand {
             callID: manifest.callID,
             callGeneration: manifest.callGeneration,
             modelSHA256: manifest.modelSHA256,
-            runtimeRelease: WhisperRuntimeIdentity.release,
+            runtimeRelease: manifest.handyBackend?.runtimeRelease
+                ?? WhisperRuntimeIdentity.release,
             segments: segments
         )
         let encoded = try JSONEncoder().encode(result)

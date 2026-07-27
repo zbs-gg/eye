@@ -1,5 +1,6 @@
 import CryptoKit
 import XCTest
+import ZBSEyeWhisper
 
 final class WhisperHelperCommandTests: XCTestCase {
     func testOneJobReadsManagedPCMAndWritesOneAtomicResult() throws {
@@ -91,7 +92,7 @@ final class WhisperHelperCommandTests: XCTestCase {
         }
     }
 
-    func testBuiltInHelperRejectsHandyBackendMetadata() throws {
+    func testSharedHelperRejectsManagedModelPath() throws {
         let fixture = try WhisperHelperFixture(
             handyBackend: HandySpeechBackendReference(
                 modelID: "handy-computer/whisper-large-v3-turbo-gguf/example.gguf",
@@ -105,6 +106,85 @@ final class WhisperHelperCommandTests: XCTestCase {
         XCTAssertThrowsError(try fixture.command()) { error in
             XCTAssertEqual(error as? WhisperHelperCommandError, .invalidModelIdentity)
         }
+    }
+
+    func testSharedHelperLoadsCachedModelWithoutLaunchingHandy() throws {
+        let fixture = try WhisperHandyHelperFixture()
+        defer { fixture.cleanup() }
+        let counter = WhisperHelperRuntimeCounter()
+        let runtime = WhisperHelperRuntime(
+            makeSession: { _ in
+                counter.builtInSessionCount += 1
+                return WhisperHelperRuntimeSession { _ in [] }
+            },
+            makeSharedSession: { modelURL in
+                counter.sharedSessionCount += 1
+                XCTAssertEqual(modelURL, fixture.modelURL.resolvingSymlinksInPath())
+                return WhisperHelperRuntimeSession { inputs in
+                    inputs.map { input in
+                        WhisperHelperResultSegment(
+                            source: input.source,
+                            startSeconds: Double(input.startSample) / Double(input.sampleRate),
+                            endSeconds: Double(input.startSample + Int64(input.samples.count))
+                                / Double(input.sampleRate),
+                            text: "shared model transcript"
+                        )
+                    }
+                }
+            }
+        )
+
+        try fixture.command().execute(runtime: runtime)
+
+        XCTAssertEqual(counter.builtInSessionCount, 0)
+        XCTAssertEqual(counter.sharedSessionCount, 1)
+        let result = try JSONDecoder().decode(
+            WhisperHelperResult.self,
+            from: Data(contentsOf: fixture.resultURL)
+        )
+        XCTAssertEqual(result.runtimeRelease, "transcribe.cpp-v0.1.3")
+        XCTAssertEqual(result.segments.map(\.text), ["shared model transcript"])
+    }
+
+    func testSharedRuntimePreservesContiguousOneMinuteWhisperContext() throws {
+        var sampleCounts: [Int] = []
+        let session = WhisperHelperRuntime.sharedRuntimeSession { samples in
+            sampleCounts.append(samples.count)
+            return [
+                WhisperSegment(
+                    startSeconds: 0,
+                    endSeconds: Double(samples.count) / 16_000,
+                    text: "batch"
+                ),
+            ]
+        }
+        var inputs = (0..<7).map { index in
+            WhisperHelperPreparedInput(
+                source: .me,
+                sampleRate: 16_000,
+                startSample: Int64(index * 160_000),
+                samples: Array(repeating: 0, count: 160_000)
+            )
+        }
+        inputs.append(WhisperHelperPreparedInput(
+            source: .system,
+            sampleRate: 16_000,
+            startSample: 0,
+            samples: Array(repeating: 0, count: 160_000)
+        ))
+        inputs.append(WhisperHelperPreparedInput(
+            source: .system,
+            sampleRate: 16_000,
+            startSample: 320_000,
+            samples: Array(repeating: 0, count: 160_000)
+        ))
+
+        let segments = try session.runBatch(inputs)
+
+        XCTAssertEqual(sampleCounts, [960_000, 160_000, 160_000, 160_000])
+        XCTAssertEqual(segments.map(\.source), [.me, .me, .system, .system])
+        XCTAssertEqual(segments.map(\.startSeconds), [0, 60, 0, 20])
+        XCTAssertEqual(segments.map(\.endSeconds), [60, 70, 10, 30])
     }
 
     func testRejectsAudioRangeLargerThanManagedFile() throws {
@@ -274,4 +354,95 @@ private final class WhisperHelperRuntimeCounter {
     var sessionCount = 0
     var batchCount = 0
     var inputCount = 0
+    var builtInSessionCount = 0
+    var sharedSessionCount = 0
+}
+
+private struct WhisperHandyHelperFixture {
+    let root: URL
+    let hubRoot: URL
+    let manifestRelativePath: String
+    let resultURL: URL
+    let modelURL: URL
+
+    init() throws {
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zbseye-whisper-handy-helper-\(UUID().uuidString)", isDirectory: true)
+        hubRoot = root.appendingPathComponent("hub", isDirectory: true)
+        let modelID = "handy-computer/whisper-large-v3-turbo-gguf/whisper-large-v3-turbo-Q8_0.gguf"
+        let revision = String(repeating: "a", count: 40)
+        let repositoryRoot = hubRoot
+            .appendingPathComponent("models--handy-computer--whisper-large-v3-turbo-gguf")
+        let referenceURL = repositoryRoot.appendingPathComponent("refs/main")
+        modelURL = repositoryRoot
+            .appendingPathComponent("snapshots/\(revision)/whisper-large-v3-turbo-Q8_0.gguf")
+        let settingsURL = root.appendingPathComponent("settings_store.json")
+        try FileManager.default.createDirectory(
+            at: referenceURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: modelURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try revision.write(to: referenceURL, atomically: true, encoding: .utf8)
+        try Data(count: 1 * 1_024 * 1_024).write(to: modelURL)
+        try JSONSerialization.data(withJSONObject: ["selected_model": modelID])
+            .write(to: settingsURL)
+        let backend = try XCTUnwrap(
+            HandySpeechModelProbe.discover(
+                settingsURL: settingsURL,
+                hubRoot: hubRoot
+            ).backend
+        )
+
+        let jobID = UUID().uuidString.lowercased()
+        manifestRelativePath = "call-helper/jobs/\(jobID)/manifest.json"
+        let manifestURL = root.appendingPathComponent(manifestRelativePath)
+        resultURL = root.appendingPathComponent("call-helper/jobs/\(jobID)/result.json")
+        let audioURL = root.appendingPathComponent("media/calls/1/me.pcm")
+        try FileManager.default.createDirectory(
+            at: manifestURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: audioURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let pcm = [Int16(-32_768), 0, 16_384, 32_767].withUnsafeBytes { Data($0) }
+        try pcm.write(to: audioURL)
+        let manifest = WhisperHelperJobManifest(
+            formatVersion: 1,
+            jobID: jobID,
+            callID: 1,
+            callGeneration: 2,
+            modelRelativePath: "external/handy",
+            modelSHA256: backend.identitySHA256,
+            handyBackend: backend,
+            resultRelativePath: "call-helper/jobs/\(jobID)/result.json",
+            audioRanges: [
+                WhisperHelperAudioRange(
+                    source: .me,
+                    relativePath: "media/calls/1/me.pcm",
+                    offsetBytes: 0,
+                    lengthBytes: Int64(pcm.count),
+                    sampleRate: 16_000,
+                    startSample: 16_000
+                ),
+            ]
+        )
+        try JSONEncoder().encode(manifest).write(to: manifestURL)
+    }
+
+    func command() throws -> WhisperHelperCommand {
+        try WhisperHelperCommand(
+            arguments: ["eye", WhisperHelperCommand.flag, manifestRelativePath],
+            dataRoot: root,
+            handyHubRoot: hubRoot
+        )
+    }
+
+    func cleanup() {
+        try? FileManager.default.removeItem(at: root)
+    }
 }

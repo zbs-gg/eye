@@ -2,15 +2,23 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
-## [0.5.2] — 2026-07-27
+## [0.5.3] — 2026-07-27
+
+### Fixed
+- Reusing Handy's downloaded Whisper model no longer starts Handy.app. Eye resolves the selected immutable
+  Hugging Face cache snapshot itself and loads it inside Eye's existing short-lived helper process through
+  the matching universal `transcribe.cpp` runtime. No model weights are copied or downloaded a second time.
+- The failed, never-published 0.5.2 candidate was withdrawn instead of replacing its notarized bytes.
+
+## [0.5.2] — 2026-07-27 (withdrawn)
 
 ### Changed
 - Call editing now uses one waveform range selector with visible handles, exact duration, source-specific
   previews, and quick tail selection. The destructive action says what it really does: permanently delete
   the selected audio while keeping the rest of the call on its original timeline.
-- Eye reuses a compatible downloaded Whisper model from an installed Handy app through Handy's local
-  headless file-transcription interface. It does not download or retain a second model copy; Eye's own
-  pinned Whisper remains an explicit fallback when Handy is unavailable.
+- This candidate attempted to reuse Handy's downloaded model through Handy's file-transcription CLI.
+  It was never published because invoking the app binary still surfaced Handy on macOS. Version 0.5.3
+  replaces that path with direct model loading and never launches Handy.app.
 - The system-audio preference now controls ordinary Timeline capture. Confirmed and manually started calls
   request separate microphone and system tracks whenever audio is enabled; `Audio Off` remains a hard stop.
 
