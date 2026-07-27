@@ -286,7 +286,7 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION:").count - 1, 2)
         XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION: \"0.5.0\"").count - 1, 2)
         XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION:").count - 1, 2)
-        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"13\"").count - 1, 2)
+        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"14\"").count - 1, 2)
     }
 
     func testReleaseDocumentationRequiresAnExactManifestBoundArtifactPair() throws {
