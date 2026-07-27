@@ -19,8 +19,8 @@ their life to somebody else's cloud. It quietly captures screen moments, accessi
 microphone and optional system audio. Everything is indexed locally and can be explored in the Timeline,
 opened as a call, searched in Ask, or read by your own agent over localhost.
 
-> **Release status:** this README documents the upcoming 0.5.0 source on `main`. The download link continues
-> to serve the stable 0.4.5 build until the installed 0.5.0 browser-call qualification is complete.
+> **Release status:** this README documents the upcoming 0.5.1 source on `main`. The download link continues
+> to serve the stable 0.4.5 build until the installed 0.5.1 browser-call qualification is complete.
 
 <p align="center">
   <img src="./assets/readme/product-proof.svg" width="100%"
@@ -57,7 +57,7 @@ input and output activity; a bounded Accessibility pass then requires a trusted 
 site-specific Leave or End control. A calendar page, podcast, voice message, look-alike domain, or microphone
 alone is not enough.
 
-| Browser and service | 0.5.0 candidate status |
+| Browser and service | 0.5.1 candidate status |
 | --- | --- |
 | Chrome, Dia, or Edge × Meet, Zoom Web, or Teams Web | Implemented and fixture-qualified; live-qualified pairs will be named at release |
 | Safari or another browser | Manual Start only |

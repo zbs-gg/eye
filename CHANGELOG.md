@@ -2,12 +2,13 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
-## [0.5.0] — 2026-07-27
+## [0.5.1] — 2026-07-27
 
-- Fixed Chrome, Dia, and Edge detection for the real Zoom Web client, whose visible end-call
-  control is currently exposed without an Accessibility label. Eye now admits only the exact
-  trusted Zoom in-call route and root window marker alongside fresh two-sided browser audio; raw
-  URLs and window titles remain transient and are never logged or stored.
+- Fixed Chrome, Dia, and Edge detection for the real Zoom Web client when Chromium exposes no
+  `AXWebArea` at all. Eye now accepts only a fully traversed `Zoom Meeting` root window plus one
+  corroborating window proxy carrying the same exact trusted `/wc/<meeting>/start` route alongside
+  fresh two-sided browser audio; raw URLs and window titles remain transient and are never logged
+  or stored.
 
 ### Added
 - **OS-only Chromium call detection.** Chrome, Dia, and Edge can start local call capture for

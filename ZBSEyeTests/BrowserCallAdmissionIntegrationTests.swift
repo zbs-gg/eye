@@ -138,30 +138,45 @@ final class BrowserCallAdmissionIntegrationTests: XCTestCase {
             "company.thebrowser.dia",
             "com.microsoft.edgemac",
         ]
+        let route = "https://app.zoom.us/wc/12345678901/start?fromPWA=1"
+        let topologies: [[BrowserCallSurfaceInspector.NodeSnapshot]] = [
+            [
+                .init(role: "AXWindow", title: "Zoom Meeting Example"),
+                webURL(route),
+                button(title: ""),
+            ],
+            [
+                .init(
+                    role: "AXWindow",
+                    title: "Zoom Meeting Example",
+                    document: route
+                ),
+                .init(role: "AXGroup", document: route),
+                .init(role: "AXButton"),
+            ],
+        ]
 
         for (index, bundleID) in browsers.enumerated() {
             let group = try XCTUnwrap(twoSidedGroup(bundleID: bundleID))
-            let inspection = BrowserCallSurfaceInspector.inspect(snapshots: [
-                .init(nodes: [
-                    .init(role: "AXWindow", title: "Zoom Meeting Example"),
-                    webURL("https://app.zoom.us/wc/12345678901/start?fromPWA=1"),
-                    button(title: ""),
-                ]),
-            ])
-            XCTAssertEqual(inspection.service, .zoom, bundleID)
+            for (topologyIndex, nodes) in topologies.enumerated() {
+                let inspection = BrowserCallSurfaceInspector.inspect(snapshots: [
+                    .init(nodes: nodes),
+                ])
+                XCTAssertEqual(inspection.service, .zoom, "\(bundleID) topology \(topologyIndex)")
 
-            let fingerprint = "zoom-window-\(index)"
-            let evidence = try XCTUnwrap(
-                BrowserCallAdmission.evidence(
-                    group: group,
-                    inspection: inspection,
-                    observedAt: 10,
-                    monotonicNow: 10,
-                    fingerprint: fingerprint
+                let fingerprint = "zoom-window-\(index)-\(topologyIndex)"
+                let evidence = try XCTUnwrap(
+                    BrowserCallAdmission.evidence(
+                        group: group,
+                        inspection: inspection,
+                        observedAt: 10,
+                        monotonicNow: 10,
+                        fingerprint: fingerprint
+                    )
                 )
-            )
-            var policy = CallDetectionPolicy()
-            XCTAssertEqual(policy.reduce(evidence), .start(fingerprint: fingerprint))
+                var policy = CallDetectionPolicy()
+                XCTAssertEqual(policy.reduce(evidence), .start(fingerprint: fingerprint))
+            }
         }
     }
 

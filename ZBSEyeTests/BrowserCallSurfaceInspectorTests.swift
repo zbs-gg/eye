@@ -46,6 +46,78 @@ final class BrowserCallSurfaceInspectorTests: XCTestCase {
         XCTAssertEqual(result.sessionDiscriminator?.count, 64)
     }
 
+    func testClassifiesZoomWebFromChromeWindowProxyWithoutAXWebArea() {
+        let route = "https://app.zoom.us/wc/12345678901/start?fromPWA=1"
+        let result = inspect([
+            zoomWindow("Zoom Meeting Example", document: route),
+            zoomWindowProxy(document: route),
+            .init(role: "AXButton"),
+        ])
+
+        XCTAssertTrue(result.isTrustedCall)
+        XCTAssertEqual(result.service, .zoom)
+        XCTAssertEqual(result.sessionDiscriminator?.count, 64)
+    }
+
+    func testZoomWindowProxyRequiresOneMatchingGroupAndACompleteTraversal() {
+        let route = "https://app.zoom.us/wc/12345678901/start"
+        let missingProxy = inspect([
+            zoomWindow("Zoom Meeting Example", document: route),
+        ])
+        let mismatchedProxy = inspect([
+            zoomWindow("Zoom Meeting Example", document: route),
+            zoomWindowProxy(document: "https://app.zoom.us/wc/10987654321/start"),
+        ])
+        let duplicateProxy = inspect([
+            zoomWindow("Zoom Meeting Example", document: route),
+            zoomWindowProxy(document: route),
+            zoomWindowProxy(document: route),
+        ])
+        let failedTraversal = BrowserCallSurfaceInspector.inspect(snapshots: [
+            .init(
+                nodes: [
+                    zoomWindow("Zoom Meeting Example", document: route),
+                    zoomWindowProxy(document: route),
+                ],
+                traversalSucceeded: false
+            ),
+        ])
+
+        XCTAssertFalse(missingProxy.isTrustedCall)
+        XCTAssertFalse(mismatchedProxy.isTrustedCall)
+        XCTAssertFalse(duplicateProxy.isTrustedCall)
+        XCTAssertFalse(failedTraversal.isTrustedCall)
+    }
+
+    func testZoomWindowProxyRejectsLookalikesAndNestedOrToolbarGroups() {
+        let route = "https://app.zoom.us/wc/12345678901/start"
+        let falsePositiveWindows: [[BrowserCallSurfaceInspector.NodeSnapshot]] = [
+            [
+                zoomWindow("My Zoom Meeting notes", document: route),
+                zoomWindowProxy(document: route),
+            ],
+            [
+                zoomWindow(
+                    "Zoom Meeting Example",
+                    document: "https://app.zoom.us.evil.example/wc/12345678901/start"
+                ),
+                zoomWindowProxy(document: route),
+            ],
+            [
+                zoomWindow("Zoom Meeting Example", document: route),
+                zoomWindowProxy(document: route, inBrowserChrome: true),
+            ],
+            [
+                zoomWindow("Zoom Meeting Example", document: route),
+                zoomWindowProxy(document: route, inBrowserWebContent: true),
+            ],
+        ]
+
+        for (index, nodes) in falsePositiveWindows.enumerated() {
+            XCTAssertFalse(inspect(nodes).isTrustedCall, "proxy false-positive fixture \(index)")
+        }
+    }
+
     func testZoomWindowFallbackRejectsPrejoinLookalikeAndLooseTitles() {
         let falsePositiveWindows: [[BrowserCallSurfaceInspector.NodeSnapshot]] = [
             [
@@ -722,8 +794,22 @@ final class BrowserCallSurfaceInspectorTests: XCTestCase {
     }
 
     private func zoomWindow(
-        _ title: String
+        _ title: String,
+        document: String? = nil
     ) -> BrowserCallSurfaceInspector.NodeSnapshot {
-        .init(role: "AXWindow", title: title)
+        .init(role: "AXWindow", title: title, document: document)
+    }
+
+    private func zoomWindowProxy(
+        document: String,
+        inBrowserChrome: Bool = false,
+        inBrowserWebContent: Bool = false
+    ) -> BrowserCallSurfaceInspector.NodeSnapshot {
+        .init(
+            role: "AXGroup",
+            document: document,
+            inBrowserChrome: inBrowserChrome,
+            inBrowserWebContent: inBrowserWebContent
+        )
     }
 }
