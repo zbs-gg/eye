@@ -83,6 +83,11 @@ enum BrowserCallSurfaceInspector {
         /// therefore uses the exact in-call window marker plus a session-bearing `/wc/.../start`
         /// document, then retains that document root as the opaque continuity capability.
         case zoomInCallDocument
+        /// Some Chrome builds expose no AXWebArea at all. The active tab is represented by an
+        /// AXWindow plus one corroborating AXGroup carrying the same document URL. Admission keeps
+        /// the exact window as an opaque capability; a later tab switch is ambiguity, not proof
+        /// that the call ended, while the original CoreAudio carriers remain alive.
+        case zoomWindowProxy
     }
 
     enum RetainedDocumentState: Equatable, Sendable {
@@ -181,7 +186,8 @@ enum BrowserCallSurfaceInspector {
         let sessionDiscriminator: String
         let allowsCrossRootReconciliation: Bool
         let controlNodeIndex: Int
-        let webContentRootID: Int
+        let webContentRootID: Int?
+        let retainedRootNodeIndex: Int?
         let retainedSurfaceKind: RetainedSurfaceKind
     }
 
@@ -482,9 +488,40 @@ enum BrowserCallSurfaceInspector {
                     return
                 }
                 guard rootRead.topologySucceeded,
-                      !reachedDeadline(deadline),
-                      normalized(rootRead.snapshot.role) == "axwebarea"
+                      !reachedDeadline(deadline)
                 else {
+                    continuation.resume(returning: .unknown)
+                    return
+                }
+
+                if entry.retainedSurfaceKind == .zoomWindowProxy {
+                    // This root is Chrome's active-tab proxy, not a hidden stable web-content
+                    // tree. Navigating away can mean only that the call became a background tab;
+                    // report invalidation so unchanged CoreAudio carriers preserve the admitted
+                    // call, while a real AX read failure remains bounded as `.unknown`.
+                    guard normalized(rootRead.snapshot.role)
+                        == normalized(kAXWindowRole as String),
+                        isZoomMeetingWindow(rootRead.snapshot)
+                    else {
+                        continuation.resume(returning: .invalidated)
+                        return
+                    }
+                    switch retainedDocumentState(
+                        rawDocument: rootRead.snapshot.authoritativePageURL,
+                        expectedService: entry.service,
+                        expectedSessionDiscriminator: entry.sessionDiscriminator
+                    ) {
+                    case .same:
+                        continuation.resume(returning: .active)
+                    case .replaced:
+                        continuation.resume(returning: .invalidated)
+                    case .unknown:
+                        continuation.resume(returning: .unknown)
+                    }
+                    return
+                }
+
+                guard normalized(rootRead.snapshot.role) == "axwebarea" else {
                     continuation.resume(returning: .unknown)
                     return
                 }
@@ -685,7 +722,7 @@ enum BrowserCallSurfaceInspector {
                 nextNode[$0] < boundedWindows[$0].nodes.count
             }
 
-        // A full-window second pass is retained for deterministic accounting, but 0.5.0 never
+        // A full-window second pass is retained for deterministic accounting, but 0.5.1 never
         // admits an automatic call from the omnibox alone. AXURL/AXDocument on the exact retained
         // AXWebArea is required so a hidden/rebuilt toolbar can be rebound without allowing a
         // different tab to inherit the session.
@@ -879,16 +916,18 @@ enum BrowserCallSurfaceInspector {
                         timedOut = true
                         break traversal
                     }
-                    let role = normalized(node.role)
-                    let isToolbar = role == normalized(kAXToolbarRole as String)
-                    let isWebArea = role == "axwebarea"
-                    if isWebArea,
-                       pendingNode.webContentRootID == nil,
+                    if pendingNode.webContentRootID == nil,
                        excludingWebContentRoots.contains(where: {
                            CFEqual($0, pendingNode.element)
                        }) {
+                        // Suppressed leases may retain either a top-level AXWebArea or Chrome's
+                        // AXWindow proxy. Skip the whole retained subtree in both topologies so a
+                        // fresh token cannot bypass session-scoped "Not a call" suppression.
                         continue
                     }
+                    let role = normalized(node.role)
+                    let isToolbar = role == normalized(kAXToolbarRole as String)
+                    let isWebArea = role == "axwebarea"
                     var webContentRootID = pendingNode.webContentRootID
                     var webContentTreeDepth = pendingNode.webContentTreeDepth
                     if isWebArea, webContentRootID == nil {
@@ -934,15 +973,18 @@ enum BrowserCallSurfaceInspector {
                         guard traversals[windowIndex].elements.indices.contains(
                             match.controlNodeIndex
                         ),
-                        let webContentRoot =
-                            traversals[windowIndex].webContentRoots[match.webContentRootID]
+                        let retainedRoot = retainedRootElement(
+                            for: match,
+                            elements: traversals[windowIndex].elements,
+                            webContentRoots: traversals[windowIndex].webContentRoots
+                        )
                         else {
                             traversals[windowIndex].hadAXFailure = true
                             continue
                         }
                         let token = controlHandles.insert(
                             element: traversals[windowIndex].elements[match.controlNodeIndex],
-                            webContentRoot: webContentRoot,
+                            webContentRoot: retainedRoot,
                             service: match.service,
                             sessionDiscriminator: match.sessionDiscriminator,
                             retainedSurfaceKind: match.retainedSurfaceKind
@@ -1037,7 +1079,7 @@ enum BrowserCallSurfaceInspector {
         )
 
         // See the deterministic seam above. The address bar is observed only as bounded browser
-        // chrome evidence; it is never sufficient for automatic admission in 0.5.0.
+        // chrome evidence; it is never sufficient for automatic admission in 0.5.1.
         if !timedOut {
             for traversal in traversals
             where traversal.nextIndex >= traversal.pending.count
@@ -1056,14 +1098,17 @@ enum BrowserCallSurfaceInspector {
                         break
                     }
                     guard traversal.elements.indices.contains(match.controlNodeIndex),
-                          let webContentRoot =
-                            traversal.webContentRoots[match.webContentRootID]
+                          let retainedRoot = retainedRootElement(
+                            for: match,
+                            elements: traversal.elements,
+                            webContentRoots: traversal.webContentRoots
+                          )
                     else {
                         continue
                     }
                     let token = controlHandles.insert(
                         element: traversal.elements[match.controlNodeIndex],
-                        webContentRoot: webContentRoot,
+                        webContentRoot: retainedRoot,
                         service: match.service,
                         sessionDiscriminator: match.sessionDiscriminator,
                         retainedSurfaceKind: match.retainedSurfaceKind
@@ -1468,6 +1513,21 @@ enum BrowserCallSurfaceInspector {
 
     // MARK: Pure classification
 
+    private static func retainedRootElement(
+        for match: Match,
+        elements: [AXUIElement],
+        webContentRoots: [Int: AXUIElement]
+    ) -> AXUIElement? {
+        if let nodeIndex = match.retainedRootNodeIndex,
+           elements.indices.contains(nodeIndex) {
+            return elements[nodeIndex]
+        }
+        if let rootID = match.webContentRootID {
+            return webContentRoots[rootID]
+        }
+        return nil
+    }
+
     private static func classifyWindow(
         _ nodes: [NodeSnapshot],
         allowAddressBarFallback: Bool = false,
@@ -1521,6 +1581,45 @@ enum BrowserCallSurfaceInspector {
         let topLevelDocuments = documents.filter {
             $0.rootID != nil && $0.depth == 0
         }
+
+        // Chrome can expose the active Zoom tab without any AXWebArea. In that topology the
+        // root AXWindow and one non-toolbar AXGroup both carry the same authoritative document.
+        // Require both copies, the exact in-call route, the root title marker, a complete bounded
+        // traversal, and no competing web-content roots. CoreAudio's fresh input+output gate is
+        // still enforced by BrowserCallAdmission before this match can start a recording.
+        if allowZoomWindowFallback,
+           topLevelDocuments.isEmpty,
+           let rootWindow = nodes.first,
+           isZoomMeetingWindow(rootWindow),
+           let rootDocument = zoomInCallDocument(from: rootWindow)
+        {
+            let proxies = nodes.enumerated().compactMap {
+                index, node -> (index: Int, document: ZoomInCallDocument)? in
+                guard index != 0,
+                      normalized(node.role) == "axgroup",
+                      !node.inBrowserChrome,
+                      !node.inBrowserWebContent,
+                      node.webContentRootID == nil,
+                      node.webContentTreeDepth == nil,
+                      let document = zoomInCallDocument(from: node),
+                      document.discriminator == rootDocument.discriminator
+                else { return nil }
+                return (index, document)
+            }
+            if proxies.count == 1 {
+                return Match(
+                    origin: rootDocument.origin,
+                    service: .zoom,
+                    sessionDiscriminator: rootDocument.discriminator,
+                    allowsCrossRootReconciliation: true,
+                    controlNodeIndex: 0,
+                    webContentRootID: nil,
+                    retainedRootNodeIndex: 0,
+                    retainedSurfaceKind: .zoomWindowProxy
+                )
+            }
+        }
+
         if !topLevelDocuments.isEmpty {
             for (rootID, controls) in controlsByRoot {
                 let authoritativeDocuments = topLevelDocuments.filter {
@@ -1560,6 +1659,7 @@ enum BrowserCallSurfaceInspector {
                         ),
                         controlNodeIndex: control.index,
                         webContentRootID: rootID,
+                        retainedRootNodeIndex: nil,
                         retainedSurfaceKind: .hardControl
                     )
                 }
@@ -1595,6 +1695,7 @@ enum BrowserCallSurfaceInspector {
                         allowsCrossRootReconciliation: true,
                         controlNodeIndex: candidate.0.nodeIndex,
                         webContentRootID: rootID,
+                        retainedRootNodeIndex: nil,
                         retainedSurfaceKind: .zoomInCallDocument
                     )
                 }
@@ -1638,7 +1739,27 @@ enum BrowserCallSurfaceInspector {
             ),
             controlNodeIndex: control.index,
             webContentRootID: onlyRootID,
+            retainedRootNodeIndex: nil,
             retainedSurfaceKind: .hardControl
+        )
+    }
+
+    private struct ZoomInCallDocument {
+        let origin: TrustedCallOrigin
+        let discriminator: String
+    }
+
+    private static func zoomInCallDocument(
+        from node: NodeSnapshot
+    ) -> ZoomInCallDocument? {
+        guard let rawURL = node.authoritativePageURL,
+              let origin = TrustedCallOrigin.normalize(rawURL),
+              service(for: origin) == .zoom,
+              isZoomInCallRoute(rawURL)
+        else { return nil }
+        return ZoomInCallDocument(
+            origin: origin,
+            discriminator: sessionDiscriminator(rawURL: rawURL, origin: origin)
         )
     }
 

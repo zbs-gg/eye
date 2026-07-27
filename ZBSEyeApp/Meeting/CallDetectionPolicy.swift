@@ -26,7 +26,7 @@ enum CallSurfaceCatalog {
         "org.telegram",
     ]
 
-    /// Browser roots qualified for OS-only call detection in 0.5.0.
+    /// Browser roots qualified for OS-only call detection in 0.5.1.
     ///
     /// Helper bundles are intentionally absent. The CoreAudio adapter walks each helper PID to one
     /// of these owning application roots before it reports evidence.

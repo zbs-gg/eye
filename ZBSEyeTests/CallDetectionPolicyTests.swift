@@ -123,7 +123,7 @@ final class CallDetectionPolicyTests: XCTestCase {
             XCTAssertEqual(
                 policy.reduce(browser(bundleID: bundleID, origin: "https://meet.google.com/abc")),
                 .none,
-                "\(bundleID) is manual-only in 0.5.0"
+                "\(bundleID) is manual-only in 0.5.1"
             )
         }
     }
