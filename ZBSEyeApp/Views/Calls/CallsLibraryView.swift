@@ -41,7 +41,7 @@ struct CallsLibraryView: View {
                     } label: {
                         CallLibraryRow(
                             call: call,
-                            modelState: env.speechModel.snapshot.state
+                            modelState: env.speechModel.effectiveState
                         )
                     }
                     .buttonStyle(.plain)

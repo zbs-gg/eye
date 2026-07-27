@@ -17,8 +17,31 @@ struct WhisperHelperJobManifest: Codable, Sendable, Equatable {
     let callGeneration: Int
     let modelRelativePath: String
     let modelSHA256: String
+    let handyBackend: HandySpeechBackendReference?
     let resultRelativePath: String
     let audioRanges: [WhisperHelperAudioRange]
+
+    init(
+        formatVersion: Int,
+        jobID: String,
+        callID: Int64,
+        callGeneration: Int,
+        modelRelativePath: String,
+        modelSHA256: String,
+        handyBackend: HandySpeechBackendReference? = nil,
+        resultRelativePath: String,
+        audioRanges: [WhisperHelperAudioRange]
+    ) {
+        self.formatVersion = formatVersion
+        self.jobID = jobID
+        self.callID = callID
+        self.callGeneration = callGeneration
+        self.modelRelativePath = modelRelativePath
+        self.modelSHA256 = modelSHA256
+        self.handyBackend = handyBackend
+        self.resultRelativePath = resultRelativePath
+        self.audioRanges = audioRanges
+    }
 }
 
 struct WhisperHelperPreparedInput: Sendable, Equatable {
@@ -202,7 +225,8 @@ struct WhisperHelperCommand {
 
         let expectedModelPath = "ai/speech/v1/\(expectedModel.relativePath)"
         guard decoded.modelRelativePath == expectedModelPath,
-              decoded.modelSHA256 == expectedModel.sha256 else {
+              decoded.modelSHA256 == expectedModel.sha256,
+              decoded.handyBackend == nil else {
             throw WhisperHelperCommandError.invalidModelIdentity
         }
         let resolvedModel: URL

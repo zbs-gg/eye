@@ -12,6 +12,17 @@ final class CallPresentationStateTests: XCTestCase {
         XCTAssertFalse(state.canRetry)
     }
 
+    func testModelDiscoveryDoesNotFlashADuplicateInstallOffer() {
+        let state = CallPresentationState.resolve(
+            evidence: evidence(callState: .finalizing, finalJobState: .pending),
+            modelState: .verifying
+        )
+
+        XCTAssertEqual(state.kind, .transcribing)
+        XCTAssertEqual(state.title, "Preparing local transcription")
+        XCTAssertFalse(state.canInstallModel)
+    }
+
     func testProjectionIsExplicitlyProvisionalWhileFinalRuns() {
         let state = CallPresentationState.resolve(
             evidence: evidence(

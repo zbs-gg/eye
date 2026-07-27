@@ -21,6 +21,8 @@ struct CallDetailView: View {
     @State private var trimInProgress = false
     @State private var showTrimConfirmation = false
     @State private var playback = CallPlaybackStore()
+    @State private var waveform = CallWaveformStore()
+    @State private var waveformLoaded = false
 
     var body: some View {
         ScrollView {
@@ -44,12 +46,12 @@ struct CallDetailView: View {
                 }
             }
             .padding(24)
-            .frame(maxWidth: 720, alignment: .leading)
+            .frame(maxWidth: 1_040, alignment: .leading)
         }
         .navigationTitle("Call")
         .task(id: CallDetailRefreshKey(
             callID: callID,
-            modelState: env.speechModel.snapshot.state,
+            modelState: env.speechModel.effectiveState,
             speakerModelState: env.speakerModel.snapshot.state,
             retryGeneration: retryGeneration
         )) {
@@ -84,20 +86,20 @@ struct CallDetailView: View {
         } message: {
             Text("Only the selected interval moves. The original microphone/system source stays unchanged.")
         }
-        .alert("Permanently trim this range?", isPresented: $showTrimConfirmation) {
+        .alert("Delete the selected audio?", isPresented: $showTrimConfirmation) {
             Button("Cancel", role: .cancel) {}
-            Button("Trim permanently", role: .destructive) {
+            Button("Delete permanently", role: .destructive) {
                 if let evidence { Task { await trim(evidence: evidence) } }
             }
         } message: {
-            Text("Audio and derived transcript/speaker evidence inside the selected range will be physically removed. This cannot be undone.")
+            Text("\(clock(trimStartSeconds))–\(clock(trimEndSeconds)) (\(clock(trimEndSeconds - trimStartSeconds))) will be physically removed, including derived transcript and speaker evidence. This cannot be undone.")
         }
     }
 
     private func header(_ evidence: CallEvidencePage) -> some View {
         let presentation = CallPresentationState.resolve(
             evidence: evidence,
-            modelState: env.speechModel.snapshot.state
+            modelState: env.speechModel.effectiveState
         )
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
@@ -415,37 +417,118 @@ struct CallDetailView: View {
     private func trimSection(_ evidence: CallEvidencePage) -> some View {
         if let endTs = evidence.call.endTs {
             let total = max(1, Double(endTs - evidence.call.startTs) / 1_000)
-            VStack(alignment: .leading, spacing: 10) {
+            let microphoneAvailable = sourceAvailable(.me, in: evidence)
+            let systemAvailable = sourceAvailable(.system, in: evidence)
+            VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Trim recording").font(.headline)
+                    Text("Edit recording").font(.headline)
                     Spacer()
-                    Text("\(clock(trimStartSeconds))–\(clock(trimEndSeconds))")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    if trimEndSeconds - trimStartSeconds >= 0.5 {
+                        Text("Selected \(clock(trimStartSeconds))–\(clock(trimEndSeconds)) · \(clock(trimEndSeconds - trimStartSeconds))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                Text("Choose the exact unwanted range. Recording outside it stays intact.")
+                Text("Drag across the waveform, then refine either edge. Only audio inside the blue range is deleted; the rest of the call keeps its original time.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                VStack(spacing: 4) {
-                    Slider(value: $trimStartSeconds, in: 0...total, step: 1) {
-                        Text("Trim start")
+
+                if waveform.loading {
+                    ProgressView("Building a lightweight preview…")
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, minHeight: 92)
+                } else {
+                    CallRangeWaveformView(
+                        totalSeconds: total,
+                        microphone: waveform.snapshot.microphone,
+                        system: waveform.snapshot.system,
+                        startSeconds: $trimStartSeconds,
+                        endSeconds: $trimEndSeconds
+                    )
+                    HStack(spacing: 14) {
+                        if microphoneAvailable {
+                            Label("You", systemImage: "mic.fill")
+                                .foregroundStyle(.red)
+                        }
+                        if systemAvailable {
+                            Label("Others", systemImage: "speaker.wave.2.fill")
+                                .foregroundStyle(.blue)
+                        }
+                        if let waveformError = waveform.errorMessage {
+                            Label(waveformError, systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
+                        }
                     }
-                    Slider(value: $trimEndSeconds, in: 0...total, step: 1) {
-                        Text("Trim end")
+                    .font(.caption)
+                }
+
+                HStack(spacing: 8) {
+                    Button("Last minute") { selectTail(seconds: 60, total: total) }
+                    if total > 5 * 60 {
+                        Button("Last 5 minutes") { selectTail(seconds: 5 * 60, total: total) }
+                    }
+                    Spacer()
+                    if trimEndSeconds - trimStartSeconds >= 0.5,
+                       let service = env.callEvidenceQueryService,
+                       let mediaRoot = env.storage?.mediaDirectory {
+                        if playback.isPlaying {
+                            Button("Stop preview", systemImage: "stop.fill") { playback.stop() }
+                        } else {
+                            if microphoneAvailable {
+                                Button("Preview you", systemImage: "mic.fill") {
+                                    playback.playRange(
+                                        callID: callID,
+                                        source: .me,
+                                        startSeconds: trimStartSeconds,
+                                        endSeconds: trimEndSeconds,
+                                        service: service,
+                                        mediaRoot: mediaRoot
+                                    )
+                                }
+                            }
+                            if systemAvailable {
+                                Button("Preview others", systemImage: "speaker.wave.2.fill") {
+                                    playback.playRange(
+                                        callID: callID,
+                                        source: .system,
+                                        startSeconds: trimStartSeconds,
+                                        endSeconds: trimEndSeconds,
+                                        service: service,
+                                        mediaRoot: mediaRoot
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
-                Button("Trim selected range…", role: .destructive) {
-                    showTrimConfirmation = true
+
+                HStack {
+                    Spacer()
+                    Button("Delete selected audio…", role: .destructive) {
+                        playback.stop()
+                        showTrimConfirmation = true
+                    }
                 }
-                .disabled(trimInProgress || trimEndSeconds - trimStartSeconds < 1)
+                .buttonStyle(.bordered)
+                .disabled(trimInProgress || trimEndSeconds - trimStartSeconds < 0.5)
             }
             .onAppear {
                 guard !trimInitialized else { return }
-                trimStartSeconds = max(0, total - min(5 * 60, total))
-                trimEndSeconds = total
+                trimStartSeconds = 0
+                trimEndSeconds = 0
                 trimInitialized = true
             }
         }
+    }
+
+    private func sourceAvailable(_ source: CallAudioSource, in evidence: CallEvidencePage) -> Bool {
+        evidence.sourceSpans.contains { $0.source == source && $0.availability == .available }
+    }
+
+    private func selectTail(seconds: Double, total: Double) {
+        playback.stop()
+        trimStartSeconds = max(0, total - min(seconds, total))
+        trimEndSeconds = total
     }
 
     private func monitor() async {
@@ -454,7 +537,7 @@ struct CallDetailView: View {
             guard let evidence else { return }
             let presentation = CallPresentationState.resolve(
                 evidence: evidence,
-                modelState: env.speechModel.snapshot.state
+                modelState: env.speechModel.effectiveState
             )
             let waitingForSpeakers = env.speakerModel.snapshot.state == .ready
                 && evidence.call.state != .recording
@@ -476,6 +559,17 @@ struct CallDetailView: View {
             }
             let revisionChanged = evidence?.preferredRevision?.id != page.preferredRevision?.id
             evidence = page
+            if !waveformLoaded,
+               let endTs = page.call.endTs,
+               let mediaRoot = env.storage?.mediaDirectory {
+                waveformLoaded = true
+                await waveform.load(
+                    callID: callID,
+                    durationSeconds: max(1, Double(endTs - page.call.startTs) / 1_000),
+                    service: service,
+                    mediaRoot: mediaRoot
+                )
+            }
             if let envelope = try await service.envelope(callID: callID) {
                 speakerRevision = envelope.preferredSpeakerRevision
                 speakerStatus = envelope.speakerStatus
@@ -542,6 +636,8 @@ struct CallDetailView: View {
             let to = evidence.call.startTs + Int64(trimEndSeconds * 1_000)
             _ = try await service.redact(callID: callID, fromMs: from, toMs: to, nowMs: nowMs())
             trimInitialized = false
+            waveformLoaded = false
+            waveform = CallWaveformStore()
             retryGeneration &+= 1
             await refresh(resetSegments: true)
         } catch {

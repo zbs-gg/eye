@@ -16,11 +16,57 @@ enum CallTranscriptWorkerError: Error, Sendable, Equatable {
     case helperFailed
 }
 
+enum CallTranscriptBackend: Sendable, Equatable {
+    case builtIn(WhisperModelManifest)
+    case handy(HandySpeechBackendReference)
+
+    var modelRelativePath: String {
+        switch self {
+        case let .builtIn(manifest): "ai/speech/v1/\(manifest.relativePath)"
+        case .handy: "external/handy"
+        }
+    }
+
+    var modelIdentitySHA256: String {
+        switch self {
+        case let .builtIn(manifest): manifest.sha256
+        case let .handy(reference): reference.identitySHA256
+        }
+    }
+
+    var runtimeRelease: String {
+        switch self {
+        case let .builtIn(manifest): manifest.runtimeRelease
+        case let .handy(reference): reference.runtimeRelease
+        }
+    }
+
+    var engine: String {
+        switch self {
+        case .builtIn: "whisper.cpp"
+        case .handy: "handy/transcribe-cpp"
+        }
+    }
+
+    var modelRevision: String {
+        switch self {
+        case let .builtIn(manifest): manifest.revision
+        case let .handy(reference): reference.modelID
+        }
+    }
+
+    var handyReference: HandySpeechBackendReference? {
+        guard case let .handy(reference) = self else { return nil }
+        return reference
+    }
+}
+
 /// Serial durable-job executor. Audio capture never calls into this actor: it
 /// consumes only immutable, finalized spool ranges after their DB watermarks
 /// have been frozen.
 actor CallTranscriptWorker {
     typealias ModelReadiness = @Sendable () async -> Bool
+    typealias BackendProvider = @Sendable () async -> CallTranscriptBackend?
     typealias HelperLauncher = @Sendable (
         _ manifest: WhisperHelperJobManifest,
         _ manifestRelativePath: String,
@@ -36,7 +82,7 @@ actor CallTranscriptWorker {
     private let computeCoordinator: AIComputeCoordinator
     private let dataRoot: URL
     private let modelManifest: WhisperModelManifest
-    private let modelReadiness: ModelReadiness
+    private let backendProvider: BackendProvider
     private let helperLauncher: HelperLauncher
     private let cancelHelper: HelperCancellation
     private let afterSourceTransition: @Sendable () async -> Void
@@ -57,7 +103,9 @@ actor CallTranscriptWorker {
         self.computeCoordinator = computeCoordinator
         self.dataRoot = dataRoot.standardizedFileURL
         self.modelManifest = modelManifest
-        self.modelReadiness = modelReadiness
+        backendProvider = {
+            await modelReadiness() ? .builtIn(modelManifest) : nil
+        }
         self.helperLauncher = helperLauncher
         self.cancelHelper = cancelHelper
         self.afterSourceTransition = afterSourceTransition
@@ -68,29 +116,44 @@ actor CallTranscriptWorker {
         computeCoordinator: AIComputeCoordinator,
         dataRoot: URL,
         modelStore: WhisperModelStore,
+        handyModelStore: HandySpeechModelStore,
         modelManifest: WhisperModelManifest = .largeV3Turbo,
         executablePath: String = Bundle.main.executableURL?.path ?? CommandLine.arguments[0],
         afterSourceTransition: @escaping @Sendable () async -> Void = {}
     ) {
-        let runner = WhisperHelperProcessRunner(executablePath: executablePath)
-        self.init(
-            repository: repository,
-            computeCoordinator: computeCoordinator,
-            dataRoot: dataRoot,
-            modelManifest: modelManifest,
-            modelReadiness: {
-                await modelStore.snapshot().state == .ready
-            },
-            helperLauncher: { manifest, relativePath, root in
-                try await runner.run(
+        let builtInRunner = WhisperHelperProcessRunner(executablePath: executablePath)
+        let handyRunner = HandyWhisperHelperProcessRunner(executablePath: executablePath)
+        self.repository = repository
+        self.computeCoordinator = computeCoordinator
+        self.dataRoot = dataRoot.standardizedFileURL
+        self.modelManifest = modelManifest
+        backendProvider = {
+            if await modelStore.snapshot().state == .ready {
+                return .builtIn(modelManifest)
+            }
+            let external = await handyModelStore.snapshot()
+            guard external.state == .ready, let reference = external.backend else { return nil }
+            return .handy(reference)
+        }
+        helperLauncher = { manifest, relativePath, root in
+            if manifest.handyBackend != nil {
+                return try await handyRunner.run(
                     manifest: manifest,
                     manifestRelativePath: relativePath,
                     dataRoot: root
                 )
-            },
-            cancelHelper: { runner.cancel() },
-            afterSourceTransition: afterSourceTransition
-        )
+            }
+            return try await builtInRunner.run(
+                manifest: manifest,
+                manifestRelativePath: relativePath,
+                dataRoot: root
+            )
+        }
+        cancelHelper = {
+            builtInRunner.cancel()
+            handyRunner.cancel()
+        }
+        self.afterSourceTransition = afterSourceTransition
     }
 
     func runOne(nowMs: Int64 = Int64(Date().timeIntervalSince1970 * 1_000)) async
@@ -169,7 +232,7 @@ actor CallTranscriptWorker {
 
     private func performOne(nowMs: Int64) async -> CallTranscriptWorkerRunResult {
         guard !suspended, !Task.isCancelled else { return .suspended }
-        guard await modelReadiness() else { return .modelUnavailable }
+        guard let backend = await backendProvider() else { return .modelUnavailable }
 
         let lease: AIComputeLease
         do {
@@ -195,12 +258,16 @@ actor CallTranscriptWorker {
                 converted = []
             } else {
                 try Task.checkCancellation()
-                let result = try await runHelperBatch(ranges, evidence: evidence)
+                let result = try await runHelperBatch(
+                    ranges,
+                    evidence: evidence,
+                    backend: backend
+                )
                 converted = try Self.validateAndConvert(
                     result: result,
                     ranges: ranges,
                     evidence: evidence,
-                    modelManifest: modelManifest
+                    backend: backend
                 )
             }
             try Task.checkCancellation()
@@ -217,8 +284,8 @@ actor CallTranscriptWorker {
                 jobID: jobID,
                 segments: segments,
                 language: "und",
-                engine: "whisper.cpp",
-                modelRevision: modelManifest.revision,
+                engine: backend.engine,
+                modelRevision: backend.modelRevision,
                 degraded: degraded,
                 nowMs: Int64(Date().timeIntervalSince1970 * 1_000)
             )
@@ -272,7 +339,8 @@ actor CallTranscriptWorker {
 
     private func runHelperBatch(
         _ ranges: [WhisperHelperAudioRange],
-        evidence: CallTranscriptJobEvidence
+        evidence: CallTranscriptJobEvidence,
+        backend: CallTranscriptBackend
     ) async throws -> WhisperHelperResult {
         let helperID = UUID().uuidString.lowercased()
         let scratch = CallHelperScratchStore(dataRoot: dataRoot)
@@ -310,8 +378,9 @@ actor CallTranscriptWorker {
             jobID: helperID,
             callID: evidence.call.id ?? evidence.job.callId,
             callGeneration: evidence.job.mediaGeneration,
-            modelRelativePath: "ai/speech/v1/\(modelManifest.relativePath)",
-            modelSHA256: modelManifest.sha256,
+            modelRelativePath: backend.modelRelativePath,
+            modelSHA256: backend.modelIdentitySHA256,
+            handyBackend: backend.handyReference,
             resultRelativePath: resultRelativePath,
             audioRanges: ranges
         )
@@ -421,14 +490,14 @@ actor CallTranscriptWorker {
         result: WhisperHelperResult,
         ranges: [WhisperHelperAudioRange],
         evidence: CallTranscriptJobEvidence,
-        modelManifest: WhisperModelManifest
+        backend: CallTranscriptBackend
     ) throws -> [CallTranscriptSegmentDraft] {
         guard result.formatVersion == 1,
               UUID(uuidString: result.jobID)?.uuidString.lowercased() == result.jobID,
               result.callID == evidence.job.callId,
               result.callGeneration == evidence.job.mediaGeneration,
-              result.modelSHA256 == modelManifest.sha256,
-              result.runtimeRelease == modelManifest.runtimeRelease,
+              result.modelSHA256 == backend.modelIdentitySHA256,
+              result.runtimeRelease == backend.runtimeRelease,
               result.segments.count <= 100_000 else {
             throw CallTranscriptWorkerError.invalidHelperResult
         }

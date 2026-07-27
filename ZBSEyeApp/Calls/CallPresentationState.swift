@@ -69,6 +69,14 @@ struct CallPresentationState: Sendable, Equatable {
                 isFinal: true
             )
         }
+        if modelState == .downloading || modelState == .verifying {
+            return state(
+                .transcribing,
+                "Preparing local transcription",
+                "Checking the local speech model. The recording is already safe.",
+                isProvisional: preferred?.kind == .projection
+            )
+        }
         if modelState != .ready {
             return state(
                 .modelRequired,

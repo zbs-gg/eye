@@ -35,6 +35,30 @@ enum CallSurfaceCatalog {
         "company.thebrowser.dia",
         "com.microsoft.edgemac",
     ]
+
+    /// CoreAudio reports the audio process' own bundle id. Chromium commonly exposes a helper
+    /// bundle whose process is not parented by the visible browser app, so ancestry alone cannot
+    /// recover the qualified AX root. Accept only helper namespaces beneath an exact supported
+    /// browser id and map them back to that root; look-alike prefixes remain unsupported.
+    static func canonicalBrowserBundleID(forAudioProcessBundleID value: String?) -> String? {
+        guard let value else { return nil }
+        if browserBundleIDs.contains(value) { return value }
+        if value == "com.google.Chrome.helper"
+            || value.hasPrefix("com.google.Chrome.helper.") {
+            return "com.google.Chrome"
+        }
+        if value == "com.microsoft.edgemac.helper"
+            || value.hasPrefix("com.microsoft.edgemac.helper.") {
+            return "com.microsoft.edgemac"
+        }
+        if value == "company.thebrowser.browser.helper"
+            || value.hasPrefix("company.thebrowser.browser.helper.")
+            || value == "company.thebrowser.dia.helper"
+            || value.hasPrefix("company.thebrowser.dia.helper.") {
+            return "company.thebrowser.dia"
+        }
+        return nil
+    }
 }
 
 struct TrustedCallOrigin: Equatable, Codable, Sendable {

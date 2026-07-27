@@ -1627,10 +1627,19 @@ actor MeetingDetector {
 
             let pid = pidOf(object)
             guard pid > 0 else { continue }
-            let ancestry = processAncestry(
+            let audioProcessBundleID = bundleIDOf(object)
+            var ancestry = processAncestry(
                 for: Int32(pid),
-                bundleIDsByPID: bundleIDsByPID
+                bundleIDsByPID: bundleIDsByPID,
+                audioProcessBundleID: audioProcessBundleID
             )
+            if let browserRoot = CallAudioBrowserRootResolution.rootAncestor(
+                audioProcessBundleID: audioProcessBundleID,
+                runningApplicationBundleIDs: bundleIDsByPID
+            ),
+            !ancestry.contains(where: { $0.pid == browserRoot.pid }) {
+                ancestry.append(browserRoot)
+            }
             guard let owner = CallAudioOwnerResolution.resolve(
                 ancestors: ancestry,
                 currentProcessID: currentPID
@@ -1687,7 +1696,8 @@ actor MeetingDetector {
 
     private static func processAncestry(
         for pid: Int32,
-        bundleIDsByPID: [Int32: String]
+        bundleIDsByPID: [Int32: String],
+        audioProcessBundleID: String?
     ) -> [CallAudioProcessAncestor] {
         var result: [CallAudioProcessAncestor] = []
         var current = pid_t(pid)
@@ -1696,7 +1706,9 @@ actor MeetingDetector {
             result.append(
                 CallAudioProcessAncestor(
                     pid: normalizedPID,
-                    bundleID: bundleIDsByPID[normalizedPID],
+                    bundleID: normalizedPID == pid
+                        ? (audioProcessBundleID ?? bundleIDsByPID[normalizedPID])
+                        : bundleIDsByPID[normalizedPID],
                     executableName: processName(of: current)
                 )
             )
@@ -1775,6 +1787,27 @@ actor MeetingDetector {
             &size,
             &pid
         ) == noErr ? pid : -1
+    }
+
+    private static func bundleIDOf(_ object: AudioObjectID) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyBundleID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectHasProperty(object, &address) else { return nil }
+        var unmanaged: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(
+            object,
+            &address,
+            0,
+            nil,
+            &size,
+            &unmanaged
+        ) == noErr,
+        let value = unmanaged?.takeUnretainedValue() else { return nil }
+        return value as String
     }
 
     private static func parentPid(of pid: pid_t) -> pid_t {

@@ -6,7 +6,7 @@ final class CallAPITests: XCTestCase {
     func testOpenAPIContractDeclaresTypedCallInputsAndResponses() throws {
         let root = try loadCallOpenAPI()
         let info = try XCTUnwrap(root["info"] as? [String: Any])
-        XCTAssertEqual(info["version"] as? String, "0.5.1")
+        XCTAssertEqual(info["version"] as? String, "0.5.2")
         let paths = try XCTUnwrap(root["paths"] as? [String: Any])
         let callPath = try XCTUnwrap(paths["/v1/call"] as? [String: Any])
         let callGet = try XCTUnwrap(callPath["get"] as? [String: Any])

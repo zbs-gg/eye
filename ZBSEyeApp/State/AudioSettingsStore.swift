@@ -19,6 +19,14 @@ enum AudioMode: String, CaseIterable, Codable, Sendable {
     }
 }
 
+enum CallAudioSourcePolicy {
+    static func requestedSources(audioMode: AudioMode) -> CallSourceSelection {
+        audioMode == .off
+            ? .none
+            : CallSourceSelection(me: true, system: true)
+    }
+}
+
 /// Audio/transcription settings. Audio capture is a tri-state `audioMode` (default `.meetingsOnly`):
 /// the engine only runs during detected meetings, saving disk. Persisted in UserDefaults; the actual
 /// start is still gated by permissions (microphone / screen recording).
@@ -37,8 +45,9 @@ final class AudioSettingsStore {
         }
     }
 
-    /// A separate toggle for system audio (calls/video = other people's voices) — so you can record
-    /// your own microphone but not other people's audio. Default ON, but it's a conscious choice.
+    /// A separate toggle for background Timeline system audio. Confirmed/explicit calls request their
+    /// own attributable mic + system legs regardless, while `.off` remains a hard stop for all audio.
+    /// This prevents ordinary playback from waking meeting tools without silently creating mic-only calls.
     var recordSystemAudio: Bool {
         didSet {
             guard recordSystemAudio != oldValue else { return }

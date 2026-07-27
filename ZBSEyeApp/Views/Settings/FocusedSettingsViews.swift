@@ -68,8 +68,8 @@ struct PermissionsSettingsView: View {
                 .foregroundStyle(.secondary)
 
             Divider()
-            Toggle("System Audio", isOn: $audio.recordSystemAudio)
-            Text("Turn this off to keep microphone recording without capturing calls, video, music, or Eye's own playback. Microphone and System Audio are independent.")
+            Toggle("System audio outside calls", isOn: $audio.recordSystemAudio)
+            Text("Turn this off to keep ordinary playback out of Timeline and avoid waking meeting tools. A confirmed or manually started call still records separate microphone and system tracks; Audio Off disables both.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

@@ -2,6 +2,25 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
+## [0.5.2] — 2026-07-27
+
+### Changed
+- Call editing now uses one waveform range selector with visible handles, exact duration, source-specific
+  previews, and quick tail selection. The destructive action says what it really does: permanently delete
+  the selected audio while keeping the rest of the call on its original timeline.
+- Eye reuses a compatible downloaded Whisper model from an installed Handy app through Handy's local
+  headless file-transcription interface. It does not download or retain a second model copy; Eye's own
+  pinned Whisper remains an explicit fallback when Handy is unavailable.
+- The system-audio preference now controls ordinary Timeline capture. Confirmed and manually started calls
+  request separate microphone and system tracks whenever audio is enabled; `Audio Off` remains a hard stop.
+
+### Fixed
+- Chromium helper audio processes can resolve to their exact visible Chrome, Dia, or Edge root through the
+  CoreAudio process bundle identifier, covering detached helper topology without broad process matching.
+- Calls no longer claim that Whisper is missing when the compatible Handy backend is ready.
+- The permission-free automatic-call banner stays above browser utility surfaces, so “Not a call”
+  remains visible without activating Eye or requesting notification access.
+
 ## [0.5.1] — 2026-07-27
 
 - Fixed Chrome, Dia, and Edge detection for the real Zoom Web client when Chromium exposes no

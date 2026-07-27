@@ -27,7 +27,7 @@ final class CallPlaybackStore {
 
     private enum Item {
         case silence(Int)
-        case chunk(CallPlaybackChunk)
+        case chunk(CallPlaybackChunk, offsetBytes: Int64, byteCount: Int)
     }
 
     func toggle(
@@ -57,7 +57,42 @@ final class CallPlaybackStore {
                 }
                 self.spoolRoot = try SecureCallSpoolRoot(root: mediaRoot)
                 self.source = requestedSource
-                self.items = Self.makeItems(chunks)
+                self.items = Self.makeItems(chunks, sampleRange: nil)
+                try self.startEngine()
+                self.scheduleNext()
+                self.player.play()
+                self.isPlaying = true
+            } catch {
+                self.stop()
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func playRange(
+        callID: Int64,
+        source requestedSource: CallAudioSource,
+        startSeconds: Double,
+        endSeconds: Double,
+        service: CallEvidenceQueryService,
+        mediaRoot: URL
+    ) {
+        let startSample = Int64(max(0, startSeconds) * 16_000)
+        let endSample = Int64(max(startSeconds, endSeconds) * 16_000)
+        guard endSample > startSample else { return }
+        stop()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let chunks = try await service.playbackChunks(callID: callID, source: requestedSource)
+                let rangeItems = Self.makeItems(chunks, sampleRange: startSample..<endSample)
+                guard !rangeItems.isEmpty else {
+                    self.errorMessage = String(localized: "The selected range has no playable audio on this source.")
+                    return
+                }
+                self.spoolRoot = try SecureCallSpoolRoot(root: mediaRoot)
+                self.source = requestedSource
+                self.items = rangeItems
                 try self.startEngine()
                 self.scheduleNext()
                 self.player.play()
@@ -113,19 +148,21 @@ final class CallPlaybackStore {
         case let .silence(count):
             sampleCount = count
             data = nil
-        case let .chunk(chunk):
+        case let .chunk(chunk, offsetBytes, byteCount):
             guard let spoolRoot,
-                  chunk.bytes > 0,
-                  chunk.bytes <= 2 * 160_000,
-                  chunk.bytes.isMultiple(of: 2) else {
+                  offsetBytes >= 0,
+                  byteCount > 0,
+                  byteCount <= 2 * 160_000,
+                  byteCount.isMultiple(of: 2),
+                  offsetBytes + Int64(byteCount) <= chunk.bytes else {
                 throw CallPlaybackError.unsafePath
             }
             let loaded = try spoolRoot.readRange(
                 relativePath: chunk.relativePath,
-                offset: 0,
-                byteCount: Int(chunk.bytes)
+                offset: offsetBytes,
+                byteCount: byteCount
             )
-            guard loaded.count == Int(chunk.bytes) else { throw CallPlaybackError.shortRead }
+            guard loaded.count == byteCount else { throw CallPlaybackError.shortRead }
             sampleCount = loaded.count / 2
             data = loaded
         }
@@ -146,23 +183,50 @@ final class CallPlaybackStore {
         return buffer
     }
 
-    private static func makeItems(_ chunks: [CallPlaybackChunk]) -> [Item] {
+    private static func makeItems(
+        _ chunks: [CallPlaybackChunk],
+        sampleRange requestedRange: Range<Int64>?
+    ) -> [Item] {
         let ordered = chunks.sorted {
             ($0.startSample, $0.endSample, $0.relativePath)
                 < ($1.startSample, $1.endSample, $1.relativePath)
         }
         guard let first = ordered.first else { return [] }
-        var cursor = first.startSample
+        let range = requestedRange ?? first.startSample..<(ordered.map(\.endSample).max() ?? first.endSample)
+        guard !range.isEmpty else { return [] }
+        var cursor = range.lowerBound
         var result: [Item] = []
+        var hasAudio = false
         for chunk in ordered where chunk.endSample > chunk.startSample {
+            let lower = max(range.lowerBound, chunk.startSample)
+            let upper = min(range.upperBound, chunk.endSample)
+            guard lower < upper else { continue }
+            hasAudio = true
             var gap = max(0, chunk.startSample - cursor)
+            gap = min(gap, max(0, range.upperBound - cursor))
             while gap > 0 {
                 let count = Int(min(gap, 160_000))
                 result.append(.silence(count))
                 gap -= Int64(count)
             }
-            result.append(.chunk(chunk))
-            cursor = max(cursor, chunk.endSample)
+            var sliceStart = lower
+            while sliceStart < upper {
+                let sliceEnd = min(upper, sliceStart + 160_000)
+                result.append(.chunk(
+                    chunk,
+                    offsetBytes: (sliceStart - chunk.startSample) * 2,
+                    byteCount: Int((sliceEnd - sliceStart) * 2)
+                ))
+                sliceStart = sliceEnd
+            }
+            cursor = max(cursor, upper)
+        }
+        guard hasAudio else { return [] }
+        var tail = max(0, range.upperBound - cursor)
+        while tail > 0 {
+            let count = Int(min(tail, 160_000))
+            result.append(.silence(count))
+            tail -= Int64(count)
         }
         return result
     }
