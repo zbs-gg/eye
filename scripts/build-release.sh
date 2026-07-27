@@ -16,6 +16,12 @@ fi
 xcodegen generate
 DERIVED="build/DerivedData"
 APP="$DERIVED/Build/Products/Release/ZBS Eye.app"
+xcodebuild -resolvePackageDependencies \
+  -project ZBSEye.xcodeproj -scheme ZBSEye \
+  -derivedDataPath "$DERIVED" \
+  -onlyUsePackageVersionsFromResolvedFile
+TRANSCRIBE_FRAMEWORK="$DERIVED/SourcePackages/artifacts/zbseyewhisper/CTranscribe/TranscribeCpp.xcframework/macos-arm64_x86_64/CTranscribe.framework"
+bash scripts/repair-transcribe-framework.sh "$TRANSCRIBE_FRAMEWORK"
 # Remove the old product BEFORE building: if xcodebuild fails, we must not silently package the previous .app.
 rm -rf "$APP"
 

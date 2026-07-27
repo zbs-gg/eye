@@ -83,6 +83,12 @@ fi
 
 # ── 1. Archive with Xcode-managed capabilities, then export as Developer ID ──
 xcodegen generate
+xcodebuild -resolvePackageDependencies \
+  -project ZBSEye.xcodeproj -scheme ZBSEye \
+  -derivedDataPath "${DERIVED}" \
+  -onlyUsePackageVersionsFromResolvedFile
+TRANSCRIBE_FRAMEWORK="${DERIVED}/SourcePackages/artifacts/zbseyewhisper/CTranscribe/TranscribeCpp.xcframework/macos-arm64_x86_64/CTranscribe.framework"
+bash scripts/repair-transcribe-framework.sh "${TRANSCRIBE_FRAMEWORK}"
 rm -rf "${ARCHIVE}" "${EXPORT_DIR}" "${EXPORT_OPTIONS}"
 set +e
 xcodebuild archive -project ZBSEye.xcodeproj -scheme ZBSEye -configuration Release \
