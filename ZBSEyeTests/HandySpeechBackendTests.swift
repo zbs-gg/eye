@@ -26,6 +26,33 @@ final class HandySpeechBackendTests: XCTestCase {
         )
     }
 
+    func testAcceptsLegacyTopLevelSelectionButRejectsConflictingShapes() throws {
+        let fixture = try HandyCacheFixture(settingsShape: .legacyTopLevel)
+        defer { fixture.cleanup() }
+
+        XCTAssertEqual(
+            HandySpeechModelProbe.discover(
+                settingsURL: fixture.settingsURL,
+                hubRoot: fixture.hubRoot
+            ).state,
+            .ready
+        )
+
+        try JSONSerialization.data(withJSONObject: [
+            "selected_model": fixture.modelID,
+            "settings": [
+                "selected_model": "handy-computer/whisper-other-gguf/model.gguf",
+            ],
+        ]).write(to: fixture.settingsURL)
+        XCTAssertEqual(
+            HandySpeechModelProbe.discover(
+                settingsURL: fixture.settingsURL,
+                hubRoot: fixture.hubRoot
+            ).state,
+            .unavailable
+        )
+    }
+
     func testRejectsChangedRevisionAfterDiscovery() throws {
         let fixture = try HandyCacheFixture()
         defer { fixture.cleanup() }
@@ -109,6 +136,14 @@ final class HandySpeechBackendTests: XCTestCase {
             throw XCTSkip("Set the shared model and audio paths for live qualification")
         }
 
+        let discovered = HandySpeechModelProbe.discover()
+        XCTAssertEqual(discovered.state, .ready)
+        let backend = try XCTUnwrap(discovered.backend)
+        XCTAssertEqual(
+            HandySpeechModelProbe.resolvedModelURL(for: backend),
+            URL(fileURLWithPath: modelPath).resolvingSymlinksInPath()
+        )
+
         let audioFile = try AVAudioFile(forReading: URL(fileURLWithPath: audioPath))
         XCTAssertEqual(audioFile.processingFormat.sampleRate, 16_000)
         XCTAssertEqual(audioFile.processingFormat.channelCount, 1)
@@ -141,6 +176,11 @@ private struct LiveWhisperFixture: Decodable {
 }
 
 private struct HandyCacheFixture {
+    enum SettingsShape {
+        case currentNested
+        case legacyTopLevel
+    }
+
     let root: URL
     let hubRoot: URL
     let settingsURL: URL
@@ -149,7 +189,8 @@ private struct HandyCacheFixture {
     let modelID: String
 
     init(
-        modelID: String = "handy-computer/whisper-large-v3-turbo-gguf/whisper-large-v3-turbo-Q8_0.gguf"
+        modelID: String = "handy-computer/whisper-large-v3-turbo-gguf/whisper-large-v3-turbo-Q8_0.gguf",
+        settingsShape: SettingsShape = .currentNested
     ) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("zbseye-handy-cache-\(UUID().uuidString)", isDirectory: true)
@@ -176,8 +217,13 @@ private struct HandyCacheFixture {
         )
         try revision.write(to: referenceURL, atomically: true, encoding: .utf8)
         try Data(count: 1 * 1_024 * 1_024).write(to: modelURL)
-        try JSONSerialization.data(withJSONObject: ["selected_model": modelID])
-            .write(to: settingsURL)
+        let settings: [String: Any] = switch settingsShape {
+        case .currentNested:
+            ["settings": ["selected_model": modelID]]
+        case .legacyTopLevel:
+            ["selected_model": modelID]
+        }
+        try JSONSerialization.data(withJSONObject: settings).write(to: settingsURL)
     }
 
     func cleanup() {

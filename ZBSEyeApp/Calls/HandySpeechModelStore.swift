@@ -47,11 +47,37 @@ enum HandySpeechModelProbe {
     static let maximumSettingsBytes = 1 * 1_024 * 1_024
     static let minimumModelBytes: Int64 = 1 * 1_024 * 1_024
 
-    private struct Settings: Decodable {
-        let selectedModel: String
+    private struct SelectedModelSettings: Decodable {
+        let selectedModel: String?
 
         enum CodingKeys: String, CodingKey {
             case selectedModel = "selected_model"
+        }
+    }
+
+    /// Handy's current settings store wraps preferences in a `settings`
+    /// object. Older releases wrote the same fields at the top level. Accept
+    /// either immutable shape, but fail closed if both disagree.
+    private struct SettingsEnvelope: Decodable {
+        let selectedModel: String?
+        let settings: SelectedModelSettings?
+
+        enum CodingKeys: String, CodingKey {
+            case selectedModel = "selected_model"
+            case settings
+        }
+
+        var effectiveSelectedModel: String? {
+            switch (selectedModel, settings?.selectedModel) {
+            case let (direct?, nested?) where direct == nested:
+                direct
+            case let (direct?, nil):
+                direct
+            case let (nil, nested?):
+                nested
+            default:
+                nil
+            }
         }
     }
 
@@ -80,10 +106,11 @@ enum HandySpeechModelProbe {
               size > 0,
               size <= maximumSettingsBytes,
               let data = try? Data(contentsOf: settingsURL),
-              let settings = try? JSONDecoder().decode(Settings.self, from: data),
-              settings.selectedModel.lowercased().contains("whisper"),
+              let settings = try? JSONDecoder().decode(SettingsEnvelope.self, from: data),
+              let selectedModel = settings.effectiveSelectedModel,
+              selectedModel.lowercased().contains("whisper"),
               let resolved = resolve(
-                  modelID: settings.selectedModel,
+                  modelID: selectedModel,
                   hubRoot: hubRoot,
                   fileManager: fileManager
               )
