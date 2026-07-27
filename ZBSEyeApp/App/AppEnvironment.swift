@@ -121,6 +121,7 @@ final class AppEnvironment {
     @ObservationIgnored private(set) var llmRouter: LLMRouter?
     @ObservationIgnored private(set) var aiComputeCoordinator: AIComputeCoordinator?
     @ObservationIgnored private(set) var whisperModelStore: WhisperModelStore?
+    @ObservationIgnored private(set) var handySpeechModelStore: HandySpeechModelStore?
     @ObservationIgnored private(set) var speakerDiarizationModelStore: SpeakerDiarizationModelStore?
     @ObservationIgnored private(set) var callTranscriptWorker: CallTranscriptWorker?
     @ObservationIgnored private var callTranscriptWorkerTask: Task<Void, Never>?
@@ -669,6 +670,8 @@ final class AppEnvironment {
                 )
                 let whisperModelStore = WhisperModelStore(root: speechRoot)
                 self.whisperModelStore = whisperModelStore
+                let handySpeechModelStore = HandySpeechModelStore()
+                self.handySpeechModelStore = handySpeechModelStore
                 let speakerDiarizationModelStore = SpeakerDiarizationModelStore(
                     root: StorageLocation.speakerDiarizationModelRoot(under: resolvedDataRoot)
                 )
@@ -678,6 +681,7 @@ final class AppEnvironment {
                     computeCoordinator: computeCoordinator,
                     dataRoot: resolvedDataRoot,
                     modelStore: whisperModelStore,
+                    handyModelStore: handySpeechModelStore,
                     afterSourceTransition: { [weak callAutomationDispatcher] in
                         await callAutomationDispatcher?.kick()
                     }
@@ -722,6 +726,7 @@ final class AppEnvironment {
                 )
                 speechModel.attach(
                     whisperModelStore,
+                    handyModelStore: handySpeechModelStore,
                     suspendWorker: { await callTranscriptWorker.suspendAndDrain() },
                     resumeWorker: { [weak self] in
                         let allowed = await MainActor.run {
@@ -945,8 +950,13 @@ final class AppEnvironment {
                 }
             )
             calls.requestedSources = { [weak self] in
-                guard let self, self.audioSettings.audioMode != .off else { return .none }
-                return CallSourceSelection(me: true, system: self.audioSettings.recordSystemAudio)
+                guard let self else { return .none }
+                // The background system-audio toggle protects the lightweight Timeline path.
+                // A confirmed/explicit call always requests both attributable legs; otherwise a user
+                // can unknowingly save only their own voice and the call recorder lies by omission.
+                return CallAudioSourcePolicy.requestedSources(
+                    audioMode: self.audioSettings.audioMode
+                )
             }
             calls.attach(callCoordinator)
             calls.onManualStartWhileActive = { [weak self] callID in

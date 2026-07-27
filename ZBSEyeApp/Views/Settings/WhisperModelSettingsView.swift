@@ -17,7 +17,8 @@ struct WhisperModelSettingsView: View {
                 Spacer()
                 action
             }
-            if model.snapshot.state == .downloading || model.snapshot.state == .verifying {
+            if !model.usesHandy
+                && (model.snapshot.state == .downloading || model.snapshot.state == .verifying) {
                 ProgressView(
                     value: Double(model.snapshot.receivedBytes),
                     total: Double(max(1, model.snapshot.expectedBytes))
@@ -36,7 +37,14 @@ struct WhisperModelSettingsView: View {
     @ViewBuilder
     private var action: some View {
         let model = env.speechModel
-        switch model.snapshot.state {
+        if model.snapshot.state == .absent, model.handySnapshot.state == .checking {
+            ProgressView().controlSize(.small)
+        } else if model.usesHandy {
+            Label("Ready", systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        } else {
+            switch model.snapshot.state {
         case .absent:
             Button("Install · \(modelSize)") { model.install() }
                 .buttonStyle(.borderedProminent)
@@ -59,11 +67,19 @@ struct WhisperModelSettingsView: View {
             }
         case .downloading, .verifying:
             ProgressView().controlSize(.small)
+            }
         }
     }
 
     private var statusText: String {
-        let snapshot = env.speechModel.snapshot
+        let model = env.speechModel
+        if model.snapshot.state == .absent, model.handySnapshot.state == .checking {
+            return String(localized: "Checking Handy for an existing compatible local Whisper model…")
+        }
+        if model.usesHandy {
+            return String(localized: "Using \(model.effectiveModelName ?? "Whisper") from Handy. Eye stores no second model copy.")
+        }
+        let snapshot = model.snapshot
         return switch snapshot.state {
         case .absent:
             "Optional local Whisper. The base app stays small; recordings wait safely without it."

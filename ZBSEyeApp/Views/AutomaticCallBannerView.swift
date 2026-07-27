@@ -118,7 +118,9 @@ final class AutomaticCallPopupPresenter {
             backing: .buffered,
             defer: true
         )
-        panel.level = .floating
+        // Browsers and web-call surfaces can own floating utility windows of their own. Status-bar
+        // level keeps this short, user-correctable privacy notice visible without activating Eye.
+        panel.level = .statusBar
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]

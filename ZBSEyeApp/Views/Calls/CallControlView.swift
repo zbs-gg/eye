@@ -48,7 +48,7 @@ struct CallControlView: View {
             if let evidence {
                 let presentation = CallPresentationState.resolve(
                     evidence: evidence,
-                    modelState: env.speechModel.snapshot.state
+                    modelState: env.speechModel.effectiveState
                 )
                 Label(presentation.title, systemImage: icon(for: presentation.kind))
                     .font(.caption)
@@ -115,7 +115,7 @@ struct CallControlView: View {
         CallControlRefreshKey(
             phase: env.calls.snapshot.phase,
             callID: env.calls.snapshot.callID,
-            modelState: env.speechModel.snapshot.state,
+            modelState: env.speechModel.effectiveState,
             serviceReady: env.callEvidenceQueryService != nil
         )
     }
@@ -135,7 +135,7 @@ struct CallControlView: View {
             guard let evidence else { return }
             let presentation = CallPresentationState.resolve(
                 evidence: evidence,
-                modelState: env.speechModel.snapshot.state
+                modelState: env.speechModel.effectiveState
             )
             guard [.finalizing, .transcribing, .provisional].contains(presentation.kind) else {
                 return

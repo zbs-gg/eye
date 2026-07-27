@@ -91,6 +91,22 @@ final class WhisperHelperCommandTests: XCTestCase {
         }
     }
 
+    func testBuiltInHelperRejectsHandyBackendMetadata() throws {
+        let fixture = try WhisperHelperFixture(
+            handyBackend: HandySpeechBackendReference(
+                modelID: "handy-computer/whisper-large-v3-turbo-gguf/example.gguf",
+                displayName: "Handy fixture",
+                identitySHA256: String(repeating: "c", count: 64),
+                runtimeRelease: "handy-test/transcribe-cpp"
+            )
+        )
+        defer { fixture.cleanup() }
+
+        XCTAssertThrowsError(try fixture.command()) { error in
+            XCTAssertEqual(error as? WhisperHelperCommandError, .invalidModelIdentity)
+        }
+    }
+
     func testRejectsAudioRangeLargerThanManagedFile() throws {
         let fixture = try WhisperHelperFixture(audioLengthBytes: 10_000)
         defer { fixture.cleanup() }
@@ -166,6 +182,7 @@ private struct WhisperHelperFixture {
     init(
         resultRelativePath suppliedResult: String? = nil,
         modelSHA256 suppliedHash: String? = nil,
+        handyBackend: HandySpeechBackendReference? = nil,
         rangeCount: Int = 1,
         audioLengthBytes: Int64 = 8
     ) throws {
@@ -221,6 +238,7 @@ private struct WhisperHelperFixture {
             callGeneration: 2,
             modelRelativePath: "ai/speech/v1/model/model.bin",
             modelSHA256: suppliedHash ?? modelDigest,
+            handyBackend: handyBackend,
             resultRelativePath: resultRelativePath,
             audioRanges: (0..<rangeCount).map { index in
                 WhisperHelperAudioRange(

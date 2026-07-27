@@ -208,6 +208,39 @@ final class CallAudioProcessEvidenceTests: XCTestCase {
         }
     }
 
+    func testDetachedChromiumAudioHelperResolvesToVisibleQualifiedRoot() {
+        let fixtures = [
+            ("com.google.Chrome.helper.Renderer", "com.google.Chrome", Int32(10)),
+            ("company.thebrowser.browser.helper.Renderer", "company.thebrowser.dia", Int32(20)),
+            ("com.microsoft.edgemac.helper", "com.microsoft.edgemac", Int32(30)),
+        ]
+
+        for (helper, root, pid) in fixtures {
+            XCTAssertEqual(
+                CallAudioBrowserRootResolution.rootAncestor(
+                    audioProcessBundleID: helper,
+                    runningApplicationBundleIDs: [pid: root]
+                ),
+                CallAudioProcessAncestor(pid: pid, bundleID: root, executableName: nil)
+            )
+        }
+    }
+
+    func testDetachedAudioHelperRejectsLookAlikeAndMissingRoot() {
+        XCTAssertNil(
+            CallAudioBrowserRootResolution.rootAncestor(
+                audioProcessBundleID: "com.google.Chrome.evil",
+                runningApplicationBundleIDs: [10: "com.google.Chrome.evil"]
+            )
+        )
+        XCTAssertNil(
+            CallAudioBrowserRootResolution.rootAncestor(
+                audioProcessBundleID: "com.google.Chrome.helper.Renderer",
+                runningApplicationBundleIDs: [20: "company.thebrowser.Browser"]
+            )
+        )
+    }
+
     func testEyeAndSystemVoiceDaemonsAreExcluded() {
         let eye = CallAudioOwnerResolution.resolve(
             ancestors: [

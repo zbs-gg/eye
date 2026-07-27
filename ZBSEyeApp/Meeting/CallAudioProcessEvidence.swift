@@ -17,6 +17,31 @@ struct CallAudioApplicationIdentity: Equatable, Sendable {
     let kind: CallAudioApplicationKind
 }
 
+enum CallAudioBrowserRootResolution {
+    /// Resolve a detached Chromium audio helper to the visible supported browser root exposed by
+    /// NSWorkspace. CoreAudio's process bundle id is the authority for the helper family; the
+    /// returned root still has to be an exact running application bundle id.
+    static func rootAncestor(
+        audioProcessBundleID: String?,
+        runningApplicationBundleIDs: [Int32: String]
+    ) -> CallAudioProcessAncestor? {
+        guard let canonical = CallSurfaceCatalog.canonicalBrowserBundleID(
+            forAudioProcessBundleID: audioProcessBundleID
+        ),
+        let rootPID = runningApplicationBundleIDs
+            .filter({ $0.value == canonical })
+            .map(\.key)
+            .sorted()
+            .first
+        else { return nil }
+        return CallAudioProcessAncestor(
+            pid: rootPID,
+            bundleID: canonical,
+            executableName: nil
+        )
+    }
+}
+
 enum CallAudioOwnerResolution {
     private static let excludedExecutableNames: Set<String> = [
         "replayd",

@@ -102,8 +102,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: "ZBS Eye"
         INFOPLIST_KEY_CFBundleName: "ZBS Eye"
         GENERATE_INFOPLIST_FILE: YES
-        MARKETING_VERSION: "0.5.1"          # CFBundleShortVersionString
-        CURRENT_PROJECT_VERSION: "15"       # CFBundleVersion
+        MARKETING_VERSION: "0.5.2"          # CFBundleShortVersionString
+        CURRENT_PROJECT_VERSION: "16"       # CFBundleVersion
         CODE_SIGN_ENTITLEMENTS: ZBSEyeApp/ZBSEye.entitlements
         # Default — ad-hoc for development. scripts/build-release.sh can use the legacy self-signed
         # "ZBS Eye Dev" identity; distributable releases must use scripts/build-notarized.sh with the
@@ -236,6 +236,8 @@ targets:
       - path: ZBSEyeApp/Calls/WhisperModelManifest.swift
       - path: ZBSEyeApp/Calls/WhisperModelStore.swift
       - path: ZBSEyeApp/Calls/WhisperHelperCommand.swift
+      - path: ZBSEyeApp/Calls/HandySpeechModelStore.swift
+      - path: ZBSEyeApp/Calls/HandyWhisperHelperProcessRunner.swift
       - path: ZBSEyeApp/Connections/ManagedAssetDownloadClient.swift
       - path: ZBSEyeApp/Connections/ManagedAssetVerifier.swift
       - path: ZBSEyeApp/Audio/AudioModels.swift
@@ -262,6 +264,7 @@ targets:
       - path: ZBSEyeApp/State/CallRecordingStore.swift
       - path: ZBSEyeApp/State/CallsStore.swift
       - path: ZBSEyeApp/State/CallPlaybackStore.swift
+      - path: ZBSEyeApp/State/CallWaveformStore.swift
       - path: ZBSEyeApp/State/WorkspaceStore.swift
       - path: ZBSEyeApp/Meeting/CallDetectionPolicy.swift
       - path: ZBSEyeApp/Meeting/CallAudioProcessEvidence.swift
@@ -297,8 +300,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye.tests
-        MARKETING_VERSION: "0.5.1"
-        CURRENT_PROJECT_VERSION: "15"
+        MARKETING_VERSION: "0.5.2"
+        CURRENT_PROJECT_VERSION: "16"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: ZBSEyeTests/Info.plist
         ZBS_EYE_MODEL_DIR: ""

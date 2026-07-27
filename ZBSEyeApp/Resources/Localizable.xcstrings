@@ -10015,6 +10015,90 @@
     "Wait for the false call to finish permanent deletion before moving storage.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Дождитесь окончательного удаления ложного звонка перед переносом хранилища." } } }
     },
+    "A call waveform sample could not be read safely.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Не удалось безопасно прочитать фрагмент дорожки звонка." } } }
+    },
+    "Audio range selector": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Выбор диапазона аудио" } } }
+    },
+    "From %@ to %@": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "С %@ до %@" } } }
+    },
+    "Building a lightweight preview…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Строим лёгкое превью…" } } }
+    },
+    "Checking Handy for an existing compatible local Whisper model…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Проверяем, есть ли в Handy совместимая локальная модель Whisper…" } } }
+    },
+    "Checking the local speech model. The recording is already safe.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Проверяем локальную речевую модель. Запись уже сохранена." } } }
+    },
+    "Delete permanently": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Удалить навсегда" } } }
+    },
+    "Delete selected audio…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Удалить выбранное аудио…" } } }
+    },
+    "Delete the selected audio?": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Удалить выбранное аудио?" } } }
+    },
+    "Drag across the recording to select audio": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Проведите по дорожке, чтобы выбрать аудио" } } }
+    },
+    "Drag across the waveform, then refine either edge. Only audio inside the blue range is deleted; the rest of the call keeps its original time.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Проведите по дорожке, затем уточните границы. Удалится только аудио внутри синего диапазона; остальная часть звонка сохранит исходное время." } } }
+    },
+    "Drag to select audio. Drag either blue edge to refine the range.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Проведите, чтобы выбрать аудио. Потяните любую синюю границу, чтобы уточнить диапазон." } } }
+    },
+    "Edit recording": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Редактировать запись" } } }
+    },
+    "Last 5 minutes": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Последние 5 минут" } } }
+    },
+    "Last minute": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Последняя минута" } } }
+    },
+    "No selection": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Диапазон не выбран" } } }
+    },
+    "Others": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Другие" } } }
+    },
+    "Preparing local transcription": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Готовим локальную расшифровку" } } }
+    },
+    "Selected %@–%@ · %@": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Выбрано %@–%@ · %@" } } }
+    },
+    "Preview others": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Слушать других" } } }
+    },
+    "Preview you": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Слушать себя" } } }
+    },
+    "Stop preview": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Остановить прослушивание" } } }
+    },
+    "System audio outside calls": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Системный звук вне звонков" } } }
+    },
+    "The selected range has no playable audio on this source.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "В выбранном диапазоне нет доступного аудио с этого источника." } } }
+    },
+    "Turn this off to keep ordinary playback out of Timeline and avoid waking meeting tools. A confirmed or manually started call still records separate microphone and system tracks; Audio Off disables both.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Выключите, чтобы обычное воспроизведение не попадало в Таймлайн и не будило приложения для звонков. Подтверждённый или запущенный вручную звонок всё равно пишет микрофон и системный звук раздельно; режим «Аудио выключено» отключает оба источника." } } }
+    },
+    "Using %@ from Handy. Eye stores no second model copy.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Используем %@ из Handy. Eye не хранит вторую копию модели." } } }
+    },
+    "%@–%@ (%@) will be physically removed, including derived transcript and speaker evidence. This cannot be undone.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "%@–%@ (%@) будет физически удалено вместе с производными расшифровкой и данными спикеров. Это нельзя отменить." } } }
+    },
+    "You": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Вы" } } }
+    },
     "%lld blocked": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Заблокировано: %lld" } } }
     },
