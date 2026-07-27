@@ -214,6 +214,35 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertTrue(script.contains("embedded.provisionprofile"))
     }
 
+    func testReleaseBuildsRepairOnlyThePinnedTranscribeFrameworkBeforeCompilation() throws {
+        let notarized = try String(
+            contentsOf: repositoryRoot.appending(path: "scripts/build-notarized.sh"),
+            encoding: .utf8
+        )
+        let local = try String(
+            contentsOf: repositoryRoot.appending(path: "scripts/build-release.sh"),
+            encoding: .utf8
+        )
+        let repair = try String(
+            contentsOf: repositoryRoot.appending(path: "scripts/repair-transcribe-framework.sh"),
+            encoding: .utf8
+        )
+
+        for script in [notarized, local] {
+            XCTAssertTrue(script.contains("-resolvePackageDependencies"))
+            XCTAssertTrue(script.contains("scripts/repair-transcribe-framework.sh"))
+            XCTAssertLessThan(
+                try XCTUnwrap(script.range(of: "scripts/repair-transcribe-framework.sh")?.lowerBound),
+                try XCTUnwrap(script.range(of: "xcodebuild archive")?.lowerBound
+                    ?? script.range(of: "xcodebuild -project")?.lowerBound)
+            )
+        }
+        XCTAssertTrue(repair.contains("9bb4ece5101e4efab3bc584e95a744c7c3ecc80295c463372b43b6d2232af8d5"))
+        XCTAssertTrue(repair.contains("diff -qr \"${CURRENT}\" \"${CANONICAL}\""))
+        XCTAssertTrue(repair.contains("ln -s A \"${CURRENT}\""))
+        XCTAssertTrue(repair.contains("codesign --verify --strict \"${FRAMEWORK}\""))
+    }
+
     func testNotarizedBuildFailsClosedOnTheReleaseSigningContract() throws {
         let url = repositoryRoot.appending(path: "scripts/build-notarized.sh")
         let script = try String(contentsOf: url, encoding: .utf8)
