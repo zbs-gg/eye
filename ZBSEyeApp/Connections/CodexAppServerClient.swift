@@ -92,8 +92,8 @@ struct CodexBinaryInspection: Sendable, Equatable {
 }
 
 enum CodexBinaryPolicy {
-    static let allowedVersion = "0.144.6"
-    static let allowedSHA256 = "80a3933d11a9d13ef806aa24f7bb8afc9169cfe4e9b09d6da6a92922cbde9cff"
+    static let allowedVersion = "0.145.0"
+    static let allowedSHA256 = "1da3f4e0e96028b8a771814293c3033dafd1971f943f6c7e79b0897fe705f590"
     static let allowedTeamIdentifier = "2DC432GLL2"
     static let allowedSigningAuthority = "Developer ID Application: OpenAI OpCo, LLC (2DC432GLL2)"
 
@@ -1857,7 +1857,7 @@ actor CodexAppServerClient: LLMAdapter {
                         "version": "1",
                     ],
                     "capabilities": [
-                        // 0.144.6 gates the empty runtimeWorkspaceRoots attestation behind this
+                        // The qualified Codex protocol gates the empty runtimeWorkspaceRoots attestation behind this
                         // capability. Unknown events still fail closed in the receive loop.
                         "experimentalApi": true,
                         "requestAttestation": false,

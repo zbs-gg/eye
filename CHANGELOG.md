@@ -4,6 +4,8 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 
 ## Unreleased
 
+## [0.7.0] — 2026-08-01
+
 ### Added
 - Read-only MCP clients, including Hermes, can request a bounded, privacy-filtered activity summary with
   deterministic sessions, top apps, and tamper-resistant snapshot pagination.
@@ -13,6 +15,10 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 ### Changed
 - Screen and system-audio capture now recover independently with bounded retries. Search, Ask, Timeline,
   REST, and MCP disclose known coverage gaps so missing history is never presented as proof of inactivity.
+
+### Fixed
+- Codex integration now admits the locally qualified signed `codex-cli 0.145.0` release with its exact
+  native-binary hash while preserving the existing signature and package-layout checks.
 
 ## [0.6.0] — 2026-07-31
 

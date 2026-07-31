@@ -19,7 +19,7 @@ their life to somebody else's cloud. It quietly captures screen moments, accessi
 microphone and optional system audio. Everything is indexed locally and can be explored in the Timeline,
 opened as a call, searched in Ask, or read by your own agent over localhost.
 
-> **Release status:** this README documents ZBS Eye 0.6.0. The download link always points to the latest
+> **Release status:** this README documents ZBS Eye 0.7.0. The download link always points to the latest
 > notarized public build.
 
 <p align="center">
@@ -60,7 +60,7 @@ input and output activity; a bounded Accessibility pass then requires a trusted 
 site-specific Leave or End control. A calendar page, podcast, voice message, look-alike domain, or microphone
 alone is not enough.
 
-| Browser and service | 0.6.0 status |
+| Browser and service | Current status |
 | --- | --- |
 | Chrome, Dia, or Edge × Meet, Zoom Web, or Teams Web | Implemented and fixture-qualified; live-qualified pairs will be named at release |
 | Safari or another browser | Manual Start only |
@@ -83,7 +83,7 @@ not keep a reusable voiceprint and does not show a live transcript.
 Chrome, Dia, Arc, Edge, Brave, Vivaldi, Chromium, and compatible Chromium browsers can add visible rendered
 page text to Timeline. Install [ZBS Eye Browser Bridge from the Chrome Web Store](https://chromewebstore.google.com/detail/zbs-eye-browser-bridge/dancgjefofjomhclpgmilholpnfadolf),
 or use the bundled unpacked fallback from **Settings → Browser Capture**. Copy the separate write-only token,
-then explicitly enable the extension. Safari is not included in 0.6.0.
+then explicitly enable the extension. Safari is not supported.
 
 The extension checks an HMAC proof from the real local Eye process and confirms recording is active before it
 extracts DOM text. It ignores background tabs, password and form values, hidden elements, scripts, and styles.

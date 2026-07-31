@@ -10185,9 +10185,6 @@
     "Chrome Web Store": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Chrome Web Store" } } }
     },
-    "Coming with v0.6.0": {
-      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Появится в v0.6.0" } } }
-    },
     "Reveal bundled extension": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Показать встроенное расширение" } } }
     },

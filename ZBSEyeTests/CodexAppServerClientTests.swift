@@ -11,10 +11,10 @@ final class CodexAppServerClientTests: XCTestCase {
     )
 
     func testQualifiedReleasePinIsExact() {
-        XCTAssertEqual(CodexBinaryPolicy.allowedVersion, "0.144.6")
+        XCTAssertEqual(CodexBinaryPolicy.allowedVersion, "0.145.0")
         XCTAssertEqual(
             CodexBinaryPolicy.allowedSHA256,
-            "80a3933d11a9d13ef806aa24f7bb8afc9169cfe4e9b09d6da6a92922cbde9cff"
+            "1da3f4e0e96028b8a771814293c3033dafd1971f943f6c7e79b0897fe705f590"
         )
     }
 
@@ -50,7 +50,7 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertNoThrow(try CodexBinaryPolicy.validate(trusted, currentUID: 501))
 
         let hostile: [CodexBinaryInspection] = [
-            trusted.with(version: "0.144.7-darwin-arm64"),
+            trusted.with(version: "0.145.1-darwin-arm64"),
             trusted.with(sha256: String(repeating: "0", count: 64)),
             trusted.with(teamIdentifier: "EVILTEAM"),
             trusted.with(signingAuthority: "Developer ID Application: Not OpenAI (EVILTEAM)"),
@@ -1259,7 +1259,7 @@ private struct Fixture {
                 "ephemeral": true,
                 "modelProvider": "openai",
                 "cwd": "/safe/work",
-                "cliVersion": "0.144.6",
+                "cliVersion": "0.145.0",
                 "path": NSNull(),
             ],
             "model": selection.modelID,
@@ -1305,7 +1305,7 @@ private struct Fixture {
 
     func initializeFrame(mutation: String? = nil) -> CodexProcessFrame {
         var result: [String: Any] = [
-            "userAgent": "zbs-eye/0.144.6 (Mac OS; arm64)",
+            "userAgent": "zbs-eye/0.145.0 (Mac OS; arm64)",
             "codexHome": "/safe/home",
             "platformFamily": "unix",
             "platformOs": "macos",
@@ -1686,7 +1686,7 @@ private extension CodexBinaryInspection {
             ownerUID: identity.ownerUID,
             mode: identity.mode,
             packageLayoutIsCanonical: true,
-            version: "0.144.6-darwin-arm64",
+            version: "0.145.0-darwin-arm64",
             sha256: CodexBinaryPolicy.allowedSHA256,
             teamIdentifier: CodexBinaryPolicy.allowedTeamIdentifier,
             signingAuthority: CodexBinaryPolicy.allowedSigningAuthority

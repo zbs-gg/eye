@@ -109,7 +109,7 @@ final class MCPActivitySummaryTests: XCTestCase {
         let object = try jsonObject(json)
         let server = try XCTUnwrap(object["server"] as? [String: Any])
         XCTAssertEqual(server["name"] as? String, "zbseye")
-        XCTAssertEqual(server["version"] as? String, "0.6.0")
+        XCTAssertEqual(server["version"] as? String, "0.7.0")
         XCTAssertEqual(server["profile"] as? String, "memoryReadOnly")
         XCTAssertEqual(object["capture_count"] as? Int, 5)
 
@@ -259,7 +259,7 @@ final class MCPActivitySummaryTests: XCTestCase {
         MCPActivitySummaryService(
             provider: provider,
             profile: .memoryReadOnly,
-            serverVersion: "0.6.0",
+            serverVersion: "0.7.0",
             cursorSecret: Data(repeating: 0x5A, count: 32),
             maximumCaptures: maximumCaptures
         )
