@@ -28,10 +28,17 @@ manifest_string() {
     fail "manifest field $1 is missing or not a string."
 }
 
+manifest_bool() {
+  /usr/bin/plutil -extract "$1" raw -expect bool -o - "${MANIFEST}" 2>/dev/null || \
+    fail "manifest field $1 is missing or not a boolean."
+}
+
 ARTIFACT=$(manifest_string artifact)
 VERSION=$(manifest_string version)
 BUILD_NUMBER=$(manifest_string build)
+BUNDLE_IDENTIFIER=$(manifest_string bundleIdentifier)
 SOURCE_REVISION=$(manifest_string sourceRevision)
+SOURCE_TREE_STATE=$(manifest_string sourceTreeState)
 TEAM_IDENTIFIER=$(manifest_string teamIdentifier)
 MANIFEST_CDHASH=$(manifest_string cdHash)
 MANIFEST_REQUIREMENT=$(manifest_string designatedRequirement)
@@ -40,10 +47,18 @@ EXECUTABLE_SHA256=$(manifest_string executableSHA256)
 NOTARY_STATUS=$(manifest_string notaryStatus)
 NOTARY_SUBMISSION_ID=$(manifest_string notarySubmissionID)
 NOTARY_LOG_SHA256=$(manifest_string notaryLogSHA256)
+NOTARIZED=$(manifest_bool notarized)
+STAPLED=$(manifest_bool stapled)
+GATEKEEPER_ACCEPTED=$(manifest_bool gatekeeperAccepted)
 
 [ "${ARTIFACT}" = "$(basename "${ZIP}")" ] || fail "manifest artifact does not name the supplied ZIP."
 [ "${TEAM_IDENTIFIER}" = "${EXPECTED_TEAM}" ] || fail "manifest TeamIdentifier is not ${EXPECTED_TEAM}."
+[ "${BUNDLE_IDENTIFIER}" = "${EXPECTED_BUNDLE_ID}" ] || fail "manifest bundle identifier is not ${EXPECTED_BUNDLE_ID}."
+[ "${SOURCE_TREE_STATE}" = "clean" ] || fail "manifest source tree state is not clean."
 [ "${NOTARY_STATUS}" = "Accepted" ] || fail "manifest notarization status is not Accepted."
+[ "${NOTARIZED}" = "true" ] || fail "manifest does not attest notarization."
+[ "${STAPLED}" = "true" ] || fail "manifest does not attest stapling."
+[ "${GATEKEEPER_ACCEPTED}" = "true" ] || fail "manifest does not attest Gatekeeper acceptance."
 [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]] || fail "manifest sourceRevision is not a full Git SHA."
 [[ "${ZIP_SHA256}" =~ ^[0-9a-f]{64}$ ]] || fail "manifest ZIP digest is invalid."
 [[ "${EXECUTABLE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || fail "manifest executable digest is invalid."
@@ -82,8 +97,8 @@ ACTUAL_BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${APP}/Conte
 ACTUAL_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${APP}/Contents/Info.plist")
 [ "${ACTUAL_VERSION}" = "${VERSION}" ] && [ "${ACTUAL_BUILD}" = "${BUILD_NUMBER}" ] || \
   fail "app version/build differs from manifest."
-[ "${ACTUAL_BUNDLE_ID}" = "${EXPECTED_BUNDLE_ID}" ] || \
-  fail "actual app bundle identifier is not ${EXPECTED_BUNDLE_ID}."
+[ "${ACTUAL_BUNDLE_ID}" = "${BUNDLE_IDENTIFIER}" ] || \
+  fail "app bundle identifier differs from manifest."
 ACTUAL_EXECUTABLE_SHA256=$(shasum -a 256 "${EXECUTABLE}" | awk '{print $1}')
 [ "${ACTUAL_EXECUTABLE_SHA256}" = "${EXECUTABLE_SHA256}" ] || \
   fail "executable SHA-256 differs from manifest."

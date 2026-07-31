@@ -17,6 +17,7 @@ cd "$(dirname "$0")/.."
 
 NOTARY_PROFILE="${ZBSEYE_NOTARY_PROFILE:-zbseye-notary}"
 EXPECTED_TEAM="44N4NZ86S5"
+EXPECTED_BUNDLE_ID="gg.zbs.eye"
 DERIVED="build/DerivedData"
 ARCHIVE="build/ZBSEye.xcarchive"
 EXPORT_DIR="build/DeveloperIDExport"
@@ -116,8 +117,13 @@ xcodebuild -exportArchive \
 [ -d "${APP}" ] || { echo "❌ \"ZBS Eye.app\" did not build"; exit 1; }
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${APP}/Contents/Info.plist")
 BUILD_NUMBER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${APP}/Contents/Info.plist")
+BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${APP}/Contents/Info.plist")
 [ "${VERSION}" = "${QUALIFIED_VERSION}" ] && [ "${BUILD_NUMBER}" = "${QUALIFIED_BUILD}" ] || {
   echo "❌ Exported app identity ${VERSION} (${BUILD_NUMBER}) differs from preflight-qualified ${QUALIFIED_VERSION} (${QUALIFIED_BUILD})."
+  exit 1
+}
+[ "${BUNDLE_ID}" = "${EXPECTED_BUNDLE_ID}" ] || {
+  echo "❌ Exported app bundle identifier ${BUNDLE_ID} differs from ${EXPECTED_BUNDLE_ID}."
   exit 1
 }
 PROFILE="${APP}/Contents/embedded.provisionprofile"
@@ -303,7 +309,9 @@ rm -f "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert artifact -string "$(basename "${ZIP}")" "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert version -string "${VERSION}" "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert build -string "${BUILD_NUMBER}" "${MANIFEST_PLIST}"
+/usr/bin/plutil -insert bundleIdentifier -string "${BUNDLE_ID}" "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert sourceRevision -string "${SOURCE_REVISION}" "${MANIFEST_PLIST}"
+/usr/bin/plutil -insert sourceTreeState -string clean "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert teamIdentifier -string "${EXPECTED_TEAM}" "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert cdHash -string "${CDHASH}" "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert designatedRequirement -string "${CANDIDATE_REQUIREMENT}" "${MANIFEST_PLIST}"
@@ -316,6 +324,9 @@ rm -f "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert audioInputEntitlement -bool YES "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert appSandbox -bool NO "${MANIFEST_PLIST}"
 /usr/bin/plutil -insert getTaskAllow -bool NO "${MANIFEST_PLIST}"
+/usr/bin/plutil -insert notarized -bool YES "${MANIFEST_PLIST}"
+/usr/bin/plutil -insert stapled -bool YES "${MANIFEST_PLIST}"
+/usr/bin/plutil -insert gatekeeperAccepted -bool YES "${MANIFEST_PLIST}"
 /usr/bin/plutil -convert json -o "${MANIFEST}" "${MANIFEST_PLIST}"
 rm -f "${MANIFEST_PLIST}"
 MANIFEST_PLIST=""

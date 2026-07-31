@@ -297,6 +297,11 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertTrue(script.contains("notaryStatus"))
         XCTAssertTrue(script.contains("notarySubmissionID"))
         XCTAssertTrue(script.contains("notaryLogSHA256"))
+        XCTAssertTrue(script.contains("bundleIdentifier"))
+        XCTAssertTrue(script.contains("sourceTreeState"))
+        XCTAssertTrue(script.contains("notarized"))
+        XCTAssertTrue(script.contains("stapled"))
+        XCTAssertTrue(script.contains("gatekeeperAccepted"))
         XCTAssertTrue(script.contains("--output-format json"))
         XCTAssertTrue(script.contains("xcrun notarytool log"))
         XCTAssertTrue(script.contains("chmod 700"))
@@ -380,7 +385,9 @@ final class ReleaseConfigurationTests: XCTestCase {
             "artifact": zip.lastPathComponent,
             "version": "0.4.3",
             "build": "8",
+            "bundleIdentifier": "gg.zbs.eye",
             "sourceRevision": String(repeating: "a", count: 40),
+            "sourceTreeState": "clean",
             "teamIdentifier": "44N4NZ86S5",
             "cdHash": "candidate-cdhash",
             "designatedRequirement": #"identifier "gg.zbs.eye""#,
@@ -389,6 +396,9 @@ final class ReleaseConfigurationTests: XCTestCase {
             "notaryStatus": "Accepted",
             "notarySubmissionID": "submission-123",
             "notaryLogSHA256": String(repeating: "c", count: 64),
+            "notarized": true,
+            "stapled": true,
+            "gatekeeperAccepted": true,
         ]
         let manifestURL = directory.appending(path: "candidate.manifest.json")
         try JSONSerialization.data(withJSONObject: manifest).write(to: manifestURL)
