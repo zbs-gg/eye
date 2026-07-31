@@ -21,6 +21,7 @@ enum MCPToolPolicy {
         "get_transcript",
         "get_context_at",
         "get_timeline",
+        "get_activity_summary",
         "list_calls",
         "get_call",
         "list_call_bookmarks",

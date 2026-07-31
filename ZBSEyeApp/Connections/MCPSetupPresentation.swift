@@ -8,6 +8,7 @@ struct MCPSetupPresentation: Sendable, Equatable {
     let installedPath: String
     let codexCommand: String
     let claudeCodeCommand: String
+    let hermesCommand: String
     let claudeJSON: String
     let claudeDesktopConfigurationPath: String
     let accessSummary: String
@@ -33,6 +34,14 @@ struct MCPSetupPresentation: Sendable, Equatable {
             Self.shellQuote(executableURL.path),
             profile.cliArgument,
         ].joined(separator: " ")
+        // Hermes always gets the least-privilege profile. Selecting Advanced
+        // may change Codex/Claude payloads, never this command.
+        hermesCommand = [
+            "hermes mcp add zbs-eye --command",
+            Self.shellQuote(executableURL.path),
+            "--args",
+            MCPAccessProfile.memoryReadOnly.cliArgument,
+        ].joined(separator: " ")
         claudeJSON = try Self.makeClaudeJSON(
             executablePath: executableURL.path,
             argument: profile.cliArgument
@@ -40,12 +49,12 @@ struct MCPSetupPresentation: Sendable, Equatable {
         claudeDesktopConfigurationPath = "~/Library/Application Support/Claude/claude_desktop_config.json"
         switch profile {
         case .memoryReadOnly:
-            accessSummary = "Reads local Timeline text, transcripts, and status. It cannot receive screenshot images or control recording."
+            accessSummary = String(localized: "Reads local Timeline text, transcripts, and status. It cannot receive screenshot images or control recording.")
         case .advancedFull:
-            accessSummary = "Also allows screenshot image access and recording control. Use only with an agent you trust."
+            accessSummary = String(localized: "Also allows screenshot image access and recording control. Use only with an agent you trust.")
         }
-        statusLabel = "Ready to connect"
-        restartInstruction = "Restart Codex or Claude after adding this connection or updating ZBS Eye."
+        statusLabel = String(localized: "Ready to connect")
+        restartInstruction = String(localized: "Restart Hermes, Codex, or Claude after adding this connection or updating ZBS Eye.")
     }
 
     private struct ClaudeServer: Encodable {

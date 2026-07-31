@@ -8019,6 +8019,56 @@
         }
       }
     },
+    "Hermes": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hermes"
+          }
+        }
+      }
+    },
+    "Reads local Timeline text, transcripts, and status. It cannot receive screenshot images or control recording.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Читает локальный текст Хронологии, расшифровки и статус. Не может получать снимки экрана или управлять записью."
+          }
+        }
+      }
+    },
+    "Also allows screenshot image access and recording control. Use only with an agent you trust.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Также разрешает доступ к снимкам экрана и управление записью. Используйте только с агентом, которому доверяете."
+          }
+        }
+      }
+    },
+    "Ready to connect": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готово к подключению"
+          }
+        }
+      }
+    },
+    "Restart Hermes, Codex, or Claude after adding this connection or updating ZBS Eye.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перезапустите Hermes, Codex или Claude после добавления подключения или обновления ZBS Eye."
+          }
+        }
+      }
+    },
     "Collects the day's activity from your history, runs it through the AI you chose, and writes a Markdown digest to a folder of your choice.": {
       "localizations": {
         "ru": {

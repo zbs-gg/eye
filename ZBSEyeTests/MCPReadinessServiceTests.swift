@@ -82,7 +82,6 @@ final class MCPReadinessServiceTests: XCTestCase {
             (.outputLimitExceeded, .outputLimitExceeded),
             (.initializationFailed, .initializationFailed),
             (.retrievalFailed, .retrievalFailed),
-            (.noHistory, .noHistory),
         ]
         for (error, expected) in cases {
             let service = Self.service(
@@ -191,34 +190,34 @@ final class MCPReadinessServiceTests: XCTestCase {
         )
     }
 
-    func testRetrievalValidationRequiresTheExactWitnessFrame() throws {
+    func testRetrievalValidationRequiresCanonicalActivityEnvelope() throws {
         let toolResult: [String: Any] = [
             "result": [
                 "tools": MCPToolPolicy.toolNames(for: .memoryReadOnly).map { ["name": $0] },
             ],
         ]
-        let emptyTimelineResult: [String: Any] = [
+        let invalidResult: [String: Any] = [
             "result": [
                 "content": [["type": "text", "text": "There is no frame for this moment."]],
                 "isError": false,
             ],
         ]
         XCTAssertThrowsError(try SystemMCPSelfTester.validatePostInitialize(
-            [2: toolResult, 3: emptyTimelineResult],
-            expectedFrameID: 42
+            [2: toolResult, 3: invalidResult],
+            expectedProfile: .memoryReadOnly
         )) { error in
             XCTAssertEqual(error as? MCPSelfTestError, .retrievalFailed)
         }
 
-        let witnessedResult: [String: Any] = [
+        let activityResult: [String: Any] = [
             "result": [
-                "content": [["type": "text", "text": "Frame #42 at Jul 14, 4:00 AM — Codex"]],
+                "content": [["type": "text", "text": Self.emptyActivitySummaryJSON]],
                 "isError": false,
             ],
         ]
         let validated = try SystemMCPSelfTester.validatePostInitialize(
-            [2: toolResult, 3: witnessedResult],
-            expectedFrameID: 42
+            [2: toolResult, 3: activityResult],
+            expectedProfile: .memoryReadOnly
         )
         XCTAssertTrue(validated.retrievalSucceeded)
     }
@@ -233,6 +232,9 @@ final class MCPReadinessServiceTests: XCTestCase {
         let tools = MCPToolPolicy.toolNames(for: .memoryReadOnly)
             .map { "{\"name\":\"\($0)\"}" }
             .joined(separator: ",")
+        let escapedSummary = Self.emptyActivitySummaryJSON
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
         let script = """
         #!/bin/sh
         IFS= read -r initialize || exit 1
@@ -241,7 +243,7 @@ final class MCPReadinessServiceTests: XCTestCase {
         IFS= read -r list || exit 1
         printf '%s\\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[\(tools)]}}'
         IFS= read -r call || exit 1
-        printf '%s\\n' '{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Frame #42 at fixture moment"}],"isError":false}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"\(escapedSummary)"}],"isError":false}}'
         """
         try Data(script.utf8).write(to: executable, options: .atomic)
         try FileManager.default.setAttributes(
@@ -310,7 +312,7 @@ final class MCPReadinessServiceTests: XCTestCase {
             MCPToolPolicy.toolNames(for: .memoryReadOnly),
             [
                 "search_history", "get_transcript", "get_context_at",
-                "get_timeline", "list_calls", "get_call",
+                "get_timeline", "get_activity_summary", "list_calls", "get_call",
                 "list_call_bookmarks", "read_call_transcript",
                 "get_status", "get_diagnostics",
             ]
@@ -360,6 +362,7 @@ final class MCPReadinessServiceTests: XCTestCase {
         toolNames: MCPToolPolicy.toolNames(for: .memoryReadOnly),
         retrievalSucceeded: true
     )
+    private static let emptyActivitySummaryJSON = #"{"schema_version":1,"server":{"name":"zbseye","version":"fixture","profile":"memoryReadOnly"},"requested_range":{"from_ms":0,"to_ms":0,"from_iso":"1970-01-01T00:00:00.000Z","to_iso":"1970-01-01T00:00:00.000Z"},"observed_range":null,"newest_capture_at":null,"capture_count":0,"top_apps":[],"sessions":[],"truncated":false,"next_cursor":null}"#
 
     private static func jsonObject(_ data: Data) throws -> [String: Any] {
         try XCTUnwrap(

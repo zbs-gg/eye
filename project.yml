@@ -255,11 +255,13 @@ targets:
       - path: ZBSEyeApp/Search/SystemAppFilter.swift
       - path: ZBSEyeApp/Search/DayActivityRepository.swift
       - path: ZBSEyeApp/Search/SceneService.swift
+      - path: ZBSEyeApp/Search/ActivityBlockBuilder.swift
       - path: ZBSEyeApp/Views/Timeline/TimelineSceneDetailState.swift
       - path: ZBSEyeApp/Search/AskScope.swift
       - path: ZBSEyeApp/Search/AskDatabaseRetrieval.swift
       - path: ZBSEyeApp/MCP/MCPHistorySearchRouting.swift
       - path: ZBSEyeApp/MCP/MCPToolPolicy.swift
+      - path: ZBSEyeApp/MCP/MCPActivitySummary.swift
       - path: ZBSEyeApp/Connections/MCPSetupPresentation.swift
       - path: ZBSEyeApp/Connections/MCPReadinessService.swift
       - path: ZBSEyeApp/MCP/MCPCallEvidenceRouting.swift

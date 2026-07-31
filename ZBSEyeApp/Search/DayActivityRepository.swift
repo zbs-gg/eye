@@ -69,6 +69,33 @@ actor DayActivityRepository {
         }
     }
 
+    /// Bounded snapshot read for the public activity-summary surface. The
+    /// limit is enforced by SQLite so a broad MCP range never materializes an
+    /// unbounded amount of history in the helper process.
+    func captures(
+        fromMs: Int64,
+        toMs: Int64,
+        snapshotMaxCaptureID: Int64,
+        limit: Int
+    ) async throws -> [CaptureLite] {
+        try await db.pool.read { dbc in
+            let captures = try Row.fetchAll(dbc, sql: """
+                SELECT c.id AS id, c.ts AS ts, c.appId AS appId,
+                       a.name AS appName, a.bundleId AS bundleId,
+                       c.windowTitle AS windowTitle, c.browserUrl AS browserUrl
+                FROM screen_captures c LEFT JOIN apps a ON a.id = c.appId
+                WHERE c.ts BETWEEN ? AND ? AND c.id <= ?
+                ORDER BY c.ts ASC, c.id ASC
+                LIMIT ?
+                """, arguments: [fromMs, toMs, snapshotMaxCaptureID, limit]).map {
+                    CaptureLite(id: $0["id"], ts: $0["ts"], appId: $0["appId"],
+                                appName: $0["appName"], bundleId: $0["bundleId"],
+                                windowTitle: $0["windowTitle"], browserUrl: $0["browserUrl"])
+                }
+            return captures.filter { !SystemAppFilter.isProtectedCaptureSurface($0) }
+        }
+    }
+
     /// Frames for a single calendar day (`day` — any time within it).
     func captures(forDay day: Date) async throws -> [CaptureLite] {
         let cal = Calendar.current

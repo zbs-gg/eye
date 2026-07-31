@@ -37,6 +37,7 @@ enum ZBSEyeMCPServer {
         // DB for READING, WITHOUT migrations (the GUI owns the schema; we don't take a write lock).
         let search: SearchService?
         let timeline: TimelineService?
+        let activitySummary: MCPActivitySummaryService?
         let db: ZBSEyeDatabase?
         do {
             let d = try ZBSEyeDatabase(
@@ -54,9 +55,14 @@ enum ZBSEyeMCPServer {
                 semanticPolicy: .ftsOnly(.secondaryProcess)
             )
             timeline = TimelineService(db: d)
+            activitySummary = MCPActivitySummaryService(
+                provider: DayActivityRepository(db: d),
+                profile: profile,
+                serverVersion: AppVersion.current
+            )
         } catch {
             FileHandle.standardError.write("[mcp] db_open_failed\n".data(using: .utf8)!)
-            db = nil; search = nil; timeline = nil
+            db = nil; search = nil; timeline = nil; activitySummary = nil
         }
 
         let historySearch = MCPHistorySearchCoordinator(
@@ -295,6 +301,51 @@ enum ZBSEyeMCPServer {
                     return .init(content: [.text("DB read failed (db_read_failed).")], isError: true)
                 }
 
+            case "get_activity_summary":
+                guard let activitySummary else {
+                    return .init(content: [.text("The DB is unavailable.")], isError: true)
+                }
+                guard let fromValue = args["from"], let from = Self.timeString(fromValue),
+                      let toValue = args["to"], let to = Self.timeString(toValue) else {
+                    return .init(
+                        content: [.text("from and to are required (timezone-aware ISO8601 or epoch-ms).")],
+                        isError: true
+                    )
+                }
+                let limit: Int?
+                if let value = args["limit"] {
+                    guard let parsed = value.intValue
+                            ?? value.stringValue.flatMap(Int.init) else {
+                        return .init(content: [.text("limit must be an integer.")], isError: true)
+                    }
+                    limit = parsed
+                } else {
+                    limit = nil
+                }
+                let cursor: String?
+                if let value = args["cursor"] {
+                    guard let parsed = value.stringValue else {
+                        return .init(content: [.text("cursor must be a string.")], isError: true)
+                    }
+                    cursor = parsed
+                } else {
+                    cursor = nil
+                }
+                do {
+                    let request = try MCPActivitySummaryRequest.parse(
+                        from: from,
+                        to: to,
+                        limit: limit,
+                        cursor: cursor
+                    )
+                    return .init(content: [.text(try await activitySummary.render(request))])
+                } catch {
+                    return .init(
+                        content: [.text("Activity summary failed: \(error.localizedDescription)")],
+                        isError: true
+                    )
+                }
+
             case "get_frame_image":
                 guard let timeline else {
                     return .init(content: [.text("The DB is unavailable.")], isError: true)
@@ -439,6 +490,24 @@ enum ZBSEyeMCPServer {
                                        "properties": .object(["from": strProp("start ISO8601/epoch-ms"),
                                                               "to": strProp("end ISO8601/epoch-ms")]),
                                        "required": .array([.string("from"), .string("to")])])),
+            Tool(name: "get_activity_summary",
+                 description: "Deterministic bounded activity sessions and top apps for a time range. Returns canonical versioned JSON text without images, paths, full URLs, raw media, or transcripts.",
+                 inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "from": strProp("required range start: timezone-aware ISO8601 or epoch-ms"),
+                        "to": strProp("required range end: timezone-aware ISO8601 or epoch-ms"),
+                        "limit": .object([
+                            "type": .string("integer"),
+                            "minimum": .int(1),
+                            "maximum": .int(24),
+                            "description": .string("sessions per page (default 12, maximum 24)"),
+                        ]),
+                        "cursor": strProp("optional opaque cursor returned by the previous page"),
+                    ]),
+                    "required": .array([.string("from"), .string("to")]),
+                    "additionalProperties": .bool(false),
+                 ])),
             Tool(name: "get_frame_image",
                  description: "Screenshot of a frame by frame_id from the search results (see the screen through the user's eyes).",
                  inputSchema: .object(["type": .string("object"),

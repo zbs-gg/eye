@@ -2,6 +2,12 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
+## Unreleased
+
+### Added
+- Read-only MCP clients, including Hermes, can request a bounded, privacy-filtered activity summary with
+  deterministic sessions, top apps, and tamper-resistant snapshot pagination.
+
 ## [0.6.0] — 2026-07-31
 
 ### Added

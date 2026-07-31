@@ -694,6 +694,8 @@ struct MCPToolsSettingsView: View {
             .pickerStyle(.segmented)
 
             VStack(alignment: .leading, spacing: 8) {
+                Text("Hermes").font(.headline)
+                CopyableSetupValue(value: presentation.hermesCommand)
                 Text("Codex").font(.headline)
                 CopyableSetupValue(value: presentation.codexCommand)
                 Text("Claude Code").font(.headline)

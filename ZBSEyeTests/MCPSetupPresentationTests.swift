@@ -18,6 +18,10 @@ final class MCPSetupPresentationTests: XCTestCase {
             presentation.claudeCodeCommand,
             "claude mcp add zbs-eye -- '/Applications/ZBS Eye.app/Contents/MacOS/ZBS Eye' --mcp-read-only"
         )
+        XCTAssertEqual(
+            presentation.hermesCommand,
+            "hermes mcp add zbs-eye --command '/Applications/ZBS Eye.app/Contents/MacOS/ZBS Eye' --args --mcp-read-only"
+        )
         let claude = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: Data(presentation.claudeJSON.utf8))
                 as? [String: Any]
@@ -33,12 +37,14 @@ final class MCPSetupPresentationTests: XCTestCase {
 
         let primary = presentation.codexCommand
             + presentation.claudeCodeCommand
+            + presentation.hermesCommand
             + presentation.claudeJSON
         for forbidden in ["Bearer", "api-token", "http://", "/v1", "secret-canary"] {
             XCTAssertFalse(primary.localizedCaseInsensitiveContains(forbidden))
         }
         XCTAssertEqual(presentation.statusLabel, "Ready to connect")
         XCTAssertTrue(presentation.restartInstruction.contains("Restart"))
+        XCTAssertTrue(presentation.restartInstruction.contains("Hermes"))
     }
 
     func testAdvancedPresentationUsesExplicitFullProfile() throws {
@@ -49,6 +55,8 @@ final class MCPSetupPresentationTests: XCTestCase {
 
         XCTAssertTrue(presentation.codexCommand.hasSuffix(" --mcp-full"))
         XCTAssertTrue(presentation.claudeJSON.contains("--mcp-full"))
+        XCTAssertTrue(presentation.hermesCommand.hasSuffix(" --args --mcp-read-only"))
+        XCTAssertFalse(presentation.hermesCommand.contains("--mcp-full"))
         XCTAssertTrue(presentation.accessSummary.contains("screenshot"))
         XCTAssertTrue(presentation.accessSummary.contains("recording"))
     }
@@ -58,6 +66,13 @@ final class MCPSetupPresentationTests: XCTestCase {
         let presentation = try MCPSetupPresentation(
             executableURL: URL(fileURLWithPath: path),
             profile: .memoryReadOnly
+        )
+        let quotedInjectionPath = presentation.codexCommand
+            .dropFirst("codex mcp add zbs-eye -- ".count)
+            .dropLast(" --mcp-read-only".count)
+        XCTAssertEqual(
+            presentation.hermesCommand,
+            "hermes mcp add zbs-eye --command \(quotedInjectionPath) --args --mcp-read-only"
         )
 
         XCTAssertEqual(

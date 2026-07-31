@@ -14,7 +14,6 @@ enum MCPSelfTestError: Error, Equatable {
     case outputLimitExceeded
     case initializationFailed
     case retrievalFailed
-    case noHistory
 }
 
 enum MCPReadinessFailure: Sendable, Equatable {
@@ -26,7 +25,6 @@ enum MCPReadinessFailure: Sendable, Equatable {
     case initializationFailed
     case toolContractMismatch
     case retrievalFailed
-    case noHistory
 
     var correctiveAction: String {
         switch self {
@@ -36,8 +34,6 @@ enum MCPReadinessFailure: Sendable, Equatable {
             "Replace the app with the signed ZBS Eye release."
         case .dataRootUnavailable:
             "Connect the data drive or open ZBS Eye to initialize storage."
-        case .noHistory:
-            "Record one Timeline moment, then check again."
         case .initializationTimedOut, .outputLimitExceeded, .initializationFailed,
              .toolContractMismatch, .retrievalFailed:
             "Quit and reopen ZBS Eye, then check again."
@@ -213,7 +209,6 @@ actor MCPReadinessService {
         case .outputLimitExceeded: .outputLimitExceeded
         case .initializationFailed: .initializationFailed
         case .retrievalFailed: .retrievalFailed
-        case .noHistory: .noHistory
         }
     }
 }
@@ -348,9 +343,8 @@ struct SystemMCPSelfTester: MCPSelfTesting {
                 == request.identity.fileIdentity else {
             throw MCPSelfTestError.initializationFailed
         }
-        guard let witness = request.dataRoot.frameWitness else {
-            throw MCPSelfTestError.noHistory
-        }
+        let probeMs = request.dataRoot.frameWitness?.timestampMs
+            ?? Int64(Date().timeIntervalSince1970 * 1_000)
 
         let specification = CodexLaunchSpecification(
             executableURL: request.identity.executableURL,
@@ -389,7 +383,7 @@ struct SystemMCPSelfTester: MCPSelfTesting {
 
         do {
             let deadline = ContinuousClock.now.advanced(by: request.timeout)
-            let handshake = try Self.handshakeMessages(nowMs: witness.timestampMs)
+            let handshake = try Self.handshakeMessages(nowMs: probeMs)
             try await connection.send(handshake.initialize, promptAdmission: nil)
             let initialize = try await Self.receiveResponse(
                 id: 1,
@@ -418,7 +412,7 @@ struct SystemMCPSelfTester: MCPSelfTesting {
             }
             let result = try Self.validatePostInitialize(
                 responses,
-                expectedFrameID: witness.frameID
+                expectedProfile: request.profile
             )
             await connection.terminateProcessGroup(gracePeriod: .milliseconds(100))
             return result
@@ -460,8 +454,12 @@ struct SystemMCPSelfTester: MCPSelfTesting {
             [
                 "jsonrpc": "2.0", "id": 3, "method": "tools/call",
                 "params": [
-                    "name": "get_context_at",
-                    "arguments": ["time": String(nowMs)],
+                    "name": "get_activity_summary",
+                    "arguments": [
+                        "from": String(nowMs),
+                        "to": String(nowMs),
+                        "limit": 1,
+                    ],
                 ],
             ],
         ]
@@ -506,7 +504,7 @@ struct SystemMCPSelfTester: MCPSelfTesting {
 
     static func validatePostInitialize(
         _ responses: [Int: [String: Any]],
-        expectedFrameID: Int64
+        expectedProfile: MCPAccessProfile
     ) throws -> MCPSelfTestResult {
         guard let list = responses[2], list["error"] == nil,
               let listResult = list["result"] as? [String: Any],
@@ -521,10 +519,31 @@ struct SystemMCPSelfTester: MCPSelfTesting {
               let retrievalResult = retrieval["result"] as? [String: Any],
               retrievalResult["isError"] as? Bool != true,
               let content = retrievalResult["content"] as? [[String: Any]],
-              content.contains(where: {
-                  $0["type"] as? String == "text"
-                      && ($0["text"] as? String)?.contains("Frame #\(expectedFrameID) ") == true
-              }) else {
+              let text = content.first(where: { $0["type"] as? String == "text" })?["text"] as? String,
+              let data = text.data(using: .utf8),
+              let decoded = try? JSONSerialization.jsonObject(with: data),
+              let envelope = decoded as? [String: Any],
+              Set(envelope.keys) == [
+                  "schema_version", "server", "requested_range", "observed_range",
+                  "newest_capture_at", "capture_count", "top_apps", "sessions",
+                  "truncated", "next_cursor",
+              ],
+              envelope["schema_version"] as? Int == 1,
+              let server = envelope["server"] as? [String: Any],
+              server["name"] as? String == "zbseye",
+              server["profile"] as? String == expectedProfile.rawValue,
+              server["version"] as? String != nil,
+              let requestedRange = envelope["requested_range"] as? [String: Any],
+              Set(requestedRange.keys) == ["from_ms", "to_ms", "from_iso", "to_iso"],
+              requestedRange["from_ms"] as? Int != nil,
+              requestedRange["to_ms"] as? Int != nil,
+              requestedRange["from_iso"] as? String != nil,
+              requestedRange["to_iso"] as? String != nil,
+              let captureCount = envelope["capture_count"] as? Int,
+              captureCount >= 0,
+              envelope["top_apps"] is [[String: Any]],
+              envelope["sessions"] is [[String: Any]],
+              envelope["truncated"] is Bool else {
             throw MCPSelfTestError.retrievalFailed
         }
         return MCPSelfTestResult(toolNames: names, retrievalSucceeded: true)
