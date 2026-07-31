@@ -140,6 +140,15 @@ enum KeychainStore {
         return t
     }
 
+    /// Write-only Browser Bridge token. It can authorize only the two browser
+    /// ingest routes and can never read Timeline, Search, frames, or audio.
+    static func browserIngestToken() -> String {
+        if let token = get("browser-ingest-token"), !token.isEmpty { return token }
+        let token = randomToken()
+        set(token, account: "browser-ingest-token")
+        return token
+    }
+
     private static func randomToken() -> String {
         (try? randomTokenOrThrow()) ?? UUID().uuidString.lowercased()
     }

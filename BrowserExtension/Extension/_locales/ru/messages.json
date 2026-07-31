@@ -1,0 +1,4 @@
+{
+  "extensionName": { "message": "ZBS Eye Browser Bridge" },
+  "extensionDescription": { "message": "Добавляет видимый текст активной вкладки Chromium в локальный таймлайн ZBS Eye." }
+}

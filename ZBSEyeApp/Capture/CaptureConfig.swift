@@ -24,6 +24,7 @@ struct CaptureConfig: Sendable {
     var idleCaptureIntervalSec = 60.0      // in idle: one frame per minute — "incoming without input" isn't lost
     var burstTrioDelays: [Double] = [0.7, 2.0]  // extra frames after an app switch (Electron finishes rendering)
     var ocrOnlyEmptyStreak = 2             // consecutive empty AX → mark the bundleId as ocrOnly
+    var browserOCRIntervalSec = 30.0       // canvas/PDF/video fallback: never OCR more often than this
 }
 
 /// Result of AX extraction (Sendable; AXUIElement does not cross the boundary).

@@ -1,0 +1,4 @@
+<!doctype html><html><head><title>SPA fixture</title></head><body><main id="app"><h1>SPA route one</h1></main><script>
+history.pushState({}, "", "/route-two");
+document.querySelector("#app").innerHTML = "<h1>SPA route two</h1><p>Mutation rendered</p>";
+</script></body></html>

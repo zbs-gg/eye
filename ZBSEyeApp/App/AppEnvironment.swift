@@ -858,8 +858,15 @@ final class AppEnvironment {
             )
             self.retention = retention
 
+            // The extension writes only fresh rendered DOM into this in-memory
+            // store; the capture loop consumes it before AX/OCR.
+            let browserContent = BrowserContentStore()
+
             // Capture loop (the heart). Starts on toggle in RecordingStore.
-            let coordinator = CaptureCoordinator(ingest: ingestService)
+            let coordinator = CaptureCoordinator(
+                ingest: ingestService,
+                browserContent: browserContent
+            )
             coordinator.onFrame = { [weak rec = recording] in rec?.noteFrame() }
             // SCK dead despite a granted permission (-3801 etc.) → honest needsRestart instead of a false recording.
             coordinator.onCaptureBroken = { [weak self] in
@@ -1113,11 +1120,15 @@ final class AppEnvironment {
 
             // Local REST /v1 (auth on everything except /health).
             let token = KeychainStore.apiToken()
+            let browserToken = KeychainStore.browserIngestToken()
             let rec = recording
             let deps = ZBSEyeHTTPServer.Deps(
                 search: searchSvc, timeline: timelineSvc, calls: callEvidenceQueryService,
                 db: db, mediaDir: storage.mediaDirectory,
-                token: token, version: AppVersion.current,
+                token: token,
+                browserToken: browserToken,
+                browserContent: browserContent,
+                version: AppVersion.current,
                 isCapturing: { await MainActor.run { rec.isCapturing } },
                 toggleCapture: { enable in
                     await MainActor.run {
@@ -1126,13 +1137,25 @@ final class AppEnvironment {
                         return rec.isCapturing
                     }
                 },
-                mediaBytes: { storage.totalBytes() })
+                mediaBytes: { storage.totalBytes() },
+                browserDidIngestAt: { [weak self] date in
+                    await MainActor.run { self?.server.noteBrowserSnapshot(at: date) }
+                }
+            )
             let server = ZBSEyeHTTPServer(deps: deps)
             self.httpServer = server
             Task { [weak self] in
                 let port = await server.start()
                 ZBSEyeHTTPServer.log("bootstrap: start -> \(String(describing: port))")
-                if let port { await MainActor.run { self?.server.setActive(port: port, token: token) } }
+                if let port {
+                    await MainActor.run {
+                        self?.server.setActive(
+                            port: port,
+                            token: token,
+                            browserToken: browserToken
+                        )
+                    }
+                }
             }
 
             // Retention runs CONTINUOUSLY (not only at startup): immediately + every 30 min. A 24/7 uptime over weeks

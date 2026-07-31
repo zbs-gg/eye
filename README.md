@@ -19,8 +19,8 @@ their life to somebody else's cloud. It quietly captures screen moments, accessi
 microphone and optional system audio. Everything is indexed locally and can be explored in the Timeline,
 opened as a call, searched in Ask, or read by your own agent over localhost.
 
-> **Release status:** this README documents the upcoming 0.5.4 source. The download link continues
-> to serve the last published stable build until the installed 0.5.4 call-quality qualification is complete.
+> **Release status:** this README documents ZBS Eye 0.6.0. The download link always points to the latest
+> notarized public build.
 
 <p align="center">
   <img src="./assets/readme/product-proof.svg" width="100%"
@@ -44,6 +44,9 @@ Eye records useful evidence and gives it back. It is not a CRM, a calendar manag
   binds to `127.0.0.1`; everything except `/health` requires a Keychain-backed Bearer token.
 - **Storage stays yours.** Fresh installs use a 5 GB media budget. You can choose another cap, keep media
   forever, move the data root to an external SSD, or create consistent compressed backups.
+- **Browser Bridge** optionally adds rendered text from the active Chromium tab when Accessibility cannot
+  see it. It is off by default, authenticates the local app before extracting text, and never sends page data
+  beyond this Mac.
 
 Screen capture is adaptive: Accessibility text is the cheap first path, while Vision OCR handles apps whose
 UI trees are empty. Images use HEIC and perceptual-hash deduplication. Static screens do not become thousands
@@ -57,7 +60,7 @@ input and output activity; a bounded Accessibility pass then requires a trusted 
 site-specific Leave or End control. A calendar page, podcast, voice message, look-alike domain, or microphone
 alone is not enough.
 
-| Browser and service | 0.5.4 candidate status |
+| Browser and service | 0.6.0 status |
 | --- | --- |
 | Chrome, Dia, or Edge × Meet, Zoom Web, or Teams Web | Implemented and fixture-qualified; live-qualified pairs will be named at release |
 | Safari or another browser | Manual Start only |
@@ -74,6 +77,17 @@ available for 15 seconds without splitting the recording. Normal ending uses a 3
 Optional Whisper Large V3 Turbo can produce a whole-call transcript after the call. Optional local
 diarization creates anonymous per-call speaker lanes; you may name or correct them for that call. Eye does
 not keep a reusable voiceprint and does not show a live transcript.
+
+## Optional Browser Bridge
+
+Chrome, Dia, Arc, Edge, Brave, Vivaldi, Chromium, and compatible Chromium browsers can add visible rendered
+page text to Timeline. Install [ZBS Eye Browser Bridge from the Chrome Web Store](https://chromewebstore.google.com/detail/zbs-eye-browser-bridge/dancgjefofjomhclpgmilholpnfadolf),
+or use the bundled unpacked fallback from **Settings → Browser Capture**. Copy the separate write-only token,
+then explicitly enable the extension. Safari is not included in 0.6.0.
+
+The extension checks an HMAC proof from the real local Eye process and confirms recording is active before it
+extracts DOM text. It ignores background tabs, password and form values, hidden elements, scripts, and styles.
+Requests go only to loopback. See the [Browser Bridge privacy details](./docs/BROWSER_BRIDGE_PRIVACY.md).
 
 ## Local capture; AI only when you choose it
 

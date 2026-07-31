@@ -5,8 +5,9 @@ import CoreGraphics
 /// and hands them to `IngestService`. It does not touch SQL/FTS directly.
 
 public enum TextSource: String, Sendable, Codable {
-    case ax     // accessibility — primary
-    case ocr    // Vision fallback
+    case ax                         // accessibility — primary
+    case ocr                        // Vision fallback
+    case browserDOM = "browser_dom" // rendered browser document
 }
 
 /// AX extraction quality (telemetry, to prove AX-first; from harness 1a).

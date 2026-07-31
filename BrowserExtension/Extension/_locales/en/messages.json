@@ -1,0 +1,4 @@
+{
+  "extensionName": { "message": "ZBS Eye Browser Bridge" },
+  "extensionDescription": { "message": "Adds visible text from the active Chromium tab to your local ZBS Eye timeline." }
+}

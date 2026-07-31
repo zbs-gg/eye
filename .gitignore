@@ -38,6 +38,7 @@ Slishu.xcodeproj/
 
 # Release artifacts (large zips)
 dist/
+BrowserExtension/node_modules/
 
 # Internal (not part of the product): planning/research, benchmarks, ops automation
 workspace/

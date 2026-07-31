@@ -8,6 +8,10 @@ import CoreGraphics
 /// Local REST `/v1` (FlyingFox). Binds ONLY 127.0.0.1 (loopback, not INADDR_ANY!), dynamic port,
 /// **auth on EVERYTHING except /health** (Bearer token from Keychain), Host check, path-traversal hardening.
 actor ZBSEyeHTTPServer {
+    private enum BodyReadError: Error {
+        case tooLarge
+    }
+
     struct Deps: Sendable {
         let search: SearchService
         let timeline: TimelineService
@@ -15,10 +19,13 @@ actor ZBSEyeHTTPServer {
         let db: ZBSEyeDatabase
         let mediaDir: URL
         let token: String
+        let browserToken: String
+        let browserContent: BrowserContentStore
         let version: String
         let isCapturing: @Sendable () async -> Bool
         let toggleCapture: @Sendable (Bool?) async -> Bool
         let mediaBytes: @Sendable () async -> Int64
+        let browserDidIngestAt: @Sendable (Date) async -> Void
     }
 
     private let deps: Deps
@@ -115,11 +122,14 @@ actor ZBSEyeHTTPServer {
         await srv.appendRoute("GET /health") { [self] req in
             let cap = await deps.isCapturing()
             let challenge = Self.query(req)["challenge"]
+            let proofToken = Self.query(req)["scope"] == "browser"
+                ? deps.browserToken
+                : deps.token
             let listeningPort = await self.activePort
             let proof = challenge.flatMap { challenge in
                 listeningPort.flatMap {
                     LocalPeerAuthenticator.proof(
-                        token: deps.token,
+                        token: proofToken,
                         challenge: challenge,
                         listeningPort: $0
                     )
@@ -194,6 +204,14 @@ actor ZBSEyeHTTPServer {
             let now = await deps.toggleCapture(enable)
             return Self.json(["capturing": now])
         }
+        await srv.appendRoute("POST /v1/browser/snapshot") { [self] req in
+            guard await browserAuthorized(req) else { return Self.unauthorized() }
+            return await handleBrowserSnapshot(req)
+        }
+        await srv.appendRoute("POST /v1/browser/heartbeat") { [self] req in
+            guard await browserAuthorized(req) else { return Self.unauthorized() }
+            return await handleBrowserHeartbeat(req)
+        }
     }
 
     // MARK: auth
@@ -206,12 +224,109 @@ actor ZBSEyeHTTPServer {
         )
     }
 
+    private func browserAuthorized(_ req: HTTPRequest) -> Bool {
+        BrowserIngestAuthorization.allows(
+            hostHeader: headerValue(req, "Host"),
+            authorizationHeader: headerValue(req, "Authorization"),
+            browserToken: deps.browserToken
+        )
+    }
+
     private func headerValue(_ req: HTTPRequest, _ name: String) -> String? {
         for (k, v) in req.headers where k.rawValue.caseInsensitiveCompare(name) == .orderedSame { return v }
         return nil
     }
 
     // MARK: handlers
+
+    private func handleBrowserSnapshot(_ req: HTTPRequest) async -> HTTPResponse {
+        let body: Data
+        do {
+            body = try await Self.readBody(
+                req,
+                maximumBytes: BrowserSnapshotLimits.maximumPayloadBytes
+            )
+        } catch BodyReadError.tooLarge {
+            return Self.error(
+                .payloadTooLarge,
+                "browser snapshot exceeds 256 KB",
+                code: "browser_snapshot_too_large"
+            )
+        } catch {
+            return Self.badRequest("invalid browser snapshot body")
+        }
+
+        let snapshot: BrowserPageSnapshot
+        do {
+            snapshot = try BrowserSnapshotDecoder.decode(body)
+        } catch BrowserSnapshotValidationError.payloadTooLarge {
+            return Self.error(
+                .payloadTooLarge,
+                "browser snapshot exceeds 256 KB",
+                code: "browser_snapshot_too_large"
+            )
+        } catch {
+            return Self.error(
+                .unprocessableContent,
+                "invalid browser snapshot",
+                code: "invalid_browser_snapshot"
+            )
+        }
+
+        let receivedAt = Date()
+        await deps.browserDidIngestAt(receivedAt)
+        guard await deps.isCapturing() else {
+            return Self.json(["status": "paused"], status: .accepted)
+        }
+        let result = await deps.browserContent.ingest(snapshot)
+        guard result != .ignoredInactive else {
+            return Self.error(
+                .unprocessableContent,
+                "only the active tab in the focused browser window is accepted",
+                code: "inactive_browser_snapshot"
+            )
+        }
+        return Self.json(
+            ["status": result == .duplicate ? "duplicate" : "accepted"],
+            status: .accepted
+        )
+    }
+
+    private func handleBrowserHeartbeat(_ req: HTTPRequest) async -> HTTPResponse {
+        let body: Data
+        do {
+            body = try await Self.readBody(req, maximumBytes: BrowserHeartbeatDecoder.maximumPayloadBytes)
+        } catch BodyReadError.tooLarge {
+            return Self.error(
+                .payloadTooLarge,
+                "browser heartbeat exceeds 8 KB",
+                code: "browser_heartbeat_too_large"
+            )
+        } catch {
+            return Self.badRequest("invalid browser heartbeat body")
+        }
+
+        let heartbeat: BrowserPageHeartbeat
+        do {
+            heartbeat = try BrowserHeartbeatDecoder.decode(body)
+        } catch {
+            return Self.error(
+                .unprocessableContent,
+                "invalid browser heartbeat",
+                code: "invalid_browser_heartbeat"
+            )
+        }
+
+        await deps.browserDidIngestAt(Date())
+        guard await deps.isCapturing() else {
+            return Self.json(["status": "paused"], status: .accepted)
+        }
+        let refreshed = await deps.browserContent.heartbeat(heartbeat)
+        return Self.json(
+            ["status": refreshed ? "refreshed" : "missing"],
+            status: .accepted
+        )
+    }
 
     private func handleSearch(_ req: HTTPRequest) async -> HTTPResponse {
         let p = Self.query(req)
@@ -579,9 +694,21 @@ actor ZBSEyeHTTPServer {
     private static func error(_ status: HTTPStatusCode, _ msg: String, code: String = "error") -> HTTPResponse {
         json(APIDTO.ErrorResponse(error: .init(code: code, message: msg)), status: status)
     }
+
+    private static func readBody(_ request: HTTPRequest, maximumBytes: Int) async throws -> Data {
+        var body = Data()
+        for try await chunk in request.bodySequence {
+            guard chunk.count <= maximumBytes,
+                  body.count <= maximumBytes - chunk.count else {
+                throw BodyReadError.tooLarge
+            }
+            body.append(chunk)
+        }
+        return body
+    }
     /// Compact OpenAPI spec (a machine contract for the LAM; the contract used to live only in code).
     static let openAPISpec = #"""
-    {"openapi":"3.0.3","info":{"title":"ZBS Eye Local API","version":"0.5.4",
+    {"openapi":"3.0.3","info":{"title":"ZBS Eye Local API","version":"0.6.0",
      "description":"Local screen/audio memory. Auth: Bearer token on everything except /health. Time: epoch-ms or ISO8601."},
      "paths":{
       "/health":{"get":{"summary":"Status without auth","responses":{"200":{"description":"ok"}}}},

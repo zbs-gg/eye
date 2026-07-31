@@ -13,8 +13,6 @@ struct CaptureDrainAcknowledgement: Sendable, Equatable {
 /// per-app capability cache (GPU/canvas → OCR-only, we don't poke AX in vain). Heavy work — on actors.
 @MainActor
 final class CaptureCoordinator {
-    private enum CaptureClass { case unknown, axViable, ocrOnly }
-
     /// Known GPU/canvas apps (plan: "OCR-only forever"). Everything else — learned per-app.
     private static let knownOCROnly: Set<String> = [
         "dev.zed.Zed", "dev.warp.Warp-Stable", "dev.warp.Warp",
@@ -26,6 +24,7 @@ final class CaptureCoordinator {
     private let config: CaptureConfig
     private let axReader: AXReader
     private let pipeline: FramePipeline
+    private let browserContent: BrowserContentStore
 
     private(set) var isRunning = false
     private var sessionGate = CaptureSessionGateState(reasons: [])
@@ -43,6 +42,8 @@ final class CaptureCoordinator {
     private var capabilityCheckedAt: [String: Date] = [:]
     private var emptyStreak: [String: Int] = [:]
     private var lastContentText: [String: String] = [:]
+    private var lastBrowserContentHash: [String: String] = [:]
+    private var lastBrowserOCRAt: [String: Date] = [:]
     private var sckFailureStreak = 0
     private var lastIdleCaptureAt = Date.distantPast
     private var burstTask: Task<Void, Never>?
@@ -64,8 +65,13 @@ final class CaptureCoordinator {
     /// The full list of excluded ones (for SCContentFilter: cut their windows out of ANY frame, not just the focus one).
     var ignoredBundleIds: @MainActor () -> Set<String> = { [] }
 
-    init(ingest: IngestService, config: CaptureConfig = CaptureConfig()) {
+    init(
+        ingest: IngestService,
+        browserContent: BrowserContentStore,
+        config: CaptureConfig = CaptureConfig()
+    ) {
         self.ingest = ingest
+        self.browserContent = browserContent
         self.config = config
         self.axReader = AXReader(config: config)
         self.pipeline = FramePipeline(config: config)
@@ -84,13 +90,17 @@ final class CaptureCoordinator {
             capabilityCheckedAt[bundleId] = at
             switch cls {
             case "ax": capability[bundleId] = .axViable
-            case "ocr": if at > cutoff { capability[bundleId] = .ocrOnly }   // expired → re-probe
+            case "ocr":
+                if at > cutoff, !BrowserCapturePolicy.isChromiumBrowser(bundleId) {
+                    capability[bundleId] = .ocrOnly
+                }
             default: break
             }
         }
     }
 
     private func persistCapability(_ bundleId: String, _ cls: CaptureClass) {
+        if cls == .ocrOnly, BrowserCapturePolicy.isChromiumBrowser(bundleId) { return }
         capability[bundleId] = cls
         capabilityCheckedAt[bundleId] = Date()
         let d = UserDefaults.standard
@@ -220,9 +230,10 @@ final class CaptureCoordinator {
 
     func stop() {
         let cycle = stopAdmission()
-        Task { [axReader] in
+        Task { [axReader, browserContent] in
             await cycle?.value
             await axReader.reset()
+            await browserContent.clear()
         }
     }
 
@@ -237,6 +248,7 @@ final class CaptureCoordinator {
         await cycle?.value
         await axReader.reset()
         await pipeline.invalidateContent()
+        await browserContent.clear()
         return CaptureDrainAcknowledgement(
             hadActiveCapture: wasRunning,
             hadInFlightCycle: hadInFlightCycle,
@@ -261,7 +273,10 @@ final class CaptureCoordinator {
         cycle?.cancel(); cycleTask = nil
         burstTask?.cancel(); burstTask = nil
         pendingCycle = false
-        emptyStreak.removeAll(); lastContentText.removeAll()
+        emptyStreak.removeAll()
+        lastContentText.removeAll()
+        lastBrowserContentHash.removeAll()
+        lastBrowserOCRAt.removeAll()
         lastProtectedSystemShell = nil
         return cycle
     }
@@ -370,28 +385,59 @@ final class CaptureCoordinator {
         // calls its @MainActor Binding.get (TimelineView) right on the axreader queue → dispatch_assert_queue → crash.
         guard pid != ProcessInfo.processInfo.processIdentifier else { onCycleOK?(); return }
 
-        // per-app capability: GPU/canvas → straight to OCR, we don't spend AX
-        let cls = capability[bundleId] ?? (Self.knownOCROnly.contains(bundleId) ? .ocrOnly : .unknown)
+        let windowInfo = Self.frontmostWindowInfo(pid: pid)
+        var browser = await browserContent.match(
+            bundleID: bundleId,
+            windowTitle: windowInfo.title,
+            browserURL: nil
+        )
+
+        // Fresh rendered DOM wins before AX. Chromium never inherits a stale
+        // persisted OCR-only verdict from a previous version.
+        let learned = capability[bundleId]
+            ?? (Self.knownOCROnly.contains(bundleId) ? .ocrOnly : .unknown)
+        let cls = BrowserCapturePolicy.effectiveClass(bundleID: bundleId, learned: learned)
 
         var ax = AXExtraction()
         var needsOCR: Bool
-        if cls == .ocrOnly {
+        if let browser {
+            ax.windowTitle = browser.title
+            ax.browserURL = browser.url
+            needsOCR = throttledBrowserOCR(bundleID: bundleId, requested: browser.requiresOCR)
+        } else if cls == .ocrOnly {
             needsOCR = true
             // we don't call full AX (the tree is empty/useless), but the window title — one cheap call:
             // otherwise Zed/Figma records were left without any windowTitle at all
             ax.windowTitle = await axReader.titleOnly(pid: pid)
         } else {
             ax = await axReader.extract(pid: pid)
-            needsOCR = ax.contentChars < config.ocrMinContentChars
-                && (ax.quality == .none || ax.quality == .titleOnly || ax.treeWasEmpty)
-            // capability learning (persists; ocrOnly expires after 7 days → re-probe)
-            if ax.contentChars >= config.usefulThreshold {
-                if capability[bundleId] != .axViable { persistCapability(bundleId, .axViable) }
-                emptyStreak[bundleId] = 0
-            } else if ax.treeWasEmpty {
-                let n = (emptyStreak[bundleId] ?? 0) + 1
-                emptyStreak[bundleId] = n
-                if n >= config.ocrOnlyEmptyStreak { persistCapability(bundleId, .ocrOnly) }
+            // Some Chromium builds hide CGWindowName but expose a title or URL
+            // through the bounded AX read. Correlate once more before deciding
+            // whether OCR is needed; DOM still wins as the text source.
+            browser = await browserContent.match(
+                bundleID: bundleId,
+                windowTitle: ax.windowTitle,
+                browserURL: ax.browserURL
+            )
+            if let browser {
+                ax.windowTitle = browser.title
+                ax.browserURL = browser.url
+                needsOCR = throttledBrowserOCR(bundleID: bundleId, requested: browser.requiresOCR)
+            } else {
+                let decision = BrowserCapturePolicy.afterAccessibility(
+                    bundleID: bundleId,
+                    extraction: ax,
+                    previousEmptyStreak: emptyStreak[bundleId] ?? 0,
+                    config: config
+                )
+                emptyStreak[bundleId] = decision.emptyStreak
+                if let learnedClass = decision.learnedClass,
+                   capability[bundleId] != learnedClass {
+                    persistCapability(bundleId, learnedClass)
+                }
+                needsOCR = BrowserCapturePolicy.isChromiumBrowser(bundleId)
+                    ? throttledBrowserOCR(bundleID: bundleId, requested: decision.needsOCR)
+                    : decision.needsOCR
             }
         }
         // Pro action 3: after awaiting the AXReader actor we must be back on main. After the self-PID fix this
@@ -404,7 +450,7 @@ final class CaptureCoordinator {
         // The display of the FRONTMOST window by GEOMETRY. NSScreen.main won't do here: it's the screen of OUR
         // app's key window — when ZBS Eye is in the background (always while recording), it would give the primary
         // display, not the screen of the other app's active window.
-        let focusedDisplayID = Self.displayForFrontmostWindow(pid: pid)
+        let focusedDisplayID = windowInfo.displayID
         let protectedApplicationSnapshot = CaptureSessionPolicy.protectedRunningApplicationSnapshot()
 
         let frame: ProcessedFrame?
@@ -435,20 +481,28 @@ final class CaptureCoordinator {
         guard currentSessionStillAllowsCapture() else { return }
 
         if frame.isDuplicate {
-            // same image — but if the AX text changed (scroll/new message), we write context-only
-            if ax.contentChars > 0, ax.contentText != (lastContentText[bundleId] ?? "") {
-                await write(bundleId: bundleId, appName: appName, ax: ax, ocr: [],
+            // Same pixels may still carry a new SPA/iframe document.
+            let contentText = browser?.text ?? ax.contentText
+            let textChanged = !contentText.isEmpty
+                && contentText != (lastContentText[bundleId] ?? "")
+            let browserIdentityChanged = browser.map {
+                $0.contentHash != lastBrowserContentHash[bundleId]
+            } ?? false
+            if textChanged || browserIdentityChanged {
+                await write(bundleId: bundleId, appName: appName, ax: ax, browser: browser, ocr: [],
                             image: .none, width: frame.width, height: frame.height,
                             monitorId: String(frame.displayID))
-                lastContentText[bundleId] = ax.contentText
+                lastContentText[bundleId] = contentText
+                lastBrowserContentHash[bundleId] = browser?.contentHash
             }
             return
         }
 
-        await write(bundleId: bundleId, appName: appName, ax: ax, ocr: frame.ocr,
+        await write(bundleId: bundleId, appName: appName, ax: ax, browser: browser, ocr: frame.ocr,
                     image: .heicData(frame.heicData), width: frame.width, height: frame.height,
                     monitorId: String(frame.displayID))
-        lastContentText[bundleId] = ax.contentText
+        lastContentText[bundleId] = browser?.text ?? ax.contentText
+        lastBrowserContentHash[bundleId] = browser?.contentHash
     }
 
     private func resumeIfSessionUnlocked(clearing reason: CaptureSuspensionReasons) async {
@@ -509,9 +563,16 @@ final class CaptureCoordinator {
     }
 
     /// The display of the topmost normal window (layer 0) of the process — by intersecting bounds with displays.
-    private static func displayForFrontmostWindow(pid: pid_t) -> CGDirectDisplayID? {
+    private struct FrontmostWindowInfo {
+        let displayID: CGDirectDisplayID?
+        let title: String?
+    }
+
+    private static func frontmostWindowInfo(pid: pid_t) -> FrontmostWindowInfo {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
-                                                    kCGNullWindowID) as? [[String: Any]] else { return nil }
+                                                    kCGNullWindowID) as? [[String: Any]] else {
+            return FrontmostWindowInfo(displayID: nil, title: nil)
+        }
         for w in list {
             guard let owner = w[kCGWindowOwnerPID as String] as? Int, pid_t(owner) == pid,
                   let layer = w[kCGWindowLayer as String] as? Int, layer == 0,
@@ -521,32 +582,50 @@ final class CaptureCoordinator {
             var display = CGDirectDisplayID(0)
             var count: UInt32 = 0
             if CGGetDisplaysWithRect(rect, 1, &display, &count) == .success, count > 0 {
-                return display
+                return FrontmostWindowInfo(
+                    displayID: display,
+                    title: w[kCGWindowName as String] as? String
+                )
             }
         }
-        return nil
+        return FrontmostWindowInfo(displayID: nil, title: nil)
     }
 
     private func write(bundleId: String, appName: String, ax: AXExtraction,
-                       ocr: [OCRLine], image: ImagePayload, width: Int, height: Int,
+                       browser: BrowserPageContent?, ocr: [OCRLine],
+                       image: ImagePayload, width: Int, height: Int,
                        monitorId: String) async {
         var blocks: [CapturedTextBlock] = []
-        if ax.contentChars > 0 {
+        if let browser, !browser.text.isEmpty {
+            blocks.append(CapturedTextBlock(source: .browserDOM, text: browser.text, confidence: 1.0))
+        }
+        if browser == nil, ax.contentChars > 0 {
             blocks.append(CapturedTextBlock(source: .ax, text: ax.contentText, confidence: 1.0))
         }
         for line in ocr where !line.text.isEmpty {
             blocks.append(CapturedTextBlock(source: .ocr, text: line.text, confidence: line.confidence, bbox: line.bbox))
         }
-        let quality: AXQuality = ocr.isEmpty ? ax.quality : (ax.contentChars > 0 ? .partialUseful : .ocr)
+        let quality: AXQuality
+        if !ocr.isEmpty {
+            quality = ax.contentChars > 0 || browser?.text.isEmpty == false ? .partialUseful : .ocr
+        } else if browser?.text.isEmpty == false {
+            quality = .fullUseful
+        } else {
+            quality = ax.quality
+        }
         let tel = CaptureTelemetry(
-            usefulTextChars: ax.contentChars, nodeCount: ax.nodeCount,
+            usefulTextChars: browser?.text.count ?? ax.contentChars, nodeCount: ax.nodeCount,
             treeWasEmpty: ax.treeWasEmpty, hitBudgetLimit: ax.hitBudgetLimit,
-            ocrFallbackReason: ocr.isEmpty ? nil : "ax=\(ax.quality.rawValue)",
+            ocrFallbackReason: ocr.isEmpty
+                ? nil
+                : (browser?.requiresOCR == true ? "browser=pixelOnly" : "ax=\(ax.quality.rawValue)"),
             manualAccessibilityResult: ax.manualResult, enhancedUiResult: ax.enhancedResult)
 
         let record = ScreenCaptureRecord(
             timestamp: Date(), bundleId: bundleId, appName: appName,
-            windowTitle: ax.windowTitle, browserURL: ax.browserURL, monitorId: monitorId,
+            windowTitle: browser?.title ?? ax.windowTitle,
+            browserURL: browser?.url ?? ax.browserURL,
+            monitorId: monitorId,
             image: image, pixelWidth: width, pixelHeight: height,
             textBlocks: blocks, axQuality: quality, telemetry: tel)
         do {
@@ -555,5 +634,19 @@ final class CaptureCoordinator {
         } catch {
             Log.ingest.error("screen_frame_ingest_failed")
         }
+    }
+
+    private func throttledBrowserOCR(bundleID: String, requested: Bool) -> Bool {
+        guard requested else { return false }
+        let now = Date()
+        if !BrowserCapturePolicy.allowsBrowserOCR(
+            lastAt: lastBrowserOCRAt[bundleID],
+            now: now,
+            interval: config.browserOCRIntervalSec
+        ) {
+            return false
+        }
+        lastBrowserOCRAt[bundleID] = now
+        return true
     }
 }

@@ -1,15 +1,16 @@
 import XCTest
 
 final class SettingsPresentationTests: XCTestCase {
-    func testPrimarySettingsContainExactlyFourFocusedRoutesInProductOrder() {
+    func testPrimarySettingsContainFocusedRoutesInProductOrder() {
         XCTAssertEqual(
             SettingsRoute.allCases,
-            [.permissions, .ai, .dataStorage, .mcpTools]
+            [.permissions, .ai, .dataStorage, .browserCapture, .mcpTools]
         )
         XCTAssertEqual(SettingsRoute.allCases.map(\.title), [
             "Permissions",
             "AI",
             "Data Storage",
+            "Browser Capture",
             "MCP & AI Tools",
         ])
     }

@@ -72,6 +72,9 @@ targets:
     platform: macOS
     sources:
       - path: ZBSEyeApp
+      - path: BrowserExtension/Extension
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: GRDB
         product: GRDB
@@ -102,8 +105,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: "ZBS Eye"
         INFOPLIST_KEY_CFBundleName: "ZBS Eye"
         GENERATE_INFOPLIST_FILE: YES
-        MARKETING_VERSION: "0.5.4"          # CFBundleShortVersionString
-        CURRENT_PROJECT_VERSION: "18"       # CFBundleVersion
+        MARKETING_VERSION: "0.6.0"          # CFBundleShortVersionString
+        CURRENT_PROJECT_VERSION: "19"       # CFBundleVersion
         CODE_SIGN_ENTITLEMENTS: ZBSEyeApp/ZBSEye.entitlements
         # Default — ad-hoc for development. scripts/build-release.sh can use the legacy self-signed
         # "ZBS Eye Dev" identity; distributable releases must use scripts/build-notarized.sh with the
@@ -178,6 +181,9 @@ targets:
       - path: ZBSEyeApp/State/BuiltInModelStore.swift
       - path: ZBSEyeApp/State/RecordingMaintenanceAdmission.swift
       - path: ZBSEyeApp/Capture/CaptureSessionPolicy.swift
+      - path: ZBSEyeApp/Capture/CaptureConfig.swift
+      - path: ZBSEyeApp/Capture/BrowserCapturePolicy.swift
+      - path: ZBSEyeApp/Browser/BrowserSnapshot.swift
       - path: ZBSEyeApp/State/LowDiskGuard.swift
       - path: ZBSEyeApp/State/RecordingStore.swift
       - path: ZBSEyeApp/Audio/SystemAudioCaptureLifecycle.swift
@@ -299,8 +305,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye.tests
-        MARKETING_VERSION: "0.5.4"
-        CURRENT_PROJECT_VERSION: "18"
+        MARKETING_VERSION: "0.6.0"
+        CURRENT_PROJECT_VERSION: "19"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: ZBSEyeTests/Info.plist
         ZBS_EYE_MODEL_DIR: ""

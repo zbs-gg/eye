@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ZBS Eye Browser Bridge</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div class="icon-wrap"><img src="../icons/icon-128.png" alt=""></div>
+      <div>
+        <p class="eyebrow" data-i18n="eyebrow">ZBS Eye · local-only</p>
+        <h1>ZBS Eye Browser Bridge</h1>
+        <p class="lede" data-i18n="lede">Capture useful page text that Accessibility cannot see.</p>
+      </div>
+    </header>
+
+    <section class="card consent">
+      <div>
+        <h2 data-i18n="captureHeading">Browser Capture</h2>
+        <p data-i18n="captureBody">Off by default. When enabled, only the active tab in the focused Chromium window is eligible—and only while ZBS Eye is recording.</p>
+      </div>
+      <label class="switch">
+        <input id="enabled" type="checkbox">
+        <span class="slider"></span>
+        <span class="switch-label" data-i18n="enable">Enable</span>
+      </label>
+    </section>
+
+    <section class="card">
+      <h2 data-i18n="connectHeading">Connect to this Mac</h2>
+      <p data-i18n="connectBody">In ZBS Eye, open Settings → Browser Capture and copy the write-only token.</p>
+      <label for="token" data-i18n="tokenLabel">Browser token</label>
+      <div class="token-row">
+        <input id="token" type="password" autocomplete="off" spellcheck="false">
+        <button id="save" type="button" data-i18n="save">Save</button>
+      </div>
+      <p id="status" role="status">Not configured</p>
+    </section>
+
+    <section class="privacy-grid">
+      <div class="privacy-card good">
+        <h3 data-i18n="sentHeading">Stays on this Mac</h3>
+        <p data-i18n="sentBody">Visible rendered text, page title, and URL go only to 127.0.0.1.</p>
+      </div>
+      <div class="privacy-card">
+        <h3 data-i18n="neverHeading">Never collected</h3>
+        <p data-i18n="neverBody">Passwords, form values, hidden content, scripts, styles, and background tabs.</p>
+      </div>
+    </section>
+    <p class="fineprint" data-i18n="fineprint">If Eye is closed or paused, the extension does not extract page text.</p>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

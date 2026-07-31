@@ -32,6 +32,7 @@ struct SettingsView: View {
                 case .permissions: PermissionsSettingsView()
                 case .ai: AISettingsView()
                 case .dataStorage: DataStorageSettingsView()
+                case .browserCapture: BrowserCaptureSettingsView()
                 case .mcpTools: MCPToolsSettingsView()
                 }
             }
@@ -99,6 +100,13 @@ struct SettingsView: View {
             return String(localized: "Off · optional")
         case .dataStorage:
             return "\(StorageSettingsStore.format(env.storageSettings.totalBytes)) · Keep \(env.storageSettings.keepMediaPolicy.settingsLabel)"
+        case .browserCapture:
+            if !env.recording.isCapturing { return String(localized: "Paused with recording") }
+            switch env.server.browserConnectionStatus() {
+            case .connected: return String(localized: "Connected · active tab only")
+            case .stale: return String(localized: "Waiting for the active tab")
+            case .disconnected: return String(localized: "Off until you enable the extension")
+            }
         case .mcpTools:
             return String(localized: "Give Codex or Claude read-only Timeline access")
         }

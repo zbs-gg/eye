@@ -10104,6 +10104,66 @@
     },
     "retry available": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "можно повторить" } } }
+    },
+    "Browser Capture": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Захват браузера" } } }
+    },
+    "Browser Bridge": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Браузерный мост" } } }
+    },
+    "Paused with recording": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Приостановлено вместе с записью" } } }
+    },
+    "Connected · active tab only": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Подключено · только активная вкладка" } } }
+    },
+    "Waiting for the active tab": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Ждём активную вкладку" } } }
+    },
+    "Off until you enable the extension": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Выключено, пока вы не включите расширение" } } }
+    },
+    "Browser Capture is off by default. After you enable the extension, it reads only the active tab in the focused Chromium window—and only while ZBS Eye is recording.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Захват браузера по умолчанию выключен. После включения расширение читает только активную вкладку активного окна Chromium — и только пока ZBS Eye записывает." } } }
+    },
+    "Install": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Установка" } } }
+    },
+    "Open Chrome Web Store": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Открыть Chrome Web Store" } } }
+    },
+    "Chrome Web Store": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Chrome Web Store" } } }
+    },
+    "Coming with v0.6.0": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Появится в v0.6.0" } } }
+    },
+    "Reveal bundled extension": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Показать встроенное расширение" } } }
+    },
+    "Fallback: open chrome://extensions, turn on Developer mode, choose Load unpacked, then select the revealed Extension folder.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Запасной путь: откройте chrome://extensions, включите режим разработчика, выберите «Загрузить распакованное» и укажите показанную папку Extension." } } }
+    },
+    "Write-only token": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Токен только для записи" } } }
+    },
+    "Copied": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Скопировано" } } }
+    },
+    "Paste this token into the extension. It can submit rendered page text to this Mac, but it cannot read Search, Timeline, screenshots, audio, or calls.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Вставьте этот токен в расширение. Оно может отправлять текст страниц на этот Mac, но не может читать Поиск, Таймлайн, снимки экрана, аудио или звонки." } } }
+    },
+    "Sent locally: visible rendered text, page title, and URL. Never sent: passwords, input or textarea values, selected form values, hidden elements, scripts, or styles.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Локально передаются: видимый текст, заголовок страницы и URL. Никогда не передаются: пароли, значения input и textarea, выбранные значения форм, скрытые элементы, скрипты и стили." } } }
+    },
+    "Read Browser Bridge privacy details": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Подробнее о приватности Browser Bridge" } } }
+    },
+    "Connected": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Подключено" } } }
+    },
+    "Waiting": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Ожидание" } } }
     }
   },
   "version": "1.0"

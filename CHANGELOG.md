@@ -2,6 +2,25 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
+## [0.6.0] — 2026-07-31
+
+### Added
+- Optional Browser Bridge for Chrome, Dia, Arc, Edge, Brave, Vivaldi, Chromium, and compatible Chromium
+  browsers on Mac. It adds visible rendered text from only the active tab in the focused window.
+- A dedicated **Settings → Browser Capture** screen with live status, Chrome Web Store access, a bundled
+  unpacked fallback, and a separate write-only Keychain token.
+
+### Changed
+- Browser text is accepted only after the extension authenticates the real loopback Eye process and confirms
+  recording is active. The extension starts disabled and has no cloud or non-loopback endpoint.
+- Capture prefers fresh rendered DOM, falls back to Accessibility, and limits OCR for canvas, PDF, and video
+  pages to once every 30 seconds.
+
+### Security
+- Passwords, form values, hidden elements, scripts, styles, background tabs, stale documents, and mismatched
+  browser snapshots are rejected before they can enter Timeline. Browser ingest credentials cannot read any
+  history route.
+
 ## [0.5.4] — 2026-07-27
 
 ### Fixed
