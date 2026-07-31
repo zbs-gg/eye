@@ -41,6 +41,7 @@ struct PermissionsSettingsView: View {
                     }
                 }
 
+                captureRepairGroup
                 audioGroup
                 privacyGroup
             }
@@ -51,6 +52,45 @@ struct PermissionsSettingsView: View {
         .task {
             await env.permissions.refreshAll()
             await env.audioSettings.refreshHealth(env.audio)
+        }
+    }
+
+    @ViewBuilder
+    private var captureRepairGroup: some View {
+        let presentation = CaptureRepairPresentation(snapshot: env.captureHealth)
+        if presentation.state != .hidden {
+            SettingsGroup("Capture") {
+                HStack(spacing: 10) {
+                    Image(systemName: presentation.state == .recovering
+                          ? "arrow.triangle.2.circlepath"
+                          : "exclamationmark.triangle.fill")
+                        .foregroundStyle(presentation.state == .recovering
+                                         ? Color.secondary : Color.orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(presentation.title)
+                        if !presentation.affectedLabel.isEmpty {
+                            Text(presentation.affectedLabel)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Text(presentation.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let actionTitle = presentation.actionTitle {
+                    Divider()
+                    Button(actionTitle) {
+                        Task { await env.repairCapture() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    ForEach(presentation.guidance, id: \.self) { item in
+                        Text("• \(item)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
     }
 
@@ -73,11 +113,6 @@ struct PermissionsSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if audio.systemEngineFailed {
-                Label("System Audio did not start. Check Screen Recording access.", systemImage: "speaker.slash.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
             if audio.micEngineFailed {
                 Label("The microphone was unavailable at the last start.", systemImage: "mic.slash.fill")
                     .font(.caption)

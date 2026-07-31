@@ -23,7 +23,12 @@ struct RecordingStatusView: View {
                 if env.recording.isCapturing {
                     screenRow(now: now)
                 } else {
-                    sourceRow(active: false, warn: false, icon: "display", text: "Screen: off")
+                    sourceRow(
+                        active: false,
+                        warn: false,
+                        icon: "display",
+                        text: String(localized: "Screen: off")
+                    )
                 }
             } else if env.recording.isCapturing {
                 screenRow(now: now)
@@ -36,13 +41,14 @@ struct RecordingStatusView: View {
                               text: micOn ? "Microphone" : "Microphone didn't start")
                 }
                 if systemWanted || systemOn {
-                    sourceRow(active: systemOn, warn: systemWanted && !systemOn, icon: "speaker.wave.2",
-                              text: systemOn ? "System audio" : "System audio didn't start")
+                    systemAudioRow
                 }
                 audioModeRow
-                if let degraded = env.recording.degradedReason {
-                    Label(degraded, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption2).foregroundStyle(.orange).lineLimit(2)
+                if CaptureRepairPresentation(snapshot: env.captureHealth).state == .repairRequired {
+                    Button("Repair Capture") {
+                        Task { await env.repairCapture() }
+                    }
+                    .font(.caption)
                 }
             } else if env.recording.lowDiskPaused {
                 HStack(spacing: 6) {
@@ -124,38 +130,51 @@ struct RecordingStatusView: View {
         return engineRunning ? .recording : .unavailable
     }
 
-    /// The "Screen" row: warn by the cycle HEARTBEAT (not by the last frame — a static screen is deduped for
-    /// hours and that's healthy) and by needsRestart. The warning is visible in compact too (color/icon).
     private func screenRow(now: Date) -> some View {
-        let needsRestart = env.permissions.screenNeedsRestart
-        // nil = the first cycle hasn't passed yet (the first seconds after start) — don't scare for nothing
-        let stale = staleSeconds(now: now).map { $0 > 90 } ?? false
-        let warn = needsRestart || stale
-        let text: String
-        if needsRestart {
-            text = "Screen: needs restart"
-        } else if stale {
-            text = "Screen: capture is silent"
-        } else {
-            text = "Screen" + frameAgeSuffix(now: now)
-        }
-        return sourceRow(active: !warn, warn: warn, icon: "display", text: text)
+        _ = now
+        let state = env.captureHealth.legs[.screen]?.state ?? .paused
+        return sourceRow(
+            active: state == .healthy,
+            warn: state == .recovering || state == .repairRequired || state == .permissionBlocked,
+            icon: "display",
+            text: captureLabel(.screen, state: state)
+        )
     }
 
     private var micOn: Bool { env.audio?.micRunning ?? false }
     private var systemOn: Bool { env.audio?.systemRunning ?? false }
     private var micWanted: Bool { env.recording.micEnabled() }
     private var systemWanted: Bool { env.recording.systemEnabled() }
-
-    /// How many seconds the heartbeat has been silent (nil = there hasn't been a single cycle yet).
-    private func staleSeconds(now: Date) -> Int? {
-        env.recording.lastCycleOKAt.map { Int(now.timeIntervalSince($0)) }
+    private var systemState: CaptureLegState {
+        env.captureHealth.legs[.systemAudio]?.state ?? .paused
     }
 
-    private func frameAgeSuffix(now: Date) -> String {
-        guard !compact, let t = env.recording.lastFrameAt else { return "" }
-        let s = Int(now.timeIntervalSince(t))
-        return s < 120 ? " · frame \(s)s ago" : ""   // an old frame ≠ a failure (dedup) — don't scare
+    private var systemAudioRow: some View {
+        sourceRow(
+            active: systemState == .healthy,
+            warn: systemState == .recovering
+                || systemState == .repairRequired
+                || systemState == .permissionBlocked,
+            icon: "speaker.wave.2",
+            text: captureLabel(.systemAudio, state: systemState)
+        )
+    }
+
+    private func captureLabel(_ leg: CaptureLeg, state: CaptureLegState) -> String {
+        let source = switch leg {
+        case .screen: String(localized: "Screen")
+        case .systemAudio: String(localized: "System audio")
+        }
+        guard state != .healthy else { return source }
+        let status = switch state {
+        case .healthy: ""
+        case .recovering: String(localized: "recovering")
+        case .repairRequired: String(localized: "repair needed")
+        case .permissionBlocked: String(localized: "permission needed")
+        case .suspended: String(localized: "suspended")
+        case .paused: String(localized: "off")
+        }
+        return "\(source): \(status)"
     }
 
     /// Audio-mode line: what the tri-state / manual override is doing right now. In `.always` the

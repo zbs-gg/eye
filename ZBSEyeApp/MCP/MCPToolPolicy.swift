@@ -32,6 +32,7 @@ enum MCPToolPolicy {
     private static let advancedTools = [
         "get_frame_image",
         "toggle_recording",
+        "repair_capture",
     ]
 
     static func toolNames(for profile: MCPAccessProfile) -> [String] {

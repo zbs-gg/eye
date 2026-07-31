@@ -217,6 +217,12 @@ targets:
       - path: ZBSEyeApp/Data/DiskReservePolicy.swift
       - path: ZBSEyeApp/Data/CaptureRecord.swift
       - path: ZBSEyeApp/Data/Models.swift
+      - path: ZBSEyeApp/Capture/CaptureHealth.swift
+      - path: ZBSEyeApp/Capture/CaptureHealthController.swift
+      - path: ZBSEyeApp/Capture/CaptureRepairOrchestrator.swift
+      - path: ZBSEyeApp/Data/CaptureCoverageMaintenance.swift
+      - path: ZBSEyeApp/Data/CaptureCoverageQuery.swift
+      - path: ZBSEyeApp/Server/CaptureStatusDTO.swift
       - path: ZBSEyeApp/Data/ZBSEyeDatabase.swift
       - path: ZBSEyeApp/Data/StorageManager.swift
       - path: ZBSEyeApp/Data/RetentionManager.swift
@@ -287,6 +293,7 @@ targets:
       - path: ZBSEyeApp/State/ResourceUsageStore.swift
       - path: ZBSEyeApp/System/ResourceUsageSampler.swift
       - path: ZBSEyeApp/Views/Settings/SettingsRoute.swift
+      - path: ZBSEyeApp/Views/Settings/CaptureRepairPresentation.swift
     dependencies:
       - package: FluidAudio
         product: FluidAudio

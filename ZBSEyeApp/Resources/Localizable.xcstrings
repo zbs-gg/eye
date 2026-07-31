@@ -10212,6 +10212,66 @@
     "Connected": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Подключено" } } }
     },
+    "Allow capture in macOS Settings. ZBS Eye will retry after macOS reports that access is granted.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Разрешите запись в настройках macOS. ZBS Eye повторит попытку, когда macOS подтвердит доступ." } } }
+    },
+    "Capture": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Запись" } } }
+    },
+    "Capture coverage could not be verified for this range. Missing results do not prove inactivity.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Не удалось проверить полноту записи в этом диапазоне. Отсутствие результатов не доказывает бездействие." } } }
+    },
+    "Capture may be incomplete for %@ in this range. Missing results do not prove inactivity.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Запись в этом диапазоне может быть неполной для %1$@. Отсутствие результатов не доказывает бездействие." } } }
+    },
+    "Capture needs repair": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Запись требует восстановления" } } }
+    },
+    "Capture permission needed": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Нужен доступ к записи" } } }
+    },
+    "If it still fails, quit other apps currently using screen capture.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Если не помогло, закройте другие приложения, которые сейчас записывают экран." } } }
+    },
+    "Log out or restart the Mac only as the final macOS recovery step.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Выходите из учётной записи или перезагружайте Mac только как последний шаг восстановления macOS." } } }
+    },
+    "Recovering capture…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Восстанавливаем запись…" } } }
+    },
+    "Repair Capture": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Восстановить запись" } } }
+    },
+    "Screen": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Экран" } } }
+    },
+    "Try the Eye-owned repair once.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Один раз запустите восстановление средствами Eye." } } }
+    },
+    "ZBS Eye is rebuilding only its own capture resources.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "ZBS Eye пересоздаёт только собственные ресурсы записи." } } }
+    },
+    "ZBS Eye stopped automatic retries. Your recording choice and existing history are safe.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "ZBS Eye остановил автоматические попытки. Ваш выбор записи и существующая история сохранены." } } }
+    },
+    "Capture repair could not safely finish — retry repair": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Не удалось безопасно завершить восстановление записи — повторите попытку" } } }
+    },
+    "recovering": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "восстанавливается" } } }
+    },
+    "repair needed": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "нужно восстановление" } } }
+    },
+    "permission needed": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "нужен доступ" } } }
+    },
+    "suspended": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "приостановлено" } } }
+    },
+    "off": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "выключено" } } }
+    },
     "Waiting": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Ожидание" } } }
     }

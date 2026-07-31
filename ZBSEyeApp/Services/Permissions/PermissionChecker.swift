@@ -5,11 +5,11 @@ import CoreGraphics
 import Speech
 import AppKit
 
-enum PermissionStatus: String, Sendable {
+enum PermissionStatus: String, Sendable, Equatable {
     case granted, denied, notDetermined, needsRestart
 }
 
-struct PermissionSnapshot: Sendable {
+struct PermissionSnapshot: Sendable, Equatable {
     var screenRecording: PermissionStatus = .notDetermined
     var accessibility: PermissionStatus = .notDetermined
     var microphone: PermissionStatus = .notDetermined

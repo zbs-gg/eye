@@ -19,12 +19,14 @@ final class CaptureCoordinator {
         "net.kovidgoyal.kitty", "com.mitchellh.ghostty", "com.github.wez.wezterm",
         "io.alacritty", "org.alacritty", "com.figma.Desktop",
     ]
+    private static let screenRequestDeadlineSeconds = 10.0
 
     private let ingest: IngestService
     private let config: CaptureConfig
     private let axReader: AXReader
     private let pipeline: FramePipeline
     private let browserContent: BrowserContentStore
+    private let healthController: CaptureHealthController
 
     private(set) var isRunning = false
     private var sessionGate = CaptureSessionGateState(reasons: [])
@@ -36,6 +38,7 @@ final class CaptureCoordinator {
     private var defaultObservers: [NSObjectProtocol] = []
     private var distributedObservers: [NSObjectProtocol] = []
     private var cycleTask: Task<Void, Never>?
+    private var cycleGeneration: UInt64 = 0
     private var pendingCycle = false
 
     private var capability: [String: CaptureClass] = [:]
@@ -44,20 +47,13 @@ final class CaptureCoordinator {
     private var lastContentText: [String: String] = [:]
     private var lastBrowserContentHash: [String: String] = [:]
     private var lastBrowserOCRAt: [String: Date] = [:]
-    private var sckFailureStreak = 0
     private var lastIdleCaptureAt = Date.distantPast
     private var burstTask: Task<Void, Never>?
     private var lastProtectedSystemShell: String?
+    private var lastObservedIdleSeconds: Double?
+    private var inputRevision: Int64 = 0
 
     var onFrame: (@MainActor () -> Void)?
-    /// N SCK failures in a row with a granted permission (the classic -3801: TCC requires a process restart) —
-    /// surface it, otherwise "Recording" stays lit at zero frames.
-    var onCaptureBroken: (@MainActor () -> Void)?
-    /// Capture recovered after failures (a transient noDisplay on wake/monitor change) — clear
-    /// needsRestart, otherwise a one-way ratchet blocks recording forever with a false "No permissions".
-    var onCaptureRecovered: (@MainActor () -> Void)?
-    /// Heartbeat: a cycle completed normally (including dedup and idle-skip) — for "capture is alive" in the UI.
-    var onCycleOK: (@MainActor () -> Void)?
     /// Returns false at critically low free space — the cycle skips capture (we don't fill the disk to the brim).
     var diskOK: @MainActor () -> Bool = { true }
     /// Privacy exclusions (1Password/bank): true → we don't record the app. Default — record everything.
@@ -68,13 +64,16 @@ final class CaptureCoordinator {
     init(
         ingest: IngestService,
         browserContent: BrowserContentStore,
-        config: CaptureConfig = CaptureConfig()
+        config: CaptureConfig = CaptureConfig(),
+        healthController: CaptureHealthController? = nil
     ) {
         self.ingest = ingest
         self.browserContent = browserContent
         self.config = config
         self.axReader = AXReader(config: config)
         self.pipeline = FramePipeline(config: config)
+        self.healthController = healthController
+            ?? CaptureHealthController(nowMs: Self.epochMs())
         loadCapability()
     }
 
@@ -124,6 +123,9 @@ final class CaptureCoordinator {
             sessionLockedNow: Self.currentSessionLocked()
         )
         applySessionGate(initialSessionGate)
+        if !initialSessionGate.isOpen {
+            healthController.setSuspension(.locked, nowMs: Self.epochMs())
+        }
 
         let wsc = NSWorkspace.shared.notificationCenter
         observers.append(wsc.addObserver(forName: NSWorkspace.didActivateApplicationNotification,
@@ -199,7 +201,16 @@ final class CaptureCoordinator {
         defaultObservers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in await self?.pipeline.invalidateContent() }
+            Task { @MainActor in
+                guard let self else { return }
+                self.healthController.invalidatePipeline(
+                    .displayChanged,
+                    screenLocked: self.screenLocked,
+                    nowMs: Self.epochMs()
+                )
+                await self.pipeline.resetDisposableState()
+                if self.isRunning, !self.suspended { self.trigger() }
+            }
         })
 
         let dnc = DistributedNotificationCenter.default()
@@ -247,13 +258,46 @@ final class CaptureCoordinator {
         let hadInFlightCycle = cycle != nil
         await cycle?.value
         await axReader.reset()
-        await pipeline.invalidateContent()
+        await pipeline.resetDisposableState()
         await browserContent.clear()
         return CaptureDrainAcknowledgement(
             hadActiveCapture: wasRunning,
             hadInFlightCycle: hadInFlightCycle,
             activeCycles: 0
         )
+    }
+
+    /// Executes one controller-admitted Eye-owned recovery attempt. It resets
+    /// only this app's disposable screenshot state; it never changes TCC or a
+    /// global macOS capture service.
+    func performScreenRecovery(_ attempt: CaptureRecoveryAttempt) async {
+        guard attempt.leg == .screen,
+              healthController.isCurrentRecoveryAttempt(attempt),
+              isRunning,
+              !suspended,
+              !screenLocked else {
+            healthController.recoveryAttemptFailed(
+                leg: .screen,
+                generation: attempt.generation,
+                reason: .screenRequestFailed,
+                nowMs: Self.epochMs()
+            )
+            return
+        }
+        healthController.invalidatePipeline(
+            .recovery,
+            screenLocked: false,
+            nowMs: Self.epochMs()
+        )
+        await pipeline.resetDisposableState()
+        guard healthController.markScreenRecoveryReady(attempt) else {
+            healthController.screenRecoveryOwnershipUnavailable(
+                attempt,
+                nowMs: Self.epochMs()
+            )
+            return
+        }
+        trigger()
     }
 
     private func stopAdmission() -> Task<Void, Never>? {
@@ -269,6 +313,7 @@ final class CaptureCoordinator {
         distributedObservers.removeAll()
         tickTimer?.invalidate(); tickTimer = nil
         gateRevision &+= 1
+        cycleGeneration &+= 1
         let cycle = cycleTask
         cycle?.cancel(); cycleTask = nil
         burstTask?.cancel(); burstTask = nil
@@ -304,7 +349,7 @@ final class CaptureCoordinator {
         // This is HEALTH, not a failure — we keep the heartbeat, otherwise the UI after lunch would scream "capture died".
         let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
         if idle > config.idleThresholdSec {
-            onCycleOK?()
+            healthController.recordScreenIntentional(.userIdle, nowMs: Self.epochMs())
             let now = Date()
             if now.timeIntervalSince(lastIdleCaptureAt) >= config.idleCaptureIntervalSec {
                 lastIdleCaptureAt = now
@@ -345,9 +390,11 @@ final class CaptureCoordinator {
         guard isRunning, !suspended,
               CaptureSessionPolicy.mayCapture(screenLocked: screenLocked) else { return }
         if cycleTask != nil { pendingCycle = true; return }   // single-flight
+        cycleGeneration &+= 1
+        let generation = cycleGeneration
         cycleTask = Task { @MainActor [weak self] in
             await self?.runCycle()
-            guard let self else { return }
+            guard let self, self.cycleGeneration == generation else { return }
             self.cycleTask = nil
             if self.pendingCycle { self.pendingCycle = false; self.trigger() }
         }
@@ -373,17 +420,23 @@ final class CaptureCoordinator {
                 Log.capture.error("capture refused for protected system shell: \(bundleId, privacy: .public)")
                 lastProtectedSystemShell = bundleId
             }
-            onCycleOK?()
+            healthController.recordScreenIntentional(.privacyExcluded, nowMs: Self.epochMs())
             return
         }
         lastProtectedSystemShell = nil
         // privacy exclusion: a deliberate skip = cycle health (heartbeat), not a failure
-        if isIgnoredApp(bundleId) { onCycleOK?(); return }
+        if isIgnoredApp(bundleId) {
+            healthController.recordScreenIntentional(.privacyExcluded, nowMs: Self.epochMs())
+            return
+        }
         let pid = app.processIdentifier
         // THE MAIN FIX (Pro's diagnosis): NEVER capture our own process. On a "Record" click ZBS Eye
         // stays frontmost → AXReader would read OUR AX tree → kAXValue on our SwiftUI Slider synchronously
         // calls its @MainActor Binding.get (TimelineView) right on the axreader queue → dispatch_assert_queue → crash.
-        guard pid != ProcessInfo.processInfo.processIdentifier else { onCycleOK?(); return }
+        guard pid != ProcessInfo.processInfo.processIdentifier else {
+            healthController.recordScreenIntentional(.selfAppExcluded, nowMs: Self.epochMs())
+            return
+        }
 
         let windowInfo = Self.frontmostWindowInfo(pid: pid)
         var browser = await browserContent.match(
@@ -452,6 +505,16 @@ final class CaptureCoordinator {
         // display, not the screen of the other app's active window.
         let focusedDisplayID = windowInfo.displayID
         let protectedApplicationSnapshot = CaptureSessionPolicy.protectedRunningApplicationSnapshot()
+        guard let request = healthController.beginScreenRequest(nowMs: Self.epochMs()) else { return }
+        let inputEvidenceRevision = observeInputRevision()
+        let deadlineTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Self.screenRequestDeadlineSeconds))
+            guard !Task.isCancelled else { return }
+            _ = self?.healthController.screenRequestDeadlineElapsed(
+                request,
+                nowMs: Self.epochMs()
+            )
+        }
 
         let frame: ProcessedFrame?
         do {
@@ -460,14 +523,40 @@ final class CaptureCoordinator {
             frame = try await pipeline.process(displayID: focusedDisplayID, needsOCR: needsOCR,
                                                excludedBundleIds: excludes,
                                                protectedApplicationSnapshot: protectedApplicationSnapshot)
-            if sckFailureStreak > 0 { onCaptureRecovered?() }   // a transient failure passed — clear the ratchet
-            sckFailureStreak = 0
-            onCycleOK?()
+            deadlineTask.cancel()
+            guard let frame else {
+                _ = healthController.completeScreenRequest(
+                    request,
+                    result: .failure(.screenRequestFailed),
+                    nowMs: Self.epochMs()
+                )
+                return
+            }
+            let contextText = browser?.text ?? ax.contentText
+            let context = CaptureContext(
+                displayID: String(frame.displayID),
+                frontmostBundleID: bundleId,
+                focusedWindowID: ax.windowTitle,
+                axRevision: Self.stableRevision(contextText),
+                inputRevision: inputEvidenceRevision
+            )
+            guard healthController.completeScreenRequest(
+                request,
+                result: .success(
+                    fingerprint: frame.fingerprint,
+                    context: context,
+                    wasDuplicate: frame.isDuplicate
+                ),
+                nowMs: Self.epochMs()
+            ) == .accepted else { return }
         } catch {
-            // -3801 after a permission grant / no display. Consecutive failures = capture effectively dead.
-            sckFailureStreak += 1
-            Log.capture.error("screen_capture_failed streak=\(self.sckFailureStreak)")
-            if sckFailureStreak == 3 { onCaptureBroken?() }
+            deadlineTask.cancel()
+            guard healthController.completeScreenRequest(
+                request,
+                result: .failure(.screenRequestFailed),
+                nowMs: Self.epochMs()
+            ) == .accepted else { return }
+            Log.capture.error("screen_capture_failed")
             return
         }
         guard let frame else { return }
@@ -505,6 +594,32 @@ final class CaptureCoordinator {
         lastBrowserContentHash[bundleId] = browser?.contentHash
     }
 
+    private func observeInputRevision() -> Int64 {
+        let idle = CGEventSource.secondsSinceLastEventType(
+            .combinedSessionState,
+            eventType: CGEventType(rawValue: ~0)!
+        )
+        if let previous = lastObservedIdleSeconds, idle + 0.25 < previous {
+            inputRevision &+= 1
+        }
+        lastObservedIdleSeconds = idle
+        return inputRevision
+    }
+
+    private static func stableRevision(_ text: String) -> Int64? {
+        guard !text.isEmpty else { return nil }
+        var hash: UInt64 = 1_469_598_103_934_665_603
+        for byte in text.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return Int64(bitPattern: hash)
+    }
+
+    private static func epochMs(_ date: Date = Date()) -> Int64 {
+        Int64(date.timeIntervalSince1970 * 1_000)
+    }
+
     private func resumeIfSessionUnlocked(clearing reason: CaptureSuspensionReasons) async {
         let previousGate = sessionGate
         let gate = CaptureSessionPolicy.resumeSignalGate(
@@ -521,6 +636,11 @@ final class CaptureCoordinator {
 
     private func openGateAfterSessionBoundary(_ gate: CaptureSessionGateState) async {
         let expectedRevision = gateRevision
+        healthController.invalidatePipeline(
+            .unlock,
+            screenLocked: false,
+            nowMs: Self.epochMs()
+        )
         // Keep admission closed while the actor invalidates its session epoch.
         await pipeline.invalidateSessionBoundary()
         guard isRunning, gateRevision == expectedRevision else { return }
@@ -543,6 +663,15 @@ final class CaptureCoordinator {
         guard gate != sessionGate else { return }
         sessionGate = gate
         gateRevision &+= 1
+        let reason: CaptureSuspensionReason?
+        if gate.reasons.contains(.session) {
+            reason = .locked
+        } else if gate.suspended {
+            reason = .sleeping
+        } else {
+            reason = nil
+        }
+        healthController.setSuspension(reason, nowMs: Self.epochMs())
     }
 
     private func currentSessionStillAllowsCapture() -> Bool {

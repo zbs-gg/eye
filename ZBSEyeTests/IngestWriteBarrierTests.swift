@@ -4,7 +4,7 @@ final class IngestWriteBarrierTests: XCTestCase {
     func testDrainWaitsForWriteSuspendedAcrossAwait() async {
         let barrier = IngestWriteBarrier()
         let completion = AsyncBarrierCompletion()
-        barrier.beginWrite()
+        XCTAssertTrue(barrier.beginWrite())
 
         let drain = Task {
             let acknowledgement = await barrier.drain()
@@ -26,8 +26,8 @@ final class IngestWriteBarrierTests: XCTestCase {
     func testDrainWaitsForEveryConcurrentWrite() async {
         let barrier = IngestWriteBarrier()
         let completion = AsyncBarrierCompletion()
-        barrier.beginWrite()
-        barrier.beginWrite()
+        XCTAssertTrue(barrier.beginWrite())
+        XCTAssertTrue(barrier.beginWrite())
 
         let drain = Task {
             let acknowledgement = await barrier.drain()
@@ -43,6 +43,25 @@ final class IngestWriteBarrierTests: XCTestCase {
 
         let acknowledgement = await drain.value
         XCTAssertEqual(acknowledgement, IngestDrainAcknowledgement(activeWrites: 0))
+    }
+
+    func testSuspendClosesAdmissionUntilExactDrainIsResumed() async {
+        let barrier = IngestWriteBarrier()
+        XCTAssertTrue(barrier.beginWrite())
+
+        let suspension = Task { await barrier.suspendAndDrain() }
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(barrier.beginWrite())
+        XCTAssertTrue(barrier.snapshot().suspended)
+
+        barrier.finishWrite()
+        let acknowledgement = await suspension.value
+        XCTAssertEqual(acknowledgement.activeWrites, 0)
+        XCTAssertFalse(barrier.beginWrite())
+
+        barrier.resume()
+        XCTAssertTrue(barrier.beginWrite())
+        barrier.finishWrite()
     }
 }
 

@@ -18,6 +18,7 @@ final class AskStore {
         var contextTruncated = false
         var provenance: AIExecutionProvenance?
         var scope: AskScopeSnapshot?
+        var coverage: CaptureCoverageDisclosure = .clean
     }
 
     private(set) var messages: [Message] = []
@@ -127,7 +128,8 @@ final class AskStore {
                     truncated: answer.truncated,
                     contextTruncated: answer.contextTruncated,
                     provenance: answer.provenance,
-                    scope: scope
+                    scope: scope,
+                    coverage: answer.coverage
                 ))
             } catch is CancellationError {
                 return

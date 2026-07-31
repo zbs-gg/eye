@@ -51,6 +51,15 @@ private struct TimelineBody: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let warning = store.coverageDisclosure.userFacingWarning {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 7)
+                    .background(Color.orange.opacity(0.08))
+            }
             Divider()
             // The scrubber is always the backdrop; search drops in as a Spotlight overlay on top (not a mode-switch).
             ZStack(alignment: .top) {

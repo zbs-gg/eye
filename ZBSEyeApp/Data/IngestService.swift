@@ -28,9 +28,105 @@ actor IngestService {
         await writeBarrier.drain()
     }
 
+    func suspendAndDrainForRelocation() async -> IngestDrainAcknowledgement {
+        await writeBarrier.suspendAndDrain()
+    }
+
+    func resumeAfterRelocation() {
+        writeBarrier.resume()
+    }
+
+    /// Durably opens an uncertainty interval before recovery is published.
+    /// Returns false for an exact replay or when the leg already has an open
+    /// episode; callers must stay conservative instead of replacing ownership.
+    @discardableResult
+    func openCaptureCoverage(_ open: CaptureCoverageOpen) async throws -> Bool {
+        guard writeBarrier.beginWrite() else {
+            throw DatabaseWriterMaintenanceError.suspendedForRelocation
+        }
+        defer { writeBarrier.finishWrite() }
+        return try await db.pool.write { dbc in
+            if let existing = try Row.fetchOne(
+                dbc,
+                sql: """
+                    SELECT leg, reason, start_ms
+                    FROM capture_coverage_intervals
+                    WHERE episode_id = ? AND generation = ?
+                    """,
+                arguments: [open.episodeID, open.generation]
+            ) {
+                let same = (existing["leg"] as String) == open.leg.rawValue
+                    && (existing["reason"] as String) == open.reason.rawValue
+                    && (existing["start_ms"] as Int64) == open.startMs
+                if same { return false }
+                throw CaptureCoverageWriteError.identityConflict
+            }
+            let alreadyOpen = try Bool.fetchOne(
+                dbc,
+                sql: """
+                    SELECT EXISTS(
+                        SELECT 1 FROM capture_coverage_intervals
+                        WHERE leg = ? AND end_ms IS NULL
+                    )
+                    """,
+                arguments: [open.leg.rawValue]
+            ) ?? false
+            guard !alreadyOpen else { return false }
+            try dbc.execute(
+                sql: """
+                    INSERT INTO capture_coverage_intervals(
+                        leg, reason, episode_id, generation, start_ms
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                arguments: [
+                    open.leg.rawValue,
+                    open.reason.rawValue,
+                    open.episodeID,
+                    open.generation,
+                    open.startMs,
+                ]
+            )
+            return true
+        }
+    }
+
+    /// Compare-and-set close. A lost race returns false and deliberately leaves
+    /// health conservative; only the exact episode/generation owner can close.
+    @discardableResult
+    func closeCaptureCoverage(_ close: CaptureCoverageClose) async throws -> Bool {
+        guard writeBarrier.beginWrite() else {
+            throw DatabaseWriterMaintenanceError.suspendedForRelocation
+        }
+        defer { writeBarrier.finishWrite() }
+        return try await db.pool.write { dbc in
+            try dbc.execute(
+                sql: """
+                    UPDATE capture_coverage_intervals
+                    SET end_ms = ?, close_cause = ?
+                    WHERE leg = ?
+                      AND episode_id = ?
+                      AND generation = ?
+                      AND end_ms IS NULL
+                      AND ? >= start_ms
+                    """,
+                arguments: [
+                    close.endMs,
+                    close.cause.rawValue,
+                    close.leg.rawValue,
+                    close.episodeID,
+                    close.generation,
+                    close.endMs,
+                ]
+            )
+            return dbc.changesCount == 1
+        }
+    }
+
     @discardableResult
     func ingest(_ rec: ScreenCaptureRecord) async throws -> Int64 {
-        writeBarrier.beginWrite()
+        guard writeBarrier.beginWrite() else {
+            throw DatabaseWriterMaintenanceError.suspendedForRelocation
+        }
         defer { writeBarrier.finishWrite() }
         // 1) We write the frame file BEFORE the transaction (if capture handed over bytes), the path — into the record.
         //    let (not var) — otherwise Swift 6 won't allow capturing it in the concurrent write closure.
@@ -98,7 +194,9 @@ actor IngestService {
 
     @discardableResult
     func ingest(_ rec: AudioCaptureRecord) async throws -> Int64 {
-        writeBarrier.beginWrite()
+        guard writeBarrier.beginWrite() else {
+            throw DatabaseWriterMaintenanceError.suspendedForRelocation
+        }
         defer { writeBarrier.finishWrite() }
         let tsMs = Int64(rec.timestamp.timeIntervalSince1970 * 1000)
         let bytes = rec.bytes ?? storage.fileSize(relativePath: rec.relativePath)
@@ -114,7 +212,9 @@ actor IngestService {
     /// + a semantic vector into vec_transcripts (cross-lingual "a ru query finds an en call").
     @discardableResult
     func ingest(_ rec: TranscriptionRecord) async throws -> Int64 {
-        writeBarrier.beginWrite()
+        guard writeBarrier.beginWrite() else {
+            throw DatabaseWriterMaintenanceError.suspendedForRelocation
+        }
         defer { writeBarrier.finishWrite() }
         // No vector here — enqueue for the background indexer (off the hot path). FTS stays instant; the
         // cross-lingual vector ('a ru query finds an en call') is filled by the indexer shortly after.
@@ -140,4 +240,8 @@ actor IngestService {
         try row.insert(db)
         return row.id!
     }
+}
+
+enum CaptureCoverageWriteError: Error, Sendable, Equatable {
+    case identityConflict
 }

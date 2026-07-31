@@ -76,7 +76,6 @@ final class AudioSettingsStore {
     /// Transcription health (refreshed when Settings opens) — to show "no on-device model".
     var health: TranscriptionHealth?
     var micEngineFailed = false
-    var systemEngineFailed = false
 
     /// Installed once by AppEnvironment. Views only edit intent; capture
     /// synchronization has one owner and therefore fires exactly once.

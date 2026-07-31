@@ -57,7 +57,9 @@ final class LowDiskGuardTests: XCTestCase {
         )
         XCTAssertEqual(guardState.evaluate(availableBytes: 99), .pauseCapture)
         XCTAssertEqual(guardState.evaluate(availableBytes: 200), .resumeCapture)
+        var admission = RecordingMaintenanceAdmission()
         let timedOutDrain = RecordingMaintenanceDrain(
+            lease: admission.acquire(.lowDisk),
             capture: CaptureDrainAcknowledgement(
                 hadActiveCapture: true,
                 hadInFlightCycle: false,

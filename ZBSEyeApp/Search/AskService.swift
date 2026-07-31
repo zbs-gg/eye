@@ -31,10 +31,32 @@ struct AskRetrievedEvidence: Sendable {
 struct AskProviderTextPayload: Sendable, Equatable {
     let question: String
     let evidenceTexts: [String]
+    let coverageInstruction: String?
 
-    init(question: String, evidence: [AskRetrievedEvidence]) {
+    init(
+        question: String,
+        evidence: [AskRetrievedEvidence],
+        coverageInstruction: String? = nil
+    ) {
         self.question = question
         self.evidenceTexts = evidence.map(\.text)
+        self.coverageInstruction = coverageInstruction
+    }
+}
+
+protocol AskCoverageProviding: Sendable {
+    func disclosure(for scope: AskScopeSnapshot) async throws -> CaptureCoverageDisclosure
+}
+
+extension CaptureCoverageQuery: AskCoverageProviding {
+    func disclosure(for scope: AskScopeSnapshot) async throws -> CaptureCoverageDisclosure {
+        try await disclosure(from: scope.from, to: scope.to)
+    }
+}
+
+private struct CleanAskCoverageProvider: AskCoverageProviding {
+    func disclosure(for scope: AskScopeSnapshot) async throws -> CaptureCoverageDisclosure {
+        .clean
     }
 }
 
@@ -149,19 +171,22 @@ actor AskService: AskAnswering {
         let contextTruncated: Bool
         let sources: [SearchResult]
         let provenance: AIExecutionProvenance?
+        let coverage: CaptureCoverageDisclosure
 
         init(
             text: String,
             truncated: Bool,
             contextTruncated: Bool = false,
             sources: [SearchResult],
-            provenance: AIExecutionProvenance?
+            provenance: AIExecutionProvenance?,
+            coverage: CaptureCoverageDisclosure = .clean
         ) {
             self.text = text
             self.truncated = truncated
             self.contextTruncated = contextTruncated
             self.sources = sources
             self.provenance = provenance
+            self.coverage = coverage
         }
     }
 
@@ -172,13 +197,16 @@ actor AskService: AskAnswering {
 
     private let retrieval: any AskRetrievalProviding
     private let router: any AskLLMRouting
+    private let coverage: any AskCoverageProviding
 
     init(
         retrieval: any AskRetrievalProviding,
-        router: any AskLLMRouting
+        router: any AskLLMRouting,
+        coverage: (any AskCoverageProviding)? = nil
     ) {
         self.retrieval = retrieval
         self.router = router
+        self.coverage = coverage ?? CleanAskCoverageProvider()
     }
 
     func answer(
@@ -233,9 +261,19 @@ actor AskService: AskAnswering {
         let outputChannel = provider.outputChannel
 
         let language = Self.language(for: question)
+        let coverageDisclosure: CaptureCoverageDisclosure
+        do {
+            coverageDisclosure = try await coverage.disclosure(for: scope)
+        } catch {
+            coverageDisclosure = .metadataUnavailable
+        }
+        let coverageInstruction = coverageDisclosure.modelInstruction(
+            russian: language == .russian
+        )
         let baseSystem = Self.systemPrompt(
             language: language,
             statusHint: nil,
+            coverageInstruction: coverageInstruction,
             outputChannel: outputChannel
         )
         let userPreamble = Self.userPreamble(question: question, language: language)
@@ -261,11 +299,16 @@ actor AskService: AskAnswering {
                 text: Self.noHitsMessage(language: language),
                 truncated: false,
                 sources: [],
-                provenance: nil
+                provenance: nil,
+                coverage: coverageDisclosure
             )
         }
 
-        let payload = AskProviderTextPayload(question: question, evidence: evidence)
+        let payload = AskProviderTextPayload(
+            question: question,
+            evidence: evidence,
+            coverageInstruction: coverageInstruction
+        )
         let evidenceTexts = payload.evidenceTexts
         let statusHint = LocalAIContextPolicy.askStatusHint(
             question: payload.question,
@@ -274,6 +317,7 @@ actor AskService: AskAnswering {
         let system = Self.systemPrompt(
             language: language,
             statusHint: statusHint,
+            coverageInstruction: payload.coverageInstruction,
             outputChannel: outputChannel
         )
         let preliminaryPostamble = Self.userPostamble(
@@ -360,7 +404,8 @@ actor AskService: AskAnswering {
             truncated: response.truncated,
             contextTruncated: budget.truncated,
             sources: budget.includedFragmentIndices.map { evidence[$0].source },
-            provenance: response.provenance
+            provenance: response.provenance,
+            coverage: coverageDisclosure
         )
     }
 
@@ -373,6 +418,7 @@ actor AskService: AskAnswering {
     private static func systemPrompt(
         language: PromptLanguage,
         statusHint: LocalAIAskStatusHint?,
+        coverageInstruction: String?,
         outputChannel: AIModelOutputChannel
     ) -> String {
         let task: String
@@ -394,7 +440,8 @@ actor AskService: AskAnswering {
         } else {
             uncertainty = ""
         }
-        let groundedTask = task + uncertainty
+        let coverage = coverageInstruction.map { " \($0)" } ?? ""
+        let groundedTask = task + uncertainty + coverage
         guard outputChannel == .builtInNativeTool else {
             let citationDirection = language == .russian
                 ? " Каждое фактическое утверждение связывай с [n] прямо в видимом ответе."

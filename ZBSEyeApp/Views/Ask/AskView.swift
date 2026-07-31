@@ -206,6 +206,11 @@ private struct MessageRow: View {
                     Text("Only the highest-ranked fragments fit the selected model's context window.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                if let warning = message.coverage.userFacingWarning {
+                    Label(warning, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
                 if !message.sources.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Sources").font(.caption).foregroundStyle(.secondary)

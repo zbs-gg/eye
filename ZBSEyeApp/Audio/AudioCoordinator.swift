@@ -21,6 +21,7 @@ final class AudioCoordinator {
     @ObservationIgnored private let micPipeline: AudioPipeline
     @ObservationIgnored private let systemPipeline: AudioPipeline
     @ObservationIgnored private let transcription: TranscriptionService
+    @ObservationIgnored private let healthController: CaptureHealthController?
     @ObservationIgnored private var micTask: Task<Void, Never>?
     @ObservationIgnored private var systemTask: Task<
         SystemAudioCaptureTeardownOutcome?,
@@ -35,7 +36,6 @@ final class AudioCoordinator {
     @ObservationIgnored var onSegment: (@MainActor () -> Void)?
 
     @ObservationIgnored private var micRestarts = RestartBudget()
-    @ObservationIgnored private var systemRestarts = RestartBudget()
     /// Bumped on every coordinator start()/stop(): restart loops from the previous session self-terminate.
     @ObservationIgnored private var legGeneration = 0
     /// Leg epochs: the tail of an OLD runLeg must not overwrite the micRunning/systemRunning of a NEW start.
@@ -48,6 +48,7 @@ final class AudioCoordinator {
     @ObservationIgnored private var legacyIntent = CallSourceSelection.none
     @ObservationIgnored private var explicitCallIntent = CallSourceSelection.none
     @ObservationIgnored private var systemStarting = false
+    @ObservationIgnored private var suppressSystemStopObservation = false
 
     private var desiredSources: CallSourceSelection {
         CallSourceSelection(
@@ -56,7 +57,12 @@ final class AudioCoordinator {
         )
     }
 
-    init(storage: StorageManager, ingest: IngestService, config: AudioConfig = AudioConfig()) {
+    init(
+        storage: StorageManager,
+        ingest: IngestService,
+        config: AudioConfig = AudioConfig(),
+        healthController: CaptureHealthController? = nil
+    ) {
         let backend = SFSpeechBackend()
         let transcription = TranscriptionService(backend: backend, ingest: ingest, config: config)
         self.transcription = transcription
@@ -66,6 +72,7 @@ final class AudioCoordinator {
                                             transcription: transcription, config: config, channel: "system")
         self.micEngine = AudioCaptureEngine(config: config)
         self.systemEngine = SystemAudioCaptureEngine(config: config)
+        self.healthController = healthController
 
         // 24/7 resilience: an audio-device change (AirPods) / SCStream death → auto-restart the leg
         // with a delay and a budget (anti-loop on a permanent breakage). Previously — a silent death.
@@ -73,7 +80,7 @@ final class AudioCoordinator {
             Task { @MainActor in await self?.restartLeg(mic: true) }
         }
         systemEngine.onStreamStopped = { [weak self] in
-            Task { @MainActor in await self?.restartLeg(mic: false) }
+            Task { @MainActor in self?.systemAudioDidStop() }
         }
     }
 
@@ -83,26 +90,31 @@ final class AudioCoordinator {
     /// generation guard: a manual stop()/start() during the pause makes this loop stale.
     private func restartLeg(mic: Bool) async {
         guard isRunning, mic ? desiredSources.me : desiredSources.system else { return }
+        if !mic {
+            systemAudioDidStop()
+            return
+        }
         let gen = legGeneration
         if mic { micRunning = false } else { systemRunning = false }
         Log.audio.info("\(mic ? "mic" : "system", privacy: .public) leg died — entering restart loop")
         while isRunning && legGeneration == gen
                 && (mic ? desiredSources.me : desiredSources.system)
                 && !Task.isCancelled {
-            let budgetOK = mic ? micRestarts.allow() : systemRestarts.allow()
+            let budgetOK = micRestarts.allow()
             if !budgetOK {
-                if mic { micStartFailed = true } else { systemStartFailed = true }
+                micStartFailed = true
                 Log.audio.error("\(mic ? "mic" : "system", privacy: .public) leg: budget exhausted, cooling down 60s")
             }
             try? await Task.sleep(for: .seconds(budgetOK ? 1 : 60))
             guard isRunning, legGeneration == gen else { return }
-            if mic {
-                if startMicLeg() { return }
-            } else {
-                startSystemLeg()   // async engine: a start failure will come back as a new restartLeg from catch
-                return
-            }
+            if startMicLeg() { return }
         }
+    }
+
+    private func systemAudioDidStop() {
+        guard isRunning, desiredSources.system, !suppressSystemStopObservation else { return }
+        systemRunning = false
+        healthController?.recordSystemAudioFailure(nowMs: Self.epochMs())
     }
 
     func start(mic: Bool, system: Bool) {
@@ -110,6 +122,31 @@ final class AudioCoordinator {
         guard mic || system else { return }
         maintenanceSuspended = false
         ensurePhysicalSources()
+    }
+
+    /// Reconciles the continuous-recording intent per physical leg. Explicit
+    /// call ownership remains intact, so toggling system audio cannot tear down
+    /// an active call or restart a healthy microphone.
+    func reconfigure(mic: Bool, system: Bool) {
+        let previous = desiredSources
+        legacyIntent = CallSourceSelection(me: mic, system: system)
+        let next = desiredSources
+        maintenanceSuspended = false
+
+        if next.me, !micRunning { _ = startMicLeg() }
+        if next.system, !systemRunning, systemStartIsAdmitted { startSystemLeg() }
+
+        if previous.me, !next.me {
+            micEpoch += 1
+            micRunning = false
+            micEngine.stop()
+        }
+        if previous.system, !next.system {
+            Task { @MainActor [weak self] in
+                _ = await self?.stopSystemAndDrain(timeout: .seconds(5))
+            }
+        }
+        if next.isEmpty { isRunning = false }
     }
 
     func stop() {
@@ -184,6 +221,58 @@ final class AudioCoordinator {
         let systemCapture = systemEngine.stop()
         // We do NOT nil out micTask/systemTask: the next start waits for them via previous (serialization of cycles).
         return (micTask, systemTask, systemCapture)
+    }
+
+    /// Stops only Eye's system-audio leg and waits for both an in-flight start
+    /// and the underlying SCK teardown. Microphone and screen capture are not
+    /// touched.
+    func stopSystemAndDrain(
+        timeout: Duration? = nil
+    ) async -> SystemAudioCaptureTeardownOutcome {
+        suppressSystemStopObservation = true
+        systemStarting = false
+        systemRunning = false
+        let direct = systemEngine.stop()
+        let previous = systemTask
+        let drain = Task { @MainActor in
+            let directOutcome = await direct?.value ?? .notNeeded
+            let taskOutcome = await previous?.value ?? .notNeeded
+            return Self.combineCaptureOutcomes(directOutcome, taskOutcome)
+        }
+        let outcome: SystemAudioCaptureTeardownOutcome
+        if let timeout {
+            outcome = await SystemAudioTeardownDeadline.wait(for: drain, timeout: timeout)
+        } else {
+            outcome = await drain.value
+        }
+        suppressSystemStopObservation = false
+        return outcome
+    }
+
+    func performSystemAudioRecovery(_ attempt: CaptureRecoveryAttempt) async {
+        guard attempt.leg == .systemAudio,
+              healthController?.isCurrentRecoveryAttempt(attempt) == true,
+              isRunning,
+              desiredSources.system else {
+            healthController?.recoveryAttemptFailed(
+                leg: .systemAudio,
+                generation: attempt.generation,
+                reason: .systemAudioStartFailed,
+                nowMs: Self.epochMs()
+            )
+            return
+        }
+        let outcome = await stopSystemAndDrain(timeout: .seconds(5))
+        guard outcome.isConfirmedStopped else {
+            healthController?.recoveryAttemptFailed(
+                leg: .systemAudio,
+                generation: attempt.generation,
+                reason: .systemAudioStartFailed,
+                nowMs: Self.epochMs()
+            )
+            return
+        }
+        startSystemLeg()
     }
 
     private nonisolated static func combineCaptureOutcomes(
@@ -323,7 +412,7 @@ final class AudioCoordinator {
 
     /// System leg: engine.start() is async (SCStream.startCapture), so the whole leg lives inside a Task.
     private func startSystemLeg() {
-        guard !systemRunning, !systemStarting else { return }
+        guard !systemRunning, !systemStarting, systemStartIsAdmitted else { return }
         systemStarting = true
         systemStartFailed = false
         let previous = systemTask
@@ -349,8 +438,7 @@ final class AudioCoordinator {
                       self.legGeneration == generation else { return nil }
                 self.systemStarting = false
                 self.systemStartFailed = true
-                // a transient start failure (displays reconfiguring) must not be terminal
-                Task { @MainActor in await self.restartLeg(mic: false) }
+                self.healthController?.recordSystemAudioFailure(nowMs: Self.epochMs())
                 return nil
             }
             guard let self, self.isRunning,
@@ -360,6 +448,7 @@ final class AudioCoordinator {
             }
             self.systemStarting = false
             self.systemRunning = true
+            self.healthController?.recordSystemAudioProgress(nowMs: Self.epochMs())
             await pipeline.reset()
             for await frame in stream {
                 if await self.routeToCallIfOwned(frame) { continue }
@@ -380,7 +469,15 @@ final class AudioCoordinator {
             legGeneration += 1
         }
         if union.me, !micRunning { _ = startMicLeg() }
-        if union.system, !systemRunning { startSystemLeg() }
+        if union.system, !systemRunning, systemStartIsAdmitted { startSystemLeg() }
+    }
+
+    private var systemStartIsAdmitted: Bool {
+        healthController?.permitsSystemAudioStart() ?? true
+    }
+
+    private static func epochMs(_ date: Date = Date()) -> Int64 {
+        Int64(date.timeIntervalSince1970 * 1_000)
     }
 
     /// Shared leg consumer: waits for the previous cycle to finish, reset, drain, flushFinal (all on one

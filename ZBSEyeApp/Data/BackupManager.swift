@@ -102,6 +102,15 @@ actor BackupManager {
         let frames = try await dest!.read { d -> Int in
             let ic = try String.fetchOne(d, sql: "PRAGMA integrity_check") ?? "?"
             guard ic == "ok" else { throw BackupError.verifyFailed("integrity_check=\(ic)") }
+            if try d.tableExists("capture_coverage_intervals") {
+                let invalid = try Int.fetchOne(d, sql: """
+                    SELECT COUNT(*) FROM capture_coverage_intervals
+                    WHERE end_ms IS NOT NULL AND end_ms < start_ms
+                    """) ?? 0
+                guard invalid == 0 else {
+                    throw BackupError.verifyFailed("invalid capture coverage intervals=\(invalid)")
+                }
+            }
             return try Int.fetchOne(d, sql: "SELECT COUNT(*) FROM screen_captures") ?? 0
         }
         dest = nil   // close the connection before reading the file for compression

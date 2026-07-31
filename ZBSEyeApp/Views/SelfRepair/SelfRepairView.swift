@@ -168,7 +168,7 @@ struct SelfRepairView: View {
         return """
         - App: ZBS Eye \(v) · \(ProcessInfo.processInfo.operatingSystemVersionString)
         - Permissions: screen=\(p.screenRecording) accessibility=\(p.accessibility) mic=\(p.microphone) speech=\(p.speech)
-        - Recording: capturing=\(rec.isCapturing) blocked=\(rec.blockedReason ?? "—") degraded=\(rec.degradedReason ?? "—")
+        - Recording: capturing=\(rec.isCapturing) blocked=\(rec.blockedReason ?? "—") health=\(env.captureHealth.aggregate.rawValue)
         - Audio mode: \(env.audioSettings.audioMode.rawValue) · frames this session: \(rec.screenFrameCount)
         """
     }

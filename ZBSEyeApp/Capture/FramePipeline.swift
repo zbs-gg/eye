@@ -19,6 +19,7 @@ struct SendableCGImage: @unchecked Sendable { let image: CGImage }
 struct ProcessedFrame: Sendable {
     var heicData: Data
     var phash: UInt64
+    var fingerprint: String
     var isDuplicate: Bool
     var width: Int
     var height: Int
@@ -65,6 +66,15 @@ actor FramePipeline {
         cachedContent = nil
         cachedProtectedApplicationSnapshot = nil
         lastHashes.removeAll(keepingCapacity: true)
+    }
+
+    /// Rebuild only Eye-owned disposable ScreenCaptureKit/dedup state. User
+    /// intent, privacy configuration, and learned AX capability live elsewhere.
+    func resetDisposableState() {
+        contentEpoch.invalidate()
+        cachedContent = nil
+        cachedProtectedApplicationSnapshot = nil
+        lastHashes.removeAll(keepingCapacity: false)
     }
 
     private func currentContent(
@@ -196,6 +206,7 @@ actor FramePipeline {
         // moves its own quadrant's hash a lot — the frame is no longer lost.
         let hashes = tileHashes(ciImage)
         let phash = hashes[0]
+        let fingerprint = hashes.map { String($0, radix: 16) }.joined(separator: ":")
         let prev = lastHashes[dedupKey]   // per-display dedup: a monitor switch isn't a "duplicate" of the previous one
         let isDup = prev != nil && prev!.count == hashes.count &&
             zip(prev!, hashes).allSatisfy { Self.hamming($0, $1) <= config.dedupHammingThreshold }
@@ -208,7 +219,7 @@ actor FramePipeline {
             }
             guard contentEpoch.contains(expectedGeneration) else { return nil }
             lastHashes[dedupKey] = hashes
-            return ProcessedFrame(heicData: Data(), phash: phash, isDuplicate: true,
+            return ProcessedFrame(heicData: Data(), phash: phash, fingerprint: fingerprint, isDuplicate: true,
                                   width: capW, height: capH, ocr: [],
                                   displayID: display.displayID)
         }
@@ -234,7 +245,7 @@ actor FramePipeline {
         }
         guard contentEpoch.contains(expectedGeneration) else { return nil }
         lastHashes[dedupKey] = hashes
-        return ProcessedFrame(heicData: heic, phash: phash, isDuplicate: false,
+        return ProcessedFrame(heicData: heic, phash: phash, fingerprint: fingerprint, isDuplicate: false,
                               width: capW, height: capH, ocr: ocr,
                               displayID: display.displayID)
     }

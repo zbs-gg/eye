@@ -24,6 +24,7 @@ final class AskServiceTests: XCTestCase {
 
         XCTAssertEqual(payload.question, "What happened?")
         XCTAssertEqual(payload.evidenceTexts, ["Allowed excerpt"])
+        XCTAssertNil(payload.coverageInstruction)
         XCTAssertFalse(serialized.contains(pathCanary))
         XCTAssertFalse(serialized.contains(mediaCanary))
         XCTAssertFalse(serialized.contains("example.test/private"))
@@ -482,7 +483,75 @@ final class AskServiceTests: XCTestCase {
         XCTAssertEqual(dispatches, 0)
     }
 
+    func testCoverageWarningReachesModelBeforeGenerationAndReturnsWithAnswer() async throws {
+        let execution = context(provider: .ollama, model: "local", local: true)
+        let router = StubAskRouter(result: .success(response(
+            content: "The available evidence is incomplete [1].",
+            execution: execution
+        )))
+        let disclosure = CaptureCoverageDisclosure(
+            availability: .available,
+            intervals: [captureGap()]
+        )
+        let service = AskService(
+            retrieval: StubAskRetrieval(evidence: [
+                evidence(id: 1, text: "One retained fragment"),
+            ]),
+            router: router,
+            coverage: FixedAskCoverage(disclosure)
+        )
+
+        let answer = try await service.answer(
+            question: "Was I inactive?",
+            execution: execution,
+            requestID: UUID()
+        )
+
+        XCTAssertEqual(answer.coverage, disclosure)
+        let calls = await router.calls()
+        let call = try XCTUnwrap(calls.only)
+        XCTAssertTrue(call.request.systemPrompt.contains("confirmed capture gap"))
+        XCTAssertTrue(call.request.systemPrompt.contains("do not prove user inactivity"))
+    }
+
+    func testNoHitsStillDisclosesCoverageWithoutDispatchingGeneration() async throws {
+        let router = StubAskRouter(result: .failure(.adapterUnavailable))
+        let disclosure = CaptureCoverageDisclosure(
+            availability: .available,
+            intervals: [captureGap()]
+        )
+        let service = AskService(
+            retrieval: StubAskRetrieval(evidence: []),
+            router: router,
+            coverage: FixedAskCoverage(disclosure)
+        )
+
+        let answer = try await service.answer(
+            question: "Was I inactive?",
+            execution: context(provider: .ollama, model: "local", local: true),
+            requestID: UUID()
+        )
+
+        XCTAssertEqual(answer.coverage, disclosure)
+        XCTAssertNotNil(answer.coverage.userFacingWarning)
+        let dispatchCount = await router.callCount()
+        XCTAssertEqual(dispatchCount, 0)
+    }
+
     // MARK: helpers
+
+    private func captureGap() -> CaptureCoverageInterval {
+        CaptureCoverageInterval(
+            id: 1,
+            leg: .screen,
+            reason: .screenProgressUnverified,
+            episodeID: "synthetic-gap",
+            generation: 2,
+            startMs: 1_000,
+            endMs: 2_000,
+            closeCause: .verifiedProgress
+        )
+    }
 
     private func context(
         provider: AIProvider,
@@ -573,6 +642,16 @@ private actor StubAskRetrieval: AskRetrievalProviding {
     }
 
     func callCount() -> Int { count }
+}
+
+private struct FixedAskCoverage: AskCoverageProviding {
+    let value: CaptureCoverageDisclosure
+
+    init(_ value: CaptureCoverageDisclosure) { self.value = value }
+
+    func disclosure(for scope: AskScopeSnapshot) async throws -> CaptureCoverageDisclosure {
+        value
+    }
 }
 
 private actor ScopedRecordingAskRetrieval: AskRetrievalProviding {

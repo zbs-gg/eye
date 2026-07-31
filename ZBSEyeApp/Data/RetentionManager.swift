@@ -279,6 +279,18 @@ actor RetentionManager {
             }
             try checkOperationContinuation()
         }
+        // Update uncertainty metadata only after every requested history
+        // writer has completed. If deletion is cancelled midway, retaining a
+        // wider gap is conservative; subtracting first could falsely claim
+        // complete coverage for source rows that were never deleted.
+        let coverageEndExclusive = toMs == Int64.max ? Int64.max : toMs + 1
+        try await db.pool.write { database in
+            try CaptureCoverageMaintenance.subtractDeletedRange(
+                in: database,
+                fromMs: fromMs,
+                toMs: coverageEndExclusive
+            )
+        }
         try? await checkpoint()
         try checkOperationContinuation()
         if isFullDeletion {

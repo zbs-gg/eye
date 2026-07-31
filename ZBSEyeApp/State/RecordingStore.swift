@@ -2,6 +2,12 @@ import Foundation
 import Observation
 
 struct RecordingMaintenanceDrain: Sendable, Equatable {
+    let lease: RecordingMaintenanceLease
+    let capture: CaptureDrainAcknowledgement
+    let audio: AudioDrainAcknowledgement
+}
+
+private struct RecordingHardwareDrain: Sendable, Equatable {
     let capture: CaptureDrainAcknowledgement
     let audio: AudioDrainAcknowledgement
 }
@@ -17,23 +23,17 @@ final class RecordingStore {
     private(set) var screenFrameCount = 0
     private(set) var audioChunkCount = 0
 
-    // Health for the indicators (menubar/sidebar): the product must show WHAT is actually being recorded.
-    private(set) var lastFrameAt: Date?
-    /// Capture-cycle heartbeat: a successful pass (including dedup and deliberate idle-skip). Separate from
-    /// lastFrameAt — a static screen gets deduped for hours, that is NOT "capture died" (anti-false-alarm).
-    private(set) var lastCycleOKAt: Date?
     private(set) var lastAudioAt: Date?
     private(set) var lowDiskPaused = false
     /// Recording didn't start due to permissions — the reason for the UI (instead of a false "Recording").
     private(set) var blockedReason: String?
-    /// Recording is on but degraded (permissions revoked mid-run, etc.) — shown WHEN isCapturing.
-    private(set) var degradedReason: String?
     /// Temporary privacy pause ("don't record for 15 minutes"): the recording desire is KEPT, the autostart watcher
     /// doesn't resume until it expires. nil = no pause active.
     private(set) var pausedUntil: Date?
     @ObservationIgnored private var resumeTask: Task<Void, Never>?
     @ObservationIgnored private var maintenanceAdmission = RecordingMaintenanceAdmission()
-    @ObservationIgnored private var activeDrain: Task<RecordingMaintenanceDrain, Never>?
+    @ObservationIgnored private var activeDrain: Task<RecordingHardwareDrain, Never>?
+    @ObservationIgnored private var lowDiskLease: RecordingMaintenanceLease?
     @ObservationIgnored private var drainGeneration: UInt64 = 0
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private static let pausedKey = "zbseye.recording.pausedUntil"
@@ -50,6 +50,10 @@ final class RecordingStore {
                     try? await Task.sleep(for: .seconds(remain))
                     guard !Task.isCancelled, let self else { return }
                     self.clearPause()
+                    self.healthController?.setSuspension(
+                        nil,
+                        nowMs: Self.epochMs()
+                    )
                     self.startIfWanted()
                 }
             } else {
@@ -65,6 +69,17 @@ final class RecordingStore {
 
     @ObservationIgnored var coordinator: CaptureCoordinator?
     @ObservationIgnored var audio: AudioCoordinator?
+    @ObservationIgnored var healthController: CaptureHealthController? {
+        didSet {
+            publishCaptureIntent()
+            if pausedUntil != nil {
+                healthController?.setSuspension(
+                    .privacy,
+                    nowMs: Self.epochMs()
+                )
+            }
+        }
+    }
     /// Gates (set from AppEnvironment): critical recording permissions; mic/system audio.
     @ObservationIgnored var canCapture: @MainActor () -> Bool = { false }
     /// Why recording is unavailable (needsRestart vs denied — different texts; set by AppEnvironment).
@@ -83,30 +98,36 @@ final class RecordingStore {
     var wantsRecording: Bool { defaults.bool(forKey: Self.enabledKey) }
 
     func toggle() {
-        // Relocation owns the write boundary. User actions and permission
-        // observers must not reopen capture after its drain acknowledgement;
-        // the persisted desire remains untouched for the eventual resume.
-        guard maintenanceAdmission.permitsStart else { return }
         // A low-disk pause still lets the user change intent. First click disarms
         // auto-resume; a later click can arm it without starting capture early.
         if lowDiskPaused {
             if wantsRecording {
-                defaults.set(false, forKey: Self.enabledKey)
+                setRecordingIntent(false)
                 blockedReason = nil
             } else {
-                defaults.set(true, forKey: Self.enabledKey)
+                setRecordingIntent(true)
                 blockedReason = String(localized: "Low disk space — recording will resume after storage recovers")
             }
+            return
+        }
+        // Each maintenance owner retains its own lease. User actions and
+        // permission observers cannot reopen capture while any lease remains.
+        // Intent changes still win: Stop during relocation/repair/quit must
+        // disarm the later automatic resume instead of becoming a no-op.
+        guard maintenanceAdmission.permitsStart else {
+            let nextIntent = !wantsRecording
+            setRecordingIntent(nextIntent)
+            if !nextIntent { blockedReason = nil }
             return
         }
         guard let coordinator else {
             // bootstrap is still running — the button must not be a silent no-op: we remember/clear the intent,
             // the autostart watcher will finish the start after initialization.
             if wantsRecording {
-                defaults.set(false, forKey: Self.enabledKey)
+                setRecordingIntent(false)
                 blockedReason = nil
             } else {
-                defaults.set(true, forKey: Self.enabledKey)
+                setRecordingIntent(true)
                 blockedReason = "ZBS Eye is still starting up — recording will turn on automatically"
             }
             return
@@ -116,8 +137,7 @@ final class RecordingStore {
             audio?.stop()
             onSessionStop()
             isCapturing = false
-            degradedReason = nil
-            defaults.set(false, forKey: Self.enabledKey)
+            setRecordingIntent(false)
         } else {
             // a manual turn-on clears the temporary pause (the user changed their mind about waiting)
             resumeTask?.cancel(); resumeTask = nil
@@ -126,10 +146,10 @@ final class RecordingStore {
                 // Honest INTENT toggle: the first click arms it (recording will start itself after permissions
                 // are granted — we say so), a second click DISARMS it (otherwise it can't be canceled).
                 if wantsRecording {
-                    defaults.set(false, forKey: Self.enabledKey)
+                    setRecordingIntent(false)
                     blockedReason = nil
                 } else {
-                    defaults.set(true, forKey: Self.enabledKey)
+                    setRecordingIntent(true)
                     blockedReason = blockedHint()
                 }
                 return
@@ -138,7 +158,7 @@ final class RecordingStore {
             coordinator.start()
             audio?.start(mic: micEnabled(), system: systemEnabled())
             isCapturing = true
-            defaults.set(true, forKey: Self.enabledKey)
+            setRecordingIntent(true)
         }
     }
 
@@ -147,7 +167,7 @@ final class RecordingStore {
         guard maintenanceAdmission.permitsStart else { return }
         if isCapturing { toggle() }
         else {
-            defaults.set(false, forKey: Self.enabledKey)
+            setRecordingIntent(false)
             blockedReason = nil
         }
     }
@@ -155,29 +175,55 @@ final class RecordingStore {
     /// Stop for maintenance (storage migration): silence the capture, but do NOT touch the intent
     /// (enabledKey) or the pause — after restart autostart will resume. Guarantees that during the data
     /// copy to the new root nobody writes to the old one.
-    func pauseForMaintenance() {
-        maintenanceAdmission.suspend()
-        guard isCapturing, let coordinator else { return }
+    @discardableResult
+    func pauseForMaintenance(
+        owner: RecordingMaintenanceOwner
+    ) -> RecordingMaintenanceLease {
+        let lease = acquireMaintenanceLease(owner)
+        guard isCapturing, let coordinator else { return lease }
         coordinator.stop()
         audio?.stop()
         onSessionStop()
         isCapturing = false
-        degradedReason = nil
+        return lease
     }
 
     /// Strong relocation pause. Both admission paths stop and acknowledge all
     /// boundary writes; the persisted recording intent remains untouched.
     func pauseForMaintenanceAndDrain(
+        owner: RecordingMaintenanceOwner,
         waitForTranscription: Bool = true,
         systemCaptureTimeout: Duration? = nil
     ) async -> RecordingMaintenanceDrain {
-        maintenanceAdmission.suspend()
+        let lease = acquireMaintenanceLease(owner)
+        return await pauseForMaintenanceAndDrain(
+            lease: lease,
+            waitForTranscription: waitForTranscription,
+            systemCaptureTimeout: systemCaptureTimeout
+        )
+    }
+
+    func acquireMaintenanceLease(
+        _ owner: RecordingMaintenanceOwner
+    ) -> RecordingMaintenanceLease {
+        maintenanceAdmission.acquire(owner)
+    }
+
+    func pauseForMaintenanceAndDrain(
+        lease: RecordingMaintenanceLease,
+        waitForTranscription: Bool = true,
+        systemCaptureTimeout: Duration? = nil
+    ) async -> RecordingMaintenanceDrain {
+        precondition(
+            maintenanceAdmission.contains(lease),
+            "maintenance drain requires a live lease from this recording store"
+        )
         if isCapturing {
             onSessionStop()
             isCapturing = false
-            degradedReason = nil
         }
         return await stopAndDrain(
+            lease: lease,
             waitForTranscription: waitForTranscription,
             systemCaptureTimeout: systemCaptureTimeout
         )
@@ -189,11 +235,18 @@ final class RecordingStore {
         systemCaptureTimeout: Duration? = nil
     ) async -> RecordingMaintenanceDrain {
         lowDiskPaused = true
+        let lease: RecordingMaintenanceLease
+        if let lowDiskLease {
+            lease = lowDiskLease
+        } else {
+            lease = maintenanceAdmission.acquire(.lowDisk)
+            lowDiskLease = lease
+        }
         if isCapturing {
             isCapturing = false
-            degradedReason = nil
         }
         return await stopAndDrain(
+            lease: lease,
             waitForTranscription: false,
             systemCaptureTimeout: systemCaptureTimeout
         )
@@ -203,18 +256,24 @@ final class RecordingStore {
     /// previous stop is awaiting hardware. Join that exact drain so no caller
     /// publishes a boundary acknowledgement before the in-flight write ends.
     private func stopAndDrain(
+        lease: RecordingMaintenanceLease,
         waitForTranscription: Bool,
         systemCaptureTimeout: Duration?
     ) async -> RecordingMaintenanceDrain {
         if let activeDrain {
             let joined = await activeDrain.value
             guard waitForTranscription, !joined.audio.transcriptionDrained else {
-                return joined
+                return RecordingMaintenanceDrain(
+                    lease: lease,
+                    capture: joined.capture,
+                    audio: joined.audio
+                )
             }
             // The joined hardware task is complete. Clear its published handle
             // before the stronger maintenance caller starts a transcription drain.
             self.activeDrain = nil
             return await stopAndDrain(
+                lease: lease,
                 waitForTranscription: true,
                 systemCaptureTimeout: systemCaptureTimeout
             )
@@ -249,7 +308,7 @@ final class RecordingStore {
         drainGeneration &+= 1
         let generation = drainGeneration
         let drain = Task { @MainActor in
-            RecordingMaintenanceDrain(
+            RecordingHardwareDrain(
                 capture: await captureTask.value,
                 audio: await audioTask.value
             )
@@ -257,7 +316,11 @@ final class RecordingStore {
         activeDrain = drain
         let result = await drain.value
         if drainGeneration == generation { activeDrain = nil }
-        return result
+        return RecordingMaintenanceDrain(
+            lease: lease,
+            capture: result.capture,
+            audio: result.audio
+        )
     }
 
     /// Autostart from bootstrap (and after permissions are granted): if the user wanted recording and has permissions — turn it on.
@@ -278,10 +341,10 @@ final class RecordingStore {
         audio?.stop()
         onSessionStop()
         isCapturing = false
-        degradedReason = nil
         let until = Date().addingTimeInterval(Double(minutes) * 60)
         pausedUntil = until
         defaults.set(until, forKey: Self.pausedKey)
+        healthController?.setSuspension(.privacy, nowMs: Self.epochMs())
         // remember the window so a retroactive importer (browser history) never backfills it
         PrivacyPauseLog.record(startMs: Int64(Date().timeIntervalSince1970 * 1000),
                                endMs: Int64(until.timeIntervalSince1970 * 1000))
@@ -290,6 +353,7 @@ final class RecordingStore {
             try? await Task.sleep(for: .seconds(Double(minutes) * 60))
             guard !Task.isCancelled, let self else { return }
             self.clearPause()
+            self.healthController?.setSuspension(nil, nowMs: Self.epochMs())
             self.startIfWanted()
         }
     }
@@ -299,6 +363,7 @@ final class RecordingStore {
         resumeTask?.cancel(); resumeTask = nil
         PrivacyPauseLog.closeLast(atMs: Int64(Date().timeIntervalSince1970 * 1000))
         clearPause()
+        healthController?.setSuspension(nil, nowMs: Self.epochMs())
         startIfWanted()
     }
 
@@ -307,31 +372,83 @@ final class RecordingStore {
         guard maintenanceAdmission.permitsStart else { return }
         guard !lowDiskPaused else { return }
         guard isCapturing, let audio else { return }
-        audio.stop()
         let m = micEnabled(), s = systemEnabled()
-        if m || s { audio.start(mic: m, system: s) }
+        publishCaptureIntent()
+        audio.reconfigure(mic: m, system: s)
     }
 
-    func noteFrame() { screenFrameCount += 1; lastFrameAt = Date(); lastCycleOKAt = Date() }
-    func noteCycleOK() { lastCycleOKAt = Date() }
+    func noteFrame() { screenFrameCount += 1 }
     func noteAudioChunk() { audioChunkCount += 1; lastAudioAt = Date() }
     func setLowDisk(_ paused: Bool) {
         lowDiskPaused = paused
-        if paused { degradedReason = nil }
     }
-    func setDegraded(_ reason: String?) { if degradedReason != reason { degradedReason = reason } }
 
     func resumeAfterLowDisk() {
         guard lowDiskPaused else { return }
         lowDiskPaused = false
+        if let lowDiskLease {
+            _ = maintenanceAdmission.release(lowDiskLease)
+            self.lowDiskLease = nil
+        }
         if blockedReason == String(localized: "Low disk space — recording will resume after storage recovers") {
             blockedReason = nil
         }
         startIfWanted()
     }
 
-    func resumeAfterMaintenance() {
-        maintenanceAdmission.resume()
+    func resumeAfterMaintenance(_ lease: RecordingMaintenanceLease) {
+        guard maintenanceAdmission.release(lease) else { return }
         startIfWanted()
+    }
+
+    /// Completes a leg-scoped repair while the repair admission lease still
+    /// owns restart. A Stop pressed during an asynchronous drain changes the
+    /// persisted intent immediately; that newer intent wins before the lease
+    /// is released, so repair can never resurrect capture behind the user.
+    func completeCaptureRepair(
+        _ lease: RecordingMaintenanceLease,
+        screenWasDrained: Bool,
+        drainSucceeded: Bool
+    ) {
+        guard maintenanceAdmission.contains(lease) else { return }
+
+        if !wantsRecording {
+            coordinator?.stop()
+            audio?.stop()
+            if isCapturing { onSessionStop() }
+            isCapturing = false
+            blockedReason = nil
+        } else if screenWasDrained, drainSucceeded, isCapturing {
+            coordinator?.start()
+        } else if screenWasDrained, !drainSucceeded {
+            coordinator?.stop()
+            audio?.stop()
+            if isCapturing { onSessionStop() }
+            isCapturing = false
+            blockedReason = String(localized: "Capture repair could not safely finish — retry repair")
+        }
+
+        guard maintenanceAdmission.release(lease) else { return }
+        if drainSucceeded { startIfWanted() }
+    }
+
+    private func setRecordingIntent(_ enabled: Bool) {
+        defaults.set(enabled, forKey: Self.enabledKey)
+        publishCaptureIntent()
+    }
+
+    private func publishCaptureIntent() {
+        let enabled = wantsRecording
+        healthController?.setIntent(
+            CaptureIntent(
+                screenEnabled: enabled,
+                systemAudioEnabled: enabled && systemEnabled()
+            ),
+            nowMs: Int64(Date().timeIntervalSince1970 * 1_000)
+        )
+    }
+
+    nonisolated private static func epochMs(_ date: Date = Date()) -> Int64 {
+        Int64(date.timeIntervalSince1970 * 1_000)
     }
 }

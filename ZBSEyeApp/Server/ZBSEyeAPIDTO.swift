@@ -7,6 +7,7 @@ enum APIDTO {
         let version: String
         let capturing: Bool
         let proof: String?
+        let captureState: String?
         // We don’t expose `port`: it’s already in the port file for our own use, and in the unauthenticated
         // /health it’s an extra information signal to an attacker (no need to scan). `capturing` is kept — MCP reads it.
     }
@@ -37,6 +38,7 @@ enum APIDTO {
         let semanticMode: String
         let semanticFallbackReason: String?
         let results: [SearchHit]
+        let coverage: CaptureCoverageDisclosure?
     }
     struct Transcript: Encodable {
         let audioId: Int64
@@ -53,6 +55,7 @@ enum APIDTO {
     struct TimelineResponse: Encodable {
         let from: Int64; let to: Int64; let bucketMs: Int64
         let buckets: [DensityBucketDTO]
+        let coverage: CaptureCoverageDisclosure?
     }
     struct Frame: Encodable {
         let id: Int64
@@ -64,6 +67,7 @@ enum APIDTO {
         let axQuality: String?
         let text: String
         let media: Media
+        let coverage: CaptureCoverageDisclosure?
     }
     struct Stats: Encodable {
         let frames: Int

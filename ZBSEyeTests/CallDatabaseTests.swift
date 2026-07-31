@@ -189,7 +189,7 @@ final class CallDatabaseTests: XCTestCase {
             "call_media_mutations", "call_source_gaps", "call_transcript_fts",
             "call_automation_config", "call_automation_outbox",
             "call_context", "call_speaker_revisions", "call_speaker_clusters",
-            "call_speaker_intervals",
+            "call_speaker_intervals", "capture_coverage_intervals",
         ].allSatisfy(freshTables.contains))
 
         let upgraded = try CallDatabaseTestStore(runMigrations: false)
@@ -214,7 +214,7 @@ final class CallDatabaseTests: XCTestCase {
             )
         }
         XCTAssertEqual(snapshot.appCount, 1)
-        XCTAssertEqual(snapshot.migrations.last, "v14_protected_capture_vector_cleanup")
+        XCTAssertEqual(snapshot.migrations.last, "v15_capture_coverage")
         XCTAssertGreaterThanOrEqual(snapshot.triggerCount, 6)
     }
 

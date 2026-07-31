@@ -79,9 +79,12 @@ final class KeepMediaPolicyCoordinator {
             return .applied
         }
 
-        _ = await recording.pauseForMaintenanceAndDrain(waitForTranscription: false)
+        let drain = await recording.pauseForMaintenanceAndDrain(
+            owner: .keepMedia,
+            waitForTranscription: false
+        )
         let inventory = await resolveInventory(database, storage)
-        recording.resumeAfterMaintenance()
+        recording.resumeAfterMaintenance(drain.lease)
         guard let currentBytes = inventory.capturedMediaBytes,
               let maximumBytes = policy.maxCapturedMediaBytes else {
             return .unavailable(

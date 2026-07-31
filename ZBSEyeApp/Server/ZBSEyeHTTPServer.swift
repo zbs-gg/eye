@@ -23,7 +23,9 @@ actor ZBSEyeHTTPServer {
         let browserContent: BrowserContentStore
         let version: String
         let isCapturing: @Sendable () async -> Bool
+        let captureStatus: @Sendable () async -> CaptureHealthSnapshot
         let toggleCapture: @Sendable (Bool?) async -> Bool
+        let repairCapture: @Sendable () async -> CaptureHealthSnapshot
         let mediaBytes: @Sendable () async -> Int64
         let browserDidIngestAt: @Sendable (Date) async -> Void
     }
@@ -121,6 +123,7 @@ actor ZBSEyeHTTPServer {
     private func registerRoutes(_ srv: HTTPServer) async {
         await srv.appendRoute("GET /health") { [self] req in
             let cap = await deps.isCapturing()
+            let capture = await deps.captureStatus()
             let challenge = Self.query(req)["challenge"]
             let proofToken = Self.query(req)["scope"] == "browser"
                 ? deps.browserToken
@@ -140,9 +143,18 @@ actor ZBSEyeHTTPServer {
                     status: "ok",
                     version: deps.version,
                     capturing: cap,
-                    proof: proof
+                    proof: proof,
+                    captureState: capture.aggregate.rawValue
                 )
             )
+        }
+        await srv.appendRoute("GET /v1/capture/status") { [self] req in
+            guard await authorized(req) else { return Self.unauthorized() }
+            return await handleCaptureStatus()
+        }
+        await srv.appendRoute("POST /v1/capture/repair") { [self] req in
+            guard await authorized(req) else { return Self.unauthorized() }
+            return await handleCaptureStatus(snapshot: await deps.repairCapture())
         }
         await srv.appendRoute("GET /v1/search") { [self] req in
             guard await authorized(req) else { return Self.unauthorized() }
@@ -358,6 +370,7 @@ actor ZBSEyeHTTPServer {
         do {
             // an honest error instead of an empty 200: the LAM must distinguish "not found" from "DB is broken"
             let execution = try await deps.search.searchWithMetadata(query: q, filters: filters)
+            let coverage = await coverageDisclosure(from: filters.from, to: filters.to)
             let hits = execution.results.map { r in
                 APIDTO.SearchHit(
                     id: r.id, kind: r.kind.rawValue, ts: msFromDate(r.ts),
@@ -387,7 +400,8 @@ actor ZBSEyeHTTPServer {
                                                    limit: filters.limit, offset: filters.offset,
                                                    semanticMode: mode,
                                                    semanticFallbackReason: fallbackReason,
-                                                   results: hits))
+                                                   results: hits,
+                                                   coverage: coverage))
         } catch {
             Self.log("search_failed")
             return Self.error(.internalServerError, "search failed", code: "search_failed")
@@ -575,7 +589,14 @@ actor ZBSEyeHTTPServer {
         do {
             let buckets = try await deps.timeline.density(from: dateFromMs(from), to: dateFromMs(to), bucketMs: bucket)
             let dto = buckets.map { APIDTO.DensityBucketDTO(ts: msFromDate($0.ts), count: $0.count) }
-            return Self.json(APIDTO.TimelineResponse(from: from, to: to, bucketMs: bucket, buckets: dto))
+            let coverage = await coverageDisclosure(from: dateFromMs(from), to: dateFromMs(to))
+            return Self.json(APIDTO.TimelineResponse(
+                from: from,
+                to: to,
+                bucketMs: bucket,
+                buckets: dto,
+                coverage: coverage
+            ))
         } catch {
             Self.log("timeline_failed")
             return Self.error(.internalServerError, "timeline failed", code: "timeline_failed")
@@ -585,19 +606,63 @@ actor ZBSEyeHTTPServer {
     private func handleFrame(_ req: HTTPRequest) async -> HTTPResponse {
         let p = Self.query(req)
         let detail: FrameDetail?
+        let coverageMoment: Date
         if let id = p["id"].flatMap({ Int64($0) }) {
             detail = try? await deps.timeline.frameDetail(id: id)
+            guard let detail else { return Self.notFound("frame") }
+            coverageMoment = detail.ts
         } else if let at = p["at"].flatMap({ Int64($0) }) {
-            detail = try? await deps.timeline.frameAt(dateFromMs(at))
+            coverageMoment = dateFromMs(at)
+            detail = try? await deps.timeline.frameAt(coverageMoment)
         } else {
             return Self.badRequest("id or at required")
         }
         guard let d = detail else { return Self.notFound("frame") }
+        let coverage = await coverageDisclosure(from: coverageMoment, to: coverageMoment)
         return Self.json(APIDTO.Frame(
             id: d.id, ts: msFromDate(d.ts), tsISO: isoFromMs(msFromDate(d.ts)),
             app: .init(bundleId: d.bundleId, name: d.appName), windowTitle: d.windowTitle,
             browserUrl: d.browserURL, axQuality: d.axQuality, text: d.text,
-            media: .init(frameUrl: "/v1/frame/image?id=\(d.id)")))
+            media: .init(frameUrl: "/v1/frame/image?id=\(d.id)"),
+            coverage: coverage))
+    }
+
+    private func handleCaptureStatus(
+        snapshot suppliedSnapshot: CaptureHealthSnapshot? = nil
+    ) async -> HTTPResponse {
+        let snapshot: CaptureHealthSnapshot
+        if let suppliedSnapshot {
+            snapshot = suppliedSnapshot
+        } else {
+            snapshot = await deps.captureStatus()
+        }
+        let coverage: CaptureCoverageDisclosure
+        do {
+            coverage = CaptureCoverageDisclosure(
+                try await CaptureCoverageQuery(database: deps.db).openIntervals()
+            )
+        } catch {
+            Self.log("capture coverage metadata unavailable")
+            coverage = .metadataUnavailable
+        }
+        return Self.json(CaptureStatusDTO(snapshot: snapshot, coverage: coverage))
+    }
+
+    /// Coverage disclosure never changes history ranking or turns successful
+    /// retrieval into an error.
+    private func coverageDisclosure(
+        from: Date?,
+        to: Date?
+    ) async -> CaptureCoverageDisclosure {
+        do {
+            return try await CaptureCoverageQuery(database: deps.db).disclosure(
+                from: from,
+                to: to
+            )
+        } catch {
+            Self.log("capture coverage metadata unavailable")
+            return .metadataUnavailable
+        }
     }
 
     private func handleImage(_ req: HTTPRequest) async -> HTTPResponse {
@@ -711,7 +776,13 @@ actor ZBSEyeHTTPServer {
     {"openapi":"3.0.3","info":{"title":"ZBS Eye Local API","version":"0.6.0",
      "description":"Local screen/audio memory. Auth: Bearer token on everything except /health. Time: epoch-ms or ISO8601."},
      "paths":{
-      "/health":{"get":{"summary":"Status without auth","responses":{"200":{"description":"ok"}}}},
+      "/health":{"get":{"summary":"Status without auth","responses":{"200":{"description":"ok, capturing, and coarse captureState"}}}},
+      "/v1/capture/status":{"get":{"summary":"Per-leg capture health and open coverage gaps",
+        "responses":{"200":{"description":"Current screen/system-audio state","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CaptureStatus"}}}},
+                     "401":{"$ref":"#/components/responses/Unauthorized"}}}},
+      "/v1/capture/repair":{"post":{"summary":"Retry only failed ZBS Eye-owned capture legs",
+        "responses":{"200":{"description":"State after the bounded repair request","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CaptureStatus"}}}},
+                     "401":{"$ref":"#/components/responses/Unauthorized"}}}},
       "/v1/search":{"get":{"summary":"Hybrid search (FTS+semantic, ru/en cross-lingual)",
         "parameters":[{"name":"q","in":"query","required":true,"schema":{"type":"string"}},
           {"name":"from","in":"query","schema":{"type":"string"},"description":"epoch-ms | ISO8601"},
@@ -720,11 +791,11 @@ actor ZBSEyeHTTPServer {
           {"name":"kind","in":"query","schema":{"type":"string","enum":["screen","audio","call"]}},
           {"name":"limit","in":"query","schema":{"type":"integer","maximum":200}},
           {"name":"offset","in":"query","schema":{"type":"integer"}}],
-        "responses":{"200":{"description":"hits: id, kind, ts, app, snippet, media{frameUrl,audioUrl,transcriptUrl,callUrl}"},
+        "responses":{"200":{"description":"hits plus additive capture coverage disclosure"},
                      "400":{"description":"invalid parameter (unparsed time, etc.)"},"500":{"description":"failure"}}}},
       "/v1/frame":{"get":{"summary":"Frame by id or nearest to a moment (at)","parameters":[
           {"name":"id","in":"query","schema":{"type":"integer"}},{"name":"at","in":"query","schema":{"type":"integer"},"description":"epoch-ms"}],
-        "responses":{"200":{"description":"app, windowTitle, browserUrl, text, media.frameUrl"}}}},
+        "responses":{"200":{"description":"app, windowTitle, browserUrl, text, media.frameUrl, coverage"}}}},
       "/v1/frame/image":{"get":{"summary":"Frame image","parameters":[
           {"name":"id","in":"query","required":true,"schema":{"type":"integer"}},
           {"name":"format","in":"query","schema":{"type":"string","enum":["jpeg"]},"description":"for LLM viewers"}],
@@ -766,7 +837,7 @@ actor ZBSEyeHTTPServer {
           {"name":"from","in":"query","required":true,"schema":{"type":"integer"}},
           {"name":"to","in":"query","required":true,"schema":{"type":"integer"}},
           {"name":"bucket","in":"query","schema":{"type":"integer"},"description":"ms, default 60000"}],
-        "responses":{"200":{"description":"buckets[{ts,count}]"}}}},
+        "responses":{"200":{"description":"buckets[{ts,count}] plus additive capture coverage disclosure"}}}},
       "/v1/stats":{"get":{"summary":"Counters and history range","responses":{"200":{"description":"frames, audioChunks, mediaBytes…"}}}},
       "/v1/capture/toggle":{"post":{"summary":"Toggle recording on/off","parameters":[
           {"name":"enable","in":"query","schema":{"type":"boolean"}}],"responses":{"200":{"description":"capturing"}}}}},
@@ -777,11 +848,16 @@ actor ZBSEyeHTTPServer {
        "Limit":{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100}},
        "Offset":{"name":"offset","in":"query","schema":{"type":"integer","minimum":0,"maximum":1000000}}},
       "responses":{
+       "Unauthorized":{"description":"localhost Bearer token required","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
        "BadRequest":{"description":"invalid typed identifier, selector, time, or pagination","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
        "NotFound":{"description":"typed resource not found","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
        "Failure":{"description":"local evidence unavailable","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}}},
       "schemas":{
        "ErrorResponse":{"type":"object","required":["error"],"properties":{"error":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string"},"message":{"type":"string"}}}}},
+       "CaptureCoverageInterval":{"type":"object","required":["id","leg","reason","episodeID","generation","startMs"],"properties":{"id":{"type":"integer","format":"int64"},"leg":{"type":"string","enum":["screen","systemAudio"]},"reason":{"type":"string"},"episodeID":{"type":"string"},"generation":{"type":"integer","format":"int64"},"startMs":{"type":"integer","format":"int64"},"endMs":{"type":"integer","format":"int64","nullable":true},"closeCause":{"type":"string","nullable":true}}},
+       "CaptureCoverage":{"type":"object","required":["availability","intervals"],"properties":{"availability":{"type":"string","enum":["available","metadataUnavailable"]},"intervals":{"type":"array","items":{"$ref":"#/components/schemas/CaptureCoverageInterval"}}}},
+       "CaptureLegStatus":{"type":"object","required":["leg","state","reason","generation","attempt","stateSinceMs"],"properties":{"leg":{"type":"string","enum":["screen","systemAudio"]},"state":{"type":"string","enum":["healthy","recovering","repairRequired","permissionBlocked","suspended","paused"]},"reason":{"type":"string"},"generation":{"type":"integer","format":"int64"},"attempt":{"type":"integer"},"stateSinceMs":{"type":"integer","format":"int64"},"lastCycleAtMs":{"type":"integer","format":"int64","nullable":true},"lastVerifiedProgressAtMs":{"type":"integer","format":"int64","nullable":true}}},
+       "CaptureStatus":{"type":"object","required":["state","screenEnabled","systemAudioEnabled","legs","coverage"],"properties":{"state":{"type":"string","enum":["healthy","recovering","repairRequired","permissionBlocked","suspended","paused"]},"suspension":{"type":"string","nullable":true},"screenEnabled":{"type":"boolean"},"systemAudioEnabled":{"type":"boolean"},"legs":{"type":"array","items":{"$ref":"#/components/schemas/CaptureLegStatus"}},"coverage":{"$ref":"#/components/schemas/CaptureCoverage"}}},
        "CallSummary":{"type":"object","required":["callId","startTs","state","status","retryable","participants","bookmarkCount","speakerStatus"],"properties":{"callId":{"type":"string"},"startTs":{"type":"integer","format":"int64"},"endTs":{"type":"integer","format":"int64","nullable":true},"state":{"type":"string"},"status":{"type":"string","enum":["recording","processing","retryable","ready","degraded"]},"retryable":{"type":"boolean"},"preferredRevisionKind":{"type":"string","nullable":true},"title":{"type":"string","nullable":true},"participants":{"type":"array","items":{"type":"string"}},"sourceApp":{"type":"string","nullable":true},"bookmarkCount":{"type":"integer","minimum":0},"speakerStatus":{"type":"string","enum":["unavailable","processing","ready","degraded"]}}},
        "CallListPage":{"type":"object","required":["limit","offset","hasMore","calls"],"properties":{"query":{"type":"string","nullable":true},"limit":{"type":"integer"},"offset":{"type":"integer"},"hasMore":{"type":"boolean"},"nextOffset":{"type":"integer","nullable":true},"calls":{"type":"array","items":{"$ref":"#/components/schemas/CallSummary"}}}},
        "CallCoverage":{"type":"object","required":["logicalStartMs","complete","hasExplicitGaps"],"properties":{"logicalStartMs":{"type":"integer","format":"int64"},"logicalEndMs":{"type":"integer","format":"int64","nullable":true},"complete":{"type":"boolean"},"hasExplicitGaps":{"type":"boolean"}}},

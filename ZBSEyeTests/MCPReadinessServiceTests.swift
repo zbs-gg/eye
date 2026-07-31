@@ -322,12 +322,14 @@ final class MCPReadinessServiceTests: XCTestCase {
         }
         XCTAssertFalse(MCPToolPolicy.allows("get_frame_image", profile: .memoryReadOnly))
         XCTAssertFalse(MCPToolPolicy.allows("toggle_recording", profile: .memoryReadOnly))
+        XCTAssertFalse(MCPToolPolicy.allows("repair_capture", profile: .memoryReadOnly))
         XCTAssertTrue(MCPToolPolicy.allows("get_frame_image", profile: .advancedFull))
         XCTAssertTrue(MCPToolPolicy.allows("toggle_recording", profile: .advancedFull))
+        XCTAssertTrue(MCPToolPolicy.allows("repair_capture", profile: .advancedFull))
         XCTAssertEqual(
             MCPToolPolicy.toolNames(for: .advancedFull),
             MCPToolPolicy.toolNames(for: .memoryReadOnly)
-                + ["get_frame_image", "toggle_recording"]
+                + ["get_frame_image", "toggle_recording", "repair_capture"]
         )
     }
 

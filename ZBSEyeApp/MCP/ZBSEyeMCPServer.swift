@@ -83,6 +83,7 @@ enum ZBSEyeMCPServer {
         let callEvidence = db.map {
             MCPCallEvidenceCoordinator(service: CallEvidenceQueryService(database: $0))
         }
+        let coverageQuery = db.map(CaptureCoverageQuery.init(database:))
 
         let server = Server(
             name: "zbseye",
@@ -138,8 +139,18 @@ enum ZBSEyeMCPServer {
                     limit: limit ?? 25)
                 do {
                     let resolution = try await historySearch.search(query: q, filters: filters)
+                    let coverage = await coverageDisclosure(
+                        coverageQuery,
+                        from: filters.from,
+                        to: filters.to
+                    )
                     return .init(content: [
-                        .text(Self.formatResults(q, resolution.results, semanticMode: resolution.semanticMode))
+                        .text(Self.formatResults(
+                            q,
+                            resolution.results,
+                            semanticMode: resolution.semanticMode,
+                            coverage: coverage
+                        ))
                     ])
                 } catch {
                     // honest error: the agent must distinguish "nothing found" from "DB broken"
@@ -281,7 +292,8 @@ enum ZBSEyeMCPServer {
                 }
                 do {
                     let frame = try await timeline.frameAt(date)
-                    return .init(content: [.text(Self.formatFrame(frame))])
+                    let coverage = await coverageDisclosure(coverageQuery, from: date, to: date)
+                    return .init(content: [.text(Self.formatFrame(frame, coverage: coverage))])
                 } catch {
                     return .init(content: [.text("DB read failed (db_read_failed).")], isError: true)
                 }
@@ -296,7 +308,10 @@ enum ZBSEyeMCPServer {
                 }
                 do {
                     let buckets = try await timeline.density(from: from, to: to, bucketMs: 300_000)
-                    return .init(content: [.text(Self.formatTimeline(from, to, buckets))])
+                    let coverage = await coverageDisclosure(coverageQuery, from: from, to: to)
+                    return .init(content: [
+                        .text(Self.formatTimeline(from, to, buckets, coverage: coverage))
+                    ])
                 } catch {
                     return .init(content: [.text("DB read failed (db_read_failed).")], isError: true)
                 }
@@ -395,6 +410,16 @@ enum ZBSEyeMCPServer {
                     return .init(content: [.text("Recording \(now ? "on" : "off").")])
                 } catch {
                     return .init(content: [.text("Recording control failed (recording_control_failed).")], isError: true)
+                }
+
+            case "repair_capture":
+                do {
+                    let status = try await Self.proxyCaptureRepair(dataRoot: dataRoot)
+                    return .init(content: [
+                        .text("Capture repair requested. \(formatCaptureStatus(status)).")
+                    ])
+                } catch {
+                    return .init(content: [.text("Capture repair failed (capture_repair_failed).")], isError: true)
                 }
 
             default:
@@ -525,6 +550,9 @@ enum ZBSEyeMCPServer {
                  description: "Turn recording on/off in the running ZBS Eye GUI instance.",
                  inputSchema: .object(["type": .string("object"),
                                        "properties": .object(["enable": .object(["type": .string("boolean")])])])),
+            Tool(name: "repair_capture",
+                 description: "Retry only ZBS Eye's own failed screen/system-audio capture legs. Does not reset macOS permissions or global capture services.",
+                 inputSchema: .object(["type": .string("object"), "properties": .object([:])])),
         ]
         let byName = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0) })
         return MCPToolPolicy.toolNames(for: profile).compactMap { byName[$0] }
@@ -535,7 +563,8 @@ enum ZBSEyeMCPServer {
     private static func formatResults(
         _ q: String,
         _ results: [SearchResult],
-        semanticMode: SearchSemanticMode
+        semanticMode: SearchSemanticMode,
+        coverage: CaptureCoverageDisclosure
     ) -> String {
         let disclosure = switch semanticMode {
         case .ftsOnly(.secondaryProcess):
@@ -545,10 +574,11 @@ enum ZBSEyeMCPServer {
         case .hybrid:
             ""
         }
+        let coverageWarning = coverage.userFacingWarning.map { "⚠️ \($0)\n" } ?? ""
         guard !results.isEmpty else {
-            return disclosure + "Nothing found for \"\(q)\"."
+            return disclosure + coverageWarning + "Nothing found for \"\(q)\"."
         }
-        var out = disclosure + "Found \(results.count) for \"\(q)\":\n"
+        var out = disclosure + coverageWarning + "Found \(results.count) for \"\(q)\":\n"
         for r in results {
             let app = r.appName ?? r.bundleId ?? "—"
             let when = r.ts.formatted(date: .abbreviated, time: .shortened)
@@ -567,21 +597,46 @@ enum ZBSEyeMCPServer {
         return out
     }
 
-    private static func formatFrame(_ f: FrameDetail?) -> String {
-        guard let f else { return "There is no frame for this moment." }
+    private static func coverageDisclosure(
+        _ query: CaptureCoverageQuery?,
+        from: Date?,
+        to: Date?
+    ) async -> CaptureCoverageDisclosure {
+        guard let query else { return .metadataUnavailable }
+        do {
+            return try await query.disclosure(from: from, to: to)
+        } catch {
+            return .metadataUnavailable
+        }
+    }
+
+    private static func formatFrame(
+        _ f: FrameDetail?,
+        coverage: CaptureCoverageDisclosure
+    ) -> String {
+        let warning = coverage.userFacingWarning.map { "⚠️ \($0)\n" } ?? ""
+        guard let f else { return warning + "There is no frame for this moment." }
         let app = f.appName ?? f.bundleId ?? "—"
-        var out = "Frame #\(f.id) at \(f.ts.formatted(date: .abbreviated, time: .standard)) — \(app)"
+        var out = warning + "Frame #\(f.id) at \(f.ts.formatted(date: .abbreviated, time: .standard)) — \(app)"
         if let w = f.windowTitle { out += " · \(w)" }
         if let u = f.browserURL { out += "\nURL: \(u)" }
         out += "\n\n\(f.text.isEmpty ? "(text not extracted)" : f.text)"
         return out
     }
 
-    private static func formatTimeline(_ from: Date, _ to: Date, _ buckets: [DensityBucket]) -> String {
+    private static func formatTimeline(
+        _ from: Date,
+        _ to: Date,
+        _ buckets: [DensityBucket],
+        coverage: CaptureCoverageDisclosure
+    ) -> String {
         let total = buckets.reduce(0) { $0 + $1.count }
-        guard total > 0 else { return "No activity recorded from \(from.formatted()) to \(to.formatted())." }
+        let warning = coverage.userFacingWarning.map { "⚠️ \($0)\n" } ?? ""
+        guard total > 0 else {
+            return warning + "No activity recorded from \(from.formatted()) to \(to.formatted())."
+        }
         let peak = buckets.max { $0.count < $1.count }
-        var out = "From \(from.formatted(date: .abbreviated, time: .shortened)) to \(to.formatted(date: .abbreviated, time: .shortened)): \(total) frames across \(buckets.count) intervals."
+        var out = warning + "From \(from.formatted(date: .abbreviated, time: .shortened)) to \(to.formatted(date: .abbreviated, time: .shortened)): \(total) frames across \(buckets.count) intervals."
         if let peak { out += "\nActivity peak around \(peak.ts.formatted(date: .omitted, time: .shortened)) (\(peak.count))." }
         return out
     }
@@ -608,6 +663,11 @@ enum ZBSEyeMCPServer {
             out += "\nHistory: \(dateFromMs(o).formatted()) — \(dateFromMs(n).formatted())."
         }
         out += "\nRecording: \(recording.description)."
+        if let live = await mainInstanceDetailedCaptureStatus(dataRoot: dataRoot) {
+            out += "\nCapture health: \(formatCaptureStatus(live))."
+        } else {
+            out += "\nLive capture health: unavailable (the GUI is absent or could not be authenticated)."
+        }
         return out
     }
 
@@ -672,6 +732,41 @@ enum ZBSEyeMCPServer {
             return .authenticationUnavailable
         }
         return .capturing(capturing)
+    }
+
+    private static func mainInstanceDetailedCaptureStatus(
+        dataRoot: URL
+    ) async -> CaptureStatusDTO? {
+        guard let token = KeychainStore.get("api-token"), !token.isEmpty,
+              let port = readPort(dataRoot: dataRoot),
+              await authenticatedHealth(port: port, token: token) != nil,
+              let url = URL(string: "http://127.0.0.1:\(port)/v1/capture/status")
+        else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await localSession.data(for: request),
+              let http = response as? HTTPURLResponse,
+              http.statusCode == 200,
+              http.url == url else { return nil }
+        return try? JSONDecoder().decode(CaptureStatusDTO.self, from: data)
+    }
+
+    private static func formatCaptureStatus(_ status: CaptureStatusDTO) -> String {
+        let legs = status.legs.map {
+            "\($0.leg.rawValue)=\($0.state.rawValue)/\($0.reason.rawValue) gen=\($0.generation) attempt=\($0.attempt)"
+        }.joined(separator: ", ")
+        let coverage: String
+        if status.coverage.availability == .metadataUnavailable {
+            coverage = "coverage=metadataUnavailable"
+        } else if status.coverage.intervals.isEmpty {
+            coverage = "coverage=complete"
+        } else {
+            let names = status.coverage.affectedLegs.map(\.rawValue).joined(separator: ",")
+            coverage = "coverage=gaps(\(status.coverage.intervals.count), legs=\(names))"
+        }
+        let warning = status.coverage.userFacingWarning.map { " ⚠️ \($0)" } ?? ""
+        return "\(status.state.rawValue) [\(legs)]; \(coverage)\(warning)"
     }
 
     private static func proxyHistorySearch(
@@ -743,6 +838,11 @@ enum ZBSEyeMCPServer {
         }
         let recording = await mainInstanceCaptureStatus(dataRoot: dataRoot)
         out += "Recording: \(recording.description)."
+        if let live = await mainInstanceDetailedCaptureStatus(dataRoot: dataRoot) {
+            out += "\nCapture health: \(formatCaptureStatus(live))."
+        } else {
+            out += "\nLive capture health: unavailable (the GUI is absent or could not be authenticated)."
+        }
         return out
     }
 
@@ -791,6 +891,32 @@ enum ZBSEyeMCPServer {
             throw RecordingControlError.requestFailed
         }
         return capturing
+    }
+
+    private static func proxyCaptureRepair(dataRoot: URL) async throws -> CaptureStatusDTO {
+        guard let token = KeychainStore.get("api-token"), !token.isEmpty else {
+            throw RecordingControlError.authenticationUnavailable
+        }
+        guard let port = readPort(dataRoot: dataRoot) else {
+            throw RecordingControlError.guiUnavailable
+        }
+        guard await authenticatedHealth(port: port, token: token) != nil else {
+            throw RecordingControlError.peerAuthenticationFailed
+        }
+        guard let url = URL(string: "http://127.0.0.1:\(port)/v1/capture/repair") else {
+            throw RecordingControlError.requestFailed
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await localSession.data(for: request),
+              let http = response as? HTTPURLResponse,
+              http.statusCode == 200,
+              http.url == url,
+              let status = try? JSONDecoder().decode(CaptureStatusDTO.self, from: data) else {
+            throw RecordingControlError.requestFailed
+        }
+        return status
     }
 
     private static func parseTime(_ s: String) -> Date? {

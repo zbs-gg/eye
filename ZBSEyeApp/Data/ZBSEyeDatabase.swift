@@ -87,6 +87,7 @@ final class ZBSEyeDatabase: Sendable {
             "v12_call_context_speakers",
             "v13_call_processing_ready_event",
             "v14_protected_capture_vector_cleanup",
+            "v15_capture_coverage",
         ]
     private static func warnIfNewerSchema(_ pool: DatabasePool) {
         let applied = (try? pool.read { db in
@@ -955,6 +956,36 @@ final class ZBSEyeDatabase: Sendable {
         // invariant for legacy imports and future queue races.
         m.registerMigration("v14_protected_capture_vector_cleanup") { db in
             try purgeProtectedScreenSemanticState(in: db)
+        }
+
+        // v15: append-only capture uncertainty intervals. There is intentionally
+        // no backfill: old history has no evidence from which a truthful gap can
+        // be reconstructed. Public range APIs use half-open [start_ms, end_ms).
+        m.registerMigration("v15_capture_coverage") { db in
+            try db.execute(sql: """
+                CREATE TABLE capture_coverage_intervals (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    leg         TEXT NOT NULL
+                                CHECK (leg IN ('screen', 'systemAudio')),
+                    reason      TEXT NOT NULL,
+                    episode_id  TEXT NOT NULL,
+                    generation  INTEGER NOT NULL CHECK (generation >= 0),
+                    start_ms    INTEGER NOT NULL,
+                    end_ms      INTEGER,
+                    close_cause TEXT,
+                    CHECK (end_ms IS NULL OR end_ms >= start_ms),
+                    CHECK (
+                        (end_ms IS NULL AND close_cause IS NULL) OR
+                        (end_ms IS NOT NULL AND close_cause IS NOT NULL)
+                    ),
+                    UNIQUE (episode_id, generation)
+                );
+                CREATE UNIQUE INDEX idx_capture_coverage_one_open_per_leg
+                ON capture_coverage_intervals(leg)
+                WHERE end_ms IS NULL;
+                CREATE INDEX idx_capture_coverage_overlap
+                ON capture_coverage_intervals(start_ms, end_ms);
+                """)
         }
         return m
     }

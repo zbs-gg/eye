@@ -21,8 +21,10 @@ final class TimelineStore {
 
     @ObservationIgnored private let search: SearchService
     @ObservationIgnored private let timeline: TimelineService
+    @ObservationIgnored private let coverageQuery: CaptureCoverageQuery?
     @ObservationIgnored let mediaDirectory: URL
     @ObservationIgnored private var searchGen = 0
+    @ObservationIgnored private var coverageGen = 0
     @ObservationIgnored private var playTask: Task<Void, Never>?
     @ObservationIgnored private var playGen = 0   // like searchGen: invalidates a stale player loop
     @ObservationIgnored private var windowStart: Date?   // left edge of the strip window; nil = all history (.full)
@@ -38,6 +40,7 @@ final class TimelineStore {
     var searchQuery = ""
     var results: [SearchResult] = []
     var isSearching = false
+    var coverageDisclosure: CaptureCoverageDisclosure = .clean
     /// An open audio segment (click on an audio hit): transcript + playback. Previously an audio hit
     /// was a dead end — the nearest screen frame was shown, the transcript vanished.
     var audioDetail: AudioDetail?
@@ -116,12 +119,38 @@ final class TimelineStore {
         if let calls = try? await timeline.callSpans(from: rangeStart, to: rangeEnd) {
             callSpans = calls
         }
+        await refreshCoverage(from: rangeStart, to: rangeEnd)
     }
 
-    init(search: SearchService, timeline: TimelineService, mediaDirectory: URL) {
+    init(
+        search: SearchService,
+        timeline: TimelineService,
+        coverage: CaptureCoverageQuery? = nil,
+        mediaDirectory: URL
+    ) {
         self.search = search
         self.timeline = timeline
+        coverageQuery = coverage
         self.mediaDirectory = mediaDirectory
+    }
+
+    private func refreshCoverage(from: Date?, to: Date?) async {
+        coverageGen += 1
+        let generation = coverageGen
+        let disclosure: CaptureCoverageDisclosure
+        guard let coverageQuery else {
+            disclosure = .clean
+            guard generation == coverageGen else { return }
+            coverageDisclosure = disclosure
+            return
+        }
+        do {
+            disclosure = try await coverageQuery.disclosure(from: from, to: to)
+        } catch {
+            disclosure = .metadataUnavailable
+        }
+        guard generation == coverageGen else { return }
+        coverageDisclosure = disclosure
     }
 
     func load() async {
@@ -293,6 +322,7 @@ final class TimelineStore {
         let r = (try? await search.search(query: q)) ?? []
         guard gen == searchGen else { return }   // a stale result arrived — ignore
         results = r
+        await refreshCoverage(from: nil, to: nil)
         isSearching = false
     }
 
@@ -301,6 +331,10 @@ final class TimelineStore {
         results = []
         isSearching = false      // otherwise showResults (isSearching||!results) keeps the overlay open
         searchGen += 1           // invalidate any in-flight runSearch — its result will be dropped (gen != searchGen)
+        Task { [weak self] in
+            guard let self else { return }
+            await self.refreshCoverage(from: self.rangeStart, to: self.rangeEnd)
+        }
     }
 
     func select(_ r: SearchResult) async {

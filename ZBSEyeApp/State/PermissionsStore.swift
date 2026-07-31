@@ -6,34 +6,14 @@ import Observation
 final class PermissionsStore {
     private(set) var snapshot = PermissionSnapshot()
 
-    /// SCK returned an error while the permission was GRANTED (classic -3801 after granting Screen Recording: TCC
-    /// requires a process restart). Set from the capture loop; cleared only by restarting the app.
-    private(set) var screenNeedsRestart = false
-
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    @ObservationIgnored var onSnapshotChanged: (@MainActor (PermissionSnapshot) -> Void)?
 
     func refreshAll() async {
-        var snap = PermissionChecker.snapshot()
-        // permission granted but capture is actually failing → honest "restart required" status
-        if screenNeedsRestart && snap.screenRecording == .granted {
-            snap.screenRecording = .needsRestart
-        }
+        let snap = PermissionChecker.snapshot()
+        guard snap != snapshot else { return }
         snapshot = snap
-    }
-
-    /// Capture hit an SCK denial despite a granted permission — raise needsRestart (UI shows "Restart").
-    func flagScreenNeedsRestart() {
-        guard !screenNeedsRestart else { return }
-        screenNeedsRestart = true
-        Task { await refreshAll() }
-    }
-
-    /// Capture recovered (the failure was transient: wake, monitor change) — release the ratchet, otherwise
-    /// "Restart required" and the re-start block would hang until relaunch even with capture alive.
-    func clearScreenNeedsRestart() {
-        guard screenNeedsRestart else { return }
-        screenNeedsRestart = false
-        Task { await refreshAll() }
+        onSnapshotChanged?(snap)
     }
 
     /// Background permission polling: the user grants permissions in System Settings — the UI picks it up without

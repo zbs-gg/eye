@@ -161,6 +161,7 @@ actor StorageRelocator {
             "call_audio_chunks", "call_source_gaps", "call_bookmarks", "call_transcript_jobs",
             "call_transcript_revisions", "call_transcript_segments",
             "call_transcript_projection_gaps", "call_media_mutations",
+            "capture_coverage_intervals",
         ] {
             c[t] = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(t)") ?? -1
         }

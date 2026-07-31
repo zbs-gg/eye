@@ -16,7 +16,10 @@ struct ZBSEyeApp: App {
     /// (low disk space / SCK is dead and a restart is needed) — rather than a perpetual green dot.
     private var menuBarIcon: String {
         if env.recording.isCapturing {
-            let degraded = env.recording.lowDiskPaused || env.permissions.screenNeedsRestart
+            let degraded = env.recording.lowDiskPaused
+                || env.captureHealth.aggregate == .recovering
+                || env.captureHealth.aggregate == .repairRequired
+                || env.captureHealth.aggregate == .permissionBlocked
             return degraded ? "exclamationmark.triangle.fill" : "record.circle.fill"
         }
         return env.rewards.menuBarIcon   // the chosen reward icon (when idle)

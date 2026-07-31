@@ -29,6 +29,7 @@ final class AppEnvironment {
     let privacy = PrivacyStore()
     let rewards = RewardsStore()   // cosmetic rewards (theme/icon/menu-bar) — independent of the DB
     let workspace = WorkspaceStore()
+    private(set) var captureHealth = CaptureHealthReducer(nowMs: 0).snapshot
     private(set) var automaticCallBanner: AutomaticCallBannerState? {
         didSet { publishAutomaticCallPopup() }
     }
@@ -39,6 +40,10 @@ final class AppEnvironment {
         automaticCallRejectionCallID == automaticCallBanner?.callID
     }
     @ObservationIgnored private let keepMediaPolicyCoordinator = KeepMediaPolicyCoordinator()
+    @ObservationIgnored private var captureHealthController: CaptureHealthController?
+    @ObservationIgnored private var captureRecoveryTasks: [CaptureLeg: Task<Void, Never>] = [:]
+    @ObservationIgnored private var captureCoveragePersistenceTasks: [CaptureLeg: Task<Void, Never>] = [:]
+    @ObservationIgnored private var captureRepairInProgress = false
     @ObservationIgnored private var automaticCallPopupPresenter: AutomaticCallPopupPresenter?
 
     init() {
@@ -301,12 +306,13 @@ final class AppEnvironment {
     }
 
     private func recoverRecordingAfterCancelledTermination(
-        after phase: AppTerminationCriticalPhaseResult
+        after phase: AppTerminationCriticalPhaseResult,
+        lease: RecordingMaintenanceLease
     ) {
         recordingTerminationRecoveryTask?.cancel()
         recordingTerminationRecoveryTask = phase.recoveryTask { @MainActor [weak self] in
             guard let self else { return }
-            await self.resumeRecordingAfterCancelledTermination()
+            await self.resumeRecordingAfterCancelledTermination(lease)
             self.recordingTerminationRecoveryTask = nil
         }
     }
@@ -314,13 +320,171 @@ final class AppEnvironment {
     /// Reopens capture after macOS cancels Quit. A maintenance call end has already closed the
     /// Call Envelope, so its detector identity must be released at the same boundary as recording
     /// admission. Otherwise the browser can stay pinned forever after a later shutdown phase fails.
-    private func resumeRecordingAfterCancelledTermination() async {
+    private func resumeRecordingAfterCancelledTermination(
+        _ lease: RecordingMaintenanceLease?
+    ) async {
         if let fingerprint = maintenanceSuspendedDetectorFingerprint {
             await meetingDetector?.releaseSession(fingerprint: fingerprint)
             callDetectionPolicy.resetAfterCompletion()
             maintenanceSuspendedDetectorFingerprint = nil
         }
-        recording.resumeAfterMaintenance()
+        captureHealthController?.setSuspension(nil, nowMs: Self.epochMs())
+        if let lease { recording.resumeAfterMaintenance(lease) }
+    }
+
+    private func handleCaptureHealthEffect(
+        _ effect: CaptureHealthEffect,
+        controller: CaptureHealthController,
+        coordinator: CaptureCoordinator,
+        audio: AudioCoordinator,
+        ingest: IngestService,
+        database: ZBSEyeDatabase
+    ) {
+        switch effect {
+        case .openCoverage(let open):
+            enqueueCaptureCoveragePersistence(for: open.leg) { @MainActor [weak self] in
+                var durable = false
+                var lastFailure = "durability verification failed"
+                for delayMs: Int64 in [0, 250, 1_000] {
+                    if delayMs > 0 { try? await Task.sleep(for: .milliseconds(delayMs)) }
+                    do {
+                        let inserted = try await ingest.openCaptureCoverage(open)
+                        durable = inserted
+                        if !inserted,
+                           case .available(let intervals) = try await CaptureCoverageQuery(
+                            database: database
+                           ).openIntervals() {
+                            durable = intervals.contains {
+                                $0.leg == open.leg
+                                    && $0.episodeID == open.episodeID
+                                    && $0.generation == open.generation
+                                    && $0.startMs == open.startMs
+                            }
+                        }
+                        if durable { break }
+                    } catch {
+                        lastFailure = String(describing: error)
+                    }
+                }
+                guard durable else {
+                    Log.capture.error(
+                        "capture coverage open failed after bounded retry: \(lastFailure, privacy: .public)"
+                    )
+                    controller.coverageOpenPersistenceFailed(open, nowMs: Self.epochMs())
+                    self?.captureHealth = controller.snapshot
+                    return
+                }
+                controller.coverageDidOpen(open, nowMs: Self.epochMs())
+            }
+
+        case .closeCoverage(let close):
+            enqueueCaptureCoveragePersistence(for: close.leg) { @MainActor in
+                var durable = false
+                var lastFailure = "compare-and-set close was not acknowledged"
+                for delayMs: Int64 in [0, 250, 1_000] {
+                    if delayMs > 0 { try? await Task.sleep(for: .milliseconds(delayMs)) }
+                    do {
+                        durable = try await ingest.closeCaptureCoverage(close)
+                        if durable { break }
+                    } catch {
+                        lastFailure = String(describing: error)
+                    }
+                }
+                guard durable else {
+                    Log.capture.error(
+                        "capture coverage close failed after bounded retry: \(lastFailure, privacy: .public)"
+                    )
+                    controller.coverageClosePersistenceFailed(close, nowMs: Self.epochMs())
+                    return
+                }
+                controller.coverageDidClose(close, nowMs: Self.epochMs())
+            }
+
+        case .attemptRecovery(let attempt):
+            captureRecoveryTasks[attempt.leg]?.cancel()
+            captureRecoveryTasks[attempt.leg] = Task { @MainActor in
+                if attempt.delayMs > 0 {
+                    try? await Task.sleep(for: .milliseconds(attempt.delayMs))
+                }
+                guard !Task.isCancelled,
+                      controller.isCurrentRecoveryAttempt(attempt) else { return }
+                switch attempt.leg {
+                case .screen:
+                    await coordinator.performScreenRecovery(attempt)
+                case .systemAudio:
+                    await audio.performSystemAudioRecovery(attempt)
+                }
+            }
+        }
+    }
+
+    private func enqueueCaptureCoveragePersistence(
+        for leg: CaptureLeg,
+        operation: @escaping @MainActor () async -> Void
+    ) {
+        let previous = captureCoveragePersistenceTasks[leg]
+        captureCoveragePersistenceTasks[leg] = Task { @MainActor in
+            await previous?.value
+            await operation()
+        }
+    }
+
+    private func drainCaptureCoveragePersistence() async {
+        for task in Array(captureCoveragePersistenceTasks.values) {
+            await task.value
+        }
+    }
+
+    func repairCapture() async {
+        guard !captureRepairInProgress else { return }
+        captureRepairInProgress = true
+        defer { captureRepairInProgress = false }
+
+        guard let controller = captureHealthController,
+              let coordinator = recording.coordinator,
+              let audio else { return }
+        let affected = Set(controller.snapshot.repairableLegs)
+        guard !affected.isEmpty, recording.wantsRecording else { return }
+        let physicalAffected = Set(affected.filter {
+            controller.repairRequiresPhysicalDrain(for: $0)
+        })
+        let lease = physicalAffected.isEmpty
+            ? nil
+            : recording.acquireMaintenanceLease(.repair)
+        let drained = await CaptureRepairOrchestrator.run(
+            affected: physicalAffected,
+            drainScreen: { await coordinator.stopAndDrain().activeCycles == 0 },
+            drainSystemAudio: {
+                await audio.stopSystemAndDrain(timeout: .seconds(5)).isConfirmedStopped
+            },
+            restartScreen: {},
+            requestRepair: { _ in }
+        )
+        if let lease {
+            recording.completeCaptureRepair(
+                lease,
+                screenWasDrained: physicalAffected.contains(.screen),
+                drainSucceeded: drained
+            )
+        }
+        guard drained else { return }
+        for leg in CaptureLeg.allCases where affected.contains(leg) {
+            controller.repairRequested(leg, nowMs: Self.epochMs())
+        }
+    }
+
+    nonisolated private static func epochMs(_ date: Date = Date()) -> Int64 {
+        Int64(date.timeIntervalSince1970 * 1_000)
+    }
+
+    nonisolated private static func capturePermission(
+        from status: PermissionStatus
+    ) -> CapturePermissionState {
+        switch status {
+        case .granted: .granted
+        case .denied: .denied
+        case .notDetermined, .needsRestart: .unknown
+        }
     }
 
     /// 👁 Delighter: once per crossed "round" memory milestone — a friendly local notification
@@ -478,7 +642,15 @@ final class AppEnvironment {
                 // has acknowledged its CoreAudio teardown and both capture
                 // legs have flushed their final DB row. Speech recognition can
                 // resume from backfill after launch, so it must not hold Quit.
+                var recordingMaintenanceLease: RecordingMaintenanceLease?
                 if recoveryOwner == .quit {
+                    self.captureHealthController?.setSuspension(
+                        .maintenance,
+                        nowMs: Self.epochMs()
+                    )
+                    await self.drainCaptureCoveragePersistence()
+                    let lease = self.recording.acquireMaintenanceLease(.termination)
+                    recordingMaintenanceLease = lease
                     let recordingPhase = await AppTerminationCriticalPhase.run(
                         timeout: AppTerminationDeadlinePolicy.recordingDrain
                     ) {
@@ -487,6 +659,7 @@ final class AppEnvironment {
                         // retained to real completion before recovery resumes.
                         await self.calls.endAndWait(reason: .maintenance)
                         let recordingDrain = await self.recording.pauseForMaintenanceAndDrain(
+                            lease: lease,
                             waitForTranscription: false
                         )
                         return recordingDrain.capture.activeCycles == 0
@@ -495,7 +668,10 @@ final class AppEnvironment {
                     }
                     guard AppTerminationCriticalPhase.acceptsTermination(recordingPhase) else {
                         Log.audio.error("termination cancelled: recording drain was not confirmed before deadline")
-                        self.recoverRecordingAfterCancelledTermination(after: recordingPhase)
+                        self.recoverRecordingAfterCancelledTermination(
+                            after: recordingPhase,
+                            lease: lease
+                        )
                         return false
                     }
                 }
@@ -528,7 +704,7 @@ final class AppEnvironment {
                         if case .completed = localRuntimePhase.outcome {
                             await self.builtInModels.refresh()
                         }
-                        await self.resumeRecordingAfterCancelledTermination()
+                        await self.resumeRecordingAfterCancelledTermination(recordingMaintenanceLease)
                         await self.whisperModelStore?.resumeAfterDrain()
                         await self.speakerDiarizationModelStore?.resumeAfterDrain()
                         await self.callTranscriptWorker?.resume()
@@ -562,7 +738,7 @@ final class AppEnvironment {
                             resumeCompute: true
                         )
                         await self.builtInModels.refresh()
-                        await self.resumeRecordingAfterCancelledTermination()
+                        await self.resumeRecordingAfterCancelledTermination(recordingMaintenanceLease)
                         await self.whisperModelStore?.resumeAfterDrain()
                         await self.speakerDiarizationModelStore?.resumeAfterDrain()
                         await self.callTranscriptWorker?.resume()
@@ -862,23 +1038,55 @@ final class AppEnvironment {
             // store; the capture loop consumes it before AX/OCR.
             let browserContent = BrowserContentStore()
 
+            let openCoverage: [CaptureCoverageInterval]
+            switch try await CaptureCoverageQuery(database: db).openIntervals() {
+            case .available(let intervals):
+                openCoverage = intervals
+            case .metadataUnavailable:
+                openCoverage = []
+            }
+            let screenPermission = Self.capturePermission(
+                from: permissions.snapshot.screenRecording
+            )
+            let captureHealthController = CaptureHealthController(
+                nowMs: Self.epochMs(),
+                intent: CaptureIntent(
+                    screenEnabled: recording.wantsRecording,
+                    systemAudioEnabled: recording.wantsRecording
+                        && audioSettings.audioShouldCapture()
+                        && audioSettings.recordSystemAudio
+                ),
+                permissions: [
+                    .screen: screenPermission,
+                    .systemAudio: screenPermission,
+                ],
+                openIntervals: openCoverage
+            )
+            self.captureHealthController = captureHealthController
+            captureHealthController.setSnapshotSink { [weak self] snapshot in
+                self?.captureHealth = snapshot
+            }
+            permissions.onSnapshotChanged = { [weak captureHealthController] snapshot in
+                let permission = Self.capturePermission(from: snapshot.screenRecording)
+                captureHealthController?.setPermission(
+                    permission,
+                    for: .screen,
+                    nowMs: Self.epochMs()
+                )
+                captureHealthController?.setPermission(
+                    permission,
+                    for: .systemAudio,
+                    nowMs: Self.epochMs()
+                )
+            }
+
             // Capture loop (the heart). Starts on toggle in RecordingStore.
             let coordinator = CaptureCoordinator(
                 ingest: ingestService,
-                browserContent: browserContent
+                browserContent: browserContent,
+                healthController: captureHealthController
             )
             coordinator.onFrame = { [weak rec = recording] in rec?.noteFrame() }
-            // SCK dead despite a granted permission (-3801 etc.) → honest needsRestart instead of a false recording.
-            coordinator.onCaptureBroken = { [weak self] in
-                Log.capture.error("capture broken at granted permission -> needsRestart")
-                self?.permissions.flagScreenNeedsRestart()
-            }
-            // A transient failure (wake/monitor change) passed — clear the ratchet, don't block recording.
-            coordinator.onCaptureRecovered = { [weak self] in
-                Log.capture.info("capture recovered -> clear needsRestart")
-                self?.permissions.clearScreenNeedsRestart()
-            }
-            coordinator.onCycleOK = { [weak rec = recording] in rec?.noteCycleOK() }
             // The independent disk monitor owns transitions. This cycle gate is
             // only a final admission check while an asynchronous drain settles.
             coordinator.diskOK = { [weak self] in
@@ -890,15 +1098,16 @@ final class AppEnvironment {
             recording.coordinator = coordinator
             // Honest recording: won't start without the critical permissions (instead of a false green dot).
             recording.canCapture = { [weak self] in self?.permissions.allCriticalGranted ?? false }
-            recording.blockedHint = { [weak self] in
-                if self?.permissions.screenNeedsRestart == true {
-                    return "Permission granted — restart ZBS Eye (Settings → Restart). Recording will turn on automatically"
-                }
+            recording.blockedHint = {
                 return "No permissions (Screen Recording + Accessibility). Recording turns on automatically once granted; click again to cancel"
             }
 
             // Audio recording + on-device transcription (step 10). Gate — transcription on + mic granted.
-            let audioCoordinator = AudioCoordinator(storage: storage, ingest: ingestService)
+            let audioCoordinator = AudioCoordinator(
+                storage: storage,
+                ingest: ingestService,
+                healthController: captureHealthController
+            )
             audioCoordinator.onSegment = { [weak rec = recording] in rec?.noteAudioChunk() }
             recording.audio = audioCoordinator
             // Gates for RECORDING audio (without the speech permission: raw audio is valuable on its own — you'll
@@ -918,6 +1127,19 @@ final class AppEnvironment {
                     && self.permissions.snapshot.screenRecording == .granted
             }
             self.audio = audioCoordinator
+            captureHealthController.setEffectSink { [weak self] effect in
+                self?.handleCaptureHealthEffect(
+                    effect,
+                    controller: captureHealthController,
+                    coordinator: coordinator,
+                    audio: audioCoordinator,
+                    ingest: ingestService,
+                    database: db
+                )
+            }
+            // Assign only after persistence effects are wired: a restored
+            // privacy pause may immediately close a hydrated open interval.
+            recording.healthController = captureHealthController
             let callAudio = CallAudioControl(
                 installSink: { [weak audioCoordinator] sink in
                     await audioCoordinator?.installCallFrameSink(sink)
@@ -1005,8 +1227,13 @@ final class AppEnvironment {
                 semanticPolicy: .coordinated(computeCoordinator)
             )
             let timelineSvc = TimelineService(db: db)
-            self.timelineStore = TimelineStore(search: searchSvc, timeline: timelineSvc,
-                                               mediaDirectory: storage.mediaDirectory)
+            let coverageQuery = CaptureCoverageQuery(database: db)
+            self.timelineStore = TimelineStore(
+                search: searchSvc,
+                timeline: timelineSvc,
+                coverage: coverageQuery,
+                mediaDirectory: storage.mediaDirectory
+            )
 
             // Shared aggregation layer for the day's activity (one scan + segmentation + active time + batch text).
             // Reused by scenes, the cartographer, and the summary — deduping logic (Pro review #9).
@@ -1075,7 +1302,11 @@ final class AppEnvironment {
             // "Ask your memory": hybrid retrieval completes first, then the
             // exact authorized snapshot crosses the process-wide router.
             let askRetrieval = AskDatabaseRetrieval(search: searchSvc, db: db)
-            let askService = AskService(retrieval: askRetrieval, router: llmRouter)
+            let askService = AskService(
+                retrieval: askRetrieval,
+                router: llmRouter,
+                coverage: coverageQuery
+            )
             self.ask = AskStore(
                 service: askService,
                 readiness: ai,
@@ -1130,12 +1361,19 @@ final class AppEnvironment {
                 browserContent: browserContent,
                 version: AppVersion.current,
                 isCapturing: { await MainActor.run { rec.isCapturing } },
+                captureStatus: {
+                    await MainActor.run { captureHealthController.snapshot }
+                },
                 toggleCapture: { enable in
                     await MainActor.run {
                         if let enable, enable == rec.isCapturing { return rec.isCapturing }
                         rec.toggle()
                         return rec.isCapturing
                     }
+                },
+                repairCapture: { [weak self] in
+                    await self?.repairCapture()
+                    return await MainActor.run { captureHealthController.snapshot }
                 },
                 mediaBytes: { storage.totalBytes() },
                 browserDidIngestAt: { [weak self] date in
@@ -1262,8 +1500,7 @@ final class AppEnvironment {
         }
         // Autostart: "eternal memory" resumes after a reboot/crash, if the user had it on.
         recording.startIfWanted()
-        // Watcher (4s): (1) autostart on late permission grant; (2) degradation on permission revocation mid-run
-        // (isCapturing would hang true with a dead capture); (3) audio-gate drift — mic/speech granted
+        // Watcher (4s): (1) autostart on late permission grant; (2) audio-gate drift — mic/speech granted
         // AFTER recording started / lowDisk changed → re-sync the legs (previously required restarting recording).
         autostartTask = Task { [weak self] in
             var prevGates: (mic: Bool, system: Bool)? = nil
@@ -1271,16 +1508,7 @@ final class AppEnvironment {
                 try? await Task.sleep(for: .seconds(4))
                 guard let self else { return }
                 self.recording.startIfWanted()
-                // permission revoked mid-run → honest degradation in the UI (instead of a forever-green dot)
                 if self.recording.isCapturing {
-                    if !self.permissions.allCriticalGranted {
-                        self.recording.setDegraded(
-                            self.permissions.screenNeedsRestart
-                                ? "Capture broke — restart ZBS Eye"
-                                : "Permissions revoked — capture isn't working")
-                    } else {
-                        self.recording.setDegraded(nil)
-                    }
                     // audio-gate drift (new permissions/settings/lowDisk) → re-sync the legs
                     let gates = (self.recording.micEnabled(), self.recording.systemEnabled())
                     if let prev = prevGates, prev != gates { self.recording.syncAudio() }
@@ -1425,8 +1653,10 @@ final class AppEnvironment {
         storageSettings.relocationError = nil
         storageSettings.relocationProgress = 0
         storageSettings.relocationStatus = "Stopping recording…"
+        captureHealthController?.setSuspension(.maintenance, nowMs: Self.epochMs())
+        await drainCaptureCoveragePersistence()
         let recordingDrainTask = Task { @MainActor [recording] in
-            await recording.pauseForMaintenanceAndDrain()
+            await recording.pauseForMaintenanceAndDrain(owner: .relocation)
         }
 
         let relocator = StorageRelocator()
@@ -1456,7 +1686,7 @@ final class AppEnvironment {
             let automationAuditDrain = await automationAuditWriter?.suspendAndDrainForRelocation()
 
             let recordingDrain = await recordingDrainTask.value
-            let ingestDrain = await ingest.drain()
+            let ingestDrain = await ingest.suspendAndDrainForRelocation()
             guard recordingDrain.capture.activeCycles == 0,
                   recordingDrain.audio.activeLegs == 0,
                   recordingDrain.audio.systemCaptureOutcome.isConfirmedStopped,
@@ -1517,6 +1747,7 @@ final class AppEnvironment {
                     _ = await terminationDrain?.value
                 },
                 resumeOldGraphAdmissions: {
+                    await self.ingest?.resumeAfterRelocation()
                     await self.callAutomationDispatcher?.resumeAfterRelocation()
                     await self.callAutomation?.resumeAfterSuspension()
                     await self.automationAuditWriter?.resumeAfterRelocation()
@@ -1533,7 +1764,9 @@ final class AppEnvironment {
                     await self.callTranscriptWorker?.resume()
                     await self.speakerDiarizationWorker?.resume()
                     await self.builtInModels.refresh()
-                    self.recording.resumeAfterMaintenance()
+                    self.captureHealthController?.setSuspension(nil, nowMs: Self.epochMs())
+                    let recordingDrain = await recordingDrainTask.value
+                    self.recording.resumeAfterMaintenance(recordingDrain.lease)
                 }
             )
             storageSettings.relocationInProgress = false
@@ -1550,6 +1783,8 @@ final class AppEnvironment {
         case .none:
             return
         case .pauseCapture:
+            captureHealthController?.setSuspension(.lowDisk, nowMs: Self.epochMs())
+            await drainCaptureCoveragePersistence()
             // Stop speech scratch work first, then close the explicit Call
             // Envelope before draining the shared physical capture legs.
             await callTranscriptWorker?.suspendAndDrain()
@@ -1582,6 +1817,7 @@ final class AppEnvironment {
                 callDetectionPolicy.resetAfterCompletion()
                 lowDiskSuspendedDetectorFingerprint = nil
             }
+            captureHealthController?.setSuspension(nil, nowMs: Self.epochMs())
             recording.resumeAfterLowDisk()
             await callTranscriptWorker?.resume()
             await speakerDiarizationWorker?.resume()

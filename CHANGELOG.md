@@ -7,6 +7,12 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 ### Added
 - Read-only MCP clients, including Hermes, can request a bounded, privacy-filtered activity summary with
   deterministic sessions, top apps, and tamper-resistant snapshot pagination.
+- Authenticated capture status and leg-scoped repair are available through REST, with repair restricted to
+  advanced/full MCP profiles.
+
+### Changed
+- Screen and system-audio capture now recover independently with bounded retries. Search, Ask, Timeline,
+  REST, and MCP disclose known coverage gaps so missing history is never presented as proof of inactivity.
 
 ## [0.6.0] — 2026-07-31
 
