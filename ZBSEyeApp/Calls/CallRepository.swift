@@ -352,6 +352,74 @@ actor CallRepository {
         }
     }
 
+    /// Universal microphone admission intentionally precedes slower AX/browser inspection. This
+    /// upsert creates the initial automatic context and later fills only stronger missing fields.
+    /// A caller may explicitly promote a generic owner to a freshly verified native/browser call
+    /// surface; it never rewrites the activation fingerprint, creation time, or terminal disposition.
+    func enrichAutomaticCallContext(
+        callID: Int64,
+        detectorFingerprint: String,
+        sourceAppBundleID: String?,
+        sourceAppName: String?,
+        trustedOriginHost: String?,
+        replaceExistingSource: Bool = false,
+        nowMs: Int64
+    ) async throws {
+        try await database.pool.write { db in
+            guard try CallRow.fetchOne(db, key: callID) != nil else {
+                throw CallRepositoryError.callNotFound(callID)
+            }
+            try db.execute(
+                sql: """
+                    INSERT INTO call_context(
+                        callId, captureOwner, disposition, detectorFingerprintHash,
+                        sourceAppBundleID, sourceAppName, trustedOriginHost, title,
+                        participantsJSON, createdAtMs, updatedAtMs
+                    ) VALUES (?, 'automatic', 'active', ?, ?, ?, ?, NULL, '[]', ?, ?)
+                    ON CONFLICT(callId) DO UPDATE SET
+                        sourceAppName = CASE
+                            WHEN ? = 1
+                              OR call_context.sourceAppBundleID IS NULL
+                              OR call_context.sourceAppBundleID LIKE 'process:%'
+                              OR call_context.sourceAppBundleID LIKE 'process-pid:%'
+                                THEN COALESCE(excluded.sourceAppName, call_context.sourceAppName)
+                            ELSE COALESCE(call_context.sourceAppName, excluded.sourceAppName)
+                        END,
+                        sourceAppBundleID = CASE
+                            WHEN ? = 1
+                              OR call_context.sourceAppBundleID IS NULL
+                              OR call_context.sourceAppBundleID LIKE 'process:%'
+                              OR call_context.sourceAppBundleID LIKE 'process-pid:%'
+                                THEN COALESCE(excluded.sourceAppBundleID, call_context.sourceAppBundleID)
+                            ELSE call_context.sourceAppBundleID
+                        END,
+                        trustedOriginHost = COALESCE(
+                            call_context.trustedOriginHost,
+                            excluded.trustedOriginHost
+                        ),
+                        detectorFingerprintHash = COALESCE(
+                            call_context.detectorFingerprintHash,
+                            excluded.detectorFingerprintHash
+                        ),
+                        updatedAtMs = MAX(call_context.updatedAtMs, excluded.updatedAtMs)
+                    WHERE call_context.captureOwner = 'automatic'
+                      AND call_context.disposition != 'rejected'
+                    """,
+                arguments: [
+                    callID,
+                    detectorFingerprint,
+                    sourceAppBundleID,
+                    sourceAppName,
+                    trustedOriginHost,
+                    nowMs,
+                    nowMs,
+                    replaceExistingSource,
+                    replaceExistingSource,
+                ]
+            )
+        }
+    }
+
     func updateCallCaptureContext(
         callID: Int64,
         owner: CallCaptureOwner,

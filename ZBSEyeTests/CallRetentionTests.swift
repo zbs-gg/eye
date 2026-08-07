@@ -28,6 +28,10 @@ final class CallRetentionTests: XCTestCase {
             )
         }
 
+        let eraseWasCompleteBeforeDeletion = try await fixture.repository.isCallEraseComplete(
+            callID: callID
+        )
+        XCTAssertFalse(eraseWasCompleteBeforeDeletion)
         let report = try await fixture.deletion.erase(callID: callID, nowMs: 5_000)
 
         XCTAssertEqual(report.bytesDeleted, 8)
@@ -50,6 +54,8 @@ final class CallRetentionTests: XCTestCase {
         XCTAssertEqual(counts.vectors, 0)
         XCTAssertEqual(counts.queue, 0)
         XCTAssertEqual(counts.mutations, 0)
+        let eraseIsComplete = try await fixture.repository.isCallEraseComplete(callID: callID)
+        XCTAssertTrue(eraseIsComplete)
     }
 
     func testRecoveryCompletesEraseAfterDatabaseTombstoneCrash() async throws {

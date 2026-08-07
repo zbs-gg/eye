@@ -218,6 +218,126 @@ final class CallDatabaseTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(snapshot.triggerCount, 6)
     }
 
+    func testAutomaticCallContextEnrichmentOnlyFillsMissingTrustedEvidence() async throws {
+        let store = try CallDatabaseTestStore()
+        let repository = CallRepository(database: store.database)
+
+        let confirmedCall = try await repository.createCall(
+            startedAtMs: 900,
+            idempotencyKey: "automatic-context-confirmed"
+        )
+        let confirmedCallID = try XCTUnwrap(confirmedCall.id)
+
+        try await repository.enrichAutomaticCallContext(
+            callID: confirmedCallID,
+            detectorFingerprint: "sha256:first-detector-fingerprint",
+            sourceAppBundleID: nil,
+            sourceAppName: nil,
+            trustedOriginHost: nil,
+            nowMs: 1_000
+        )
+        try await repository.enrichAutomaticCallContext(
+            callID: confirmedCallID,
+            detectorFingerprint: "sha256:synthetic-event-must-not-replace-fingerprint",
+            sourceAppBundleID: "process-pid:412",
+            sourceAppName: "Unknown Helper",
+            trustedOriginHost: nil,
+            nowMs: 1_050
+        )
+        try await repository.enrichAutomaticCallContext(
+            callID: confirmedCallID,
+            detectorFingerprint: "sha256:generic-owner",
+            sourceAppBundleID: "ai.krisp.krispMac",
+            sourceAppName: "Krisp",
+            trustedOriginHost: nil,
+            nowMs: 1_075
+        )
+        try await repository.updateCallCaptureContext(
+            callID: confirmedCallID,
+            owner: .automatic,
+            disposition: .confirmed,
+            nowMs: 1_100
+        )
+        try await repository.enrichAutomaticCallContext(
+            callID: confirmedCallID,
+            detectorFingerprint: "sha256:late-event-must-not-replace-fingerprint",
+            sourceAppBundleID: "com.google.Chrome",
+            sourceAppName: "Google Chrome",
+            trustedOriginHost: "meet.google.com",
+            replaceExistingSource: true,
+            nowMs: 1_200
+        )
+        try await repository.enrichAutomaticCallContext(
+            callID: confirmedCallID,
+            detectorFingerprint: "sha256:conflicting-event",
+            sourceAppBundleID: "us.zoom.xos",
+            sourceAppName: "Zoom",
+            trustedOriginHost: "zoom.us",
+            nowMs: 1_300
+        )
+
+        let confirmedContext = try await store.database.pool.read { db in
+            try CallContextRow.fetchOne(db, key: confirmedCallID)
+        }
+        XCTAssertEqual(confirmedContext?.captureOwner, .automatic)
+        XCTAssertEqual(confirmedContext?.disposition, .confirmed)
+        XCTAssertEqual(
+            confirmedContext?.detectorFingerprintHash,
+            "sha256:first-detector-fingerprint"
+        )
+        XCTAssertEqual(confirmedContext?.sourceAppBundleID, "com.google.Chrome")
+        XCTAssertEqual(confirmedContext?.sourceAppName, "Google Chrome")
+        XCTAssertEqual(confirmedContext?.trustedOriginHost, "meet.google.com")
+        XCTAssertEqual(confirmedContext?.createdAtMs, 1_000)
+        XCTAssertEqual(confirmedContext?.updatedAtMs, 1_300)
+
+        _ = try await repository.endCall(
+            callID: confirmedCallID,
+            idempotencyKey: "automatic-context-confirmed-end",
+            endedAtMs: 1_400
+        )
+
+        let rejectedCall = try await repository.createCall(
+            startedAtMs: 1_900,
+            idempotencyKey: "automatic-context-rejected"
+        )
+        let rejectedCallID = try XCTUnwrap(rejectedCall.id)
+        try await repository.enrichAutomaticCallContext(
+            callID: rejectedCallID,
+            detectorFingerprint: "sha256:rejected-fingerprint",
+            sourceAppBundleID: "process:unknown",
+            sourceAppName: "Unknown Process",
+            trustedOriginHost: nil,
+            nowMs: 2_000
+        )
+        try await repository.updateCallCaptureContext(
+            callID: rejectedCallID,
+            owner: .claimed,
+            disposition: .rejected,
+            nowMs: 2_100
+        )
+        try await repository.enrichAutomaticCallContext(
+            callID: rejectedCallID,
+            detectorFingerprint: "sha256:rejected-late-event",
+            sourceAppBundleID: "com.openai.codex",
+            sourceAppName: "ChatGPT",
+            trustedOriginHost: "chatgpt.com",
+            nowMs: 2_200
+        )
+
+        let rejectedContext = try await store.database.pool.read { db in
+            try CallContextRow.fetchOne(db, key: rejectedCallID)
+        }
+        XCTAssertEqual(rejectedContext?.captureOwner, .claimed)
+        XCTAssertEqual(rejectedContext?.disposition, .rejected)
+        XCTAssertEqual(rejectedContext?.detectorFingerprintHash, "sha256:rejected-fingerprint")
+        XCTAssertEqual(rejectedContext?.sourceAppBundleID, "process:unknown")
+        XCTAssertEqual(rejectedContext?.sourceAppName, "Unknown Process")
+        XCTAssertNil(rejectedContext?.trustedOriginHost)
+        XCTAssertEqual(rejectedContext?.createdAtMs, 2_000)
+        XCTAssertEqual(rejectedContext?.updatedAtMs, 2_100)
+    }
+
     func testCallContextAndSpeakerRevisionAreGenerationBoundRevisionedAndCascading() async throws {
         let store = try CallDatabaseTestStore()
         let repository = CallRepository(database: store.database)
