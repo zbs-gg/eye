@@ -35,21 +35,41 @@ Two product goals:
 
 ---
 
-## Working now (verified live)
+## Current product state
+
+Previously verified live baseline:
 
 - Screen capture: ScreenCaptureKit → HEIC, accessibility text + OCR fallback, perceptual-hash dedup.
 - Audio: microphone + system audio, VAD, on-device transcription (SFSpeech).
 - Hybrid search: FTS5 + semantics (multilingual-e5, 384-dim) via RRF — **cross-lingual**.
 - Timeline: scrubber, activity density, 1×/2×/4× player, day/hour/10-min zoom.
 - Local REST + MCP for AI agents.
-- Explicit Call Envelopes: uninterrupted mic/system recording, durable Bookmarks, optional post-call
-  Whisper transcript, preferred-only search, compact Timeline/Call Detail, and read-only agent evidence.
-  Automated fixtures are green; installed-app 60/120-minute physical qualification remains before release.
-- Storage: retention (forever by default), move to external SSD, iCloud backup as a compressed snapshot,
-  size tracking.
+- Storage: 5 GB Keep Media on a fresh profile, explicit 10/20/50 GB or Forever, move to external SSD, iCloud
+  backup as a compressed snapshot, size tracking.
 - Automations: daily summary (local LLM → file/Obsidian), export.
 - Built-in local generation on qualified hardware, with one global provider/model pair and provider-owned
   model lists; Ollama and LM Studio remain separate alternatives.
+
+Implemented and deterministically verified in the **`0.7.0 (21)` candidate**:
+
+- Explicit Call Envelopes, the Calls library/detail, uninterrupted Bookmarks, optional local Whisper and
+  per-call speaker processing, preferred-only search, and bounded read-only agent evidence.
+- One persistent low-rate screen stream, bounded latest-wins processing (one active + one pending), and one
+  coordinator serializing complete screen/system-audio ScreenCaptureKit lifecycle operations.
+- Best-effort listen-only yield for native screenshot shortcuts with no new TCC prompt, plus exact native helper
+  observation. Failure to observe an early keypress leaves the system shortcut untouched.
+- Per-leg capture health, durable coverage gaps, bounded 1/3/10-second Eye-owned recovery, and explicit repair
+  after exhaustion; static pixels alone never mean failure.
+- Automatic Calls from eligible external microphone initiators, including while Timeline recording is paused.
+  Krisp is relay-only, `codex_chronicle` is excluded, and the exact automatic-Call exclusion list is separate
+  from screen privacy. Audio Off and privacy pause disarm Calls.
+- A 30-second detected-end window with resumed-mic continuation, **End & save**, or destructive
+  **This wasn’t a call**. There is no post-end Undo.
+
+Build 21 is **not physically release-qualified yet**. A new exact notarized ZIP/manifest must pass the complete
+capture-coexistence v2 bracket, native-shortcut and recovery matrix, 30-minute churn and two-hour installed soak,
+plus the full automatic-Call physical checklist including 60- and 120-minute calls. Deterministic tests do not
+replace those installed-artifact gates.
 
 ---
 
@@ -66,10 +86,16 @@ Two product goals:
   (`AudioCoordinator.backfillUntranscribed`, 7-day window, file check).
 - ✅ Diagnosability: `os.Logger` by category (`Log`), crash marker (clean-shutdown flag), server log.
 - ✅ Real-time storage: a continuous retention timer + a size trigger; a disk guard before capture
-  (`diskOK`/`freeBytes`) + emergency prune.
+  (`diskOK`/`freeBytes`). Critically low disk pauses capture; it never overrides Keep Media by deleting history.
+- ✅ Screen capture uses one persistent low-rate stream and latest-wins processing rather than per-cycle native
+  screenshot requests or an unbounded work queue.
+- ✅ Screen and system-audio start/update/stop operations cannot overlap; capture health records real gaps and
+  retries only Eye-owned resources before asking for explicit repair.
 
 ### 2. Capture depth — 🟡
 - ✅ Multi-monitor: the display of the focused window is captured (`displayForFrontmostWindow`).
+- ✅ Native screenshot coexistence: listen-only, best-effort early yield plus exact helper observation, with no
+  new permission prompt and no event interception.
 - ⏳ Polish (needs tuning on hardware): priority AX extraction instead of a full traversal, per-PID
   backoff (don't slow other apps), per-tile hash, titles/URLs for OCR-only windows.
 
@@ -83,8 +109,12 @@ Two product goals:
 - ✅ Explicit Call Envelopes keep microphone/system evidence separate; Bookmark never stops capture.
 - ✅ Optional Whisper Large V3 Turbo checkpoints + preferred whole-call final; no model required to record.
 - ✅ Timeline/search/REST/MCP resolve one Call Envelope without duplicate provisional/final hits.
-- 🟡 Release qualification: deterministic fixtures pass; short installed-app smoke and 60/120-minute
-  continuity/resource/recovery gates remain deliberately physical.
+- ✅ Eligible external microphone use can start one automatic Call even while Timeline recording is paused;
+  relay-only Krisp cannot own it, `codex_chronicle` is ignored, and audio-only exclusions do not alter screen history.
+- ✅ A detected end has one 30-second grace owner. Returning microphone activity resumes the envelope;
+  **End & save**, timeout save, and **This wasn’t a call** are single-owner terminal paths with no Undo.
+- 🟡 Release qualification: deterministic fixtures pass; the exact installed build still needs the complete
+  short/60/120-minute privacy, continuity, resource, restart, device-change, and recovery checklist.
 
 ### 5. Truly zero egress — ✅
 - ✅ The embedding model is bundled (`scripts/build-release.sh`) — first-run with no network.
@@ -110,10 +140,11 @@ Two product goals:
 **v1.0 readiness criterion:** a week of real 24/7 use with no silent losses; search finds both screen
 text and conversations; the first launch on a fresh machine is completed without hints.
 
-> **Built, notarized, working live** (2026-06-25): a notarized Developer ID build is installed, launches
+> **Historical installed-build evidence** (2026-06-25): a notarized Developer ID build was installed, launched
 > with a double-click, writes to an external SSD (50k+ frames). The live-recording crash (self-AX reentrancy)
 > is fixed and verified live. The release now also has a native XCTest target covering provider,
-> provisioning, routing, adapter, and consumer contracts.
+> provisioning, routing, adapter, and consumer contracts. This evidence does not qualify the later
+> `0.7.0 (21)` candidate or its capture/automatic-Call changes.
 
 ---
 

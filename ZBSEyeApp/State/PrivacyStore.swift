@@ -8,12 +8,16 @@ import AppKit
 @Observable
 final class PrivacyStore {
     private(set) var ignoredBundleIds: [String] {
-        didSet { UserDefaults.standard.set(ignoredBundleIds, forKey: Self.key) }
+        didSet {
+            UserDefaults.standard.set(ignoredBundleIds, forKey: Self.key)
+            if ignoredBundleIds != oldValue { onIgnoredBundleIdsChanged?() }
+        }
     }
     /// Names for the UI (bundleId → display name, fetched lazily from the installed app).
     private(set) var displayNames: [String: String] = [:]
 
     @ObservationIgnored private static let key = "zbseye.privacy.ignoredApps"
+    @ObservationIgnored var onIgnoredBundleIdsChanged: (@MainActor () -> Void)?
 
     init() {
         ignoredBundleIds = UserDefaults.standard.stringArray(forKey: Self.key) ?? []

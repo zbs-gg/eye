@@ -43,6 +43,7 @@ struct PermissionsSettingsView: View {
 
                 captureRepairGroup
                 audioGroup
+                autoCallExclusionsGroup
                 privacyGroup
             }
             .padding(24)
@@ -109,7 +110,7 @@ struct PermissionsSettingsView: View {
 
             Divider()
             Toggle("System audio outside calls", isOn: $audio.recordSystemAudio)
-            Text("Turn this off to keep ordinary playback out of Timeline and avoid waking meeting tools. A confirmed or manually started call still records separate microphone and system tracks; Audio Off disables both.")
+            Text("Turn this off to keep ordinary playback out of Timeline. An automatically detected or manually started Call still records separate microphone and system tracks; Audio Off disables both.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -124,13 +125,49 @@ struct PermissionsSettingsView: View {
     private var audioModeSummary: String {
         switch env.audioSettings.audioMode {
         case .off: String(localized: "Audio is off. Screen capture continues.")
-        case .meetingsOnly: String(localized: "Audio engines run only during detected meetings.")
+        case .meetingsOnly: String(localized: "Eligible microphone use starts a Call even while screen recording is stopped. Audio Off or privacy pause disables it.")
         case .always: String(localized: "Audio follows recording continuously.")
+        }
+    }
+
+    private var autoCallExclusionsGroup: some View {
+        SettingsGroup("Don’t auto-record these apps") {
+            Text("These apps can still appear in screen history. This list only prevents them from automatically starting a Call when they use the microphone.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if env.audioSettings.autoCallExcludedBundleIDs.isEmpty {
+                Text("No excluded apps.")
+                    .foregroundStyle(.secondary)
+            } else {
+                Divider()
+                ForEach(env.audioSettings.autoCallExcludedBundleIDs, id: \.self) { bundleID in
+                    HStack {
+                        Image(systemName: "mic.slash")
+                        VStack(alignment: .leading) {
+                            Text(env.audioSettings.autoCallExcludedDisplayNames[bundleID] ?? bundleID)
+                            Text(bundleID).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            env.audioSettings.removeAutoCallExcludedApp(bundleID)
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Allow automatic Calls for \(bundleID)")
+                    }
+                }
+            }
+            Divider()
+            Button("Add an app…") { env.audioSettings.addAutoCallExcludedAppViaPanel() }
         }
     }
 
     private var privacyGroup: some View {
         SettingsGroup("Private apps") {
+            Text("Their screen and text aren't recorded. This setting does not change automatic Call recording.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             if env.privacy.ignoredBundleIds.isEmpty {
                 Text("No excluded apps.")
                     .foregroundStyle(.secondary)

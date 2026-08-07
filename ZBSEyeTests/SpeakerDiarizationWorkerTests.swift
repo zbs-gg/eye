@@ -21,6 +21,101 @@ final class SpeakerDiarizationWorkerTests: XCTestCase {
         XCTAssertEqual(resumed, [1])
     }
 
+    func testCombinedEvidenceBarrierDoesNotResumeUntilEveryOverlappingLeaseEnds() async {
+        let recorder = EvidenceBarrierRecorder(ownership: [true])
+        let barrier = CallEvidenceWorkerBarrier(
+            workers: [
+                .init(
+                    suspend: { await recorder.suspend(index: 0) },
+                    resume: { await recorder.resume(index: 0) }
+                ),
+            ]
+        )
+
+        let firstLease = await barrier.suspend()
+        let secondLease = await barrier.suspend()
+        XCTAssertTrue(firstLease)
+        XCTAssertTrue(secondLease)
+        await barrier.resume()
+        let resumedWhileSecondLeaseActive = await recorder.resumedWorkers()
+        XCTAssertEqual(resumedWhileSecondLeaseActive, [])
+        await barrier.resume()
+        let resumedAfterFinalLease = await recorder.resumedWorkers()
+        XCTAssertEqual(resumedAfterFinalLease, [0])
+    }
+
+    func testConcurrentEvidenceBarrierLeaseWaitsForTheSharedDrain() async {
+        let delayedWorker = DelayedEvidenceBarrierWorker()
+        let completion = EvidenceBarrierCompletionRecorder()
+        let barrier = CallEvidenceWorkerBarrier(
+            workers: [
+                .init(
+                    suspend: { await delayedWorker.suspend() },
+                    resume: {}
+                ),
+            ]
+        )
+
+        let first = Task {
+            _ = await barrier.suspend()
+            await completion.completeFirst()
+        }
+        await delayedWorker.waitUntilSuspendStarted()
+        let second = Task {
+            await completion.markSecondEntered()
+            _ = await barrier.suspend()
+            await completion.completeSecond()
+        }
+        await completion.waitUntilSecondEntered()
+        for _ in 0..<20 { await Task.yield() }
+        let completedBeforeDrain = await completion.secondCompleted()
+        XCTAssertFalse(
+            completedBeforeDrain,
+            "A nested privacy lease must not return before the first full worker drain."
+        )
+
+        await delayedWorker.releaseSuspend()
+        _ = await first.value
+        _ = await second.value
+        let firstCompleted = await completion.firstCompleted()
+        let secondCompleted = await completion.secondCompleted()
+        XCTAssertTrue(firstCompleted)
+        XCTAssertTrue(secondCompleted)
+        await barrier.resume()
+        await barrier.resume()
+    }
+
+    func testLateWorkerOperationCannotClearANewerOperationGeneration() {
+        var fence = CallEvidenceWorkerOperationFence()
+        let operationA = fence.beginIfIdle()
+        XCTAssertNotNil(operationA)
+        XCTAssertTrue(fence.clearIfCurrent(operationA ?? 0))
+        let operationB = fence.beginIfIdle()
+        XCTAssertNotNil(operationB)
+
+        XCTAssertFalse(fence.clearIfCurrent(operationA ?? 0))
+        XCTAssertEqual(fence.activeGeneration, operationB)
+    }
+
+    func testDirectMaintenanceResumeCannotOpenSpeakerPrivacyBarrier() async throws {
+        let fixture = try SpeakerDiarizationWorkerFixture()
+        _ = try await fixture.makeReadyCall()
+        let worker = fixture.makeWorker(modelReady: false) { _, _, _ in
+            XCTFail("helper must remain closed")
+            throw SpeakerDiarizationWorkerError.helperFailed
+        }
+
+        await worker.suspendAndDrainForPrivacyBarrier()
+        await worker.suspendAndDrain()
+        await worker.resume()
+        let whilePrivacyHeld = await worker.runOne(nowMs: 5_000)
+        XCTAssertEqual(whilePrivacyHeld, .suspended)
+
+        await worker.resumeFromPrivacyBarrier()
+        let afterPrivacyRelease = await worker.runOne(nowMs: 5_001)
+        XCTAssertEqual(afterPrivacyRelease, .modelUnavailable)
+    }
+
     func testMissingModelLeavesFinalTranscriptAnonymousAndDoesNotLaunchHelper() async throws {
         let fixture = try SpeakerDiarizationWorkerFixture()
         let callID = try await fixture.makeReadyCall()
@@ -128,6 +223,61 @@ private actor EvidenceBarrierRecorder {
     func suspend(index: Int) -> Bool { ownership[index] }
     func resume(index: Int) { resumed.append(index) }
     func resumedWorkers() -> [Int] { resumed }
+}
+
+private actor DelayedEvidenceBarrierWorker {
+    private var suspendStarted = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Bool, Never>?
+
+    func suspend() async -> Bool {
+        suspendStarted = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+        return await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilSuspendStarted() async {
+        guard !suspendStarted else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func releaseSuspend() {
+        releaseContinuation?.resume(returning: true)
+        releaseContinuation = nil
+    }
+}
+
+private actor EvidenceBarrierCompletionRecorder {
+    private var firstDone = false
+    private var secondEntered = false
+    private var secondDone = false
+    private var secondEntryWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func completeFirst() { firstDone = true }
+
+    func markSecondEntered() {
+        secondEntered = true
+        let waiters = secondEntryWaiters
+        secondEntryWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
+
+    func completeSecond() { secondDone = true }
+    func firstCompleted() -> Bool { firstDone }
+    func secondCompleted() -> Bool { secondDone }
+
+    func waitUntilSecondEntered() async {
+        guard !secondEntered else { return }
+        await withCheckedContinuation { continuation in
+            secondEntryWaiters.append(continuation)
+        }
+    }
 }
 
 private actor DiarizationManifestRecorder {

@@ -316,11 +316,63 @@ final class ReleaseConfigurationTests: XCTestCase {
     func testReleaseCandidateHasANewVersionAndBuildIdentity() throws {
         let url = repositoryRoot.appending(path: "project.yml")
         let project = try String(contentsOf: url, encoding: .utf8)
+        let notices = try String(
+            contentsOf: repositoryRoot.appending(path: "ZBSEyeApp/Resources/LOCAL_AI_NOTICES.txt"),
+            encoding: .utf8
+        )
 
         XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION:").count - 1, 2)
         XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION: \"0.7.0\"").count - 1, 2)
         XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION:").count - 1, 2)
-        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"20\"").count - 1, 2)
+        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"21\"").count - 1, 2)
+        XCTAssertTrue(notices.contains("Release: 0.7.0 (build 21 candidate)"))
+    }
+
+    func testUnqualifiedCandidateDocumentationDoesNotClaimAPublicRelease() throws {
+        let readme = try String(
+            contentsOf: repositoryRoot.appending(path: "README.md"),
+            encoding: .utf8
+        )
+        let changelog = try String(
+            contentsOf: repositoryRoot.appending(path: "CHANGELOG.md"),
+            encoding: .utf8
+        )
+        let normalizedReadme = readme
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+
+        XCTAssertTrue(normalizedReadme.contains("public stable release is 0.6.0"))
+        XCTAssertTrue(normalizedReadme.contains("0.7.0 (build 21)"))
+        XCTAssertTrue(normalizedReadme.contains("source candidate"))
+        XCTAssertTrue(changelog.contains("Unreleased — 0.7.0 (build 21 candidate)"))
+        XCTAssertFalse(changelog.contains("## [0.7.0]"))
+    }
+
+    func testCallQualificationScriptsDoNotShareTheGenericDerivedDataCache() throws {
+        let recording = try String(
+            contentsOf: repositoryRoot.appending(path: "scripts/verify-call-recording.sh"),
+            encoding: .utf8
+        )
+        let automation = try String(
+            contentsOf: repositoryRoot.appending(path: "scripts/verify-call-automation.sh"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(recording.contains("build/CallRecordingDerivedData"))
+        XCTAssertTrue(automation.contains("build/CallAutomationDerivedData"))
+        XCTAssertFalse(recording.contains("PATH:-build/DerivedData"))
+        XCTAssertFalse(automation.contains("PATH:-build/DerivedData"))
+    }
+
+    func testNotarizedBuildDoesNotShareTheGenericDerivedDataCache() throws {
+        let script = try String(
+            contentsOf: repositoryRoot.appending(path: "scripts/build-notarized.sh"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(script.contains("build/NotarizedDerivedData"))
+        XCTAssertFalse(script.contains(#"DERIVED="build/DerivedData""#))
     }
 
     func testReleaseDocumentationRequiresAnExactManifestBoundArtifactPair() throws {

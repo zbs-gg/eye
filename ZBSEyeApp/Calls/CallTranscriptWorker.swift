@@ -87,7 +87,9 @@ actor CallTranscriptWorker {
     private let cancelHelper: HelperCancellation
     private let afterSourceTransition: @Sendable () async -> Void
     private var suspended = false
+    private var privacySuspensionCount = 0
     private var activeOperation: Task<CallTranscriptWorkerRunResult, Never>?
+    private var activeOperationFence = CallEvidenceWorkerOperationFence()
 
     init(
         repository: CallRepository,
@@ -149,8 +151,11 @@ actor CallTranscriptWorker {
 
     func runOne(nowMs: Int64 = Int64(Date().timeIntervalSince1970 * 1_000)) async
         -> CallTranscriptWorkerRunResult {
-        guard !suspended else { return .suspended }
+        guard !isWorkSuspended else { return .suspended }
         if let activeOperation { return await activeOperation.value }
+        guard let generation = activeOperationFence.beginIfIdle() else {
+            return .suspended
+        }
 
         let operation = Task { [weak self] in
             guard let self else { return CallTranscriptWorkerRunResult.suspended }
@@ -158,7 +163,9 @@ actor CallTranscriptWorker {
         }
         activeOperation = operation
         let result = await operation.value
-        if activeOperation != nil { activeOperation = nil }
+        if activeOperationFence.clearIfCurrent(generation) {
+            activeOperation = nil
+        }
         return result
     }
 
@@ -211,9 +218,12 @@ actor CallTranscriptWorker {
         suspended = true
         cancelHelper()
         guard let operation = activeOperation else { return ownsResume }
+        guard let generation = activeOperationFence.activeGeneration else { return ownsResume }
         operation.cancel()
         _ = await operation.value
-        if activeOperation != nil { activeOperation = nil }
+        if activeOperationFence.clearIfCurrent(generation) {
+            activeOperation = nil
+        }
         return ownsResume
     }
 
@@ -221,8 +231,31 @@ actor CallTranscriptWorker {
         suspended = false
     }
 
+    /// Counted privacy barrier independent of maintenance's legacy suspended bit. A direct
+    /// low-disk/model `resume()` therefore cannot reopen work accepted for deletion.
+    func suspendAndDrainForPrivacyBarrier() async {
+        privacySuspensionCount += 1
+        cancelHelper()
+        guard let operation = activeOperation else { return }
+        guard let generation = activeOperationFence.activeGeneration else { return }
+        operation.cancel()
+        _ = await operation.value
+        if activeOperationFence.clearIfCurrent(generation) {
+            activeOperation = nil
+        }
+    }
+
+    func resumeFromPrivacyBarrier() {
+        guard privacySuspensionCount > 0 else { return }
+        privacySuspensionCount -= 1
+    }
+
+    private var isWorkSuspended: Bool {
+        suspended || privacySuspensionCount > 0
+    }
+
     private func performOne(nowMs: Int64) async -> CallTranscriptWorkerRunResult {
-        guard !suspended, !Task.isCancelled else { return .suspended }
+        guard !isWorkSuspended, !Task.isCancelled else { return .suspended }
         guard let backend = await backendProvider() else { return .modelUnavailable }
 
         let lease: AIComputeLease

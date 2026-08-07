@@ -3030,6 +3030,27 @@
         }
       }
     },
+    "Stop Timeline capture": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Остановить запись Таймлайна" } } }
+    },
+    "Pause Timeline capture": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Приостановить запись Таймлайна" } } }
+    },
+    "Start Timeline capture": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Начать запись Таймлайна" } } }
+    },
+    "Stop Timeline": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Остановить Таймлайн" } } }
+    },
+    "Pause Timeline": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Приостановить Таймлайн" } } }
+    },
+    "Record Timeline": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Записывать Таймлайн" } } }
+    },
+    "Automatic Calls stay armed until Audio is Off or privacy pause is active.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Автозапись звонков остаётся включённой, пока не выбран режим «Аудио выключено» или пауза приватности." } } }
+    },
     "MCP": {
       "localizations": {
         "ru": {
@@ -9861,8 +9882,14 @@
     "Use http://127.0.0.1 with an explicit port of 1024 or higher.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Используйте http://127.0.0.1 и явно укажите порт 1024 или выше." } } }
     },
+    "%@ is using the microphone.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "%@ использует микрофон." } } }
+    },
     "%lld bookmarks": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Закладок: %lld" } } }
+    },
+    "An app": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Приложение" } } }
     },
     "Assign to %@": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Назначить спикеру %@" } } }
@@ -9870,14 +9897,17 @@
     "Audio and derived transcript/speaker evidence inside the selected range will be physically removed. This cannot be undone.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Аудио и производные данные расшифровки и спикеров в выбранном диапазоне будут физически удалены. Это нельзя отменить." } } }
     },
-    "Call ended automatically": {
-      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Запись звонка завершена автоматически" } } }
+    "Call couldn't be saved": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Не удалось сохранить звонок" } } }
     },
-    "Call may have ended": {
-      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Возможно, звонок завершился" } } }
+    "Call ended": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонок завершён" } } }
     },
     "Call recording started": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Запись звонка началась" } } }
+    },
+    "Call saved to Calls": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонок сохранён в «Звонки»" } } }
     },
     "Call service is still starting. Try again in a moment.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Сервис звонков ещё запускается. Повторите через мгновение." } } }
@@ -9915,11 +9945,17 @@
     "Downloading %1$@ of %2$@…": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Загружено %1$@ из %2$@…" } } }
     },
+    "End & save": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Завершить и сохранить" } } }
+    },
     "Eye could not separate speakers for this call. The transcript and source labels remain available.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Eye не смог разделить спикеров в этом звонке. Расшифровка и подписи источников доступны." } } }
     },
-    "Eye found call controls and microphone use.": {
-      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Eye обнаружил элементы звонка и использование микрофона." } } }
+    "Finish recording and save this call now": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Завершить запись и сохранить звонок сейчас" } } }
+    },
+    "Finishing the recording and saving it to Calls.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Завершаем запись и сохраняем её в «Звонки»." } } }
     },
     "Finding speakers": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Определяем спикеров" } } }
@@ -9948,9 +9984,6 @@
     "No calls yet": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонков пока нет" } } }
     },
-    "Not a call": {
-      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Это не звонок" } } }
-    },
     "Only the selected interval moves. The original microphone/system source stays unchanged.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Переносится только выбранный интервал. Исходная метка микрофона или системного звука не меняется." } } }
     },
@@ -9978,9 +10011,6 @@
     "Refreshing calls": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Обновляем звонки" } } }
     },
-    "Resume the same call without losing its end boundary": {
-      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Продолжить тот же звонок, сохранив границу завершения" } } }
-    },
     "Retry speaker model": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Повторить установку модели спикеров" } } }
     },
@@ -9989,6 +10019,9 @@
     },
     "Search calls, people, apps, and transcripts": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Искать звонки, людей, приложения и расшифровки" } } }
+    },
+    "Saving to Calls in 30 seconds. You can delete it there later.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Через 30 секунд запись сохранится в «Звонки». Там её можно будет удалить." } } }
     },
     "Separate speakers": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Разделять спикеров" } } }
@@ -10026,6 +10059,9 @@
     "The call is still recording because its privacy receipt could not be saved.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонок продолжает записываться: не удалось сохранить подтверждение приватного удаления." } } }
     },
+    "The call could not be finalized safely.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Не удалось безопасно завершить звонок." } } }
+    },
     "The call stopped, but permanent removal was not confirmed.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Звонок остановлен, но окончательное удаление не подтверждено." } } }
     },
@@ -10034,6 +10070,18 @@
     },
     "The name applies only to this call. Eye does not create a reusable voiceprint.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Имя применяется только к этому звонку. Eye не создаёт повторно используемый голосовой отпечаток." } } }
+    },
+    "The local recording was kept. %@": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Локальная запись сохранена. %@" } } }
+    },
+    "The local recording was kept. Open Calls to retry or delete it.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Локальная запись сохранена. Откройте «Звонки», чтобы повторить или удалить её." } } }
+    },
+    "This isn’t a call": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Это не звонок" } } }
+    },
+    "This wasn’t a call": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Это не был звонок" } } }
     },
     "Trim end": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Конец обрезки" } } }
@@ -10050,17 +10098,11 @@
     "Trim start": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Начало обрезки" } } }
     },
-    "Undo": {
-      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Отменить" } } }
-    },
-    "Undo is available for 15 seconds. Recording is not split.": {
-      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Отменить завершение можно 15 секунд. Запись не разделяется." } } }
-    },
     "Verifying every model file locally…": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Проверяем каждый файл модели локально…" } } }
     },
-    "Waiting 30 seconds for the call to resume.": {
-      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Ждём 30 секунд на случай продолжения звонка." } } }
+    "You can open or delete it in ZBS Eye.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Его можно открыть или удалить в ZBS Eye." } } }
     },
     "Wait for the false call to finish permanent deletion before moving storage.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Дождитесь окончательного удаления ложного звонка перед переносом хранилища." } } }
@@ -10268,6 +10310,63 @@
     },
     "off": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "выключено" } } }
+    },
+    "Add an app…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Добавить приложение…" } } }
+    },
+    "Allow automatic Calls for %@": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Разрешить автозапись звонков для %@" } } }
+    },
+    "Always": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Всегда" } } }
+    },
+    "Eligible microphone use starts a Call even while screen recording is stopped. Audio Off or privacy pause disables it.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Подходящее приложение запускает запись звонка даже при остановленной записи экрана. Режим «Аудио выключено» или пауза приватности отключают это." } } }
+    },
+    "Don’t auto-record": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Не записывать автоматически" } } }
+    },
+    "Don’t auto-record these apps": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Не записывать эти приложения автоматически" } } }
+    },
+    "Mic in use": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Микрофон используется" } } }
+    },
+    "Listening for microphone use": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Ожидание активности микрофона" } } }
+    },
+    "Recording a Call": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Запись звонка" } } }
+    },
+    "Microphone — when Audio is enabled, eligible apps start a local Call; relays like Krisp only join one": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Микрофон — при включённом аудио подходящие приложения запускают локальную запись звонка; ретрансляторы вроде Krisp могут только присоединиться" } } }
+    },
+    "Never auto-record %@": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Никогда не записывать %@ автоматически" } } }
+    },
+    "Never auto-record %@?": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Больше никогда не записывать %@ автоматически?" } } }
+    },
+    "Never auto-record this app?": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Больше никогда не записывать это приложение автоматически?" } } }
+    },
+    "Save this Call and stop this app from starting automatic Calls": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Сохранить этот звонок и запретить приложению запускать автозапись" } } }
+    },
+    "The current Call will be saved. Future microphone use by this app won’t start a Call. Screen recording is unchanged.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Текущий звонок сохранится. В дальнейшем микрофон этого приложения не будет запускать запись звонка. Запись экрана не изменится." } } }
+    },
+    "Their screen and text aren't recorded. This setting does not change automatic Call recording.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Экран и текст этих приложений не записываются. Эта настройка не влияет на автоматическую запись звонков." } } }
+    },
+    "These apps can still appear in screen history. This list only prevents them from automatically starting a Call when they use the microphone.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Эти приложения по-прежнему могут попадать в историю экрана. Список только запрещает им автоматически запускать запись звонка при использовании микрофона." } } }
+    },
+    "This app can still appear in screen history, but it won't automatically start a Call.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Приложение по-прежнему может попадать в историю экрана, но не будет автоматически запускать запись звонка." } } }
+    },
+    "Turn this off to keep ordinary playback out of Timeline. An automatically detected or manually started Call still records separate microphone and system tracks; Audio Off disables both.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Выключите это, чтобы обычное воспроизведение не попадало в Таймлайн. Автоматически найденный или запущенный вручную звонок всё равно пишет отдельные дорожки микрофона и системного звука; режим «Аудио выключено» отключает обе." } } }
     },
     "Waiting": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Ожидание" } } }

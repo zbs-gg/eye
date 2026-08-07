@@ -24,6 +24,17 @@ struct ProtectedCaptureApplicationSnapshot: Sendable, Equatable {
     let applications: Set<ProtectedCaptureApplicationIdentity>
 }
 
+/// Exact identity of a running process whose bundle was put in the user's
+/// screen privacy list. Bundle-only matching is not sufficient here: a stale
+/// ScreenCaptureKit inventory can otherwise omit a newly launched helper while
+/// still containing another process from the same app.
+struct UserIgnoredCaptureApplicationIdentity: Hashable, Sendable {
+    let processIdentifier: Int32
+    let bundleIdentifier: String
+}
+
+typealias UserIgnoredCaptureApplicationSnapshot = Set<UserIgnoredCaptureApplicationIdentity>
+
 struct CaptureContentEpoch: Sendable, Equatable {
     private(set) var value: UInt64 = 0
 
@@ -68,6 +79,13 @@ enum CaptureSessionPolicy {
               sessionInfo[macOSLoginDoneKey] as? Bool == true else { return nil }
         guard let rawValue = sessionInfo[macOSLockKey] else { return false }
         return rawValue as? Bool
+    }
+
+    /// One authoritative local query shared by screen and explicit Call-audio admission. Unknown
+    /// is intentionally fail-closed at each caller.
+    static func currentSessionLocked() -> Bool? {
+        let sessionInfo = CGSessionCopyCurrentDictionary() as? [String: Any]
+        return sessionLockState(from: sessionInfo)
     }
 
     /// Start fail-closed: a failed initial query must not probe ScreenCaptureKit
@@ -149,8 +167,15 @@ enum CaptureSessionPolicy {
         appName: String?
     ) -> Bool {
         guard isProtectedCaptureSurface(bundleId: bundleId, appName: appName) else { return false }
-        protectedApplicationEpoch.invalidate()
+        recordProtectedApplicationInventoryChange()
         return true
+    }
+
+    /// KVO of NSWorkspace.runningApplications covers background/LSUIElement
+    /// processes that do not emit didLaunch/didTerminate notifications.
+    @MainActor
+    static func recordProtectedApplicationInventoryChange() {
+        protectedApplicationEpoch.invalidate()
     }
 
     /// A process identity, rather than only a bundle id, makes a cached
@@ -199,5 +224,14 @@ enum CaptureSessionPolicy {
                 return representedApplication.applicationName == expectedName
             }
         }
+    }
+
+    /// Exact PID + bundle matching keeps PID reuse and sibling helpers from
+    /// satisfying an exclusion attestation built for a different process.
+    static func contentCoversUserIgnoredApplications(
+        expected: UserIgnoredCaptureApplicationSnapshot,
+        represented: UserIgnoredCaptureApplicationSnapshot
+    ) -> Bool {
+        expected.isSubset(of: represented)
     }
 }

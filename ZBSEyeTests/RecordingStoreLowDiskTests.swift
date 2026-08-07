@@ -173,6 +173,59 @@ final class RecordingStoreLowDiskTests: XCTestCase {
     }
 
     @MainActor
+    func testResumeNowPublishesOnePrivacyGateReopenBoundary() {
+        defaults.set(
+            Date().addingTimeInterval(900),
+            forKey: "zbseye.recording.pausedUntil"
+        )
+        let store = makeStore()
+        var reopenCount = 0
+        store.onPrivacyPauseEnded = { reopenCount += 1 }
+
+        store.resumeNow()
+        store.resumeNow()
+
+        XCTAssertNil(store.pausedUntil)
+        XCTAssertEqual(reopenCount, 1)
+    }
+
+    @MainActor
+    func testPrivacyPauseClosesAdmissionEvenWhenScreenCaptureIsAlreadyIdle() {
+        let store = makeStore()
+        var reopenCount = 0
+        store.onPrivacyPauseEnded = { reopenCount += 1 }
+
+        store.pauseFor(minutes: 15)
+
+        XCTAssertNotNil(store.pausedUntil)
+        XCTAssertFalse(store.isCapturing)
+        XCTAssertEqual(reopenCount, 0)
+
+        store.resumeNow()
+
+        XCTAssertNil(store.pausedUntil)
+        XCTAssertEqual(reopenCount, 1)
+    }
+
+    @MainActor
+    func testMaintenanceLeaseIsVisibleToCallAdmissionBeforeDrainAwaits() {
+        let store = makeStore()
+        var closeCount = 0
+        store.onMaintenanceAdmissionClosed = { closeCount += 1 }
+        XCTAssertTrue(store.maintenancePermitsStart)
+
+        let lease = store.acquireMaintenanceLease(.termination)
+        let overlapping = store.acquireMaintenanceLease(.repair)
+
+        XCTAssertFalse(store.maintenancePermitsStart)
+        XCTAssertEqual(closeCount, 1, "Only the open-to-closed edge invalidates an in-flight Call start")
+        store.resumeAfterMaintenance(overlapping)
+        XCTAssertFalse(store.maintenancePermitsStart)
+        store.resumeAfterMaintenance(lease)
+        XCTAssertTrue(store.maintenancePermitsStart)
+    }
+
+    @MainActor
     private func makeStore() -> RecordingStore {
         let store = RecordingStore(defaults: defaults)
         store.canCapture = { true }

@@ -2,39 +2,22 @@ import Foundation
 
 enum CapturePipelineInvalidationReason: Sendable, Equatable {
     case displayChanged
+    case contentTopologyChanged
     case wake
     case unlock
+    case suspension
     case recovery
 }
 
-struct ScreenCaptureRequestToken: Sendable, Equatable {
-    let id: UInt64
-    let pipelineGeneration: Int64
-    let healthGeneration: Int64
-}
-
-enum ScreenCaptureRequestResult: Sendable, Equatable {
-    case success(fingerprint: String, context: CaptureContext, wasDuplicate: Bool)
-    case failure(CaptureHealthReason)
-}
-
-enum ScreenCaptureCompletion: Sendable, Equatable {
-    case accepted
-    case rejectedOldGeneration
-    case rejectedUnknownRequest
-}
-
-/// Sole owner of capture-health reduction and one-shot request admission.
-/// ScreenCaptureKit remains in FramePipeline; this controller owns only
-/// generations, single-flight, deadlines, and deterministic health effects.
+/// Sole owner of capture-health reduction. The persistent screen stream owns
+/// physical generations; this controller accepts only callbacks from the exact
+/// published generation and never infers failure from duplicate pixels.
 @MainActor
 final class CaptureHealthController {
     private var reducer: CaptureHealthReducer
-    private var nextRequestID: UInt64 = 0
-    private var inFlight: ScreenCaptureRequestToken?
+    private var activeScreenStreamGeneration: Int64?
     private var screenRecoveryAdmission: CaptureRecoveryAttempt?
     private var screenLocked = false
-    private var timedOutOwnershipBlocked = false
     private var pendingCoverageOpens: [CaptureLeg: CaptureCoverageOpen] = [:]
     private var emit: @MainActor (CaptureHealthEffect) -> Void
     private var publish: @MainActor (CaptureHealthSnapshot) -> Void = { _ in }
@@ -62,83 +45,84 @@ final class CaptureHealthController {
         self.emit = emit
     }
 
-    func beginScreenRequest(nowMs: Int64) -> ScreenCaptureRequestToken? {
+    func screenStreamDidStart(generation: Int64, nowMs: Int64) {
         let screenHealth = snapshot.legs[.screen]
         if screenHealth?.state == .recovering {
             guard let admission = screenRecoveryAdmission,
-                  isCurrentRecoveryAttempt(admission) else { return nil }
+                  isCurrentRecoveryAttempt(admission) else { return }
         }
         guard !screenLocked,
-              !timedOutOwnershipBlocked,
               pendingCoverageOpens[.screen] == nil,
-              inFlight == nil,
               snapshot.intent.screenEnabled,
               snapshot.permissions[.screen] == .granted,
               snapshot.suspension == nil,
-              snapshot.legs[.screen]?.state != .repairRequired else { return nil }
-        nextRequestID &+= 1
-        let token = ScreenCaptureRequestToken(
-            id: nextRequestID,
-            pipelineGeneration: pipelineGeneration,
-            healthGeneration: snapshot.legs[.screen]?.generation ?? 0
+              snapshot.legs[.screen]?.state != .repairRequired else { return }
+        activeScreenStreamGeneration = generation
+        pipelineGeneration = generation
+    }
+
+    func recordScreenStreamFrame(
+        _ stamp: ScreenStreamFrameStamp,
+        nowMs: Int64
+    ) {
+        guard stamp.generation == activeScreenStreamGeneration,
+              stamp.status.provesLiveness,
+              !screenLocked,
+              snapshot.suspension == nil else { return }
+        let observation = CaptureObservation(
+            leg: .screen,
+            generation: snapshot.legs[.screen]?.generation ?? 0,
+            kind: .verifiedProgress,
+            fingerprint: "\(stamp.generation):\(stamp.displayTime)",
+            context: nil
         )
-        inFlight = token
-        return token
+        apply(reducer.reduce(.observation(observation), at: nowMs))
     }
 
-    @discardableResult
-    func completeScreenRequest(
-        _ request: ScreenCaptureRequestToken,
-        result: ScreenCaptureRequestResult,
+    func recordScreenStreamFailure(
+        generation: Int64,
+        reason: CaptureHealthReason,
         nowMs: Int64
-    ) -> ScreenCaptureCompletion {
-        guard inFlight?.id == request.id else { return .rejectedUnknownRequest }
-        inFlight = nil
-        guard request.pipelineGeneration == pipelineGeneration,
-              !timedOutOwnershipBlocked else {
-            return .rejectedOldGeneration
-        }
-
-        switch result {
-        case .success(let fingerprint, let context, let wasDuplicate):
-            let observation = CaptureObservation(
-                leg: .screen,
-                generation: request.healthGeneration,
-                kind: wasDuplicate ? .unchanged(.staticDuplicate) : .verifiedProgress,
-                fingerprint: fingerprint,
-                context: context
-            )
-            apply(reducer.reduce(.observation(observation), at: nowMs))
-        case .failure(let reason):
-            reduceFailure(
-                leg: .screen,
-                generation: request.healthGeneration,
-                reason: reason,
-                nowMs: nowMs
-            )
-        }
-        return .accepted
-    }
-
-    /// Marks a request unsafe to replace. We advance the generation so a late
-    /// callback cannot publish health, but keep admission closed even after it
-    /// returns until an explicit repair starts a new bounded episode.
-    @discardableResult
-    func screenRequestDeadlineElapsed(
-        _ request: ScreenCaptureRequestToken,
-        nowMs: Int64
-    ) -> Bool {
-        guard inFlight?.id == request.id,
-              request.pipelineGeneration == pipelineGeneration else { return false }
-        timedOutOwnershipBlocked = true
-        pipelineGeneration &+= 1
+    ) {
+        guard activeScreenStreamGeneration == generation else { return }
+        activeScreenStreamGeneration = nil
+        screenRecoveryAdmission = nil
         reduceFailure(
             leg: .screen,
-            generation: request.healthGeneration,
-            reason: .screenRequestTimedOut,
+            generation: snapshot.legs[.screen]?.generation ?? 0,
+            reason: reason,
             nowMs: nowMs
         )
-        return true
+    }
+
+    func recordScreenStartFailure(
+        _ reason: CaptureHealthReason = .screenStreamStopped,
+        nowMs: Int64
+    ) {
+        guard activeScreenStreamGeneration == nil else { return }
+        reduceFailure(
+            leg: .screen,
+            generation: snapshot.legs[.screen]?.generation ?? 0,
+            reason: reason,
+            nowMs: nowMs
+        )
+    }
+
+    /// A controller-owned start/update/stop operation failed after the
+    /// pipeline had already revoked frame admission. Retire the previously
+    /// published stream before opening the bounded recovery episode.
+    func recordScreenPipelineFailure(
+        _ reason: CaptureHealthReason = .screenStreamStopped,
+        nowMs: Int64
+    ) {
+        activeScreenStreamGeneration = nil
+        screenRecoveryAdmission = nil
+        reduceFailure(
+            leg: .screen,
+            generation: snapshot.legs[.screen]?.generation ?? 0,
+            reason: reason,
+            nowMs: nowMs
+        )
     }
 
     func invalidatePipeline(
@@ -149,6 +133,7 @@ final class CaptureHealthController {
         _ = reason
         self.screenLocked = screenLocked
         screenRecoveryAdmission = nil
+        activeScreenStreamGeneration = nil
         pipelineGeneration &+= 1
         if screenLocked {
             apply(reducer.reduce(.suspensionChanged(.locked), at: nowMs))
@@ -237,32 +222,14 @@ final class CaptureHealthController {
             && health.attempt == attempt.attempt
     }
 
-    /// Opens admission for exactly one request after the adapter has reset its
-    /// disposable screenshot state for this controller-approved attempt.
+    /// Opens admission for one controller-approved stream replacement. The
+    /// coordinator must drain the prior physical stream before calling this.
     func markScreenRecoveryReady(_ attempt: CaptureRecoveryAttempt) -> Bool {
         guard attempt.leg == .screen,
               isCurrentRecoveryAttempt(attempt),
-              inFlight == nil,
-              !timedOutOwnershipBlocked else { return false }
+              activeScreenStreamGeneration == nil else { return false }
         screenRecoveryAdmission = attempt
         return true
-    }
-
-    func screenRecoveryOwnershipUnavailable(
-        _ attempt: CaptureRecoveryAttempt,
-        nowMs: Int64
-    ) {
-        guard attempt.leg == .screen,
-              timedOutOwnershipBlocked,
-              isCurrentRecoveryAttempt(attempt) else { return }
-        apply(reducer.reduce(
-            .recoveryOwnershipBlocked(
-                leg: .screen,
-                generation: attempt.generation,
-                reason: .screenRequestTimedOut
-            ),
-            at: nowMs
-        ))
     }
 
     func recordSystemAudioFailure(
@@ -290,10 +257,7 @@ final class CaptureHealthController {
     }
 
     func repairRequested(_ leg: CaptureLeg, nowMs: Int64) {
-        if leg == .screen {
-            guard inFlight == nil else { return }
-            timedOutOwnershipBlocked = false
-        }
+        if leg == .screen { activeScreenStreamGeneration = nil }
         apply(reducer.reduce(.repairRequested(leg), at: nowMs))
     }
 

@@ -106,7 +106,7 @@ targets:
         INFOPLIST_KEY_CFBundleName: "ZBS Eye"
         GENERATE_INFOPLIST_FILE: YES
         MARKETING_VERSION: "0.7.0"          # CFBundleShortVersionString
-        CURRENT_PROJECT_VERSION: "20"       # CFBundleVersion
+        CURRENT_PROJECT_VERSION: "21"       # CFBundleVersion
         CODE_SIGN_ENTITLEMENTS: ZBSEyeApp/ZBSEye.entitlements
         # Default — ad-hoc for development. scripts/build-release.sh can use the legacy self-signed
         # "ZBS Eye Dev" identity; distributable releases must use scripts/build-notarized.sh with the
@@ -181,8 +181,12 @@ targets:
       - path: ZBSEyeApp/State/BuiltInModelStore.swift
       - path: ZBSEyeApp/State/RecordingMaintenanceAdmission.swift
       - path: ZBSEyeApp/Capture/CaptureSessionPolicy.swift
+      - path: ZBSEyeApp/Capture/SCKResourceCoordinator.swift
+      - path: ZBSEyeApp/Capture/ScreenStreamPolicy.swift
       - path: ZBSEyeApp/Capture/CaptureConfig.swift
       - path: ZBSEyeApp/Capture/BrowserCapturePolicy.swift
+      - path: ZBSEyeApp/Capture/ScreenshotPriorityYieldGate.swift
+      - path: ZBSEyeApp/Capture/ScreenshotHotkeyMonitor.swift
       - path: ZBSEyeApp/Browser/BrowserSnapshot.swift
       - path: ZBSEyeApp/State/LowDiskGuard.swift
       - path: ZBSEyeApp/State/RecordingStore.swift
@@ -274,6 +278,7 @@ targets:
       - path: ZBSEyeApp/Server/ZBSEyeAPIDTO.swift
       - path: ZBSEyeApp/Search/AskService.swift
       - path: ZBSEyeApp/State/AskStore.swift
+      - path: ZBSEyeApp/State/AutomaticCallCaptureState.swift
       - path: ZBSEyeApp/State/CallRecordingStore.swift
       - path: ZBSEyeApp/State/CallsStore.swift
       - path: ZBSEyeApp/State/CallPlaybackStore.swift
@@ -281,6 +286,7 @@ targets:
       - path: ZBSEyeApp/State/WorkspaceStore.swift
       - path: ZBSEyeApp/Meeting/CallDetectionPolicy.swift
       - path: ZBSEyeApp/Meeting/CallAudioProcessEvidence.swift
+      - path: ZBSEyeApp/Meeting/CoreAudioMicListenerLifecycle.swift
       - path: ZBSEyeApp/Meeting/BrowserCallSurfaceInspector.swift
       - path: ZBSEyeApp/Meeting/NativeCallSurfaceInspector.swift
       - path: ZBSEyeApp/Calls/Diarization/SpeakerDiarizationModelManifest.swift
@@ -315,7 +321,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye.tests
         MARKETING_VERSION: "0.7.0"
-        CURRENT_PROJECT_VERSION: "20"
+        CURRENT_PROJECT_VERSION: "21"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: ZBSEyeTests/Info.plist
         ZBS_EYE_MODEL_DIR: ""

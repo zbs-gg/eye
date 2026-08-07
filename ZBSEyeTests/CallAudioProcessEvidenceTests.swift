@@ -169,7 +169,8 @@ final class CallAudioProcessEvidenceTests: XCTestCase {
             CallAudioApplicationIdentity(
                 rootPID: 10,
                 bundleID: "company.thebrowser.dia",
-                kind: .browser
+                kind: .browser,
+                displayName: "Dia"
             )
         )
     }
@@ -267,10 +268,83 @@ final class CallAudioProcessEvidenceTests: XCTestCase {
             )
             XCTAssertNil(identity, processName)
         }
+
+        XCTAssertNil(
+            CallAudioOwnerResolution.resolve(
+                ancestors: [
+                    CallAudioProcessAncestor(
+                        pid: 999,
+                        bundleID: "com.example.current",
+                        executableName: "Current"
+                    ),
+                ],
+                currentProcessID: 999
+            )
+        )
+        XCTAssertNotNil(
+            CallAudioOwnerResolution.resolve(
+                ancestors: [
+                    CallAudioProcessAncestor(
+                        pid: 101,
+                        bundleID: nil,
+                        executableName: "coreaudiod-helper"
+                    ),
+                ],
+                currentProcessID: 999
+            ),
+            "System denylist matching must stay exact."
+        )
     }
 
-    func testUnsupportedBrowserHelperDoesNotBecomeOwner() {
+    func testCodexChronicleExactBasenameIsExcludedBeforeChatGPTRootFolding() {
+        let chatGPTRoot = CallAudioProcessAncestor(
+            pid: 10,
+            bundleID: "com.openai.codex",
+            executableName: "ChatGPT"
+        )
         XCTAssertNil(
+            CallAudioOwnerResolution.resolve(
+                ancestors: [
+                    CallAudioProcessAncestor(
+                        pid: 101,
+                        bundleID: "com.openai.codex.helper",
+                        executableName: "codex_chronicle"
+                    ),
+                    chatGPTRoot,
+                ],
+                currentProcessID: 999
+            ),
+            "The exact Chronicle pulse must be rejected before its helper inherits ChatGPT's root."
+        )
+
+        XCTAssertEqual(
+            CallAudioOwnerResolution.resolve(
+                ancestors: [
+                    CallAudioProcessAncestor(
+                        pid: 102,
+                        bundleID: "com.openai.codex.helper",
+                        executableName: "Codex Service"
+                    ),
+                    chatGPTRoot,
+                ],
+                currentProcessID: 999
+            ),
+            CallAudioApplicationIdentity(
+                rootPID: 10,
+                bundleID: "com.openai.codex",
+                kind: .generic,
+                displayName: "ChatGPT"
+            ),
+            "A real Codex Service microphone owner must still fold into ChatGPT."
+        )
+        XCTAssertFalse(
+            CallAudioOwnerResolution.isExcludedExecutableName("codex_chronicle-helper"),
+            "The built-in executable exclusion must remain an exact basename match."
+        )
+    }
+
+    func testArcHelperBecomesGenericOwnerAtVisibleRoot() {
+        XCTAssertEqual(
             CallAudioOwnerResolution.resolve(
                 ancestors: [
                     CallAudioProcessAncestor(
@@ -285,7 +359,232 @@ final class CallAudioProcessEvidenceTests: XCTestCase {
                     ),
                 ],
                 currentProcessID: 999
+            ),
+            CallAudioApplicationIdentity(
+                rootPID: 10,
+                bundleID: "company.thebrowser.Browser",
+                kind: .generic,
+                displayName: "Arc"
             )
+        )
+    }
+
+    func testChatGPTKrispAndUnknownProcessesResolveWithoutGivingKrispOwnership() {
+        for (bundleID, name) in [
+            ("com.openai.codex", "ChatGPT"),
+            ("ai.krisp.krispMac", "Krisp"),
+        ] {
+            XCTAssertEqual(
+                CallAudioOwnerResolution.resolve(
+                    ancestors: [
+                        CallAudioProcessAncestor(
+                            pid: 101,
+                            bundleID: bundleID,
+                            executableName: name
+                        ),
+                    ],
+                    currentProcessID: 999
+                ),
+                CallAudioApplicationIdentity(
+                    rootPID: 101,
+                    bundleID: bundleID,
+                    kind: .generic,
+                    displayName: name
+                )
+            )
+        }
+
+        XCTAssertEqual(
+            CallAudioOwnerResolution.resolve(
+                ancestors: [
+                    CallAudioProcessAncestor(
+                        pid: 202,
+                        bundleID: nil,
+                        executableName: "MysteryAudio"
+                    ),
+                ],
+                currentProcessID: 999
+            ),
+            CallAudioApplicationIdentity(
+                rootPID: 202,
+                bundleID: "process:mysteryaudio",
+                kind: .generic,
+                bundleIDIsSynthetic: true,
+                displayName: "MysteryAudio"
+            )
+        )
+
+        XCTAssertEqual(
+            CallAudioAutomaticOwnerRolePolicy.role(forBundleID: "com.openai.codex"),
+            .initiator
+        )
+        for krispBundleID in [
+            "ai.krisp.krispMac",
+            "ai.krisp.krispMac.helper",
+            "ai.krisp.krispMac.helper.Audio",
+            "ai.krisp.krispMac.xpc.Capture",
+        ] {
+            XCTAssertEqual(
+                CallAudioAutomaticOwnerRolePolicy.role(forBundleID: krispBundleID),
+                .relay,
+                krispBundleID
+            )
+        }
+        XCTAssertEqual(
+            CallAudioAutomaticOwnerRolePolicy.role(forBundleID: "ai.krisp.krispMacBeta"),
+            .initiator,
+            "A look-alike bundle outside Krisp's exact namespace remains a normal owner."
+        )
+    }
+
+    func testGenericDetachedHelperResolvesOnlyToExactVisibleRootNamespace() {
+        XCTAssertEqual(
+            CallAudioVisibleRootResolution.rootAncestor(
+                audioProcessBundleID: "com.openai.codex.helper.Renderer",
+                runningApplicationBundleIDs: [10: "com.openai.codex"]
+            ),
+            CallAudioProcessAncestor(
+                pid: 10,
+                bundleID: "com.openai.codex",
+                executableName: nil
+            )
+        )
+        XCTAssertNil(
+            CallAudioVisibleRootResolution.rootAncestor(
+                audioProcessBundleID: "com.openai.codex.evil",
+                runningApplicationBundleIDs: [10: "com.openai.codex"]
+            )
+        )
+    }
+
+    func testChatGPTAndKrispProduceOneCallOwnedAndNamedByChatGPT() {
+        let chatGPT = CallAudioApplicationGroup(
+            rootPID: 10,
+            ownerBundleID: "com.openai.codex",
+            ownerKind: .generic,
+            inputActive: true,
+            outputActive: false,
+            memberCount: 1,
+            inputAudioObjectIDs: [10],
+            outputAudioObjectIDs: []
+        )
+        let krisp = CallAudioApplicationGroup(
+            rootPID: 20,
+            ownerBundleID: "ai.krisp.krispMac",
+            ownerKind: .generic,
+            inputActive: true,
+            outputActive: true,
+            memberCount: 1,
+            inputAudioObjectIDs: [20],
+            outputAudioObjectIDs: [21]
+        )
+        let synthetic = CallAudioApplicationGroup(
+            rootPID: 30,
+            ownerBundleID: "process:mystery",
+            ownerKind: .generic,
+            ownerBundleIDIsSynthetic: true,
+            inputActive: true,
+            outputActive: false,
+            memberCount: 1,
+            inputAudioObjectIDs: [30],
+            outputAudioObjectIDs: []
+        )
+
+        let participants = CallAudioAutomaticAdmission.participatingInputGroups(
+            from: [chatGPT, krisp, synthetic],
+            excludedBundleIDs: ["com.openai.codex", "process:mystery"]
+        )
+        XCTAssertEqual(
+            participants.map(\.ownerBundleID),
+            ["ai.krisp.krispMac", "process:mystery"],
+            "Krisp may remain observable as a relay participant."
+        )
+        let eligible = CallAudioAutomaticAdmission.eligibleInputGroups(
+            from: [chatGPT, krisp],
+            excludedBundleIDs: []
+        )
+        XCTAssertEqual(eligible, [chatGPT])
+        XCTAssertEqual(
+            CallAudioAutomaticAdmission.preferredGroup(from: [chatGPT, krisp]),
+            chatGPT,
+            "Krisp cannot name the Call even when it exposes two-sided audio."
+        )
+        XCTAssertNil(CallAudioAutomaticAdmission.preferredGroup(from: [krisp]))
+        XCTAssertEqual(
+            CallAudioAutomaticAdmission.eligibleInputGroups(
+                from: [chatGPT],
+                excludedBundleIDs: ["com.openai.codex.helper"]
+            ),
+            [chatGPT],
+            "A similar prefix must not exclude the exact app."
+        )
+        XCTAssertEqual(
+            CallAudioAutomaticAdmission.preferredGroup(
+                from: [chatGPT, krisp],
+                retaining: CallAudioOwnerKey(group: chatGPT)
+            ),
+            chatGPT
+        )
+        let restartedChatGPTHelper = CallAudioApplicationGroup(
+            rootPID: 999,
+            ownerBundleID: "com.openai.codex",
+            ownerKind: .generic,
+            inputActive: true,
+            outputActive: false,
+            memberCount: 1,
+            inputAudioObjectIDs: [999],
+            outputAudioObjectIDs: []
+        )
+        XCTAssertEqual(
+            CallAudioOwnerKey(group: chatGPT),
+            CallAudioOwnerKey(group: restartedChatGPTHelper),
+            "A helper/PID restart must stay inside the same suppression identity."
+        )
+    }
+
+    func testKrispAloneAndExcludedHandyPlusKrispProduceNoCallCandidate() {
+        let krisp = CallAudioApplicationGroup(
+            rootPID: 20,
+            ownerBundleID: "ai.krisp.krispMac",
+            ownerKind: .generic,
+            inputActive: true,
+            outputActive: false,
+            memberCount: 1,
+            inputAudioObjectIDs: [20],
+            outputAudioObjectIDs: []
+        )
+        let handy = CallAudioApplicationGroup(
+            rootPID: 10,
+            ownerBundleID: "com.pais.handy",
+            ownerKind: .generic,
+            inputActive: true,
+            outputActive: false,
+            memberCount: 1,
+            inputAudioObjectIDs: [10],
+            outputAudioObjectIDs: []
+        )
+
+        XCTAssertEqual(
+            CallAudioAutomaticAdmission.participatingInputGroups(
+                from: [krisp],
+                excludedBundleIDs: []
+            ),
+            [krisp]
+        )
+        XCTAssertTrue(
+            CallAudioAutomaticAdmission.eligibleInputGroups(
+                from: [krisp],
+                excludedBundleIDs: []
+            ).isEmpty,
+            "Krisp alone is relay activity, not a Call."
+        )
+        XCTAssertEqual(
+            CallAudioAutomaticAdmission.eligibleInputGroups(
+                from: [handy, krisp],
+                excludedBundleIDs: ["com.pais.handy"]
+            ).count,
+            0,
+            "An excluded Handy pulse plus Krisp relay activity must not open a Call."
         )
     }
 
@@ -902,6 +1201,83 @@ final class CallAudioProcessEvidenceTests: XCTestCase {
                 now: 110
             ),
             .release
+        )
+    }
+
+    func testAutomaticTimeoutReleasesSameAppForImmediateBackToBackCall() {
+        XCTAssertNil(
+            CallAudioOwnerSuppressionBoundary.stateWhenSuppressing(
+                fingerprint: "call-a",
+                alreadyIdleSince: 100,
+                now: 130
+            ),
+            "Thirty seconds of proven idle must not tombstone the same app's next Call."
+        )
+    }
+
+    func testKrispRelayNeverEntersTheCallSuppressionIdentity() {
+        let chatGPT = CallAudioOwnerKey(
+            group: CallAudioApplicationGroup(
+                rootPID: 10,
+                ownerBundleID: "com.openai.codex",
+                ownerKind: .generic,
+                inputActive: false,
+                outputActive: false,
+                memberCount: 1,
+                inputAudioObjectIDs: [],
+                outputAudioObjectIDs: []
+            )
+        )
+        let krisp = CallAudioApplicationGroup(
+            rootPID: 11,
+            ownerBundleID: "ai.krisp.krispMac",
+            ownerKind: .generic,
+            inputActive: true,
+            outputActive: false,
+            memberCount: 1,
+            inputAudioObjectIDs: [11],
+            outputAudioObjectIDs: []
+        )
+        let chatGPTGroup = CallAudioApplicationGroup(
+            rootPID: 10,
+            ownerBundleID: "com.openai.codex",
+            ownerKind: .generic,
+            inputActive: true,
+            outputActive: false,
+            memberCount: 1,
+            inputAudioObjectIDs: [10],
+            outputAudioObjectIDs: []
+        )
+
+        let ownerKeys = Set(
+            CallAudioAutomaticAdmission.eligibleInputGroups(
+                from: [chatGPTGroup, krisp],
+                excludedBundleIDs: []
+            ).map(CallAudioOwnerKey.init)
+        )
+        XCTAssertEqual(ownerKeys, [chatGPT])
+        XCTAssertFalse(ownerKeys.contains(CallAudioOwnerKey(group: krisp)))
+    }
+
+    func testIndependentUnknownProcessesDoNotShareOneSuppressionKey() {
+        func unknownGroup(rootPID: Int32) -> CallAudioApplicationGroup {
+            CallAudioApplicationGroup(
+                rootPID: rootPID,
+                ownerBundleID: "process:unknown",
+                ownerKind: .generic,
+                ownerBundleIDIsSynthetic: true,
+                inputActive: true,
+                outputActive: false,
+                memberCount: 1,
+                inputAudioObjectIDs: [UInt32(rootPID)],
+                outputAudioObjectIDs: []
+            )
+        }
+
+        XCTAssertNotEqual(
+            CallAudioOwnerKey(group: unknownGroup(rootPID: 101)),
+            CallAudioOwnerKey(group: unknownGroup(rootPID: 202)),
+            "Two anonymous processes must not inherit each other's false-call tombstone."
         )
     }
 

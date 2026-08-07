@@ -17,10 +17,21 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
         }
     }
 
+    private var sessionPolicySource: String {
+        get throws {
+            return try String(
+                contentsOf: projectRoot.appending(path: "ZBSEyeApp/Capture/CaptureSessionPolicy.swift"),
+                encoding: .utf8
+            )
+        }
+    }
+
     func testStartSeedsAConservativeGateFromTheCurrentSession() throws {
         let source = try coordinatorSource
+        let policySource = try sessionPolicySource
 
-        XCTAssertTrue(source.contains("CGSessionCopyCurrentDictionary"))
+        XCTAssertTrue(source.contains("CaptureSessionPolicy.currentSessionLocked()"))
+        XCTAssertTrue(policySource.contains("CGSessionCopyCurrentDictionary"))
         XCTAssertTrue(source.contains("CaptureSessionPolicy.startupGate"))
         XCTAssertTrue(source.contains("applySessionGate(initialSessionGate)"))
         XCTAssertTrue(source.contains("if initialSessionGate.isOpen { trigger() }"))
@@ -58,7 +69,7 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
             )
         )
         let trigger = try XCTUnwrap(
-            source.range(of: "triggerAndArmBurst()", range: liveRecheck.upperBound..<source.endIndex)
+            source.range(of: "trigger()", range: liveRecheck.upperBound..<source.endIndex)
         )
 
         XCTAssertLessThan(invalidation.lowerBound, liveRecheck.lowerBound)
@@ -70,7 +81,7 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
         let frameReady = try XCTUnwrap(source.range(of: "guard let frame else { return }"))
         let finalGate = try XCTUnwrap(
             source.range(
-                of: "guard currentSessionStillAllowsCapture() else { return }",
+                of: "guard currentSessionStillAllowsCapture(),",
                 range: frameReady.upperBound..<source.endIndex
             )
         )
@@ -97,7 +108,7 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
         )
         let secondLiveGate = try XCTUnwrap(
             source.range(
-                of: "guard currentSessionStillAllowsCapture() else { return }",
+                of: "guard currentSessionStillAllowsCapture(),",
                 range: axRead.upperBound..<source.endIndex
             )
         )
@@ -151,29 +162,144 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
             contentsOf: projectRoot.appendingPathComponent("ZBSEyeApp/Capture/FramePipeline.swift"),
             encoding: .utf8
         )
-
         XCTAssertTrue(source.contains("let protectedApplicationSnapshot = CaptureSessionPolicy.protectedRunningApplicationSnapshot()"))
         XCTAssertTrue(source.contains("protectedApplicationSnapshot: protectedApplicationSnapshot"))
         XCTAssertTrue(source.contains("CaptureSessionPolicy.protectedRunningApplicationSnapshot()"))
         XCTAssertTrue(source.contains("NSWorkspace.didLaunchApplicationNotification"))
-        XCTAssertTrue(source.contains("CaptureSessionPolicy.recordProtectedApplicationLifecycle"))
+        XCTAssertTrue(source.contains("\\.runningApplications"))
+        XCTAssertTrue(source.contains("CaptureSessionPolicy.recordProtectedApplicationInventoryChange"))
         XCTAssertTrue(pipeline.contains("onScreenWindowsOnly: false"))
         XCTAssertTrue(pipeline.contains("contentCoversProtectedApplications"))
     }
 
-    func testProtectedLifecycleRevisionBumpsBeforeUnstructuredInvalidationTask() throws {
+    func testStaleShareableContentMissingUserIgnoredHelperFailsClosed() throws {
         let source = try coordinatorSource
-        let launchObserver = try XCTUnwrap(
-            source.range(of: "NSWorkspace.didLaunchApplicationNotification")
+        let pipeline = try String(
+            contentsOf: projectRoot.appendingPathComponent("ZBSEyeApp/Capture/FramePipeline.swift"),
+            encoding: .utf8
         )
-        let synchronousBump = try XCTUnwrap(
-            source.range(of: "MainActor.assumeIsolated", range: launchObserver.upperBound..<source.endIndex)
-        )
-        let invalidationTask = try XCTUnwrap(
-            source.range(of: "Task { @MainActor", range: synchronousBump.upperBound..<source.endIndex)
+        let policy = try String(
+            contentsOf: projectRoot.appendingPathComponent("ZBSEyeApp/Capture/CaptureSessionPolicy.swift"),
+            encoding: .utf8
         )
 
-        XCTAssertLessThan(synchronousBump.lowerBound, invalidationTask.lowerBound)
+        XCTAssertTrue(source.contains("let userIgnoredApplicationSnapshot = Self.userIgnoredApplicationSnapshot("))
+        XCTAssertGreaterThanOrEqual(
+            source.components(separatedBy: "userIgnoredApplicationSnapshot: userIgnoredApplicationSnapshot").count - 1,
+            3
+        )
+        XCTAssertTrue(pipeline.contains("cachedUserIgnoredApplicationSnapshot"))
+        XCTAssertTrue(pipeline.contains("contentCoversExpectedPrivacyApplications"))
+        XCTAssertTrue(pipeline.contains("contentCoversUserIgnoredApplications"))
+        XCTAssertTrue(policy.contains("expected.isSubset(of: represented)"))
+        XCTAssertGreaterThanOrEqual(
+            pipeline.components(separatedBy: "Self.contentCoversExpectedPrivacyApplications(").count - 1,
+            4,
+            "fresh content, active stream, update completion, and start completion must all fail closed"
+        )
+    }
+
+    func testUserIgnoredShareableContentIdentityRequiresExactPIDAndBundle() throws {
+        let source = try coordinatorSource
+        let pipeline = try String(
+            contentsOf: projectRoot.appendingPathComponent("ZBSEyeApp/Capture/FramePipeline.swift"),
+            encoding: .utf8
+        )
+        let policy = try String(
+            contentsOf: projectRoot.appendingPathComponent("ZBSEyeApp/Capture/CaptureSessionPolicy.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("case ignored(processIdentifier: Int32, bundleIdentifier: String)"))
+        XCTAssertTrue(source.contains("guard case let .ignored(processIdentifier, bundleIdentifier) = identity"))
+        XCTAssertTrue(policy.contains("struct UserIgnoredCaptureApplicationIdentity: Hashable, Sendable"))
+        XCTAssertTrue(pipeline.contains("processIdentifier: Int32($0.processID)"))
+        XCTAssertTrue(pipeline.contains("bundleIdentifier: $0.bundleIdentifier"))
+        XCTAssertTrue(
+            policy.contains("typealias UserIgnoredCaptureApplicationSnapshot = Set<UserIgnoredCaptureApplicationIdentity>")
+        )
+        XCTAssertFalse(
+            policy.contains("representedBundleIdentifiers.isSuperset"),
+            "a reused PID or another process from the same bundle must not satisfy exact identity attestation"
+        )
+    }
+
+    func testCompleteRunningApplicationInventoryRevokesBeforeAsyncInvalidation() throws {
+        let source = try coordinatorSource
+        let reconciliation = try XCTUnwrap(
+            source.range(of: "private func reconcileRunningPrivacyApplications()")
+        )
+        let synchronousBump = try XCTUnwrap(
+            source.range(
+                of: "CaptureSessionPolicy.recordProtectedApplicationInventoryChange()",
+                range: reconciliation.upperBound..<source.endIndex
+            )
+        )
+        let synchronousRevoke = try XCTUnwrap(
+            source.range(
+                of: "revokeCaptureForStreamTopologyChange(.contentTopologyChanged)",
+                range: synchronousBump.upperBound..<source.endIndex
+            )
+        )
+        let asyncRefresh = try XCTUnwrap(
+            source.range(
+                of: "refreshContentAfterTopologyChange()",
+                range: synchronousRevoke.upperBound..<source.endIndex
+            )
+        )
+
+        XCTAssertLessThan(synchronousBump.lowerBound, synchronousRevoke.lowerBound)
+        XCTAssertLessThan(synchronousRevoke.lowerBound, asyncRefresh.lowerBound)
+    }
+
+    func testPrivateApplicationLifecycleRevokesCurrentCycleBeforeStreamInvalidation() throws {
+        let source = try coordinatorSource
+        let privateMatch = try XCTUnwrap(
+            source.range(
+                of: "ignored.contains(bundleIdentifier)"
+            )
+        )
+        let synchronousRevoke = try XCTUnwrap(
+            source.range(
+                of: "revokeCaptureForStreamTopologyChange(.contentTopologyChanged)",
+                range: privateMatch.upperBound..<source.endIndex
+            )
+        )
+        let asyncInvalidation = try XCTUnwrap(
+            source.range(
+                of: "await self.pipeline.invalidateContent()",
+                range: synchronousRevoke.upperBound..<source.endIndex
+            )
+        )
+
+        XCTAssertLessThan(privateMatch.lowerBound, synchronousRevoke.lowerBound)
+        XCTAssertLessThan(synchronousRevoke.lowerBound, asyncInvalidation.lowerBound)
+        XCTAssertTrue(source.contains("contentTopologyRevision &+= 1"))
+        XCTAssertTrue(source.contains("healthController.invalidatePipeline("))
+        XCTAssertTrue(source.contains("recordScreenPipelineFailure("))
+        XCTAssertTrue(source.contains("func privacyExclusionsDidChange()"))
+        let environment = try String(
+            contentsOf: projectRoot.appending(path: "ZBSEyeApp/App/AppEnvironment.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(environment.contains("privacy.onIgnoredBundleIdsChanged"))
+        XCTAssertGreaterThanOrEqual(
+            source.components(separatedBy: "contentTopologyRevision == expectedContentTopologyRevision").count - 1,
+            2
+        )
+        XCTAssertGreaterThanOrEqual(
+            source.components(separatedBy: "privacyApplicationInventoryStillMatches(").count - 1,
+            4
+        )
+    }
+
+    func testIntentionalCyclesCannotHidePhysicalStreamFailures() throws {
+        let source = try coordinatorSource
+
+        XCTAssertFalse(source.contains("try? await pipeline.reconcilePersistentStream"))
+        XCTAssertTrue(source.contains("reconcilePersistentStreamForIntentionalCycle"))
+        XCTAssertTrue(source.contains("case .streamStartFailed, .streamUpdateFailed, .streamStopUnconfirmed:"))
+        XCTAssertTrue(source.contains("healthController.recordScreenPipelineFailure("))
     }
 
     func testEveryClosingNotificationRevokesAdmissionSynchronously() throws {

@@ -106,6 +106,23 @@ final class SystemAudioCaptureLifecycleTests: XCTestCase {
         XCTAssertEqual(outcome, .notNeeded)
     }
 
+    func testStopInvalidatesStartTokenBeforePhysicalCaptureBegins() async throws {
+        let lifecycle = SystemAudioCaptureLifecycle<TestSystemAudioSession>()
+        let maybeToken = await lifecycle.beginStart()
+        let token = try XCTUnwrap(maybeToken)
+        XCTAssertTrue(lifecycle.isStartCurrent(token))
+
+        XCTAssertNil(lifecycle.beginStop { _ in
+            XCTFail("an invalidated preflight never acquired a physical session")
+            return .failed("unexpected teardown")
+        })
+        XCTAssertFalse(lifecycle.isStartCurrent(token))
+
+        lifecycle.failStart(token: token)
+        let outcome = await lifecycle.drain()
+        XCTAssertEqual(outcome, .notNeeded)
+    }
+
     func testFailedLateStartTeardownRetainsOwnershipUntilRetrySucceeds() async throws {
         let lifecycle = SystemAudioCaptureLifecycle<TestSystemAudioSession>()
         let maybeToken = await lifecycle.beginStart()
@@ -338,6 +355,32 @@ final class SystemAudioCaptureLifecycleTests: XCTestCase {
         XCTAssertEqual(admission.close(), 42)
         XCTAssertNil(admission.sink(for: first))
         XCTAssertNil(admission.close())
+    }
+
+    func testCoordinatorDoesNotReportAnIntentionalStopAsAStartFailure() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appending(path: "ZBSEyeApp/Audio/AudioCoordinator.swift"),
+            encoding: .utf8
+        )
+        let engineStart = try XCTUnwrap(
+            source.range(of: "stream = try await engine.start()")
+        )
+        let failureLog = try XCTUnwrap(
+            source.range(
+                of: "Log.audio.error(\"system_audio_start_failed\")",
+                range: engineStart.upperBound..<source.endIndex
+            )
+        )
+        let reattestation = source[engineStart.upperBound..<failureLog.lowerBound]
+
+        XCTAssertTrue(reattestation.contains("self.systemEpoch == epoch"))
+        XCTAssertTrue(reattestation.contains("self.systemStarting"))
+        XCTAssertTrue(reattestation.contains("self.desiredSources.system"))
+        XCTAssertTrue(reattestation.contains("!self.suppressSystemStopObservation"))
+        XCTAssertTrue(reattestation.contains("return await engine.stopAndDrain()"))
     }
 }
 

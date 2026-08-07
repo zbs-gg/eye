@@ -42,6 +42,44 @@ final class CallTranscriptWorkerTests: XCTestCase {
         XCTAssertEqual(job.attempts, 0)
     }
 
+    func testDirectMaintenanceResumeCannotOpenAnActivePrivacyBarrier() async throws {
+        let fixture = try CallTranscriptWorkerFixture()
+        _ = try await fixture.makePendingCheckpoint()
+        let worker = fixture.makeWorker(modelReady: false) { _, _, _ in
+            XCTFail("helper must remain closed")
+            throw FixtureError.helperFailed
+        }
+
+        await worker.suspendAndDrainForPrivacyBarrier()
+        await worker.suspendAndDrain()
+        await worker.resume()
+        let whilePrivacyHeld = await worker.runOne(nowMs: 3_000)
+        XCTAssertEqual(whilePrivacyHeld, .suspended)
+
+        await worker.resumeFromPrivacyBarrier()
+        let afterPrivacyRelease = await worker.runOne(nowMs: 3_001)
+        XCTAssertEqual(afterPrivacyRelease, .modelUnavailable)
+    }
+
+    func testPrivacyReleaseBalancesWhileMaintenanceStillOwnsSuspension() async throws {
+        let fixture = try CallTranscriptWorkerFixture()
+        _ = try await fixture.makePendingCheckpoint()
+        let worker = fixture.makeWorker(modelReady: false) { _, _, _ in
+            XCTFail("helper must remain closed")
+            throw FixtureError.helperFailed
+        }
+
+        await worker.suspendAndDrainForPrivacyBarrier()
+        await worker.suspendAndDrain()
+        await worker.resumeFromPrivacyBarrier()
+        let whileMaintenanceHeld = await worker.runOne(nowMs: 3_000)
+        XCTAssertEqual(whileMaintenanceHeld, .suspended)
+
+        await worker.resume()
+        let afterMaintenanceRelease = await worker.runOne(nowMs: 3_001)
+        XCTAssertEqual(afterMaintenanceRelease, .modelUnavailable)
+    }
+
     func testOneCheckpointRunsHelperAndCommitsSourceAttributedProjection() async throws {
         let fixture = try CallTranscriptWorkerFixture()
         let created = try await fixture.makePendingCheckpoint()

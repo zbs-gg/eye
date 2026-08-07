@@ -197,6 +197,37 @@ final class CallAutomationDispatcherTests: XCTestCase {
         await dispatcher.resumeAfterRelocation(nowMs: 3_100)
     }
 
+    func testPrivacyCanCloseAdmissionWithoutWaitingForAnOfflineTransport() async throws {
+        let fixture = try CallAutomationFixture()
+        try await fixture.enable(endpoint: "http://127.0.0.1:7777/events")
+        _ = try await fixture.makeEndedCall(key: "privacy-fast-stop", startedAtMs: 1_000)
+        let transport = PausingCallAutomationTransport()
+        let dispatcher = CallAutomationDispatcher(repository: fixture.automation, transport: transport)
+        let delivery = Task { await dispatcher.runOne(nowMs: 3_000) }
+        await transport.waitUntilStarted()
+
+        await dispatcher.suspendAdmissionForRelocation()
+        let secondDeliveryStarted = await dispatcher.runOne(nowMs: 3_001)
+        XCTAssertFalse(secondDeliveryStarted)
+
+        let drained = AsyncFlag()
+        let drain = Task {
+            await dispatcher.drainSuspendedDelivery()
+            await drained.set()
+        }
+        await Task.yield()
+        let drainedBeforeTransportFinished = await drained.value()
+        XCTAssertFalse(drainedBeforeTransportFinished)
+
+        await transport.release()
+        let didDeliver = await delivery.value
+        XCTAssertTrue(didDeliver)
+        await drain.value
+        let drainedAfterTransportFinished = await drained.value()
+        XCTAssertTrue(drainedAfterTransportFinished)
+        await dispatcher.resumeAfterRelocation(nowMs: 3_100)
+    }
+
     func testStatusCallbackRefreshesAfterBackgroundBlock() async throws {
         let fixture = try CallAutomationFixture()
         try await fixture.enable(endpoint: "http://127.0.0.1:7777/events")

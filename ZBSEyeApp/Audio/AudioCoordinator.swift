@@ -45,6 +45,8 @@ final class AudioCoordinator {
     /// it could enqueue a transcript after the audio legs had acknowledged.
     @ObservationIgnored private var maintenanceSuspended = false
     @ObservationIgnored private var callFrameSink: CallAudioFrameSink?
+    @ObservationIgnored private var callFrameAdmission = CallAudioFrameAdmissionLatch()
+    @ObservationIgnored private var sealedCallFrameBoundary: CallAudioFrameBoundary?
     @ObservationIgnored private var legacyIntent = CallSourceSelection.none
     @ObservationIgnored private var explicitCallIntent = CallSourceSelection.none
     @ObservationIgnored private var systemStarting = false
@@ -61,7 +63,8 @@ final class AudioCoordinator {
         storage: StorageManager,
         ingest: IngestService,
         config: AudioConfig = AudioConfig(),
-        healthController: CaptureHealthController? = nil
+        healthController: CaptureHealthController? = nil,
+        resourceCoordinator: SCKResourceCoordinator
     ) {
         let backend = SFSpeechBackend()
         let transcription = TranscriptionService(backend: backend, ingest: ingest, config: config)
@@ -71,7 +74,10 @@ final class AudioCoordinator {
         self.systemPipeline = AudioPipeline(storage: storage, ingest: ingest,
                                             transcription: transcription, config: config, channel: "system")
         self.micEngine = AudioCaptureEngine(config: config)
-        self.systemEngine = SystemAudioCaptureEngine(config: config)
+        self.systemEngine = SystemAudioCaptureEngine(
+            config: config,
+            resourceCoordinator: resourceCoordinator
+        )
         self.healthController = healthController
 
         // 24/7 resilience: an audio-device change (AirPods) / SCStream death → auto-restart the leg
@@ -287,12 +293,39 @@ final class AudioCoordinator {
 
     func health() async -> TranscriptionHealth { await transcription.snapshot() }
 
-    func installCallFrameSink(_ sink: CallAudioFrameSink?) {
+    func installCallFrameSink(
+        _ sink: CallAudioFrameSink?
+    ) -> CallAudioFrameAdmissionLease? {
         callFrameSink = sink
+        sealedCallFrameBoundary = nil
+        return callFrameAdmission.installSink(present: sink != nil)
     }
 
-    func beginExplicitCall(_ requested: CallSourceSelection) async -> CallSourceSelection {
-        guard !requested.isEmpty, !maintenanceSuspended else { return .none }
+    func admitCallFrameSink(_ lease: CallAudioFrameAdmissionLease) -> Bool {
+        callFrameAdmission.admit(lease)
+    }
+
+    /// Called synchronously from MainActor privacy/session/disk/maintenance boundaries before
+    /// their asynchronous teardown starts. Already accepted frames through the frozen boundary
+    /// may still drain to the Call; later frames are consumed-and-dropped instead of leaking into
+    /// either the closing Call or the ordinary Timeline pipeline.
+    func closeCallFrameAdmission() {
+        if callFrameSink != nil, sealedCallFrameBoundary == nil {
+            sealedCallFrameBoundary = CallAudioFrameBoundary(
+                targets: liveAcceptedIngressTargets()
+            )
+        }
+        callFrameAdmission.close()
+    }
+
+    func beginExplicitCall(
+        _ requested: CallSourceSelection,
+        sinkLease: CallAudioFrameAdmissionLease
+    ) async -> CallSourceSelection {
+        guard !requested.isEmpty,
+              !maintenanceSuspended,
+              callFrameAdmission.isOpen(for: sinkLease)
+        else { return .none }
         explicitCallIntent = requested
         ensurePhysicalSources()
 
@@ -303,6 +336,10 @@ final class AudioCoordinator {
                   !systemRunning, !systemStartFailed {
                 try? await Task.sleep(for: .milliseconds(25))
             }
+        }
+        guard callFrameAdmission.isOpen(for: sinkLease) else {
+            explicitCallIntent = .none
+            return .none
         }
         let actual = CallSourceSelection(
             me: requested.me && micRunning,
@@ -343,6 +380,14 @@ final class AudioCoordinator {
     }
 
     func acceptedIngressTargets() -> AudioIngressTargets {
+        CallAudioFinalizationTargetPolicy.targets(
+            hasCallSink: callFrameSink != nil,
+            sealedBoundary: sealedCallFrameBoundary,
+            liveTargets: liveAcceptedIngressTargets()
+        )
+    }
+
+    private func liveAcceptedIngressTargets() -> AudioIngressTargets {
         AudioIngressTargets(
             me: micEngine.latestAcceptedIngressSequence,
             system: systemEngine.latestAcceptedIngressSequence
@@ -423,27 +468,54 @@ final class AudioCoordinator {
         let epoch = systemEpoch
         systemTask = Task { @MainActor [weak self] in
             _ = await previous?.value
+            guard let self else { return nil }
+            guard self.systemEpoch == epoch,
+                  self.isRunning,
+                  self.legGeneration == generation,
+                  self.systemStarting,
+                  self.desiredSources.system,
+                  !self.suppressSystemStopObservation else {
+                if self.systemEpoch == epoch { self.systemStarting = false }
+                return nil
+            }
+            do {
+                try Task.checkCancellation()
+            } catch {
+                if self.systemEpoch == epoch { self.systemStarting = false }
+                return nil
+            }
             let stream: AsyncStream<AudioFrame>
             do {
                 stream = try await engine.start()
             } catch let cancellation as SystemAudioCaptureStartCancelled {
-                self?.systemStarting = false
+                if self.systemEpoch == epoch { self.systemStarting = false }
                 return cancellation.teardownOutcome
             } catch is CancellationError {
-                self?.systemStarting = false
+                if self.systemEpoch == epoch { self.systemStarting = false }
                 return nil
             } catch {
+                guard self.systemEpoch == epoch else { return nil }
+                guard self.isRunning,
+                      self.legGeneration == generation,
+                      self.systemStarting,
+                      self.desiredSources.system,
+                      !self.suppressSystemStopObservation else {
+                    self.systemStarting = false
+                    return await engine.stopAndDrain()
+                }
                 Log.audio.error("system_audio_start_failed")
-                guard let self, self.isRunning,
-                      self.legGeneration == generation else { return nil }
                 self.systemStarting = false
                 self.systemStartFailed = true
                 self.healthController?.recordSystemAudioFailure(nowMs: Self.epochMs())
                 return nil
             }
-            guard let self, self.isRunning,
-                  self.legGeneration == generation else {
-                self?.systemStarting = false
+            guard self.systemEpoch == epoch,
+                  self.isRunning,
+                  self.legGeneration == generation,
+                  self.systemStarting,
+                  self.desiredSources.system,
+                  !self.suppressSystemStopObservation else {
+                if self.systemEpoch == epoch { self.systemStarting = false }
                 return await engine.stopAndDrain()
             }
             self.systemStarting = false
@@ -499,8 +571,20 @@ final class AudioCoordinator {
     }
 
     private func routeToCallIfOwned(_ frame: AudioFrame) async -> Bool {
-        guard let callFrameSink else { return false }
-        return await callFrameSink(frame)
+        let sink = callFrameSink
+        let admission = callFrameAdmission.route(hasCallSink: sink != nil)
+        if case .explicitCall = admission {
+            if let sink {
+                _ = await sink(frame)
+            }
+            return true
+        }
+        return await CallAudioFrameRouter.route(
+            frame,
+            admission: admission,
+            sealedBoundary: sealedCallFrameBoundary,
+            sink: sink
+        )
     }
 }
 

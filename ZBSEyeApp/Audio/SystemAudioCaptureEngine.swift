@@ -15,11 +15,15 @@ struct SystemAudioCaptureStartCancelled: Error, Sendable, Equatable {
 /// state is the locked `frameAdmission`; lifecycle fields stay on MainActor.
 final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let config: AudioConfig
+    private let resourceCoordinator: SCKResourceCoordinator
     private let lifecycle: SystemAudioCaptureLifecycle<SCStream>
     private let frameAdmission = SystemAudioFrameAdmission<
         SCStream,
         SystemAudioIngressSink
     >()
+    private let externalStopLock = NSLock()
+    private var registeredStreamIDs: Set<ObjectIdentifier> = []
+    private var externallyStoppedStreamIDs: Set<ObjectIdentifier> = []
     private var stream: SCStream?
     private var running = false
     private var epoch = -1
@@ -27,14 +31,23 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
     private var lastAcceptedIngressSequence: Int64?
     private var completedGaps: [AudioIngressGap] = []
     private let sampleQueue = DispatchQueue(label: "com.zbseye.systemaudio.samples")
+    private let discardScreenOutput = SystemAudioDiscardScreenOutput()
+    private let discardScreenQueue = DispatchQueue(
+        label: "com.zbseye.systemaudio.discard-screen",
+        qos: .utility
+    )
 
     /// The stream died mid-run (SCK error, permission revoked, display reconfiguration) — the feed is closed;
     /// the coordinator restarts the leg. Without the delegate the death was silent (the feed hung forever).
     var onStreamStopped: (@Sendable () -> Void)?
 
     @MainActor
-    init(config: AudioConfig) {
+    init(
+        config: AudioConfig,
+        resourceCoordinator: SCKResourceCoordinator
+    ) {
         self.config = config
+        self.resourceCoordinator = resourceCoordinator
         self.lifecycle = SystemAudioCaptureLifecycle()
         super.init()
     }
@@ -85,13 +98,113 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
                 initialSequence: nextIngressSequence
             )
             let stream = SCStream(filter: filter, configuration: cfg, delegate: self)
-            try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
+            registerStream(stream)
+            var startWasInvoked = false
             do {
-                try await stream.startCapture()
+                try await resourceCoordinator.withExclusiveAccess(
+                    owner: .systemAudio,
+                    operation: .start
+                ) {
+                    try Task.checkCancellation()
+                    guard lifecycle.isStartCurrent(startToken) else {
+                        throw SystemAudioCaptureStartInvalidated()
+                    }
+                    do {
+                        try stream.addStreamOutput(
+                            self,
+                            type: .audio,
+                            sampleHandlerQueue: sampleQueue
+                        )
+                        try Task.checkCancellation()
+                        // SCK still has a video leg when capturesAudio is
+                        // enabled. A tiny discard output keeps that leg valid
+                        // without feeding pixels into the audio callback queue.
+                        try stream.addStreamOutput(
+                            discardScreenOutput,
+                            type: .screen,
+                            sampleHandlerQueue: discardScreenQueue
+                        )
+                        try Task.checkCancellation()
+                        guard lifecycle.isStartCurrent(startToken) else {
+                            throw SystemAudioCaptureStartInvalidated()
+                        }
+                        startWasInvoked = true
+                        try await stream.startCapture()
+                        try Task.checkCancellation()
+                        guard lifecycle.isStartCurrent(startToken) else {
+                            throw SystemAudioCaptureStartInvalidated()
+                        }
+                    } catch {
+                        // Once startCapture() has been invoked the stream may
+                        // already own live SCK resources even if its async
+                        // continuation throws or cancellation wins. Keep both
+                        // outputs attached until the retained stop path has
+                        // physically stopped that exact stream; removing them
+                        // first recreates SCK's "stream output NOT found"
+                        // lifecycle ordering.
+                        if !startWasInvoked {
+                            removeCaptureOutputs(from: stream)
+                        }
+                        throw error
+                    }
+                }
+            } catch is SystemAudioCaptureStartInvalidated {
+                sink.publisher.finish()
+                if startWasInvoked {
+                    let teardownOutcome = await retainAndStopRejectedStart(
+                        stream,
+                        token: startToken
+                    )
+                    throw SystemAudioCaptureStartCancelled(
+                        teardownOutcome: teardownOutcome
+                    )
+                }
+                unregisterStream(stream)
+                lifecycle.failStart(token: startToken)
+                throw SystemAudioCaptureStartCancelled(teardownOutcome: .notNeeded)
+            } catch is CancellationError {
+                sink.publisher.finish()
+                if startWasInvoked {
+                    let teardownOutcome = await retainAndStopRejectedStart(
+                        stream,
+                        token: startToken
+                    )
+                    throw SystemAudioCaptureStartCancelled(
+                        teardownOutcome: teardownOutcome
+                    )
+                }
+                unregisterStream(stream)
+                lifecycle.failStart(token: startToken)
+                throw CancellationError()
             } catch {
                 sink.publisher.finish()
+                if startWasInvoked {
+                    let teardownOutcome = await retainAndStopRejectedStart(
+                        stream,
+                        token: startToken
+                    )
+                    if !teardownOutcome.isConfirmedStopped {
+                        Log.audio.error("system_audio_failed_start_teardown_unconfirmed")
+                    }
+                } else {
+                    unregisterStream(stream)
+                }
                 lifecycle.failStart(token: startToken)
                 throw AudioEngineError.engineStartFailed(error.localizedDescription)
+            }
+
+            // The delegate can prove a physical stop before startCapture's
+            // continuation returns to MainActor. In that ordering there is no
+            // published lifecycle session for the queued main callback to
+            // acknowledge, so consume the synchronous marker before exposing a
+            // dead stream as running.
+            if consumeExternalStopMarker(for: stream) {
+                removeCaptureOutputs(from: stream)
+                sink.publisher.finish()
+                lifecycle.failStart(token: startToken)
+                throw AudioEngineError.engineStartFailed(
+                    "system audio stream stopped during start"
+                )
             }
 
             guard lifecycle.publishStarted(stream, token: startToken) else {
@@ -126,8 +239,8 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
             sink.publisher.finish()
         }
         self.stream = nil
-        return lifecycle.beginStop { stream in
-            await Self.stopStream(stream)
+        return lifecycle.beginStop { [self] stream in
+            await stopStream(stream)
         }
     }
 
@@ -150,19 +263,38 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
     // MARK: SCStreamDelegate
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
+        let stoppedID = ObjectIdentifier(stream)
+        guard markExternalStop(streamID: stoppedID) else { return }
+        // The physical stream has stopped, so both registrations can be
+        // detached before lifecycle ownership is released. Removal is
+        // idempotent with the normal stop path.
+        removeCaptureOutputs(from: stream)
         // Field mutations happen on main only: the coordinator's stop()/start() are there too (no check-then-act race).
         // ObjectIdentifier instead of the SCStream itself — we don't drag a non-Sendable object into the main closure.
-        let stoppedID = ObjectIdentifier(stream)
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.running,
-                  self.stream.map(ObjectIdentifier.init) == stoppedID else { return }
+            guard let self else { return }
+            let wasRunningCurrent = self.running
+                && self.stream.map(ObjectIdentifier.init) == stoppedID
+            _ = self.lifecycle.acknowledgeExternalStop(
+                sessionID: stoppedID
+            )
+            // A normal stop may still be suspended in stopCapture(). Keep its
+            // marker until that operation observes the delegate-confirmed
+            // physical stop; otherwise an SCK "already stopped" error would be
+            // misreported as a teardown failure. Only a spontaneous stop of the
+            // published running stream has no teardown waiter. Any non-current
+            // marker may belong to a start/stop race and remains consumable by
+            // the retained late-start teardown.
+            if wasRunningCurrent {
+                _ = self.consumeExternalStopMarker(streamID: stoppedID)
+            }
+            guard wasRunningCurrent else { return }
             self.running = false
             self.stream = nil
             if let sink = self.frameAdmission.close() {
                 self.archive(sink)
                 sink.publisher.finish()
             }
-            _ = self.lifecycle.acknowledgeExternalStop(sessionID: stoppedID)
             self.onStreamStopped?()
         }
     }
@@ -199,21 +331,90 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
     }
 
     @MainActor
-    private static func stopStream(
+    private func stopStream(
         _ stream: SCStream
     ) async -> SystemAudioCaptureTeardownOutcome {
-        for attempt in 0..<2 {
-            do {
-                try await stream.stopCapture()
-                return .stopped
-            } catch {
-                if attempt == 0 {
-                    try? await Task.sleep(for: .milliseconds(100))
+        await resourceCoordinator.withExclusiveAccess(
+            owner: .systemAudio,
+            operation: .stop
+        ) {
+            for attempt in 0..<2 {
+                if consumeExternalStopMarker(for: stream) {
+                    removeCaptureOutputs(from: stream)
+                    return .stopped
+                }
+                do {
+                    try await stream.stopCapture()
+                    removeCaptureOutputs(from: stream)
+                    unregisterStream(stream)
+                    return .stopped
+                } catch {
+                    if consumeExternalStopMarker(for: stream) {
+                        removeCaptureOutputs(from: stream)
+                        return .stopped
+                    }
+                    if attempt == 0 {
+                        try? await Task.sleep(for: .milliseconds(100))
+                    }
                 }
             }
+            Log.audio.error("system_audio_stop_failed_after_retry")
+            return .failed("system_audio_stop_failed")
         }
-        Log.audio.error("system_audio_stop_failed_after_retry")
-        return .failed("system_audio_stop_failed")
+    }
+
+    private func removeCaptureOutputs(from stream: SCStream) {
+        try? stream.removeStreamOutput(self, type: .audio)
+        try? stream.removeStreamOutput(discardScreenOutput, type: .screen)
+    }
+
+    @MainActor
+    private func retainAndStopRejectedStart(
+        _ stream: SCStream,
+        token: SystemAudioCaptureLifecycle<SCStream>.StartToken
+    ) async -> SystemAudioCaptureTeardownOutcome {
+        if lifecycle.publishStarted(stream, token: token) {
+            _ = lifecycle.beginStop { [self] ownedStream in
+                await stopStream(ownedStream)
+            }
+        }
+        return await lifecycle.drain()
+    }
+
+    private func consumeExternalStopMarker(for stream: SCStream) -> Bool {
+        consumeExternalStopMarker(streamID: ObjectIdentifier(stream))
+    }
+
+    private func consumeExternalStopMarker(streamID: ObjectIdentifier) -> Bool {
+        return externalStopLock.withLock {
+            guard externallyStoppedStreamIDs.remove(streamID) != nil else { return false }
+            registeredStreamIDs.remove(streamID)
+            return true
+        }
+    }
+
+    private func registerStream(_ stream: SCStream) {
+        let streamID = ObjectIdentifier(stream)
+        externalStopLock.withLock {
+            registeredStreamIDs.insert(streamID)
+            externallyStoppedStreamIDs.remove(streamID)
+        }
+    }
+
+    private func unregisterStream(_ stream: SCStream) {
+        let streamID = ObjectIdentifier(stream)
+        externalStopLock.withLock {
+            registeredStreamIDs.remove(streamID)
+            externallyStoppedStreamIDs.remove(streamID)
+        }
+    }
+
+    private func markExternalStop(streamID: ObjectIdentifier) -> Bool {
+        externalStopLock.withLock {
+            guard registeredStreamIDs.contains(streamID) else { return false }
+            externallyStoppedStreamIDs.insert(streamID)
+            return true
+        }
     }
 
     /// CMSampleBuffer (Float32, non-interleaved — SCStream audio format) → mono frame + RMS.
@@ -251,6 +452,19 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
         nextIngressSequence = sink.publisher.nextAttemptedIngressSequence
         completedGaps.append(contentsOf: sink.publisher.drainGaps())
     }
+}
+
+private struct SystemAudioCaptureStartInvalidated: Error, Sendable {}
+
+/// SCK requires a screen output for a reliable audio stream even though Eye
+/// does not consume those pixels. The 2x2 buffers are intentionally dropped.
+private final class SystemAudioDiscardScreenOutput: NSObject, SCStreamOutput,
+    @unchecked Sendable {
+    func stream(
+        _ stream: SCStream,
+        didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+        of type: SCStreamOutputType
+    ) {}
 }
 
 private final class SystemAudioIngressSink: @unchecked Sendable {

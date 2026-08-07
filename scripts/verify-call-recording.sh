@@ -18,24 +18,35 @@ fixture_gate() {
   command -v rg >/dev/null || fail "ripgrep is required"
 
   xcodegen generate >/dev/null
-  local derived="build/DerivedData"
+  # An override lets a checkout escape stale absolute SPM artifact links left by an older
+  # worktree without touching that checkout's build cache.
+  local derived="${ZBS_EYE_CALL_DERIVED_DATA_PATH:-build/CallRecordingDerivedData}"
   local selected=(
     -only-testing:ZBSEyeTests/AIComputeCoordinatorTests
     -only-testing:ZBSEyeTests/AudioIngressPublisherTests
+    -only-testing:ZBSEyeTests/AudioSettingsStoreTests
+    -only-testing:ZBSEyeTests/AutomaticCallBannerPresentationTests
+    -only-testing:ZBSEyeTests/AutomaticCallCaptureLifecycleTests
     -only-testing:ZBSEyeTests/AutomaticRetentionAdmissionTests
+    -only-testing:ZBSEyeTests/BrowserCallAdmissionIntegrationTests
+    -only-testing:ZBSEyeTests/BrowserCallSurfaceInspectorTests
     -only-testing:ZBSEyeTests/CallAPITests
     -only-testing:ZBSEyeTests/CallAutomationDispatcherTests
     -only-testing:ZBSEyeTests/CallAutomationOutboxTests
     -only-testing:ZBSEyeTests/CallAutomationPayloadTests
     -only-testing:ZBSEyeTests/CallAutomationStoreTests
+    -only-testing:ZBSEyeTests/CallAudioProcessEvidenceTests
+    -only-testing:ZBSEyeTests/CallAudioSourcePolicyTests
     -only-testing:ZBSEyeTests/CallAudioWindowAssemblerTests
     -only-testing:ZBSEyeTests/CallCoordinatorTests
     -only-testing:ZBSEyeTests/CallDatabaseTests
+    -only-testing:ZBSEyeTests/CallDetectionPolicyTests
     -only-testing:ZBSEyeTests/CallEvidenceQueryServiceTests
     -only-testing:ZBSEyeTests/CallExportTests
     -only-testing:ZBSEyeTests/CallFinalPromotionTests
     -only-testing:ZBSEyeTests/CallMediaMutationRecoveryTests
     -only-testing:ZBSEyeTests/CallPresentationStateTests
+    -only-testing:ZBSEyeTests/CallPrivacyIntentJournalTests
     -only-testing:ZBSEyeTests/CallRecordingStoreTests
     -only-testing:ZBSEyeTests/CallRecoveryTests
     -only-testing:ZBSEyeTests/CallRedactionTests
@@ -47,13 +58,20 @@ fixture_gate() {
     -only-testing:ZBSEyeTests/CallTimelineTests
     -only-testing:ZBSEyeTests/CallTranscriptProjectionTests
     -only-testing:ZBSEyeTests/CallTranscriptWorkerTests
+    -only-testing:ZBSEyeTests/CaptureSessionPolicyTests
+    -only-testing:ZBSEyeTests/CoreAudioMicListenerLifecycleTests
     -only-testing:ZBSEyeTests/DiarizationHelperCommandTests
     -only-testing:ZBSEyeTests/MCPCallEvidenceRoutingTests
     -only-testing:ZBSEyeTests/MCPHistorySearchRoutingTests
     -only-testing:ZBSEyeTests/MCPReadOnlyDatabaseTests
     -only-testing:ZBSEyeTests/MCPReadinessServiceTests
+    -only-testing:ZBSEyeTests/MeetingDetectorSurfaceTrustTests
+    -only-testing:ZBSEyeTests/NativeCallSurfaceInspectorTests
     -only-testing:ZBSEyeTests/ReleaseConfigurationTests
+    -only-testing:ZBSEyeTests/RecordingMaintenanceAdmissionTests
+    -only-testing:ZBSEyeTests/RecordingStoreLowDiskTests
     -only-testing:ZBSEyeTests/RetentionManagerTests
+    -only-testing:ZBSEyeTests/SettingsPresentationTests
     -only-testing:ZBSEyeTests/SpeakerDiarizationModelManifestTests
     -only-testing:ZBSEyeTests/SpeakerDiarizationWorkerTests
     -only-testing:ZBSEyeTests/LoopbackWebhookTransportTests
@@ -130,13 +148,23 @@ physical_preflight() {
 
 ## Operator gates
 
+- [ ] ChatGPT through Krisp starts exactly one automatic Call from microphone activity
+- [ ] Wi-Fi disabled before or during that Call does not affect detection, local capture, or saved evidence
+- [ ] End & save commits once; the 30-second timeout commits once; neither surface offers Undo
+- [ ] This wasn’t a call erases only that automatic Call and suppresses it until microphone idle
+- [ ] A user-excluded app creates no Call; removing the exclusion re-arms current mic activity
+- [ ] Muting and unmuting inside the app does not split the Call or create a duplicate
+- [ ] Switching microphone or output device keeps one Call and reports any unavailable track as degraded
+- [ ] Sleep then wake neither records the locked session nor loses automatic microphone detection after unlock
+- [ ] Restarting coreaudiod reinstalls input-running listeners; the two-second poll covers the restart window
+- [ ] Quitting and relaunching Eye recovers the interrupted automatic Call without loss or duplicate finalization
 - [ ] Short mic-only smoke with Screen Recording globally off
 - [ ] Short mic+system smoke with system audio enabled
 - [ ] 60-minute mic+system call, at least 10 Bookmarks
 - [ ] 120-minute mic+system call, at least 10 Bookmarks
-- [ ] Device/sample-rate change produces an explicit source epoch/gap
+- [ ] Device/sample-rate change produces an explicit source epoch/gap without splitting the Call
 - [ ] End during checkpoint and immediate quit after Bookmark recover honestly
-- [ ] Helper kill/retry and app relaunch preserve finalized chunks and one final revision
+- [ ] Helper kill/retry preserves finalized chunks and one final revision
 - [ ] GUI RSS/CPU, helper peak/exit RSS, queue depth, gaps, and disk growth recorded
 - [ ] Database/chunk/transcript/search/export reconciliation passes
 - [ ] Unified log, server.log, diagnostics, and helper stderr contain no seeded content/path/token marker

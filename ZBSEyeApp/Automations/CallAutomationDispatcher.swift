@@ -130,9 +130,20 @@ actor CallAutomationDispatcher {
     }
 
     func suspendAndDrainForRelocation() async {
+        suspendAdmissionForRelocation()
+        await drainSuspendedDelivery()
+    }
+
+    /// Closes admission synchronously on the actor without waiting for a transport request that
+    /// was already in flight. Privacy rejection uses this first so microphone teardown is not
+    /// held open by receiver latency; it still drains before projecting or deleting evidence.
+    func suspendAdmissionForRelocation() {
         suspensionCount += 1
         retryWakeTask?.cancel()
         retryWakeTask = nil
+    }
+
+    func drainSuspendedDelivery() async {
         guard inFlight else { return }
         await withCheckedContinuation { drainWaiters.append($0) }
     }

@@ -4,9 +4,11 @@ import CryptoKit
 enum CallSurfaceKind: String, Codable, Sendable {
     case native
     case browser
+    case generic
 }
 
 enum CallStateMarker: String, Codable, Sendable {
+    case microphoneActivity = "microphone_activity"
     case nativeCallControls = "native_call_controls"
     case accessibilityParticipantRoster = "accessibility_participant_roster"
     case trustedBrowserCallState = "trusted_browser_call_state"
@@ -105,6 +107,9 @@ struct CallEvidenceSnapshot: Equatable, Codable, Sendable {
     /// jump backwards after NTP, sleep, or a manual time change.
     var monotonicNow: TimeInterval
     var microphoneOwnerBundleID: String?
+    /// Localized app name or executable basename. This is optional enrichment; admission never
+    /// depends on it and no executable path is collected.
+    var microphoneOwnerDisplayName: String? = nil
     var surface: CallSurfaceEvidence?
     var microphoneAudioActive: Bool
     var systemAudioActive: Bool
@@ -198,7 +203,7 @@ enum CallDetectionDecision: Equatable, Sendable {
     case start(fingerprint: String)
     case activity(fingerprint: String)
     case strongEnd(fingerprint: String)
-    case becameIdle
+    case becameIdle(fingerprint: String)
 }
 
 struct CallSurfaceTrustDecision: Equatable, Sendable {
@@ -254,7 +259,6 @@ struct CallDetectionPolicy: Sendable {
         case suppressed(fingerprint: String)
     }
 
-    private static let maximumSurfaceAge: TimeInterval = 8
     private static let maximumStaleActivity: TimeInterval = 8
 
     private var state: State = .idle
@@ -264,7 +268,7 @@ struct CallDetectionPolicy: Sendable {
         switch state {
         case .idle:
             guard isEligibleToStart(evidence) else { return .none }
-            guard let kind = evidence.surface?.kind else { return .none }
+            let kind = evidence.surface?.kind ?? .generic
             staleSince = nil
             state = .active(fingerprint: evidence.fingerprint, kind: kind)
             return .start(fingerprint: evidence.fingerprint)
@@ -292,10 +296,10 @@ struct CallDetectionPolicy: Sendable {
         case let .suppressed(fingerprint):
             if evidence.isStronglyIdle {
                 state = .idle
-                return .becameIdle
+                return .becameIdle(fingerprint: fingerprint)
             }
             if evidence.fingerprint != fingerprint, isEligibleToStart(evidence) {
-                guard let kind = evidence.surface?.kind else { return .none }
+                let kind = evidence.surface?.kind ?? .generic
                 staleSince = nil
                 state = .active(fingerprint: evidence.fingerprint, kind: kind)
                 return .start(fingerprint: evidence.fingerprint)
@@ -309,32 +313,14 @@ struct CallDetectionPolicy: Sendable {
         state = .suppressed(fingerprint: fingerprint)
     }
 
-    mutating func resetAfterCompletion() {
-        staleSince = nil
-        state = .idle
-    }
-
     private func isEligibleToStart(_ evidence: CallEvidenceSnapshot) -> Bool {
         guard !evidence.isStale,
               !evidence.isRetainedMissing,
-              let micOwner = evidence.microphoneOwnerBundleID,
-              let surface = evidence.surface,
-              surface.ownerBundleID == micOwner,
-              surface.marker != nil,
-              evidence.now >= surface.observedAt,
-              evidence.now - surface.observedAt <= Self.maximumSurfaceAge
+              let ownerBundleID = evidence.microphoneOwnerBundleID,
+              CallAudioAutomaticOwnerRolePolicy.role(forBundleID: ownerBundleID) == .initiator,
+              evidence.microphoneAudioActive
         else { return false }
-
-        switch surface.kind {
-        case .native:
-            return CallSurfaceCatalog.nativeBundlePrefixes.contains { micOwner.hasPrefix($0) }
-
-        case .browser:
-            return CallSurfaceCatalog.browserBundleIDs.contains(micOwner)
-                && surface.trustedOrigin != nil
-                && surface.marker == .trustedBrowserCallState
-                && evidence.hasTwoSidedAudio
-        }
+        return true
     }
 
     private func isEligibleToContinue(
@@ -343,18 +329,13 @@ struct CallDetectionPolicy: Sendable {
         kind: CallSurfaceKind
     ) -> Bool {
         guard !evidence.isStale, evidence.fingerprint == fingerprint else { return false }
-        switch kind {
-        case .browser:
-            // Admission remains strictly two-sided. Once the detector has retained and revalidated
-            // the exact trusted browser surface, an active microphone is sufficient continuation
-            // evidence: a quiet call may legitimately have no running browser output process.
-            return evidence.microphoneOwnerBundleID != nil
-                && evidence.microphoneAudioActive
-        case .native:
-            return evidence.microphoneOwnerBundleID != nil
-                || evidence.surface?.marker != nil
-                || evidence.microphoneAudioActive
-                || evidence.systemAudioActive
-        }
+        _ = kind // Known native/browser classification is enrichment, never an admission gate.
+        guard let ownerBundleID = evidence.microphoneOwnerBundleID,
+              CallAudioAutomaticOwnerRolePolicy.role(forBundleID: ownerBundleID) == .initiator
+        else { return false }
+        // The universal boundary is microphone activity. Output playback and AX call controls may
+        // enrich context, but cannot hold a Call open forever after input disappears. A mute/device
+        // switch enters the existing 30-second grace and resumes the same fingerprint on return.
+        return evidence.microphoneAudioActive
     }
 }

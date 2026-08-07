@@ -161,6 +161,9 @@ struct RecordingStatusView: View {
     }
 
     private func captureLabel(_ leg: CaptureLeg, state: CaptureLegState) -> String {
+        if leg == .screen, state == .repairRequired {
+            return String(localized: "Capture needs repair")
+        }
         let source = switch leg {
         case .screen: String(localized: "Screen")
         case .systemAudio: String(localized: "System audio")
@@ -191,9 +194,19 @@ struct RecordingStatusView: View {
             sourceRow(active: false, warn: false, icon: "speaker.slash", text: "Audio: off")
         } else if mode == .meetingsOnly {
             if env.audioSettings.meetingActive {
-                sourceRow(active: true, warn: false, icon: "waveform", text: "Recording this meeting")
+                sourceRow(
+                    active: true,
+                    warn: false,
+                    icon: "waveform",
+                    text: String(localized: "Recording a Call")
+                )
             } else {
-                sourceRow(active: false, warn: false, icon: "ear", text: "Listening for meetings")
+                sourceRow(
+                    active: false,
+                    warn: false,
+                    icon: "ear",
+                    text: String(localized: "Listening for microphone use")
+                )
             }
         }
     }

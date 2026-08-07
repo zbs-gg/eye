@@ -2,23 +2,50 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
-## Unreleased
-
-## [0.7.0] — 2026-08-01
+## Unreleased — 0.7.0 (build 21 candidate)
 
 ### Added
+- Any external user application with active microphone input now starts one local automatic Call immediately,
+  including ChatGPT, browsers, and unknown microphone owners. Public CoreAudio input-running events wake
+  detection promptly, while the existing bounded poll remains as recovery after missed events or `coreaudiod`
+  restarts. Krisp is an audio relay that may join an existing Call but cannot start, name, or hold one; the
+  `codex_chronicle` capture helper is always excluded without excluding real ChatGPT or Codex calls.
+- Audio settings now include a separate **Don’t auto-record these apps** list. The in-call **Never
+  auto-record [App]** action adds the current app to that list and saves the Call without changing screen
+  capture's **Private apps** list.
 - Read-only MCP clients, including Hermes, can request a bounded, privacy-filtered activity summary with
   deterministic sessions, top apps, and tamper-resistant snapshot pagination.
 - Authenticated capture status and leg-scoped repair are available through REST, with repair restricted to
   advanced/full MCP profiles.
 
 ### Changed
+- Screen capture now uses one persistent low-rate ScreenCaptureKit stream with a bounded latest-wins pipeline.
+  Focus changes and periodic ticks request the next fresh frame instead of starting one-shot screenshots or
+  accumulating work, and screen/system-audio stream lifecycle is serialized.
+- Known meeting surfaces now enrich Call source context instead of gating automatic recording. Multiple
+  microphone owners, helper changes, and audio-device changes remain in one Call; microphone and system audio
+  are both requested, and an unavailable track is reported as degraded.
+- Automatic ending keeps the active Call open for 30 seconds. **End & save** commits it immediately,
+  **This wasn’t a call** deletes the entire automatic Call, and returning microphone activity cancels the
+  timer and continues the same Call. The timeout saves once, and saving remains entirely local without
+  internet access.
+- The user-facing audio mode is now named **Mic in use** (`Off / Mic in use / Always`); its stored raw value
+  remains compatible with existing preferences.
 - Screen and system-audio capture now recover independently with bounded retries. Search, Ask, Timeline,
   REST, and MCP disclose known coverage gaps so missing history is never presented as proof of inactivity.
 
 ### Fixed
+- Native macOS screenshots now take priority over Eye processing. When listen-event access already exists,
+  shortcut intent synchronously opens a short yield window; otherwise Eye falls back to observing screenshot
+  helper processes without requesting a new permission. Both paths cancel pending AX/HEIC/OCR work and never
+  restart the persistent Eye stream.
+- Capture health is based on fresh stream generations, complete/idle frame events, and display time rather
+  than changed pixels, so a static screen remains healthy while real stream stalls recover without overlap.
 - Codex integration now admits the locally qualified signed `codex-cli 0.145.0` release with its exact
   native-binary hash while preserving the existing signature and package-layout checks.
+
+### Removed
+- Removed the post-save Undo phase, its 15-second recovery tail, and Undo actions from Call surfaces.
 
 ## [0.6.0] — 2026-07-31
 

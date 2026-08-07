@@ -269,6 +269,10 @@ struct CallPrivacyIntentJournalExecutor: @unchecked Sendable {
         try await perform { try $0.pendingAutomaticRejections() }
     }
 
+    func contains(_ receipt: CallPrivacyIntentReceipt) async throws -> Bool {
+        try await perform { try $0.contains(receipt) }
+    }
+
     func remove(_ receipt: CallPrivacyIntentReceipt) async throws {
         try await perform { try $0.remove(receipt) }
     }

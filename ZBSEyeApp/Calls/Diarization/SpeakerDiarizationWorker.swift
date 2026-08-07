@@ -25,26 +25,121 @@ actor CallEvidenceWorkerBarrier {
     }
 
     private let workers: [Worker]
-    private var ownedIndices: [Int] = []
+    private enum WorkerState: Sendable {
+        case resumed
+        case suspended(ownedIndices: [Int])
+    }
+
+    private struct Transition: Sendable {
+        let generation: UInt64
+        let task: Task<WorkerState, Never>
+    }
+
+    private var workerState = WorkerState.resumed
+    private var transition: Transition?
+    private var transitionGeneration: UInt64 = 0
+    private var suspensionCount = 0
 
     init(workers: [Worker]) {
         self.workers = workers
     }
 
     func suspend() async -> Bool {
-        ownedIndices.removeAll(keepingCapacity: true)
-        for (index, worker) in workers.enumerated() where await worker.suspend() {
-            ownedIndices.append(index)
+        suspensionCount += 1
+        if suspensionCount == 1 {
+            enqueueSuspendTransition()
         }
-        return !ownedIndices.isEmpty
+        // A nested lease that arrives while the first drain is awaiting a worker must await that
+        // same transition. Returning early here would let its deletion race the still-running job.
+        if let transition {
+            await settle(transition)
+        }
+        return true
     }
 
     func resume() async {
-        let indices = ownedIndices
-        ownedIndices.removeAll(keepingCapacity: true)
-        for index in indices {
-            await workers[index].resume()
+        guard suspensionCount > 0 else { return }
+        suspensionCount -= 1
+        guard suspensionCount == 0 else { return }
+        enqueueResumeTransition()
+        if let transition {
+            await settle(transition)
         }
+    }
+
+    private func enqueueSuspendTransition() {
+        let predecessor = transition?.task
+        let baseline = workerState
+        let workers = self.workers
+        transitionGeneration &+= 1
+        let generation = transitionGeneration
+        let task = Task {
+            let startingState: WorkerState
+            if let predecessor {
+                startingState = await predecessor.value
+            } else {
+                startingState = baseline
+            }
+            if case .suspended = startingState { return startingState }
+            var ownedIndices: [Int] = []
+            for (index, worker) in workers.enumerated() where await worker.suspend() {
+                ownedIndices.append(index)
+            }
+            return .suspended(ownedIndices: ownedIndices)
+        }
+        transition = Transition(generation: generation, task: task)
+    }
+
+    private func enqueueResumeTransition() {
+        let predecessor = transition?.task
+        let baseline = workerState
+        let workers = self.workers
+        transitionGeneration &+= 1
+        let generation = transitionGeneration
+        let task = Task {
+            let startingState: WorkerState
+            if let predecessor {
+                startingState = await predecessor.value
+            } else {
+                startingState = baseline
+            }
+            guard case let .suspended(ownedIndices) = startingState else {
+                return WorkerState.resumed
+            }
+            for index in ownedIndices {
+                await workers[index].resume()
+            }
+            return .resumed
+        }
+        transition = Transition(generation: generation, task: task)
+    }
+
+    private func settle(_ candidate: Transition) async {
+        let settledState = await candidate.task.value
+        guard transition?.generation == candidate.generation else { return }
+        workerState = settledState
+        transition = nil
+    }
+}
+
+/// Prevents a late continuation for operation A from clearing the handle for a newer operation B.
+/// Workers remain actor-isolated; the token is only an identity fence across actor reentrancy.
+struct CallEvidenceWorkerOperationFence: Sendable, Equatable {
+    private(set) var activeGeneration: UInt64?
+    private var nextGeneration: UInt64 = 0
+
+    mutating func beginIfIdle() -> UInt64? {
+        guard activeGeneration == nil else { return nil }
+        nextGeneration &+= 1
+        activeGeneration = nextGeneration
+        return nextGeneration
+    }
+
+    @discardableResult
+    mutating func clearIfCurrent(_ generation: UInt64) -> Bool {
+        guard activeGeneration == generation else { return false }
+        activeGeneration = nil
+        return true
     }
 }
 
@@ -73,7 +168,9 @@ actor SpeakerDiarizationWorker {
     private let cancelHelper: HelperCancellation
     private let afterTransition: @Sendable () async -> Void
     private var suspended = false
+    private var privacySuspensionCount = 0
     private var activeOperation: Task<SpeakerDiarizationWorkerRunResult, Never>?
+    private var activeOperationFence = CallEvidenceWorkerOperationFence()
     private var failedEvidence: Set<String> = []
 
     init(
@@ -136,15 +233,20 @@ actor SpeakerDiarizationWorker {
     func runOne(
         nowMs: Int64 = msFromDate(Date())
     ) async -> SpeakerDiarizationWorkerRunResult {
-        guard !suspended else { return .suspended }
+        guard !isWorkSuspended else { return .suspended }
         if let activeOperation { return await activeOperation.value }
+        guard let generation = activeOperationFence.beginIfIdle() else {
+            return .suspended
+        }
         let operation = Task { [weak self] in
             guard let self else { return SpeakerDiarizationWorkerRunResult.suspended }
             return await self.performOne(nowMs: nowMs)
         }
         activeOperation = operation
         let result = await operation.value
-        if activeOperation != nil { activeOperation = nil }
+        if activeOperationFence.clearIfCurrent(generation) {
+            activeOperation = nil
+        }
         return result
     }
 
@@ -173,9 +275,12 @@ actor SpeakerDiarizationWorker {
         suspended = true
         cancelHelper()
         guard let operation = activeOperation else { return ownsResume }
+        guard let generation = activeOperationFence.activeGeneration else { return ownsResume }
         operation.cancel()
         _ = await operation.value
-        if activeOperation != nil { activeOperation = nil }
+        if activeOperationFence.clearIfCurrent(generation) {
+            activeOperation = nil
+        }
         return ownsResume
     }
 
@@ -184,8 +289,32 @@ actor SpeakerDiarizationWorker {
         failedEvidence.removeAll()
     }
 
+    /// Counted separately from maintenance so a direct resume from another subsystem cannot
+    /// reopen speaker evidence while an accepted false-call deletion is still being projected.
+    func suspendAndDrainForPrivacyBarrier() async {
+        privacySuspensionCount += 1
+        cancelHelper()
+        guard let operation = activeOperation else { return }
+        guard let generation = activeOperationFence.activeGeneration else { return }
+        operation.cancel()
+        _ = await operation.value
+        if activeOperationFence.clearIfCurrent(generation) {
+            activeOperation = nil
+        }
+    }
+
+    func resumeFromPrivacyBarrier() {
+        guard privacySuspensionCount > 0 else { return }
+        privacySuspensionCount -= 1
+        if privacySuspensionCount == 0 { failedEvidence.removeAll() }
+    }
+
+    private var isWorkSuspended: Bool {
+        suspended || privacySuspensionCount > 0
+    }
+
     private func performOne(nowMs: Int64) async -> SpeakerDiarizationWorkerRunResult {
-        guard !suspended, !Task.isCancelled else { return .suspended }
+        guard !isWorkSuspended, !Task.isCancelled else { return .suspended }
         let evidence: CallSpeakerDiarizationEvidence
         do {
             guard let candidate = try await repository.nextSpeakerDiarizationEvidence(

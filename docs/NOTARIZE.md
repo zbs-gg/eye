@@ -104,11 +104,86 @@ installed-app privacy and liveness gate before publishing:
    post-unlock row must be ordinary user content, and the whole test window must contain zero `loginwindow`
    or screen-saver rows.
 5. Take a normal system screenshot while Eye records and confirm it completes promptly without a new
-   permission prompt.
+   permission prompt. This is only a short liveness smoke; it does not replace capture coexistence v2 below.
 6. Restore the user's original recording setting and stop the temporary MCP client, even when a check fails.
 
 The session-state contract and exact failure modes are documented in
 [`docs/solutions/security-issues/macos-capture-session-lock-state-contract.md`](solutions/security-issues/macos-capture-session-lock-state-contract.md).
+
+### Blocking physical gate: capture coexistence v2
+
+The same exact verified draft ZIP/manifest/source and the app installed from that download must pass the
+complete [`CAPTURE_COEXISTENCE.md`](CAPTURE_COEXISTENCE.md) protocol before publication. Run it from ordinary
+Terminal, not an app-owned terminal, so every baseline can prove that Eye, ChatGPT, and Chronicle are absent:
+
+```bash
+bash scripts/verify-capture-coexistence.sh \
+  --app "/Applications/ZBS Eye.app" \
+  --data-root "/absolute/path/to/the/current/ZBS Eye data root" \
+  --manifest "dist/ZBSEye-<version>-<build>-<sha>-notarized.manifest.json"
+```
+
+All of the following are one blocking gate; a green automated bracket alone is not enough:
+
+1. The fixed nine-arm baseline/Eye/ChatGPT/Chronicle/real-two-track-call bracket completes with 5 warm-ups and
+   100 measured native screenshots per arm. `result.json` must say `pass`: zero error/empty/stale attempts, the
+   documented p95/max limits, healthy Eye state, stable exact process identities, and exactly one Eye screen
+   stream start per Eye process lifetime.
+2. Repeat Shift-Command-3/4/5 and all Control variants ten times in **every** arm. Content must match the
+   keypress, latency must remain normal, the expected number of new permission prompts is zero, and UI/REST/MCP
+   must agree on capture health and coverage warnings.
+3. Pass every row of the lifecycle/recovery matrix: static screen, sleep/wake, launch-under-lock, lock/unlock,
+   display topology change, System Audio off/on, quit/relaunch, and Eye-owned Repair Capture. No step may change
+   TCC, restart another app, or touch a global macOS capture service.
+4. Pass 30 minutes of OCR + two-track churn with at least 120 deliberate app switches, then keep the same
+   candidate installed and recording through the `+5 minutes`, `+1 hour`, and `+2 hours` soak checkpoints.
+   Timeline must advance, requested legs must be healthy, permission prompts and exhausted recovery episodes
+   must remain zero, and no coverage interval may remain open.
+
+Keep the timestamped receipt private and do not retain screenshots or captured content. A failed, invalid, or
+`upstream-blocked` run is not a product pass; follow the rerun rules in `CAPTURE_COEXISTENCE.md`.
+
+### Blocking physical gate: automatic Calls
+
+Deterministic verification proves policy and race handling without recording anyone. Run it against the exact
+candidate source before physical qualification:
+
+```bash
+bash scripts/verify-call-recording.sh --fixtures
+```
+
+After installing the reverse-verified draft artifact, generate the physical checklist without starting a
+recording:
+
+```bash
+ZBS_EYE_CALL_PHYSICAL_GATE=YES \
+  bash scripts/verify-call-recording.sh --physical-preflight
+```
+
+Before checking any row in `build/CallRecordingPhysical/REPORT.md`, add the exact ZIP filename and SHA-256, the
+exact manifest filename and SHA-256, the manifest's full source revision, and the installed app CDHash. They must
+match the pair already accepted by `verify-release-artifact.sh`; a report bound only to "the latest app" or to a
+version number is invalid. Use only synthetic/non-personal speech and keep media, transcripts, logs, and the
+report private.
+
+Every generated checklist row must pass, including short mic-only and mic+system smoke, the 60- and 120-minute
+calls, device/sample-rate changes, sleep/wake, `coreaudiod` listener recovery, app relaunch, helper kill/retry,
+resource measurements, database/chunk/transcript/search/export reconciliation, and seeded log-leak checks.
+For the `0.7.0 (21)` automatic-Call change, the completed report must also explicitly prove:
+
+- an eligible external microphone initiator starts exactly one Call while **Pause Timeline** is active;
+- ChatGPT through Krisp starts one Call, while Krisp alone cannot initiate, name, or keep it alive;
+- an exact `codex_chronicle` microphone pulse creates no Call;
+- an exact user audio exclusion prevents automatic Call admission without removing the app from screen history,
+  and removing that exclusion re-arms current microphone activity;
+- **Audio Off** and privacy pause finish and disarm the active automatic Call, while ending Pause Timeline does
+  neither; reopening the hard gate re-arms without requiring an app restart;
+- detected end saves once after 30 seconds, **End & save** saves once, **This wasn’t a call** erases only that
+  automatic Call, and none of those surfaces offers Undo.
+
+Leave `Pending manual execution` in place until all rows are evidenced against this exact candidate. Notarization,
+unit tests, fixture gates, an earlier build's checklist, or one short Call cannot substitute for this physical gate.
+
 If the draft fails any step, delete the draft, restore the last known-good installed app, fix the defect, and
 advance both version and build before rebuilding. Do not publish a failed candidate or replace bytes under an
 existing version.

@@ -49,6 +49,8 @@ enum CaptureHealthReason: String, Codable, Sendable, Equatable {
     case screenProgressUnverified
     case screenRequestFailed
     case screenRequestTimedOut
+    case screenStreamStopped
+    case screenStreamStalled
     case systemAudioStartFailed
     case systemAudioStartExhausted
     case verifiedProgress
@@ -205,7 +207,7 @@ enum CaptureHealthEvent: Sendable, Equatable {
 struct CaptureHealthReducer: Sendable, Equatable {
     struct Configuration: Sendable, Equatable {
         var staleObservationCount = 3
-        var retryDelaysMs: [Int64] = [0, 1_000, 3_000]
+        var retryDelaysMs: [Int64] = [1_000, 3_000, 10_000]
     }
 
     private enum RecoveryOrigin: Sendable, Equatable {

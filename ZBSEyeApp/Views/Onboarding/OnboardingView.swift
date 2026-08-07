@@ -36,7 +36,7 @@ struct OnboardingView: View {
                 .font(.callout)
             VStack(alignment: .leading, spacing: 10) {
                 bullet("display", "Your screen and its text — every app, window, tab")
-                bullet("mic", "Microphone — your voice (if you enable it)")
+                bullet("mic", "Microphone — when Audio is enabled, eligible apps start a local Call; relays like Krisp only join one")
                 bullet("speaker.wave.2", "System audio — calls, meetings, video (if you enable it)")
             }
             Divider()
@@ -52,7 +52,7 @@ struct OnboardingView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func bullet(_ icon: String, _ text: String) -> some View {
+    private func bullet(_ icon: String, _ text: LocalizedStringKey) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon).frame(width: 22).foregroundStyle(.tint)
             Text(text).font(.callout)

@@ -56,14 +56,18 @@ struct MenuBarContent: View {
             Button(recordingButtonTitle) {
                 env.recording.toggle()
             }
-            if env.recording.isCapturing {
-                // privacy micro-pause: «something sensitive is coming — don't record for 15 minutes»
+            .help("Automatic Calls stay armed until Audio is Off or privacy pause is active.")
+            if env.recording.pausedUntil == nil {
+                // Privacy pause remains available when Timeline capture is already off: automatic
+                // Calls are intentionally independent of the Timeline Record/Pause control.
                 Button("Don't record for 15 minutes") { env.pauseForPrivacy(minutes: 15) }
+            }
+            if env.recording.isCapturing {
                 // manual audio override — force ON/OFF at any moment (wins over the mode for this session)
                 if env.audioSettings.audioMode != .off {
                     Button(audioOverrideTitle) {
                         env.audioSettings.cycleManualOverride()
-                        env.recording.syncAudio()
+                        env.syncAudioConfiguration()
                     }
                 }
             }
@@ -100,10 +104,10 @@ struct MenuBarContent: View {
 
     private var recordingButtonTitle: String {
         if env.recording.lowDiskPaused, env.recording.wantsRecording {
-            return String(localized: "Stop recording")
+            return String(localized: "Stop Timeline capture")
         }
         return env.recording.isCapturing
-            ? String(localized: "Pause")
-            : String(localized: "Start recording")
+            ? String(localized: "Pause Timeline capture")
+            : String(localized: "Start Timeline capture")
     }
 }

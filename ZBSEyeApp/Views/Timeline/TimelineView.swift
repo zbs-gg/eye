@@ -163,12 +163,13 @@ private struct TimelineBody: View {
             Button {
                 env.recording.toggle()
             } label: {
-                Label(env.recording.isCapturing ? "Stop" : "Record",
-                      systemImage: env.recording.isCapturing ? "stop.circle.fill" : "record.circle")
+                Label(timelineRecordingButtonTitle,
+                      systemImage: timelineRecordingButtonStopsIntent ? "stop.circle.fill" : "record.circle")
             }
             .buttonStyle(.borderedProminent)
-            .tint(env.recording.isCapturing ? .red : .accentColor)
-            .animation(reduceMotion ? .none : .snappy(duration: 0.2), value: env.recording.isCapturing)
+            .tint(timelineRecordingButtonStopsIntent ? .red : .accentColor)
+            .help("Automatic Calls stay armed until Audio is Off or privacy pause is active.")
+            .animation(reduceMotion ? .none : .snappy(duration: 0.2), value: timelineRecordingButtonStopsIntent)
 
             HStack(spacing: 4) {
                 Text("\(env.recording.screenFrameCount)")
@@ -183,6 +184,18 @@ private struct TimelineBody: View {
             .help("Moments captured this session")
         }
         .padding(16)
+    }
+
+    private var timelineRecordingButtonStopsIntent: Bool {
+        env.recording.isCapturing
+            || (env.recording.lowDiskPaused && env.recording.wantsRecording)
+    }
+
+    private var timelineRecordingButtonTitle: LocalizedStringKey {
+        if env.recording.lowDiskPaused, env.recording.wantsRecording {
+            return "Stop Timeline"
+        }
+        return env.recording.isCapturing ? "Pause Timeline" : "Record Timeline"
     }
 
     private func openAsk(scope: AskScope) {

@@ -12,6 +12,8 @@ fail() {
 command -v xcodegen >/dev/null || fail "xcodegen is required"
 command -v python3 >/dev/null || fail "python3 is required"
 
+DERIVED_DATA_PATH="${ZBS_EYE_CALL_AUTOMATION_DERIVED_DATA_PATH:-build/CallAutomationDerivedData}"
+
 xcodegen generate >/dev/null
 
 selected=(
@@ -27,7 +29,7 @@ xcodebuild -quiet \
   -project ZBSEye.xcodeproj \
   -scheme ZBSEyeUnitTests \
   -configuration Debug \
-  -derivedDataPath build/DerivedData \
+  -derivedDataPath "$DERIVED_DATA_PATH" \
   CODE_SIGNING_ALLOWED=NO \
   test "${selected[@]}"
 
