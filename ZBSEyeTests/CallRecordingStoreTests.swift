@@ -133,6 +133,92 @@ final class CallRecordingStoreTests: XCTestCase {
         }
     }
 
+    func testAutomaticStartLatchesPermissionGateCycleDuringAudioStart() async throws {
+        let fixture = try CallRecordingStoreFixture(
+            actualSources: CallSourceSelection.none,
+            suspendAudioStart: true
+        )
+        defer { fixture.cleanup() }
+        let store = CallRecordingStore()
+        store.attach(fixture.coordinator)
+        store.requestedSources = { CallSourceSelection(me: true, system: true) }
+        let permissionAdmission = StoreAdmissionFlag()
+        store.automaticStartAdmissionAllowed = { permissionAdmission.value }
+
+        let start = Task { @MainActor in
+            await store.startAutomatic(idempotencyKey: "automatic:permission-race")
+        }
+        await fixture.waitUntilAudioStartIsBlocked()
+        permissionAdmission.value = false
+        store.automaticStartAdmissionChanged(isClosed: true)
+        permissionAdmission.value = true
+        store.automaticStartAdmissionChanged(isClosed: false)
+        await fixture.resumeAudioStart()
+
+        guard case .admissionClosed = await start.value else {
+            return XCTFail("A gate that closed mid-start must release/re-probe after grant.")
+        }
+        XCTAssertFalse(store.isActive)
+        XCTAssertEqual(store.snapshot.phase, .idle)
+    }
+
+    func testAutomaticStartIgnoresOpeningAdmissionEdgeDuringAudioStart() async throws {
+        let fixture = try CallRecordingStoreFixture(
+            actualSources: CallSourceSelection(me: true, system: false),
+            suspendAudioStart: true
+        )
+        defer { fixture.cleanup() }
+        let store = CallRecordingStore()
+        store.attach(fixture.coordinator)
+        store.requestedSources = { CallSourceSelection(me: true, system: false) }
+
+        let start = Task { @MainActor in
+            await store.startAutomatic(idempotencyKey: "automatic:opening-edge")
+        }
+        await fixture.waitUntilAudioStartIsBlocked()
+        store.automaticStartAdmissionChanged(isClosed: false)
+        await fixture.resumeAudioStart()
+
+        guard case .started = await start.value else {
+            return XCTFail("An opening or irrelevant edge must not fragment a healthy start.")
+        }
+        XCTAssertTrue(store.isActive)
+        let stopCount = await fixture.audioStopCount()
+        XCTAssertEqual(stopCount, 0)
+        await store.endAndWait(reason: .user)
+    }
+
+    func testStartScopedLeaseRemainsInvalidAfterAClosingEdgeReopens() async throws {
+        let fixture = try CallRecordingStoreFixture(
+            actualSources: CallSourceSelection(me: true, system: false),
+            suspendAudioStart: true
+        )
+        defer { fixture.cleanup() }
+        let store = CallRecordingStore()
+        store.attach(fixture.coordinator)
+        store.requestedSources = { CallSourceSelection(me: true, system: false) }
+
+        let start = Task { @MainActor in
+            await store.startAutomatic(idempotencyKey: "automatic:start-lease-aba")
+        }
+        await fixture.waitUntilAudioStartIsBlocked()
+        let capturedLease = await fixture.capturedStartAdmissionLease()
+        let lease = try XCTUnwrap(capturedLease)
+        XCTAssertTrue(store.permitsCallAudioStart(lease))
+
+        store.automaticStartAdmissionChanged(isClosed: true)
+        store.automaticStartAdmissionChanged(isClosed: false)
+        XCTAssertFalse(
+            store.permitsCallAudioStart(lease),
+            "A close-and-reopen before sink admission must not validate the stale in-flight start"
+        )
+
+        await fixture.resumeAudioStart()
+        guard case .admissionClosed = await start.value else {
+            return XCTFail("The stale start must be discarded and re-probed after the closing edge")
+        }
+    }
+
     func testConcurrentTerminalEndWaitersJoinTheSamePhysicalStop() async throws {
         let fixture = try CallRecordingStoreFixture(suspendAudioStop: true)
         defer { fixture.cleanup() }
@@ -203,58 +289,124 @@ final class CallRecordingStoreTests: XCTestCase {
         XCTAssertEqual(completions.map(\.1), [true])
     }
 
-    func testAutomaticUndoClaimBlocksDeadlineWhileUndoIsSuspended() async throws {
-        let fixture = try CallRecordingStoreFixture(suspendUndoSoftEnd: true)
+    func testConcurrentAutomaticFinishRequestsShareOnePhysicalStop() async throws {
+        let fixture = try CallRecordingStoreFixture(suspendAudioStop: true)
         defer { fixture.cleanup() }
         let store = CallRecordingStore()
         store.attach(fixture.coordinator)
         store.requestedSources = { CallSourceSelection(me: true, system: false) }
 
         let started = await store.startAutomatic(
-            idempotencyKey: "automatic:undo-wins-deadline"
+            idempotencyKey: "automatic:finish-once"
         )
         let callID = try XCTUnwrap(started.snapshot?.callID)
-        let softEnded = await store.softEndAutomaticAndWait()
-        XCTAssertEqual(softEnded?.phase, .recoveryTail)
-
-        let undoRequest = try XCTUnwrap(store.requestAutomaticUndo())
-        let undoWaiter = Task { @MainActor in
-            await store.undoAutomaticEndAndWait(request: undoRequest)
+        let first = Task { @MainActor in
+            await store.finishAutomaticAndWait(reason: .automatic)
         }
-        await fixture.waitUntilUndoSoftEndIsBlocked()
+        await fixture.waitUntilAudioStopIsBlocked()
 
-        let deadlineCommit = await store.commitAutomaticEndAndWait()
-        XCTAssertNil(
-            deadlineCommit,
-            "The automatic deadline must not join after Undo owns the recovery tail."
-        )
-        let stopCountBeforeUndo = await fixture.audioStopCount()
-        XCTAssertEqual(stopCountBeforeUndo, 0)
-
-        await fixture.resumeUndoSoftEnd()
-        let undone = await undoWaiter.value
-        XCTAssertEqual(undone?.phase, .recording)
-        XCTAssertEqual(undone?.callID, callID)
-        XCTAssertEqual(store.snapshot.phase, .recording)
-
-        let persisted = try await fixture.database.pool.read { db in
-            try XCTUnwrap(CallRow.fetchOne(db, key: callID))
+        var duplicateReturned = false
+        let duplicate = Task { @MainActor in
+            let snapshot = await store.finishAutomaticAndWait(reason: .automatic)
+            duplicateReturned = true
+            return snapshot
         }
-        XCTAssertEqual(persisted.state, .recording)
-        XCTAssertNil(persisted.endTs)
+        await Task.yield()
+        XCTAssertFalse(duplicateReturned)
+
+        await fixture.resumeAudioStop()
+        let firstResult = await first.value
+        let duplicateResult = await duplicate.value
+        XCTAssertEqual(firstResult?.phase, .pendingTranscription)
+        XCTAssertEqual(firstResult?.callID, callID)
+        XCTAssertEqual(duplicateResult, firstResult)
+        let stopCount = await fixture.audioStopCount()
+        XCTAssertEqual(stopCount, 1)
+        let finalJobs = try await fixture.database.pool.read { db in
+            try CallTranscriptJobRow
+                .filter(
+                    Column("callId") == callID
+                        && Column("kind") == CallTranscriptJobKind.final.rawValue
+                )
+                .fetchCount(db)
+        }
+        XCTAssertEqual(finalJobs, 1)
     }
 
-    func testAutomaticDeadlineAdmissionRejectsLateUndoAndAcceptsStrongerIntentMatrix() async throws {
+    func testExternalEndPreflightCompletesBeforePhysicalAudioStop() async throws {
+        let fixture = try CallRecordingStoreFixture()
+        defer { fixture.cleanup() }
+        let store = CallRecordingStore()
+        store.attach(fixture.coordinator)
+        store.requestedSources = { CallSourceSelection(me: true, system: false) }
+        let preflight = StoreAutomaticRejectionPreflight()
+        var observedReason: CallStopReason?
+        store.onEndWillPrepare = { reason in
+            observedReason = reason
+            _ = await preflight.run()
+        }
+
+        let started = await store.startAutomatic(
+            idempotencyKey: "automatic:external-end-preflight"
+        )
+        XCTAssertNotNil(started.snapshot)
+        let end = Task { @MainActor in
+            await store.endAndWait(reason: .privacy)
+        }
+        await preflight.waitUntilBlocked()
+
+        XCTAssertEqual(observedReason, .privacy)
+        let stopsBeforePreflight = await fixture.audioStopCount()
+        XCTAssertEqual(stopsBeforePreflight, 0)
+
+        await preflight.resume(result: true)
+        await end.value
+        let stopsAfterPreflight = await fixture.audioStopCount()
+        XCTAssertEqual(stopsAfterPreflight, 1)
+    }
+
+    func testStrongerUserIntentRunsItsBoundaryHookWhenItJoinsPhysicalStop() async throws {
+        let fixture = try CallRecordingStoreFixture(suspendAudioStop: true)
+        defer { fixture.cleanup() }
+        let store = CallRecordingStore()
+        store.attach(fixture.coordinator)
+        store.requestedSources = { CallSourceSelection(me: true, system: false) }
+        var observedReasons: [CallStopReason] = []
+        store.onEndWillPrepare = { reason in observedReasons.append(reason) }
+
+        let started = await store.startAutomatic(
+            idempotencyKey: "automatic:joined-boundary-hook"
+        )
+        XCTAssertNotNil(started.snapshot)
+        let lowDiskEnd = Task { @MainActor in
+            await store.endAndWait(reason: .lowDisk)
+        }
+        await fixture.waitUntilAudioStopIsBlocked()
+        XCTAssertEqual(observedReasons, [.lowDisk])
+
+        store.end()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        while !observedReasons.contains(.user), ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        XCTAssertEqual(observedReasons, [.lowDisk, .user])
+
+        await fixture.resumeAudioStop()
+        await lowDiskEnd.value
+        XCTAssertEqual(store.snapshot.stopReason, .user)
+    }
+
+    func testAutomaticFinishAcceptsStrongerIntentMatrixBeforeSeal() async throws {
         for disposition: SealedCallEndDisposition in [
             .finish(.user),
             .finish(.privacy),
             .finish(.maintenance),
         ] {
-            try await assertAutomaticDeadlineRejectsUndoAndAccepts(disposition)
+            try await assertAutomaticFinishAccepts(disposition)
         }
     }
 
-    private func assertAutomaticDeadlineRejectsUndoAndAccepts(
+    private func assertAutomaticFinishAccepts(
         _ disposition: SealedCallEndDisposition
     ) async throws {
         let fixture = try CallRecordingStoreFixture(suspendAudioStop: true)
@@ -264,20 +416,14 @@ final class CallRecordingStoreTests: XCTestCase {
         store.requestedSources = { CallSourceSelection(me: true, system: false) }
 
         let started = await store.startAutomatic(
-            idempotencyKey: "automatic:deadline-wins-undo:\(disposition.stopReason.rawValue)"
+            idempotencyKey: "automatic:finish-upgrade:\(disposition.stopReason.rawValue)"
         )
         let callID = try XCTUnwrap(started.snapshot?.callID)
-        let softEnded = await store.softEndAutomaticAndWait()
-        XCTAssertEqual(softEnded?.phase, .recoveryTail)
 
         let automaticCommit = Task { @MainActor in
-            await store.commitAutomaticEndAndWait()
+            await store.finishAutomaticAndWait(reason: .automatic)
         }
         await fixture.waitUntilAudioStopIsBlocked()
-        XCTAssertNil(
-            store.requestAutomaticUndo(),
-            "A late Undo must not cancel the already-admitted deadline owner."
-        )
 
         let strongerEnd = Task<Int64?, Never> { @MainActor in
             switch disposition {
@@ -312,49 +458,6 @@ final class CallRecordingStoreTests: XCTestCase {
             XCTAssertEqual(persisted.state, .interrupted)
             XCTAssertEqual(persisted.degradationReason, "automatic_rejected")
         }
-        let stopCount = await fixture.audioStopCount()
-        XCTAssertEqual(stopCount, 1)
-    }
-
-    func testPrivacyInvalidatesAcceptedUndoWithoutPublishingItsResult() async throws {
-        let fixture = try CallRecordingStoreFixture(suspendUndoSoftEnd: true)
-        defer { fixture.cleanup() }
-        let store = CallRecordingStore()
-        store.attach(fixture.coordinator)
-        store.requestedSources = { CallSourceSelection(me: true, system: false) }
-
-        let started = await store.startAutomatic(
-            idempotencyKey: "automatic:privacy-invalidates-undo"
-        )
-        let callID = try XCTUnwrap(started.snapshot?.callID)
-        let softEnded = await store.softEndAutomaticAndWait()
-        XCTAssertEqual(softEnded?.phase, .recoveryTail)
-
-        let undoRequest = try XCTUnwrap(store.requestAutomaticUndo())
-        let undoWaiter = Task { @MainActor in
-            await store.undoAutomaticEndAndWait(request: undoRequest)
-        }
-        await fixture.waitUntilUndoSoftEndIsBlocked()
-
-        let privacyEnd = Task { @MainActor in
-            await store.endAndWait(reason: .privacy)
-        }
-        await Task.yield()
-        XCTAssertNil(store.requestAutomaticUndo())
-        await fixture.resumeUndoSoftEnd()
-
-        let undone = await undoWaiter.value
-        XCTAssertNil(undone)
-        await privacyEnd.value
-        XCTAssertEqual(store.snapshot.phase, .pendingTranscription)
-        XCTAssertEqual(store.snapshot.stopReason, .privacy)
-        let persisted = try await fixture.database.pool.read { db in
-            try XCTUnwrap(CallRow.fetchOne(db, key: callID))
-        }
-        XCTAssertEqual(
-            persisted.degradationReason,
-            CallStopReason.privacy.persistenceCode
-        )
         let stopCount = await fixture.audioStopCount()
         XCTAssertEqual(stopCount, 1)
     }
@@ -722,6 +825,45 @@ final class CallRecordingStoreTests: XCTestCase {
         )
     }
 
+    func testAutomaticSaveObservesTheSameCallWhenAnotherFinishAlreadySealed() async throws {
+        let fixture = try CallRecordingStoreFixture(
+            suspendAfterSourceTransition: true
+        )
+        defer { fixture.cleanup() }
+        let store = CallRecordingStore()
+        store.attach(fixture.coordinator)
+        store.requestedSources = { CallSourceSelection(me: true, system: false) }
+
+        let started = await store.startAutomatic(
+            idempotencyKey: "automatic:observe-sealed-finish"
+        )
+        let callID = try XCTUnwrap(started.snapshot?.callID)
+        let userEnd = Task { @MainActor in
+            await store.endAndWait(reason: .user)
+        }
+        await fixture.waitUntilAfterSourceTransitionIsBlocked()
+        XCTAssertEqual(store.snapshot.phase, .finalizing)
+        XCTAssertEqual(store.snapshot.callID, callID)
+
+        var observerReturned = false
+        let automaticObserver = Task { @MainActor in
+            let result = await store.finishAutomaticAndWait(reason: .automatic)
+            observerReturned = true
+            return result
+        }
+        await Task.yield()
+        XCTAssertFalse(observerReturned)
+
+        await fixture.resumeAfterSourceTransition()
+        await userEnd.value
+        let observed = await automaticObserver.value
+        XCTAssertEqual(observed?.callID, callID)
+        XCTAssertEqual(observed?.phase, .pendingTranscription)
+        XCTAssertEqual(observed?.stopReason, .user)
+        let stopCount = await fixture.audioStopCount()
+        XCTAssertEqual(stopCount, 1)
+    }
+
     func testQueuedEndWithNoActiveCallCannotLeakReasonIntoNextCall() async throws {
         let fixture = try CallRecordingStoreFixture(suspendAudioStop: true)
         defer { fixture.cleanup() }
@@ -832,19 +974,39 @@ final class CallRecordingStoreTests: XCTestCase {
             idempotencyKey: "automatic:failed-deadline-commit"
         )
         XCTAssertNotNil(started.snapshot)
-        let softEnded = await store.softEndAutomaticAndWait()
-        XCTAssertEqual(softEnded?.phase, .recoveryTail)
         try fixture.database.pool.close()
 
-        let committed = await store.commitAutomaticEndAndWait()
+        let committed = await store.finishAutomaticAndWait(reason: .automatic)
 
         XCTAssertEqual(committed?.phase, .failed)
         XCTAssertEqual(store.snapshot.phase, .failed)
         XCTAssertFalse(store.isActive)
-        XCTAssertFalse(store.canScheduleAutomaticEnd)
         XCTAssertNotNil(store.errorMessage)
         let stopCount = await fixture.audioStopCount()
         XCTAssertEqual(stopCount, 1)
+    }
+
+    func testFailedTerminalPersistenceReportsDidFinishFalse() async throws {
+        let fixture = try CallRecordingStoreFixture()
+        defer { fixture.cleanup() }
+        let store = CallRecordingStore()
+        store.attach(fixture.coordinator)
+        store.requestedSources = { CallSourceSelection(me: true, system: false) }
+        var completions: [(CallStopReason, Bool)] = []
+        store.onEndCompleted = { completions.append(($0, $1)) }
+
+        let started = await store.startAutomatic(
+            idempotencyKey: "automatic:failed-completion-signal"
+        )
+        XCTAssertNotNil(started.snapshot)
+        try fixture.database.pool.close()
+
+        await store.endAndWait(reason: .user)
+
+        XCTAssertEqual(completions.map(\.0), [.user])
+        XCTAssertEqual(completions.map(\.1), [false])
+        XCTAssertEqual(store.snapshot.phase, .failed)
+        XCTAssertNotNil(store.errorMessage)
     }
 
     func testUserEndSignalsSynchronouslyWithoutClassifyingInternalEndsAsUserStops() async throws {
@@ -862,11 +1024,9 @@ final class CallRecordingStoreTests: XCTestCase {
             completionObservedInactive = !store.isActive
         }
 
-        let automaticStart = await store.startAutomatic(idempotencyKey: "automatic:soft-end")
-        let automaticSoftEnd = await store.softEndAutomaticAndWait()
-        let automaticCommit = await store.commitAutomaticEndAndWait()
+        let automaticStart = await store.startAutomatic(idempotencyKey: "automatic:direct-end")
+        let automaticCommit = await store.finishAutomaticAndWait(reason: .automatic)
         XCTAssertNotNil(automaticStart.snapshot)
-        XCTAssertNotNil(automaticSoftEnd)
         XCTAssertNotNil(automaticCommit)
         XCTAssertEqual(userEndRequests, 0)
 
@@ -912,13 +1072,11 @@ private final class CallRecordingStoreFixture {
     let coordinator: CallCoordinator
     private let audio: StoreCallAudio
     private let transition: StoreCallTransitionGate
-    private let undoTransition: StoreCallTransitionGate
 
     init(
         actualSources: CallSourceSelection? = nil,
         suspendAudioStart: Bool = false,
         suspendAudioStop: Bool = false,
-        suspendUndoSoftEnd: Bool = false,
         suspendAfterSourceTransition: Bool = false
     ) throws {
         root = FileManager.default.temporaryDirectory
@@ -931,15 +1089,11 @@ private final class CallRecordingStoreFixture {
             suspendStop: suspendAudioStop
         )
         transition = StoreCallTransitionGate(suspended: suspendAfterSourceTransition)
-        undoTransition = StoreCallTransitionGate(suspended: suspendUndoSoftEnd)
         coordinator = CallCoordinator(
             repository: CallRepository(database: database),
             mediaRoot: root.appendingPathComponent("media", isDirectory: true),
             audio: audio.control(),
             now: { Date(timeIntervalSince1970: 1) },
-            beforeSoftEndUndo: { [undoTransition] in
-                await undoTransition.cross()
-            },
             afterSourceTransition: { [transition] in
                 await transition.cross()
             }
@@ -966,12 +1120,8 @@ private final class CallRecordingStoreFixture {
         await audio.stopCount()
     }
 
-    func waitUntilUndoSoftEndIsBlocked() async {
-        await undoTransition.waitUntilBlocked()
-    }
-
-    func resumeUndoSoftEnd() async {
-        await undoTransition.resume()
+    func capturedStartAdmissionLease() async -> CallAudioStartAdmissionLease? {
+        await audio.capturedStartAdmissionLease()
     }
 
     func waitUntilAfterSourceTransitionIsBlocked() async {
@@ -1067,6 +1217,8 @@ private actor StoreCallTransitionGate {
 
 private actor StoreCallAudio {
     private var sink: CallAudioFrameSink?
+    private var frameAdmission = CallAudioFrameAdmissionLatch()
+    private var lastStartAdmissionLease: CallAudioStartAdmissionLease?
     private let actual: CallSourceSelection?
     private var suspendStart: Bool
     private var startIsBlocked = false
@@ -1091,9 +1243,13 @@ private actor StoreCallAudio {
     nonisolated func control() -> CallAudioControl {
         CallAudioControl(
             installSink: { [weak self] sink in await self?.setSink(sink) },
-            start: { [weak self] requested in
+            start: { [weak self] requested, sinkLease, startAdmissionLease in
                 guard let self else { return .none }
-                return await self.start(requested)
+                return await self.start(
+                    requested,
+                    sinkLease: sinkLease,
+                    startAdmissionLease: startAdmissionLease
+                )
             },
             acceptedTargets: { AudioIngressTargets(me: nil, system: nil) },
             drainGaps: { [] },
@@ -1131,11 +1287,22 @@ private actor StoreCallAudio {
         stops
     }
 
-    private func setSink(_ sink: CallAudioFrameSink?) {
-        self.sink = sink
+    func capturedStartAdmissionLease() -> CallAudioStartAdmissionLease? {
+        lastStartAdmissionLease
     }
 
-    private func start(_ requested: CallSourceSelection) async -> CallSourceSelection {
+    private func setSink(_ sink: CallAudioFrameSink?) -> CallAudioFrameAdmissionLease? {
+        self.sink = sink
+        return frameAdmission.installSink(present: sink != nil)
+    }
+
+    private func start(
+        _ requested: CallSourceSelection,
+        sinkLease: CallAudioFrameAdmissionLease,
+        startAdmissionLease: CallAudioStartAdmissionLease
+    ) async -> CallSourceSelection {
+        lastStartAdmissionLease = startAdmissionLease
+        guard frameAdmission.admit(sinkLease) else { return .none }
         if suspendStart {
             startIsBlocked = true
             let waiters = blockedWaiters

@@ -49,7 +49,7 @@ final class RecordingStore {
                 resumeTask = Task { [weak self] in
                     try? await Task.sleep(for: .seconds(remain))
                     guard !Task.isCancelled, let self else { return }
-                    self.clearPause()
+                    self.clearPrivacyPauseAndNotify()
                     self.healthController?.setSuspension(
                         nil,
                         nowMs: Self.epochMs()
@@ -65,6 +65,12 @@ final class RecordingStore {
     private func clearPause() {
         pausedUntil = nil
         defaults.removeObject(forKey: Self.pausedKey)
+    }
+
+    private func clearPrivacyPauseAndNotify() {
+        let wasPaused = pausedUntil != nil
+        clearPause()
+        if wasPaused { onPrivacyPauseEnded() }
     }
 
     @ObservationIgnored var coordinator: CaptureCoordinator?
@@ -91,11 +97,19 @@ final class RecordingStore {
     /// Called when recording truly stops/pauses (NOT on syncAudio re-sync) — clears the session-scoped
     /// manual audio override. Set from AppEnvironment.
     @ObservationIgnored var onSessionStop: @MainActor () -> Void = {}
+    /// A temporary privacy gate has reopened, either by timeout, Resume now, or an explicit
+    /// recording restart. AppEnvironment uses this exact boundary to re-arm a still-live mic owner.
+    @ObservationIgnored var onPrivacyPauseEnded: @MainActor () -> Void = {}
+    /// Closes automatic Call admission synchronously with the first maintenance lease. This edge
+    /// must be latched before any drain can suspend, otherwise a close-and-reopen wholly inside an
+    /// asynchronous Call start could be missed.
+    @ObservationIgnored var onMaintenanceAdmissionClosed: @MainActor () -> Void = {}
 
     @ObservationIgnored private static let enabledKey = "zbseye.recording.enabled"
 
     /// User's desire (persisted): was "Recording" on at the last exit.
     var wantsRecording: Bool { defaults.bool(forKey: Self.enabledKey) }
+    var maintenancePermitsStart: Bool { maintenanceAdmission.permitsStart }
 
     func toggle() {
         // A low-disk pause still lets the user change intent. First click disarms
@@ -141,7 +155,7 @@ final class RecordingStore {
         } else {
             // a manual turn-on clears the temporary pause (the user changed their mind about waiting)
             resumeTask?.cancel(); resumeTask = nil
-            clearPause()
+            clearPrivacyPauseAndNotify()
             guard canCapture() else {
                 // Honest INTENT toggle: the first click arms it (recording will start itself after permissions
                 // are granted — we say so), a second click DISARMS it (otherwise it can't be canceled).
@@ -206,7 +220,10 @@ final class RecordingStore {
     func acquireMaintenanceLease(
         _ owner: RecordingMaintenanceOwner
     ) -> RecordingMaintenanceLease {
-        maintenanceAdmission.acquire(owner)
+        let wasOpen = maintenanceAdmission.permitsStart
+        let lease = maintenanceAdmission.acquire(owner)
+        if wasOpen { onMaintenanceAdmissionClosed() }
+        return lease
     }
 
     func pauseForMaintenanceAndDrain(
@@ -336,11 +353,12 @@ final class RecordingStore {
     /// Privacy pause from the menubar: stop recording for N minutes, then resume itself.
     /// We don't touch the recording desire (enabledKey) — this is a pause, not a turn-off.
     func pauseFor(minutes: Int) {
-        guard isCapturing, let coordinator else { return }
-        coordinator.stop()
-        audio?.stop()
-        onSessionStop()
-        isCapturing = false
+        if isCapturing {
+            coordinator?.stop()
+            audio?.stop()
+            onSessionStop()
+            isCapturing = false
+        }
         let until = Date().addingTimeInterval(Double(minutes) * 60)
         pausedUntil = until
         defaults.set(until, forKey: Self.pausedKey)
@@ -352,7 +370,7 @@ final class RecordingStore {
         resumeTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Double(minutes) * 60))
             guard !Task.isCancelled, let self else { return }
-            self.clearPause()
+            self.clearPrivacyPauseAndNotify()
             self.healthController?.setSuspension(nil, nowMs: Self.epochMs())
             self.startIfWanted()
         }
@@ -362,7 +380,7 @@ final class RecordingStore {
     func resumeNow() {
         resumeTask?.cancel(); resumeTask = nil
         PrivacyPauseLog.closeLast(atMs: Int64(Date().timeIntervalSince1970 * 1000))
-        clearPause()
+        clearPrivacyPauseAndNotify()
         healthController?.setSuspension(nil, nowMs: Self.epochMs())
         startIfWanted()
     }

@@ -278,6 +278,7 @@ targets:
       - path: ZBSEyeApp/Server/ZBSEyeAPIDTO.swift
       - path: ZBSEyeApp/Search/AskService.swift
       - path: ZBSEyeApp/State/AskStore.swift
+      - path: ZBSEyeApp/State/AutomaticCallCaptureState.swift
       - path: ZBSEyeApp/State/CallRecordingStore.swift
       - path: ZBSEyeApp/State/CallsStore.swift
       - path: ZBSEyeApp/State/CallPlaybackStore.swift
@@ -285,6 +286,7 @@ targets:
       - path: ZBSEyeApp/State/WorkspaceStore.swift
       - path: ZBSEyeApp/Meeting/CallDetectionPolicy.swift
       - path: ZBSEyeApp/Meeting/CallAudioProcessEvidence.swift
+      - path: ZBSEyeApp/Meeting/CoreAudioMicListenerLifecycle.swift
       - path: ZBSEyeApp/Meeting/BrowserCallSurfaceInspector.swift
       - path: ZBSEyeApp/Meeting/NativeCallSurfaceInspector.swift
       - path: ZBSEyeApp/Calls/Diarization/SpeakerDiarizationModelManifest.swift

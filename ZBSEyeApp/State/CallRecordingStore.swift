@@ -19,20 +19,20 @@ enum AutomaticCallStartResult: Sendable {
 
 struct AutomaticCallRejectionRequest: Sendable {
     let callID: Int64
-    fileprivate let task: Task<SealedCallEndDisposition?, Never>
+    fileprivate let task: Task<CallTerminationOutcome, Never>
 }
 
-struct AutomaticCallUndoRequest: Sendable {
-    let callID: Int64
-    fileprivate let generation: UInt64
-    fileprivate let task: Task<CallCoordinatorSnapshot?, Never>
+fileprivate struct CallTerminationOutcome: Sendable {
+    let callID: Int64?
+    let disposition: SealedCallEndDisposition?
+    let snapshot: CallCoordinatorSnapshot
 }
 
 @MainActor
 @Observable
 final class CallRecordingStore {
     private struct TerminationRequest {
-        let task: Task<SealedCallEndDisposition?, Never>
+        let task: Task<CallTerminationOutcome, Never>
         let accepted: Bool
     }
 
@@ -43,33 +43,43 @@ final class CallRecordingStore {
     @ObservationIgnored private var startGeneration: UInt64 = 0
     @ObservationIgnored private var startTask: Task<Void, Never>?
     @ObservationIgnored private var automaticStartAdmissionClosedGeneration: UInt64?
+    @ObservationIgnored private var automaticStartAdmissionGeneration: UInt64 = 0
     @ObservationIgnored private var endJoinedStartGeneration: UInt64?
     @ObservationIgnored private var ending = false
-    @ObservationIgnored private var endTask: Task<SealedCallEndDisposition?, Never>?
+    @ObservationIgnored private var endTask: Task<CallTerminationOutcome, Never>?
     @ObservationIgnored private var pendingEndDisposition: SealedCallEndDisposition?
     @ObservationIgnored private var endJoinOpen = false
     @ObservationIgnored private var terminationCallID: Int64?
     @ObservationIgnored private var endCompletionRequested = false
-    @ObservationIgnored private var automaticUndoGeneration: UInt64 = 0
-    @ObservationIgnored private var automaticUndoTask: Task<CallCoordinatorSnapshot?, Never>?
-    @ObservationIgnored private var automaticUndoCallID: Int64?
+    @ObservationIgnored private var endIntentPreparationTask: Task<Void, Never>?
+    @ObservationIgnored private var endIntentPreparationGeneration: UInt64 = 0
     @ObservationIgnored var requestedSources: @MainActor () -> CallSourceSelection = { .none }
     @ObservationIgnored var admissionAllowed: @MainActor () -> Bool = { true }
+    @ObservationIgnored var automaticStartAdmissionAllowed: @MainActor () -> Bool = { true }
     @ObservationIgnored var onManualStartWhileActive: @MainActor (Int64) -> Void = { _ in }
     @ObservationIgnored var onUserEndRequested: @MainActor () -> Void = {}
+    @ObservationIgnored var onEndWillPrepare:
+        @MainActor @Sendable (CallStopReason) async -> Void = { _ in }
     @ObservationIgnored var onEndCompleted: @MainActor (CallStopReason, Bool) -> Void = { _, _ in }
 
     var isActive: Bool {
         switch snapshot.phase {
-        case .starting, .recording, .recoveryTail, .finalizing: true
+        case .starting, .recording, .finalizing: true
         case .idle, .pendingTranscription, .ready, .readyDegraded, .failed: false
         }
     }
 
-    var canScheduleAutomaticEnd: Bool {
-        snapshot.phase == .recoveryTail
-            && !ending
-            && automaticUndoTask == nil
+    private var hasDurablyFinishedCurrentCall: Bool {
+        Self.isDurablyFinished(snapshot)
+    }
+
+    private static func isDurablyFinished(_ snapshot: CallCoordinatorSnapshot) -> Bool {
+        switch snapshot.phase {
+        case .pendingTranscription, .ready, .readyDegraded:
+            true
+        case .idle, .starting, .recording, .finalizing, .failed:
+            false
+        }
     }
 
     func attach(_ coordinator: CallCoordinator) {
@@ -78,6 +88,26 @@ final class CallRecordingStore {
 
     func setExternalError(_ message: String?) {
         errorMessage = message
+    }
+
+    /// Latches only closing automatic-admission edges across asynchronous audio startup. A gate
+    /// that closes and reopens while CoreAudio/ScreenCaptureKit is suspended must still release and
+    /// re-probe the original detector owner. Opening or unrelated configuration changes must not
+    /// fragment a healthy in-flight start.
+    func automaticStartAdmissionChanged(isClosed: Bool) {
+        guard isClosed else { return }
+        automaticStartAdmissionGeneration &+= 1
+    }
+
+    /// Final synchronous validation used by AppEnvironment immediately before it admits the
+    /// prepared Call sink. This closes the pre-install ABA window that the later post-start check
+    /// can detect but cannot prevent from briefly opening physical audio.
+    func permitsCallAudioStart(_ lease: CallAudioStartAdmissionLease) -> Bool {
+        lease.isScoped
+            && starting
+            && !ending
+            && lease.startGeneration == startGeneration
+            && lease.lifecycleGeneration == automaticStartAdmissionGeneration
     }
 
     /// The lifecycle owner must re-check this after every await before publishing an automatic
@@ -92,7 +122,6 @@ final class CallRecordingStore {
 
     func canPublishAutomaticResume(callID: Int64) -> Bool {
         canPublishAutomaticStart(callID: callID)
-            && automaticUndoTask == nil
     }
 
     func start() {
@@ -119,6 +148,11 @@ final class CallRecordingStore {
         )
         startGeneration &+= 1
         let generation = startGeneration
+        let startAdmissionLease = CallAudioStartAdmissionLease(
+            startGeneration: generation,
+            lifecycleGeneration: automaticStartAdmissionGeneration,
+            isScoped: true
+        )
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
@@ -132,8 +166,12 @@ final class CallRecordingStore {
                     self.snapshot = await coordinator.snapshot()
                     return
                 }
-                self.snapshot = try await coordinator.start(request: requested)
+                self.snapshot = try await coordinator.start(
+                    request: requested,
+                    startAdmissionLease: startAdmissionLease
+                )
             } catch {
+                await self.drainEndIntentPreparations()
                 self.errorMessage = error.localizedDescription
                 self.snapshot = await coordinator.snapshot()
             }
@@ -145,9 +183,13 @@ final class CallRecordingStore {
         guard let coordinator, !isActive, !starting, !ending else {
             return .failed
         }
-        guard admissionAllowed() else { return .admissionClosed }
+        guard admissionAllowed(), automaticStartAdmissionAllowed() else {
+            return .admissionClosed
+        }
         let requested = requestedSources()
-        guard !requested.isEmpty else { return .failed }
+        guard !requested.isEmpty else {
+            return automaticStartAdmissionAllowed() ? .failed : .admissionClosed
+        }
         errorMessage = nil
         starting = true
         snapshot = CallCoordinatorSnapshot(
@@ -160,6 +202,12 @@ final class CallRecordingStore {
         )
         startGeneration &+= 1
         let generation = startGeneration
+        let admissionGeneration = automaticStartAdmissionGeneration
+        let startAdmissionLease = CallAudioStartAdmissionLease(
+            startGeneration: generation,
+            lifecycleGeneration: admissionGeneration,
+            isScoped: true
+        )
         automaticStartAdmissionClosedGeneration = nil
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -170,16 +218,29 @@ final class CallRecordingStore {
                 }
             }
             do {
-                guard self.admissionAllowed() else {
+                guard self.automaticStartAdmissionGeneration == admissionGeneration,
+                      self.admissionAllowed(),
+                      self.automaticStartAdmissionAllowed() else {
                     self.automaticStartAdmissionClosedGeneration = generation
                     self.snapshot = await coordinator.snapshot()
                     return
                 }
                 self.snapshot = try await coordinator.start(
                     request: requested,
-                    idempotencyKey: idempotencyKey
+                    idempotencyKey: idempotencyKey,
+                    startAdmissionLease: startAdmissionLease
                 )
+                if self.automaticStartAdmissionGeneration != admissionGeneration
+                    || !self.automaticStartAdmissionAllowed() {
+                    self.automaticStartAdmissionClosedGeneration = generation
+                }
             } catch {
+                await self.drainEndIntentPreparations()
+                if self.automaticStartAdmissionGeneration != admissionGeneration
+                    || !self.admissionAllowed()
+                    || !self.automaticStartAdmissionAllowed() {
+                    self.automaticStartAdmissionClosedGeneration = generation
+                }
                 self.errorMessage = error.localizedDescription
                 self.snapshot = await coordinator.snapshot()
             }
@@ -192,6 +253,11 @@ final class CallRecordingStore {
         }
         if automaticStartAdmissionClosedGeneration == generation {
             automaticStartAdmissionClosedGeneration = nil
+            if isActive {
+                // Permission/audio admission closed after a physical source managed to start.
+                // Finish that tiny local envelope before the detector releases this owner.
+                await endAndWait(reason: .privacy)
+            }
             return .admissionClosed
         }
         guard startGeneration == generation,
@@ -228,110 +294,31 @@ final class CallRecordingStore {
         onUserEndRequested()
     }
 
-    /// Claims the recovery tail synchronously, before either the detector or the Undo button
-    /// performs an await. An accepted claim closes admission for the 15-second automatic commit.
-    /// Terminal user/privacy/maintenance/rejection requests may still invalidate this claim.
-    func requestAutomaticUndo() -> AutomaticCallUndoRequest? {
-        if let automaticUndoTask,
-           let callID = automaticUndoCallID,
-           !ending,
-           snapshot.phase == .recoveryTail {
-            return AutomaticCallUndoRequest(
-                callID: callID,
-                generation: automaticUndoGeneration,
-                task: automaticUndoTask
-            )
-        }
-        guard let coordinator,
-              !ending,
-              snapshot.phase == .recoveryTail,
-              let callID = snapshot.callID
-        else { return nil }
-
-        automaticUndoGeneration &+= 1
-        let generation = automaticUndoGeneration
-        let task = Task<CallCoordinatorSnapshot?, Never> { @MainActor [weak self] in
-            guard let self,
-                  self.automaticUndoGeneration == generation,
-                  !self.ending,
-                  !Task.isCancelled
-            else { return nil }
-            defer {
-                if self.automaticUndoGeneration == generation {
-                    self.automaticUndoTask = nil
-                    self.automaticUndoCallID = nil
-                }
-            }
-            do {
-                let undone = try await coordinator.undoSoftEnd()
-                guard self.automaticUndoGeneration == generation,
-                      !self.ending,
-                      !Task.isCancelled,
-                      undone.phase == .recording,
-                      undone.callID == callID
-                else { return nil }
-                self.snapshot = undone
-                return undone
-            } catch {
-                guard self.automaticUndoGeneration == generation,
-                      !self.ending,
-                      !Task.isCancelled
-                else { return nil }
-                self.errorMessage = error.localizedDescription
-                let latest = await coordinator.snapshot()
-                guard self.automaticUndoGeneration == generation,
-                      !self.ending,
-                      !Task.isCancelled
-                else { return nil }
-                self.snapshot = latest
-                return nil
-            }
-        }
-        automaticUndoTask = task
-        automaticUndoCallID = callID
-        return AutomaticCallUndoRequest(
-            callID: callID,
-            generation: generation,
-            task: task
-        )
-    }
-
-    func undoAutomaticEndAndWait(
-        request suppliedRequest: AutomaticCallUndoRequest? = nil
-    ) async -> CallCoordinatorSnapshot? {
-        let request: AutomaticCallUndoRequest
-        if let suppliedRequest {
-            request = suppliedRequest
-        } else {
-            guard let created = requestAutomaticUndo() else { return nil }
-            request = created
-        }
-        guard request.generation == automaticUndoGeneration else { return nil }
-        return await request.task.value
-    }
-
-    func softEndAutomaticAndWait() async -> CallCoordinatorSnapshot? {
-        guard let coordinator, snapshot.phase == .recording else { return nil }
-        do {
-            snapshot = try await coordinator.softEnd()
-            return snapshot
-        } catch {
-            errorMessage = error.localizedDescription
-            snapshot = await coordinator.snapshot()
-            return nil
-        }
-    }
-
-    func commitAutomaticEndAndWait() async -> CallCoordinatorSnapshot? {
-        guard snapshot.phase == .recoveryTail,
-              automaticUndoTask == nil
-        else { return nil }
+    /// Directly finishes an automatically-owned recording. The 30-second grace is managed by the
+    /// lifecycle owner while this store and the coordinator remain in `.recording`, so no separate
+    /// tail or undo transition exists.
+    func finishAutomaticAndWait(reason: CallStopReason) async -> CallCoordinatorSnapshot? {
+        guard reason == .automatic || reason == .user else { return nil }
+        let expectedCallID = snapshot.callID ?? terminationCallID
         guard let request = requestTermination(
-            .finish(.automatic),
+            .finish(reason),
             notifyCompletion: false
         ) else { return nil }
-        _ = await request.task.value
-        return snapshot
+        if !request.accepted {
+            // Physical audio teardown may already be sealed by Call Control, Audio Off, privacy,
+            // or another lifecycle owner. The automatic banner must observe that same durable end
+            // instead of falsely reporting a save failure, but it must never claim a later Call.
+            guard let expectedCallID,
+                  terminationCallID == expectedCallID
+            else { return nil }
+            let outcome = await request.task.value
+            guard outcome.callID == expectedCallID,
+                  Self.isDurablyFinished(outcome.snapshot)
+            else { return nil }
+            return outcome.snapshot
+        }
+        let outcome = await request.task.value
+        return outcome.snapshot
     }
 
     /// A false-call rejection is accepted only before physical teardown starts. Its asynchronous
@@ -358,8 +345,8 @@ final class CallRecordingStore {
     func rejectAutomaticAndWait(
         request: AutomaticCallRejectionRequest
     ) async -> Int64? {
-        let disposition = await request.task.value
-        return disposition == .rejectAutomatic ? request.callID : nil
+        let outcome = await request.task.value
+        return outcome.disposition == .rejectAutomatic ? request.callID : nil
     }
 
     func endAndWait(reason: CallStopReason) async {
@@ -373,12 +360,6 @@ final class CallRecordingStore {
         notifyCompletion: Bool = true,
         preflight: (@MainActor @Sendable () async -> Bool)? = nil
     ) -> TerminationRequest? {
-        switch requested {
-        case .finish(.automatic):
-            guard automaticUndoTask == nil else { return nil }
-        case .finish, .rejectAutomatic:
-            invalidateAutomaticUndo()
-        }
         if let endTask {
             guard preflight == nil else {
                 return TerminationRequest(task: endTask, accepted: false)
@@ -387,6 +368,7 @@ final class CallRecordingStore {
                 pendingEndDisposition =
                     pendingEndDisposition?.merged(with: requested) ?? requested
                 endCompletionRequested = endCompletionRequested || notifyCompletion
+                enqueueEndIntentPreparation(for: requested)
                 return TerminationRequest(task: endTask, accepted: true)
             }
             return TerminationRequest(task: endTask, accepted: false)
@@ -398,8 +380,16 @@ final class CallRecordingStore {
         endCompletionRequested = notifyCompletion
         terminationCallID = snapshot.callID
         endJoinedStartGeneration = startGeneration
-        let task = Task<SealedCallEndDisposition?, Never> { @MainActor [weak self] in
-            guard let self else { return nil }
+        enqueueEndIntentPreparation(for: requested)
+        let task = Task<CallTerminationOutcome, Never> { @MainActor [weak self] in
+            guard let self else {
+                return CallTerminationOutcome(
+                    callID: nil,
+                    disposition: nil,
+                    snapshot: .idle
+                )
+            }
+            var completedCallID = self.terminationCallID ?? self.snapshot.callID
             var sealedDisposition: SealedCallEndDisposition?
             defer {
                 self.ending = false
@@ -407,14 +397,16 @@ final class CallRecordingStore {
                 self.endTask = nil
                 self.pendingEndDisposition = nil
                 self.terminationCallID = nil
+                self.endIntentPreparationTask = nil
                 let notifyCompletion = self.endCompletionRequested
                 self.endCompletionRequested = false
                 if notifyCompletion,
                    case let .finish(reason) = sealedDisposition {
-                    self.onEndCompleted(reason, !self.isActive && !self.starting)
+                    self.onEndCompleted(reason, self.hasDurablyFinishedCurrentCall)
                 }
             }
             if let startTask = self.startTask { await startTask.value }
+            completedCallID = self.snapshot.callID ?? completedCallID
             if let preflight {
                 let preflightSucceeded = await preflight()
                 if preflightSucceeded {
@@ -422,19 +414,30 @@ final class CallRecordingStore {
                         self.pendingEndDisposition?.merged(with: requested) ?? requested
                 } else if self.pendingEndDisposition == nil {
                     self.endJoinOpen = false
-                    return nil
+                    return CallTerminationOutcome(
+                        callID: completedCallID,
+                        disposition: nil,
+                        snapshot: self.snapshot
+                    )
                 }
             }
             guard self.isActive else {
                 sealedDisposition = self.pendingEndDisposition ?? requested
                 self.endJoinOpen = false
-                return sealedDisposition
+                return CallTerminationOutcome(
+                    callID: completedCallID,
+                    disposition: sealedDisposition,
+                    snapshot: self.snapshot
+                )
             }
             self.errorMessage = nil
             do {
-                let initialReason = self.pendingEndDisposition?.stopReason
-                    ?? requested.stopReason
+                await self.drainEndIntentPreparations()
+                let initialReason = self.pendingEndDisposition?.stopReason ?? requested.stopReason
                 let prepared = try await coordinator.prepareEnd(initialReason: initialReason)
+                // A stronger user/privacy intent can join while physical audio/spool teardown is
+                // suspended. Its detector boundary must finish before this shared end seals.
+                await self.drainEndIntentPreparations()
 
                 // This is the only seal. It happens synchronously on MainActor after every request
                 // accepted during physical teardown, and before the DB/outbox transaction exists.
@@ -448,6 +451,10 @@ final class CallRecordingStore {
                     disposition: sealedDisposition ?? requested
                 )
             } catch {
+                // `prepareEnd` can fail after a stronger terminal intent joined while it was
+                // suspended. Finish that intent's detector/privacy boundary before publishing the
+                // shared failure outcome; otherwise its accepted hook would be silently dropped.
+                await self.drainEndIntentPreparations()
                 self.errorMessage = error.localizedDescription
                 self.snapshot = await coordinator.snapshot()
                 if sealedDisposition == nil {
@@ -455,17 +462,33 @@ final class CallRecordingStore {
                     self.endJoinOpen = false
                 }
             }
-            return sealedDisposition
+            return CallTerminationOutcome(
+                callID: completedCallID,
+                disposition: sealedDisposition,
+                snapshot: self.snapshot
+            )
         }
         endTask = task
         return TerminationRequest(task: task, accepted: true)
     }
 
-    private func invalidateAutomaticUndo() {
-        guard automaticUndoTask != nil else { return }
-        automaticUndoGeneration &+= 1
-        automaticUndoTask?.cancel()
-        automaticUndoTask = nil
-        automaticUndoCallID = nil
+    private func enqueueEndIntentPreparation(for disposition: SealedCallEndDisposition) {
+        guard case let .finish(reason) = disposition else { return }
+        let predecessor = endIntentPreparationTask
+        let callback = onEndWillPrepare
+        endIntentPreparationGeneration &+= 1
+        endIntentPreparationTask = Task { @MainActor in
+            if let predecessor { await predecessor.value }
+            await callback(reason)
+        }
     }
+
+    private func drainEndIntentPreparations() async {
+        while let task = endIntentPreparationTask {
+            let generation = endIntentPreparationGeneration
+            await task.value
+            guard generation != endIntentPreparationGeneration else { return }
+        }
+    }
+
 }
