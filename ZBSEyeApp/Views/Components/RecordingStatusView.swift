@@ -194,9 +194,19 @@ struct RecordingStatusView: View {
             sourceRow(active: false, warn: false, icon: "speaker.slash", text: "Audio: off")
         } else if mode == .meetingsOnly {
             if env.audioSettings.meetingActive {
-                sourceRow(active: true, warn: false, icon: "waveform", text: "Recording this meeting")
+                sourceRow(
+                    active: true,
+                    warn: false,
+                    icon: "waveform",
+                    text: String(localized: "Recording a Call")
+                )
             } else {
-                sourceRow(active: false, warn: false, icon: "ear", text: "Listening for meetings")
+                sourceRow(
+                    active: false,
+                    warn: false,
+                    icon: "ear",
+                    text: String(localized: "Listening for microphone use")
+                )
             }
         }
     }

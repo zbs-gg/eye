@@ -63,7 +63,7 @@ struct MenuBarContent: View {
                 if env.audioSettings.audioMode != .off {
                     Button(audioOverrideTitle) {
                         env.audioSettings.cycleManualOverride()
-                        env.recording.syncAudio()
+                        env.syncAudioConfiguration()
                     }
                 }
             }

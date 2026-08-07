@@ -6,65 +6,123 @@ import SwiftUI
 struct AutomaticCallBannerView: View {
     let state: AutomaticCallBannerState
     let rejectionInProgress: Bool
+    let onEndAndSave: () -> Void
     let onReject: () -> Void
-    let onUndo: () -> Void
+    let onNeverAutoRecord: (AutomaticCallExclusionTarget) -> Void
+    @State private var pendingNeverAutoRecordTarget: AutomaticCallExclusionTarget?
 
     var body: some View {
-        HStack(spacing: 12) {
-            Label(title, systemImage: icon)
-                .font(.callout.weight(.medium))
-            if let detail {
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                message
+                Spacer(minLength: 8)
+                horizontalActions
             }
-            Spacer(minLength: 8)
-            switch state.phase {
-            case .started, .endingGrace:
-                Button("Not a call", role: .destructive, action: onReject)
-                    .disabled(rejectionInProgress)
-                    .help("Stop and permanently remove only this automatically detected call")
-            case .endedUndo:
-                Button("Undo", action: onUndo)
-                    .buttonStyle(.borderedProminent)
-                    .help("Resume the same call without losing its end boundary")
+            VStack(alignment: .leading, spacing: 10) {
+                message
+                ViewThatFits(in: .horizontal) {
+                    horizontalActions
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    verticalActions
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
         .background(tint.opacity(0.10))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(title)
-    }
-
-    private var title: LocalizedStringKey {
-        switch state.phase {
-        case .started: "Call recording started"
-        case .endingGrace: "Call may have ended"
-        case .endedUndo: "Call ended automatically"
+        .accessibilityLabel(state.presentation.title)
+        .confirmationDialog(
+            Text(neverAutoRecordConfirmationTitle),
+            isPresented: Binding(
+                get: { pendingNeverAutoRecordTarget != nil },
+                set: { isPresented in
+                    if !isPresented { pendingNeverAutoRecordTarget = nil }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let target = pendingNeverAutoRecordTarget {
+                Button(
+                    String(localized: "Never auto-record \(target.displayName)"),
+                    role: .destructive
+                ) {
+                    pendingNeverAutoRecordTarget = nil
+                    onNeverAutoRecord(target)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The current Call will be saved. Future microphone use by this app won’t start a Call. Screen recording is unchanged.")
         }
     }
 
-    private var detail: LocalizedStringKey? {
-        switch state.phase {
-        case .started: "Eye found call controls and microphone use."
-        case .endingGrace: "Waiting 30 seconds for the call to resume."
-        case .endedUndo: "Undo is available for 15 seconds. Recording is not split."
+    private var message: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Label(state.presentation.title, systemImage: state.presentation.icon)
+                .font(.callout.weight(.medium))
+            Text(state.presentation.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .layoutPriority(1)
+    }
+
+    private var horizontalActions: some View {
+        HStack(spacing: 8) {
+            actionButtons
         }
     }
 
-    private var icon: String {
-        switch state.phase {
-        case .started: "phone.badge.waveform"
-        case .endingGrace: "timer"
-        case .endedUndo: "checkmark.circle"
+    private var verticalActions: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            actionButtons
         }
+    }
+
+    @ViewBuilder
+    private var actionButtons: some View {
+        if let target = state.neverAutoRecordTarget,
+           let exclusionTitle = state.neverAutoRecordActionTitle {
+            Button(exclusionTitle) {
+                pendingNeverAutoRecordTarget = target
+            }
+            .disabled(rejectionInProgress)
+            .lineLimit(2)
+            .help("Save this Call and stop this app from starting automatic Calls")
+        }
+        if state.presentation.showsEndAndSave {
+            Button("End & save", action: onEndAndSave)
+                .buttonStyle(.borderedProminent)
+                .disabled(rejectionInProgress)
+                .help("Finish recording and save this call now")
+        }
+        if let rejectActionTitle = state.presentation.rejectActionTitle {
+            Button(rejectActionTitle, role: .destructive, action: onReject)
+                .disabled(rejectionInProgress)
+                .help("Stop and permanently remove only this automatically detected call")
+        }
+        if state.phase == .finalizing || rejectionInProgress {
+            ProgressView().controlSize(.small)
+        }
+    }
+
+    private var neverAutoRecordConfirmationTitle: String {
+        guard let target = pendingNeverAutoRecordTarget else {
+            return String(localized: "Never auto-record this app?")
+        }
+        return String(localized: "Never auto-record \(target.displayName)?")
     }
 
     private var tint: Color {
-        switch state.phase {
-        case .started: .green
-        case .endingGrace, .endedUndo: .orange
+        switch state.presentation.tone {
+        case .positive: .green
+        case .warning: .orange
+        case .neutral: .secondary
+        case .error: .red
         }
     }
 }
@@ -74,18 +132,22 @@ struct AutomaticCallBannerView: View {
 @MainActor
 final class AutomaticCallPopupPresenter {
     typealias Action = @MainActor () -> Void
+    typealias ExclusionAction = @MainActor (AutomaticCallExclusionTarget) -> Void
 
+    private let onEndAndSave: Action
     private let onReject: Action
-    private let onUndo: Action
+    private let onNeverAutoRecord: ExclusionAction
     private var panel: AutomaticCallPopupPanel?
     private var hostingView: FirstMouseHostingView<AutomaticCallPopupContent>?
 
     init(
+        onEndAndSave: @escaping Action,
         onReject: @escaping Action,
-        onUndo: @escaping Action
+        onNeverAutoRecord: @escaping ExclusionAction
     ) {
+        self.onEndAndSave = onEndAndSave
         self.onReject = onReject
-        self.onUndo = onUndo
+        self.onNeverAutoRecord = onNeverAutoRecord
     }
 
     func update(
@@ -100,18 +162,24 @@ final class AutomaticCallPopupPresenter {
         let content = AutomaticCallPopupContent(
             state: state,
             rejectionInProgress: rejectionInProgress,
+            onEndAndSave: onEndAndSave,
             onReject: onReject,
-            onUndo: onUndo
+            onNeverAutoRecord: onNeverAutoRecord
         )
         let panel = panel ?? makePanel(content: content)
         hostingView?.rootView = content
-        position(panel)
+        position(panel, state: state)
         // Unlike makeKeyAndOrderFront, this does not activate Eye or open its main window.
         panel.orderFrontRegardless()
     }
 
     private func makePanel(content: AutomaticCallPopupContent) -> AutomaticCallPopupPanel {
-        let contentRect = NSRect(x: 0, y: 0, width: 520, height: 82)
+        let contentRect = NSRect(
+            x: 0,
+            y: 0,
+            width: AutomaticCallPopupGeometry.targetWidth,
+            height: AutomaticCallPopupGeometry.wideHeight
+        )
         let panel = AutomaticCallPopupPanel(
             contentRect: contentRect,
             styleMask: [.nonactivatingPanel, .borderless],
@@ -142,18 +210,27 @@ final class AutomaticCallPopupPresenter {
         return panel
     }
 
-    private func position(_ panel: NSPanel) {
+    private func position(_ panel: NSPanel, state: AutomaticCallBannerState) {
         let pointer = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { $0.frame.contains(pointer) }
             ?? NSScreen.main
             ?? NSScreen.screens.first
         guard let visibleFrame = screen?.visibleFrame else { return }
-        let frame = panel.frame
-        panel.setFrameOrigin(
-            NSPoint(
-                x: visibleFrame.midX - frame.width / 2,
-                y: visibleFrame.maxY - frame.height - 18
-            )
+        let geometry = AutomaticCallPopupGeometry.fit(
+            visibleX: visibleFrame.minX,
+            visibleY: visibleFrame.minY,
+            visibleWidth: visibleFrame.width,
+            visibleHeight: visibleFrame.height,
+            actionCount: state.visibleActionCount
+        )
+        panel.setFrame(
+            NSRect(
+                x: geometry.x,
+                y: geometry.y,
+                width: geometry.width,
+                height: geometry.height
+            ),
+            display: false
         )
     }
 }
@@ -161,17 +238,19 @@ final class AutomaticCallPopupPresenter {
 private struct AutomaticCallPopupContent: View {
     let state: AutomaticCallBannerState
     let rejectionInProgress: Bool
+    let onEndAndSave: AutomaticCallPopupPresenter.Action
     let onReject: AutomaticCallPopupPresenter.Action
-    let onUndo: AutomaticCallPopupPresenter.Action
+    let onNeverAutoRecord: AutomaticCallPopupPresenter.ExclusionAction
 
     var body: some View {
         AutomaticCallBannerView(
             state: state,
             rejectionInProgress: rejectionInProgress,
+            onEndAndSave: onEndAndSave,
             onReject: onReject,
-            onUndo: onUndo
+            onNeverAutoRecord: onNeverAutoRecord
         )
-        .frame(width: 500)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
         .padding(10)
