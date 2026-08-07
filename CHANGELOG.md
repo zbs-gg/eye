@@ -4,6 +4,29 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
 
 ## Unreleased
 
+### Added
+- Any external user application with active microphone input now starts one local automatic Call immediately,
+  including ChatGPT, Krisp, browsers, and unknown helper processes. Public CoreAudio input-running events wake
+  detection promptly, while the existing bounded poll remains as recovery after missed events or `coreaudiod`
+  restarts.
+- Audio settings now include a separate **Don’t auto-record these apps** list. The in-call **Never
+  auto-record [App]** action adds the current app to that list and saves the Call without changing screen
+  capture's **Private apps** list.
+
+### Changed
+- Known meeting surfaces now enrich Call source context instead of gating automatic recording. Multiple
+  microphone owners, helper changes, and audio-device changes remain in one Call; microphone and system audio
+  are both requested, and an unavailable track is reported as degraded.
+- Automatic ending keeps the active Call open for 30 seconds. **End & save** commits it immediately,
+  **This wasn’t a call** deletes the entire automatic Call, and returning microphone activity cancels the
+  timer and continues the same Call. The timeout saves once, and saving remains entirely local without
+  internet access.
+- The user-facing audio mode is now named **Mic in use** (`Off / Mic in use / Always`); its stored raw value
+  remains compatible with existing preferences.
+
+### Removed
+- Removed the post-save Undo phase, its 15-second recovery tail, and Undo actions from Call surfaces.
+
 ## [0.7.0] — 2026-08-01
 
 ### Added

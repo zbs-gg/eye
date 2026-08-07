@@ -45,6 +45,8 @@ final class AudioCoordinator {
     /// it could enqueue a transcript after the audio legs had acknowledged.
     @ObservationIgnored private var maintenanceSuspended = false
     @ObservationIgnored private var callFrameSink: CallAudioFrameSink?
+    @ObservationIgnored private var callFrameAdmission = CallAudioFrameAdmissionLatch()
+    @ObservationIgnored private var sealedCallFrameBoundary: CallAudioFrameBoundary?
     @ObservationIgnored private var legacyIntent = CallSourceSelection.none
     @ObservationIgnored private var explicitCallIntent = CallSourceSelection.none
     @ObservationIgnored private var systemStarting = false
@@ -291,12 +293,39 @@ final class AudioCoordinator {
 
     func health() async -> TranscriptionHealth { await transcription.snapshot() }
 
-    func installCallFrameSink(_ sink: CallAudioFrameSink?) {
+    func installCallFrameSink(
+        _ sink: CallAudioFrameSink?
+    ) -> CallAudioFrameAdmissionLease? {
         callFrameSink = sink
+        sealedCallFrameBoundary = nil
+        return callFrameAdmission.installSink(present: sink != nil)
     }
 
-    func beginExplicitCall(_ requested: CallSourceSelection) async -> CallSourceSelection {
-        guard !requested.isEmpty, !maintenanceSuspended else { return .none }
+    func admitCallFrameSink(_ lease: CallAudioFrameAdmissionLease) -> Bool {
+        callFrameAdmission.admit(lease)
+    }
+
+    /// Called synchronously from MainActor privacy/session/disk/maintenance boundaries before
+    /// their asynchronous teardown starts. Already accepted frames through the frozen boundary
+    /// may still drain to the Call; later frames are consumed-and-dropped instead of leaking into
+    /// either the closing Call or the ordinary Timeline pipeline.
+    func closeCallFrameAdmission() {
+        if callFrameSink != nil, sealedCallFrameBoundary == nil {
+            sealedCallFrameBoundary = CallAudioFrameBoundary(
+                targets: liveAcceptedIngressTargets()
+            )
+        }
+        callFrameAdmission.close()
+    }
+
+    func beginExplicitCall(
+        _ requested: CallSourceSelection,
+        sinkLease: CallAudioFrameAdmissionLease
+    ) async -> CallSourceSelection {
+        guard !requested.isEmpty,
+              !maintenanceSuspended,
+              callFrameAdmission.isOpen(for: sinkLease)
+        else { return .none }
         explicitCallIntent = requested
         ensurePhysicalSources()
 
@@ -307,6 +336,10 @@ final class AudioCoordinator {
                   !systemRunning, !systemStartFailed {
                 try? await Task.sleep(for: .milliseconds(25))
             }
+        }
+        guard callFrameAdmission.isOpen(for: sinkLease) else {
+            explicitCallIntent = .none
+            return .none
         }
         let actual = CallSourceSelection(
             me: requested.me && micRunning,
@@ -347,6 +380,14 @@ final class AudioCoordinator {
     }
 
     func acceptedIngressTargets() -> AudioIngressTargets {
+        CallAudioFinalizationTargetPolicy.targets(
+            hasCallSink: callFrameSink != nil,
+            sealedBoundary: sealedCallFrameBoundary,
+            liveTargets: liveAcceptedIngressTargets()
+        )
+    }
+
+    private func liveAcceptedIngressTargets() -> AudioIngressTargets {
         AudioIngressTargets(
             me: micEngine.latestAcceptedIngressSequence,
             system: systemEngine.latestAcceptedIngressSequence
@@ -530,8 +571,20 @@ final class AudioCoordinator {
     }
 
     private func routeToCallIfOwned(_ frame: AudioFrame) async -> Bool {
-        guard let callFrameSink else { return false }
-        return await callFrameSink(frame)
+        let sink = callFrameSink
+        let admission = callFrameAdmission.route(hasCallSink: sink != nil)
+        if case .explicitCall = admission {
+            if let sink {
+                _ = await sink(frame)
+            }
+            return true
+        }
+        return await CallAudioFrameRouter.route(
+            frame,
+            admission: admission,
+            sealedBoundary: sealedCallFrameBoundary,
+            sink: sink
+        )
     }
 }
 

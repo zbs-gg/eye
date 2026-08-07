@@ -81,6 +81,13 @@ enum CaptureSessionPolicy {
         return rawValue as? Bool
     }
 
+    /// One authoritative local query shared by screen and explicit Call-audio admission. Unknown
+    /// is intentionally fail-closed at each caller.
+    static func currentSessionLocked() -> Bool? {
+        let sessionInfo = CGSessionCopyCurrentDictionary() as? [String: Any]
+        return sessionLockState(from: sessionInfo)
+    }
+
     /// Start fail-closed: a failed initial query must not probe ScreenCaptureKit
     /// until a later valid session observation confirms an unlocked console.
     static func startupGate(sessionLockedNow: Bool?) -> CaptureSessionGateState {

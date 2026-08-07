@@ -10,8 +10,11 @@ struct MemoryWorkspaceView: View {
                 AutomaticCallBannerView(
                     state: banner,
                     rejectionInProgress: env.automaticCallRejectionInProgress,
+                    onEndAndSave: { env.endDetectedCallAndSave() },
                     onReject: { env.rejectDetectedCall() },
-                    onUndo: { env.undoDetectedCallEnd() }
+                    onNeverAutoRecord: { target in
+                        env.neverAutoRecordDetectedApp(target)
+                    }
                 )
             }
             Divider()

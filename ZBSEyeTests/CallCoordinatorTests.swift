@@ -14,6 +14,11 @@ final class CallCoordinatorTests: XCTestCase {
         XCTAssertEqual(started.phase, .recording)
         XCTAssertEqual(started.me, .recording)
         XCTAssertEqual(started.system, .disabled)
+        let forwardedExactPreparedLease = await fixture.audio.forwardedExactPreparedLease()
+        XCTAssertTrue(
+            forwardedExactPreparedLease,
+            "CallCoordinator must start the sink using the exact lease returned by its installation"
+        )
 
         await fixture.audio.emit(frame(source: .me, epoch: 0, sequence: 0))
         let ended = try await fixture.coordinator.end(
@@ -40,6 +45,39 @@ final class CallCoordinatorTests: XCTestCase {
         XCTAssertEqual(persisted.chunks.map(\.source), [.me])
         XCTAssertEqual(persisted.finals.count, 1)
         XCTAssertTrue(persisted.finals[0].coverageFrozen)
+    }
+
+    func testSealedBoundaryDoesNotWaitForPostCloseEngineWatermarksOrCreateFalseGap() async throws {
+        let fixture = try CallCoordinatorFixture(actual: .init(me: true, system: false))
+        defer { fixture.cleanup() }
+
+        let started = try await fixture.coordinator.start(
+            request: .init(me: true, system: false),
+            idempotencyKey: "start-sealed-boundary"
+        )
+        let callID = try XCTUnwrap(started.callID)
+        await fixture.audio.emit(frame(source: .me, epoch: 0, sequence: 0))
+        await fixture.audio.sealFrameBoundary()
+        await fixture.audio.advanceAcceptedTargetsWithoutRouting(
+            AudioIngressTargets(me: 1_000, system: nil)
+        )
+
+        let ended = try await fixture.coordinator.end(
+            idempotencyKey: "end-sealed-boundary",
+            reason: .user
+        )
+        XCTAssertEqual(ended.phase, .pendingTranscription)
+
+        let persisted = try await fixture.database.pool.read { db in
+            (
+                call: try CallRow.fetchOne(db, key: callID),
+                gaps: try CallSourceGapRow
+                    .filter(Column("callId") == callID)
+                    .fetchAll(db)
+            )
+        }
+        XCTAssertNil(persisted.call?.degradationReason)
+        XCTAssertTrue(persisted.gaps.isEmpty)
     }
 
     func testZeroSourceRefusesWithoutLeavingCallAndDuplicateStartIsIdempotent() async throws {
@@ -266,29 +304,28 @@ final class CallCoordinatorTests: XCTestCase {
         XCTAssertNil(persisted.call.degradationReason)
     }
 
-    func testSoftEndUndoReplaysTailIntoSameCall() async throws {
+    func testEndGraceKeepsWritingIntoSameCallUntilDirectAutomaticEnd() async throws {
         let fixture = try CallCoordinatorFixture(actual: .init(me: false, system: true))
         defer { fixture.cleanup() }
         let started = try await fixture.coordinator.start(
             request: .init(me: false, system: true),
-            idempotencyKey: "soft-undo-start"
+            idempotencyKey: "grace-start"
         )
         let callID = try XCTUnwrap(started.callID)
         await fixture.audio.emit(frame(source: .system, epoch: 0, sequence: 0))
 
-        let soft = try await fixture.coordinator.softEnd()
-        XCTAssertEqual(soft.phase, .recoveryTail)
-        XCTAssertEqual(soft.callID, callID)
+        // The lifecycle grace is deliberately outside CallCoordinator. Audio keeps flowing into
+        // the canonical spool until the timeout (or End & save) performs one direct end.
+        let duringGrace = await fixture.coordinator.snapshot()
+        XCTAssertEqual(duringGrace.phase, .recording)
+        XCTAssertEqual(duringGrace.callID, callID)
         await fixture.audio.emit(frame(source: .system, epoch: 0, sequence: 1))
-
-        let resumed = try await fixture.coordinator.undoSoftEnd()
-        XCTAssertEqual(resumed.phase, .recording)
-        XCTAssertEqual(resumed.callID, callID)
-        await fixture.audio.emit(frame(source: .system, epoch: 0, sequence: 2))
-        _ = try await fixture.coordinator.end(
-            idempotencyKey: "soft-undo-end",
-            reason: .user
+        let ended = try await fixture.coordinator.end(
+            idempotencyKey: "grace-end",
+            reason: .automatic
         )
+        XCTAssertEqual(ended.phase, .pendingTranscription)
+        XCTAssertEqual(ended.stopReason, .automatic)
 
         let persisted = try await fixture.database.pool.read { db in
             (
@@ -301,38 +338,43 @@ final class CallCoordinatorTests: XCTestCase {
             )
         }
         XCTAssertEqual(persisted.calls, 1)
-        XCTAssertEqual(persisted.samples, 480)
+        XCTAssertEqual(persisted.samples, 320)
         let stopCount = await fixture.audio.stopCount()
         XCTAssertEqual(stopCount, 1)
     }
 
-    func testSoftEndCommitDiscardsRecoveryTailAndFreezesCanonicalBoundary() async throws {
+    func testRepeatedAutomaticEndCreatesOneFinalJobAndStopsAudioOnce() async throws {
         let fixture = try CallCoordinatorFixture(actual: .init(me: false, system: true))
         defer { fixture.cleanup() }
         let started = try await fixture.coordinator.start(
             request: .init(me: false, system: true),
-            idempotencyKey: "soft-commit-start"
+            idempotencyKey: "automatic-once-start"
         )
         let callID = try XCTUnwrap(started.callID)
         await fixture.audio.emit(frame(source: .system, epoch: 0, sequence: 0))
 
-        _ = try await fixture.coordinator.softEnd()
-        await fixture.audio.emit(frame(source: .system, epoch: 0, sequence: 1))
-        let committed = try await fixture.coordinator.commitSoftEnd(
-            idempotencyKey: "soft-commit-end"
+        let committed = try await fixture.coordinator.end(
+            idempotencyKey: "automatic-once-end",
+            reason: .automatic
+        )
+        let duplicate = try await fixture.coordinator.end(
+            idempotencyKey: "automatic-duplicate-end",
+            reason: .automatic
         )
 
         XCTAssertEqual(committed.phase, .pendingTranscription)
         XCTAssertEqual(committed.callID, callID)
         XCTAssertEqual(committed.stopReason, .automatic)
-        let samples = try await fixture.database.pool.read { db in
-            try Int64.fetchOne(
-                db,
-                sql: "SELECT COALESCE(SUM(endSample - startSample), 0) FROM call_audio_chunks WHERE callId = ?",
-                arguments: [callID]
-            ) ?? -1
+        XCTAssertEqual(duplicate, committed)
+        let finalJobs = try await fixture.database.pool.read { db in
+            try CallTranscriptJobRow
+                .filter(
+                    Column("callId") == callID
+                        && Column("kind") == CallTranscriptJobKind.final.rawValue
+                )
+                .fetchCount(db)
         }
-        XCTAssertEqual(samples, 160)
+        XCTAssertEqual(finalJobs, 1)
         let stopCount = await fixture.audio.stopCount()
         XCTAssertEqual(stopCount, 1)
     }
@@ -428,6 +470,10 @@ private final class CallCoordinatorFixture {
 private actor FakeCallAudio {
     private let actual: CallSourceSelection
     private var sink: CallAudioFrameSink?
+    private var frameAdmission = CallAudioFrameAdmissionLatch()
+    private var sealedBoundary: CallAudioFrameBoundary?
+    private var installedLease: CallAudioFrameAdmissionLease?
+    private var startedLease: CallAudioFrameAdmissionLease?
     private var targets = AudioIngressTargets(me: nil, system: nil)
     private var gaps: [AudioIngressGap] = []
     private var starts = 0
@@ -440,7 +486,7 @@ private actor FakeCallAudio {
     nonisolated func control() -> CallAudioControl {
         CallAudioControl(
             installSink: { sink in await self.setSink(sink) },
-            start: { _ in await self.didStart() },
+            start: { _, sinkLease, _ in await self.didStart(sinkLease: sinkLease) },
             acceptedTargets: { await self.currentTargets() },
             drainGaps: { await self.takeGaps() },
             stop: { await self.didStop() }
@@ -452,7 +498,18 @@ private actor FakeCallAudio {
         case .me: targets = AudioIngressTargets(me: frame.timing.ingressSequence, system: targets.system)
         case .system: targets = AudioIngressTargets(me: targets.me, system: frame.timing.ingressSequence)
         }
-        _ = await sink?(frame)
+        switch frameAdmission.route(hasCallSink: sink != nil) {
+        case .background:
+            return
+        case .explicitCall:
+            _ = await sink?(frame)
+        case .dropAtBoundary:
+            guard sealedBoundary?.contains(
+                source: frame.timing.source,
+                ingressSequence: frame.timing.ingressSequence
+            ) == true else { return }
+            _ = await sink?(frame)
+        }
     }
 
     func recordGap(_ gap: AudioIngressGap) { gaps.append(gap) }
@@ -462,10 +519,41 @@ private actor FakeCallAudio {
     }
     func startCount() -> Int { starts }
     func stopCount() -> Int { stops }
+    func sealFrameBoundary() {
+        if sealedBoundary == nil {
+            sealedBoundary = CallAudioFrameBoundary(targets: targets)
+        }
+        frameAdmission.close()
+    }
+    func advanceAcceptedTargetsWithoutRouting(_ advanced: AudioIngressTargets) {
+        targets = advanced
+    }
+    func forwardedExactPreparedLease() -> Bool {
+        installedLease != nil && installedLease == startedLease
+    }
 
-    private func setSink(_ sink: CallAudioFrameSink?) { self.sink = sink }
-    private func didStart() -> CallSourceSelection { starts += 1; return actual }
-    private func currentTargets() -> AudioIngressTargets { targets }
+    private func setSink(_ sink: CallAudioFrameSink?) -> CallAudioFrameAdmissionLease? {
+        self.sink = sink
+        sealedBoundary = nil
+        let lease = frameAdmission.installSink(present: sink != nil)
+        if lease != nil { installedLease = lease }
+        return lease
+    }
+    private func didStart(
+        sinkLease: CallAudioFrameAdmissionLease
+    ) -> CallSourceSelection {
+        starts += 1
+        startedLease = sinkLease
+        guard frameAdmission.admit(sinkLease) else { return .none }
+        return actual
+    }
+    private func currentTargets() -> AudioIngressTargets {
+        CallAudioFinalizationTargetPolicy.targets(
+            hasCallSink: sink != nil,
+            sealedBoundary: sealedBoundary,
+            liveTargets: targets
+        )
+    }
     private func takeGaps() -> [AudioIngressGap] { defer { gaps.removeAll() }; return gaps }
     private func didStop() { stops += 1 }
 }

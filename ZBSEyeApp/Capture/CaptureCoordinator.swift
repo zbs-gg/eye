@@ -941,8 +941,7 @@ final class CaptureCoordinator {
     }
 
     private static func currentSessionLocked() -> Bool? {
-        let sessionInfo = CGSessionCopyCurrentDictionary() as? [String: Any]
-        return CaptureSessionPolicy.sessionLockState(from: sessionInfo)
+        CaptureSessionPolicy.currentSessionLocked()
     }
 
     /// The display of the topmost normal window (layer 0) of the process — by intersecting bounds with displays.

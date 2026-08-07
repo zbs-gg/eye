@@ -54,25 +54,30 @@ of duplicate files.
 
 ## Calls without a visible bot
 
-Manual Start, Bookmark, and End work with any call app. In the qualified Chromium path, Eye can also begin
-automatically without an extension or AppleScript. CoreAudio first proves that the browser owns current
-input and output activity; a bounded Accessibility pass then requires a trusted HTTPS origin and the real
-site-specific Leave or End control. A calendar page, podcast, voice message, look-alike domain, or microphone
-alone is not enough.
+Any external application using the microphone starts one local Call immediately. This includes native apps,
+browsers, ChatGPT, Krisp, and unknown helper processes; several microphone owners and device or helper changes
+stay inside the same Call. Known Zoom, Meet, and Teams signals may improve the saved source context, but they
+never decide whether recording is allowed to start. Detection, recording, and saving do not require internet
+access.
 
-| Browser and service | Current status |
-| --- | --- |
-| Chrome, Dia, or Edge × Meet, Zoom Web, or Teams Web | Implemented and fixture-qualified; live-qualified pairs will be named at release |
-| Safari or another browser | Manual Start only |
+Eye requests separate microphone and system-audio tracks. If one track is unavailable, the Call remains
+recording and reports the missing track instead of silently hiding the gap. `Audio Off`, privacy pause,
+critically low disk, and storage relocation remain hard stops.
 
-Detection is local. Its call context retains the normalized trusted service host and an opaque fingerprint
-hash, but not the full URL or path, meeting code, window title, or participant names; detector diagnostics
-log neither private form. The ordinary Timeline capture still records visible screen content and may locally
-retain browser URL, title, and text.
+Eye itself and a narrow list of macOS system daemons are always excluded. **Settings → Audio → Don’t
+auto-record these apps** adds user-selected bundle identifiers to a separate audio exclusion list; this does
+not change the existing **Private apps** list for screen capture. While a Call is recording, **Never
+auto-record [App]** adds that app to the audio list and saves the current Call.
 
-If Eye is wrong, **Not a call** permanently stops and deletes that automatically detected call, then
-suppresses only its current session fingerprint. Separately, after a normal automatic end, **Undo** is
-available for 15 seconds without splitting the recording. Normal ending uses a 30-second grace.
+When microphone activity disappears, Eye keeps the same Call open for a 30-second grace. **End & save**
+finishes it immediately; **This wasn’t a call** stops and permanently deletes the whole automatic Call. If
+the microphone returns during the grace, the timer is cancelled and the same Call continues. With no action,
+Eye saves once after 30 seconds. There is no post-save Undo; saved Calls can be opened or deleted in Calls.
+
+Detection is local. Call context may retain a normalized service host and an opaque fingerprint hash, but
+not the full URL or path, meeting code, window title, or participant names; detector diagnostics log neither
+private form. The ordinary Timeline capture still records visible screen content and may locally retain
+browser URL, title, and text.
 
 Optional Whisper Large V3 Turbo can produce a whole-call transcript after the call. Optional local
 diarization creates anonymous per-call speaker lanes; you may name or correct them for that call. Eye does

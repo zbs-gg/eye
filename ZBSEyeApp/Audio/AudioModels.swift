@@ -127,9 +127,158 @@ struct BoundedAudioIngressGaps: Sendable {
 
 typealias CallAudioFrameSink = @Sendable (AudioFrame) async -> Bool
 
+enum CallAudioFrameRoute: Sendable, Equatable {
+    /// No explicit Call owns the physical leg, so the ordinary Timeline pipeline may consume it.
+    case background
+    /// The current explicit Call sink owns this frame.
+    case explicitCall
+    /// A hard privacy/lifecycle edge closed the Call synchronously. The frame is intentionally
+    /// consumed without reaching either the old Call spool or the background Timeline pipeline.
+    case dropAtBoundary
+}
+
+/// A synchronous MainActor latch in front of the asynchronous Call spool. Closing it does not
+/// detach or reopen a sink: only the final live lifecycle check may admit the exact lease returned
+/// for a newly prepared sink. That prevents unlock/resume or an ABA-stale start from resurrecting
+/// an old Call whose teardown is still suspended in detector or persistence work.
+struct CallAudioFrameAdmissionLatch: Sendable, Equatable {
+    private enum Phase: Sendable, Equatable {
+        case detached
+        case prepared(CallAudioFrameAdmissionLease)
+        case open(CallAudioFrameAdmissionLease)
+        case sealed(CallAudioFrameAdmissionLease)
+    }
+
+    private var phase = Phase.detached
+    private var nextGeneration: UInt64 = 0
+
+    var permitsCallFrames: Bool {
+        if case .open = phase { return true }
+        return false
+    }
+
+    /// Replacing the sink creates a new ABA-safe identity but never admits frames by itself. The
+    /// final live lifecycle check must explicitly admit this exact lease.
+    mutating func installSink(present: Bool) -> CallAudioFrameAdmissionLease? {
+        guard present else {
+            phase = .detached
+            return nil
+        }
+        nextGeneration &+= 1
+        let lease = CallAudioFrameAdmissionLease(generation: nextGeneration)
+        phase = .prepared(lease)
+        return lease
+    }
+
+    @discardableResult
+    mutating func admit(_ lease: CallAudioFrameAdmissionLease) -> Bool {
+        guard case let .prepared(prepared) = phase, prepared == lease else { return false }
+        phase = .open(lease)
+        return true
+    }
+
+    func isOpen(for lease: CallAudioFrameAdmissionLease) -> Bool {
+        guard case let .open(open) = phase else { return false }
+        return open == lease
+    }
+
+    mutating func close() {
+        switch phase {
+        case .detached, .sealed:
+            return
+        case let .prepared(lease), let .open(lease):
+            phase = .sealed(lease)
+        }
+    }
+
+    func route(hasCallSink: Bool) -> CallAudioFrameRoute {
+        guard hasCallSink else { return .background }
+        return permitsCallFrames ? .explicitCall : .dropAtBoundary
+    }
+}
+
+struct CallAudioFrameAdmissionLease: Sendable, Equatable {
+    fileprivate let generation: UInt64
+}
+
+/// Issued by CallRecordingStore before its first asynchronous start operation. Every hard closing
+/// edge advances `lifecycleGeneration`, so a close-and-reopen that happens before sink installation
+/// still invalidates the in-flight start. `unscoped` exists only for lower-level coordinator tests;
+/// AppEnvironment deliberately rejects it.
+struct CallAudioStartAdmissionLease: Sendable, Equatable {
+    let startGeneration: UInt64
+    let lifecycleGeneration: UInt64
+    let isScoped: Bool
+
+    static let unscoped = CallAudioStartAdmissionLease(
+        startGeneration: 0,
+        lifecycleGeneration: 0,
+        isScoped: false
+    )
+}
+
 struct AudioIngressTargets: Sendable, Equatable {
     let me: Int64?
     let system: Int64?
+}
+
+struct CallAudioFrameBoundary: Sendable, Equatable {
+    let targets: AudioIngressTargets
+
+    func contains(source: CallAudioSource, ingressSequence: Int64) -> Bool {
+        let maximum: Int64?
+        switch source {
+        case .me: maximum = targets.me
+        case .system: maximum = targets.system
+        }
+        guard let maximum else { return false }
+        return ingressSequence <= maximum
+    }
+}
+
+enum CallAudioFrameRouter {
+    /// Returns whether the frame is owned by the Call path and therefore must not fall through to
+    /// the ordinary Timeline pipeline. Once admission is sealed, a pre-boundary frame may still be
+    /// offered to the Call sink so an already accepted frame can drain. A closed sink is still a
+    /// consumed Call frame: returning its rejection would leak the frame into Timeline after the
+    /// hard lifecycle/privacy boundary.
+    static func route(
+        _ frame: AudioFrame,
+        admission: CallAudioFrameRoute,
+        sealedBoundary: CallAudioFrameBoundary?,
+        sink: CallAudioFrameSink?
+    ) async -> Bool {
+        switch admission {
+        case .background:
+            return false
+        case .dropAtBoundary:
+            guard let sink,
+                  sealedBoundary?.contains(
+                    source: frame.timing.source,
+                    ingressSequence: frame.timing.ingressSequence
+                  ) == true
+            else { return true }
+            _ = await sink(frame)
+            return true
+        case .explicitCall:
+            guard let sink else { return false }
+            return await sink(frame)
+        }
+    }
+}
+
+enum CallAudioFinalizationTargetPolicy {
+    /// Once a hard boundary is sealed, physical engines may keep accepting frames until teardown.
+    /// Finalization must wait only for the frozen boundary, never for those intentionally dropped
+    /// post-boundary sequences.
+    static func targets(
+        hasCallSink: Bool,
+        sealedBoundary: CallAudioFrameBoundary?,
+        liveTargets: AudioIngressTargets
+    ) -> AudioIngressTargets {
+        if hasCallSink, let sealedBoundary { return sealedBoundary.targets }
+        return liveTargets
+    }
 }
 
 /// One frame from an audio callback. Hardware objects never cross this boundary;

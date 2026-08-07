@@ -3,6 +3,27 @@ import Foundation
 enum CallAudioApplicationKind: String, Hashable, Sendable {
     case native
     case browser
+    case generic
+}
+
+enum CallAudioAutomaticOwnerRole: String, Hashable, Sendable {
+    /// A real microphone consumer. It may start, name, and keep an automatic Call alive.
+    case initiator
+    /// An audio relay that may coexist with a Call but must never own its lifecycle or identity.
+    case relay
+}
+
+enum CallAudioAutomaticOwnerRolePolicy {
+    static let krispRootBundleID = "ai.krisp.krispMac"
+
+    static func role(forBundleID bundleID: String) -> CallAudioAutomaticOwnerRole {
+        isKrispRelayBundleID(bundleID) ? .relay : .initiator
+    }
+
+    static func isKrispRelayBundleID(_ bundleID: String) -> Bool {
+        bundleID == krispRootBundleID
+            || bundleID.hasPrefix("\(krispRootBundleID).")
+    }
 }
 
 struct CallAudioProcessAncestor: Equatable, Sendable {
@@ -15,6 +36,25 @@ struct CallAudioApplicationIdentity: Equatable, Sendable {
     let rootPID: Int32
     let bundleID: String
     let kind: CallAudioApplicationKind
+    /// `bundleID` is a local process identity when CoreAudio cannot expose a real bundle id.
+    /// Keep that distinction so exact user bundle exclusions never accidentally match a fallback.
+    let bundleIDIsSynthetic: Bool
+    /// Safe user-facing fallback only. `proc_name` returns a basename, never an executable path.
+    let displayName: String?
+
+    init(
+        rootPID: Int32,
+        bundleID: String,
+        kind: CallAudioApplicationKind,
+        bundleIDIsSynthetic: Bool = false,
+        displayName: String? = nil
+    ) {
+        self.rootPID = rootPID
+        self.bundleID = bundleID
+        self.kind = kind
+        self.bundleIDIsSynthetic = bundleIDIsSynthetic
+        self.displayName = displayName
+    }
 }
 
 enum CallAudioBrowserRootResolution {
@@ -42,8 +82,39 @@ enum CallAudioBrowserRootResolution {
     }
 }
 
+enum CallAudioVisibleRootResolution {
+    /// Detached app helpers are not always parented by their visible application. Resolve common
+    /// helper namespaces only against an exact bundle id currently exposed by NSWorkspace.
+    static func rootAncestor(
+        audioProcessBundleID: String?,
+        runningApplicationBundleIDs: [Int32: String]
+    ) -> CallAudioProcessAncestor? {
+        guard let audioProcessBundleID else { return nil }
+        let matches = runningApplicationBundleIDs.compactMap { pid, rootBundleID in
+            let isMatch = audioProcessBundleID == rootBundleID
+                || audioProcessBundleID.hasPrefix("\(rootBundleID).helper")
+                || audioProcessBundleID.hasPrefix("\(rootBundleID).Helper")
+                || audioProcessBundleID.hasPrefix("\(rootBundleID).xpc")
+            return isMatch ? (pid, rootBundleID) : nil
+        }
+        // Prefer the longest exact namespace, then a stable PID. `com.example.app.beta` must win
+        // over a simultaneously running `com.example.app`.
+        guard let match = matches.sorted(by: {
+            if $0.1.count != $1.1.count { return $0.1.count > $1.1.count }
+            return $0.0 < $1.0
+        }).first else { return nil }
+        return CallAudioProcessAncestor(
+            pid: match.0,
+            bundleID: match.1,
+            executableName: nil
+        )
+    }
+}
+
 enum CallAudioOwnerResolution {
-    private static let excludedExecutableNames: Set<String> = [
+    /// Exact executable basenames owned by macOS audio/voice infrastructure. Prefix matching is
+    /// deliberately forbidden: a third-party app with a similar name is still a valid mic owner.
+    static let excludedExecutableNames: Set<String> = [
         "replayd",
         "coreaudiod",
         "audiomxd",
@@ -53,6 +124,7 @@ enum CallAudioOwnerResolution {
         "speechsynthesisd",
         "voicetriggerd",
         "voiceover",
+        "codex_chronicle",
     ]
 
     /// Resolve a helper-to-root ancestry captured child-first.
@@ -65,37 +137,67 @@ enum CallAudioOwnerResolution {
     ) -> CallAudioApplicationIdentity? {
         guard let first = ancestors.first,
               first.pid != currentProcessID,
-              !isExcludedExecutable(first.executableName)
+              !isExcludedExecutableName(first.executableName)
         else { return nil }
 
         var nativeCandidate: CallAudioApplicationIdentity?
+        var genericCandidate: CallAudioApplicationIdentity?
         for ancestor in ancestors {
             guard ancestor.pid != currentProcessID else { return nil }
             guard let bundleID = ancestor.bundleID else { continue }
-            if bundleID == "gg.zbs.eye" || bundleID.hasPrefix("gg.zbs.eye.") {
+            if isEyeBundleID(bundleID) {
                 return nil
             }
             if CallSurfaceCatalog.browserBundleIDs.contains(bundleID) {
                 return CallAudioApplicationIdentity(
                     rootPID: ancestor.pid,
                     bundleID: bundleID,
-                    kind: .browser
+                    kind: .browser,
+                    displayName: ancestor.executableName
                 )
             }
             if CallSurfaceCatalog.nativeBundlePrefixes.contains(where: { bundleID.hasPrefix($0) }) {
                 nativeCandidate = CallAudioApplicationIdentity(
                     rootPID: ancestor.pid,
                     bundleID: bundleID,
-                    kind: .native
+                    kind: .native,
+                    displayName: ancestor.executableName
+                )
+            } else {
+                // Walking child-first and retaining the last application identity folds ordinary
+                // helper processes into their visible/root application when ancestry exposes it.
+                genericCandidate = CallAudioApplicationIdentity(
+                    rootPID: ancestor.pid,
+                    bundleID: bundleID,
+                    kind: .generic,
+                    displayName: ancestor.executableName
                 )
             }
         }
-        return nativeCandidate
+        if let nativeCandidate { return nativeCandidate }
+        if let genericCandidate { return genericCandidate }
+
+        // A nil CoreAudio bundle id is not a reason to lose a call. Use only a process basename
+        // (never a path), falling back to one conservative anonymous identity if unavailable.
+        let executableName = first.executableName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stableProcessName = executableName.flatMap { $0.isEmpty ? nil : $0.lowercased() }
+        let identifier = stableProcessName.map { "process:\($0)" } ?? "process:unknown"
+        return CallAudioApplicationIdentity(
+            rootPID: first.pid,
+            bundleID: identifier,
+            kind: .generic,
+            bundleIDIsSynthetic: true,
+            displayName: executableName
+        )
     }
 
-    private static func isExcludedExecutable(_ value: String?) -> Bool {
+    static func isExcludedExecutableName(_ value: String?) -> Bool {
         guard let value else { return false }
         return excludedExecutableNames.contains(value.lowercased())
+    }
+
+    private static func isEyeBundleID(_ value: String) -> Bool {
+        value == "gg.zbs.eye" || value.hasPrefix("gg.zbs.eye.")
     }
 }
 
@@ -107,22 +209,202 @@ struct CallAudioProcessSample: Equatable, Sendable {
     let rootPID: Int32
     let ownerBundleID: String
     let ownerKind: CallAudioApplicationKind
+    let ownerBundleIDIsSynthetic: Bool
+    let ownerDisplayName: String?
     let inputActive: Bool
     let outputActive: Bool
+
+    init(
+        audioObjectID: UInt32,
+        pid: Int32,
+        rootPID: Int32,
+        ownerBundleID: String,
+        ownerKind: CallAudioApplicationKind,
+        ownerBundleIDIsSynthetic: Bool = false,
+        ownerDisplayName: String? = nil,
+        inputActive: Bool,
+        outputActive: Bool
+    ) {
+        self.audioObjectID = audioObjectID
+        self.pid = pid
+        self.rootPID = rootPID
+        self.ownerBundleID = ownerBundleID
+        self.ownerKind = ownerKind
+        self.ownerBundleIDIsSynthetic = ownerBundleIDIsSynthetic
+        self.ownerDisplayName = ownerDisplayName
+        self.inputActive = inputActive
+        self.outputActive = outputActive
+    }
 }
 
 struct CallAudioApplicationGroup: Equatable, Sendable {
     let rootPID: Int32
     let ownerBundleID: String
     let ownerKind: CallAudioApplicationKind
+    let ownerBundleIDIsSynthetic: Bool
+    let ownerDisplayName: String?
     let inputActive: Bool
     let outputActive: Bool
     let memberCount: Int
     let inputAudioObjectIDs: Set<UInt32>
     let outputAudioObjectIDs: Set<UInt32>
 
+    init(
+        rootPID: Int32,
+        ownerBundleID: String,
+        ownerKind: CallAudioApplicationKind,
+        ownerBundleIDIsSynthetic: Bool = false,
+        ownerDisplayName: String? = nil,
+        inputActive: Bool,
+        outputActive: Bool,
+        memberCount: Int,
+        inputAudioObjectIDs: Set<UInt32>,
+        outputAudioObjectIDs: Set<UInt32>
+    ) {
+        self.rootPID = rootPID
+        self.ownerBundleID = ownerBundleID
+        self.ownerKind = ownerKind
+        self.ownerBundleIDIsSynthetic = ownerBundleIDIsSynthetic
+        self.ownerDisplayName = ownerDisplayName
+        self.inputActive = inputActive
+        self.outputActive = outputActive
+        self.memberCount = memberCount
+        self.inputAudioObjectIDs = inputAudioObjectIDs
+        self.outputAudioObjectIDs = outputAudioObjectIDs
+    }
+
     var hasAnyAudioSession: Bool {
         inputActive || outputActive
+    }
+
+    var automaticCallOwnerRole: CallAudioAutomaticOwnerRole {
+        CallAudioAutomaticOwnerRolePolicy.role(forBundleID: ownerBundleID)
+    }
+}
+
+struct CallAudioOwnerKey: Hashable, Sendable {
+    let ownerBundleID: String
+    let syntheticRootPID: Int32?
+
+    init(group: CallAudioApplicationGroup) {
+        ownerBundleID = group.ownerBundleID
+        syntheticRootPID = group.ownerBundleIDIsSynthetic ? group.rootPID : nil
+    }
+}
+
+struct CallAudioSuppressedOwnerState: Equatable, Sendable {
+    let fingerprint: String
+    var idleSince: TimeInterval?
+}
+
+enum CallAudioOwnerSuppressionBoundary {
+    static let minimumStableIdle: TimeInterval = 4
+
+    /// A Call that already spent a stable interval without this owner needs no tombstone when it
+    /// is finally saved. This is what lets the same app begin a genuinely new back-to-back Call.
+    static func stateWhenSuppressing(
+        fingerprint: String,
+        alreadyIdleSince: TimeInterval?,
+        now: TimeInterval,
+        minimumStableIdle: TimeInterval = CallAudioOwnerSuppressionBoundary.minimumStableIdle
+    ) -> CallAudioSuppressedOwnerState? {
+        if let alreadyIdleSince,
+           now - alreadyIdleSince >= minimumStableIdle {
+            return nil
+        }
+        return CallAudioSuppressedOwnerState(
+            fingerprint: fingerprint,
+            idleSince: alreadyIdleSince
+        )
+    }
+
+    /// Each initiating microphone owner proves its own idle boundary. Relay-only processes never
+    /// enter this map, so they cannot keep a real app tombstoned after its microphone becomes idle.
+    static func reconcile(
+        _ states: [CallAudioOwnerKey: CallAudioSuppressedOwnerState],
+        activeOwners: Set<CallAudioOwnerKey>,
+        now: TimeInterval,
+        minimumStableIdle: TimeInterval = CallAudioOwnerSuppressionBoundary.minimumStableIdle
+    ) -> [CallAudioOwnerKey: CallAudioSuppressedOwnerState] {
+        var retained: [CallAudioOwnerKey: CallAudioSuppressedOwnerState] = [:]
+        retained.reserveCapacity(states.count)
+        for (owner, original) in states {
+            var state = original
+            if activeOwners.contains(owner) {
+                state.idleSince = nil
+                retained[owner] = state
+                continue
+            }
+            let idleSince = state.idleSince ?? now
+            guard now - idleSince < minimumStableIdle else { continue }
+            state.idleSince = idleSince
+            retained[owner] = state
+        }
+        return retained
+    }
+}
+
+enum CallAudioAutomaticAdmission {
+    /// Every permitted input process remains observable, including relay-only helpers. This is the
+    /// participant set; callers must use `eligibleInputGroups` for lifecycle ownership.
+    static func participatingInputGroups(
+        from groups: [CallAudioApplicationGroup],
+        excludedBundleIDs: Set<String>
+    ) -> [CallAudioApplicationGroup] {
+        groups.filter { group in
+            group.inputActive
+                && (group.ownerBundleIDIsSynthetic
+                    || !excludedBundleIDs.contains(group.ownerBundleID))
+        }
+    }
+
+    /// User exclusions are exact, case-sensitive bundle ids. Synthetic identities intentionally
+    /// remain eligible because they are not bundle ids and cannot be configured safely by prefix.
+    /// Relay-only owners stay observable through `participatingInputGroups`, but cannot initiate,
+    /// name, or hold an automatic Call.
+    static func eligibleInputGroups(
+        from groups: [CallAudioApplicationGroup],
+        excludedBundleIDs: Set<String>
+    ) -> [CallAudioApplicationGroup] {
+        participatingInputGroups(
+            from: groups,
+            excludedBundleIDs: excludedBundleIDs
+        ).filter { $0.automaticCallOwnerRole == .initiator }
+    }
+
+    static func unsuppressedInputGroups(
+        from groups: [CallAudioApplicationGroup],
+        excludedBundleIDs: Set<String>,
+        suppressedOwners: Set<CallAudioOwnerKey>
+    ) -> [CallAudioApplicationGroup] {
+        eligibleInputGroups(
+            from: groups,
+            excludedBundleIDs: excludedBundleIDs
+        ).filter { !suppressedOwners.contains(CallAudioOwnerKey(group: $0)) }
+    }
+
+    /// Stable deterministic enrichment choice. The detector's activation fingerprint is retained
+    /// independently, so another owner becoming preferable never splits the Call.
+    static func preferredGroup(
+        from groups: [CallAudioApplicationGroup],
+        retaining owner: CallAudioOwnerKey? = nil
+    ) -> CallAudioApplicationGroup? {
+        let initiators = groups.filter { $0.automaticCallOwnerRole == .initiator }
+        if let owner,
+           let retained = initiators.first(where: { CallAudioOwnerKey(group: $0) == owner }) {
+            return retained
+        }
+        return initiators.sorted(by: { lhs, rhs in
+            if lhs.outputActive != rhs.outputActive { return lhs.outputActive && !rhs.outputActive }
+            if lhs.ownerKind != rhs.ownerKind {
+                let rank: [CallAudioApplicationKind: Int] = [.native: 0, .browser: 1, .generic: 2]
+                return rank[lhs.ownerKind, default: 9] < rank[rhs.ownerKind, default: 9]
+            }
+            if lhs.ownerBundleID != rhs.ownerBundleID {
+                return lhs.ownerBundleID < rhs.ownerBundleID
+            }
+            return lhs.rootPID < rhs.rootPID
+        }).first
     }
 }
 
@@ -523,6 +805,7 @@ enum CallAudioProcessGrouping {
         let rootPID: Int32
         let ownerBundleID: String
         let ownerKind: CallAudioApplicationKind
+        let ownerBundleIDIsSynthetic: Bool
     }
 
     static func groups(from samples: [CallAudioProcessSample]) -> [CallAudioApplicationGroup] {
@@ -532,7 +815,8 @@ enum CallAudioProcessGrouping {
                 output: Bool,
                 pids: Set<Int32>,
                 inputObjects: Set<UInt32>,
-                outputObjects: Set<UInt32>
+                outputObjects: Set<UInt32>,
+                displayName: String?
             )
         ] = [:]
 
@@ -540,12 +824,16 @@ enum CallAudioProcessGrouping {
             let key = Key(
                 rootPID: sample.rootPID,
                 ownerBundleID: sample.ownerBundleID,
-                ownerKind: sample.ownerKind
+                ownerKind: sample.ownerKind,
+                ownerBundleIDIsSynthetic: sample.ownerBundleIDIsSynthetic
             )
-            var aggregate = grouped[key] ?? (false, false, [], [], [])
+            var aggregate = grouped[key] ?? (false, false, [], [], [], nil)
             aggregate.input = aggregate.input || sample.inputActive
             aggregate.output = aggregate.output || sample.outputActive
             aggregate.pids.insert(sample.pid)
+            if aggregate.displayName == nil {
+                aggregate.displayName = sample.ownerDisplayName
+            }
             if sample.inputActive {
                 aggregate.inputObjects.insert(sample.audioObjectID)
             }
@@ -560,6 +848,8 @@ enum CallAudioProcessGrouping {
                 rootPID: key.rootPID,
                 ownerBundleID: key.ownerBundleID,
                 ownerKind: key.ownerKind,
+                ownerBundleIDIsSynthetic: key.ownerBundleIDIsSynthetic,
+                ownerDisplayName: aggregate.displayName,
                 inputActive: aggregate.input,
                 outputActive: aggregate.output,
                 memberCount: aggregate.pids.count,

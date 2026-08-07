@@ -941,6 +941,35 @@ extension CallRepository {
         }
     }
 
+    /// Terminal evidence for an idempotent erase retry. Another recovery/retention owner may have
+    /// completed the same durable mutation between attempts; absence of both the call and a pending
+    /// erase means this owner must stop retrying instead of treating `callNotFound` as permanent.
+    func isCallEraseComplete(callID: Int64) async throws -> Bool {
+        try await evidenceStorage.read { db in
+            let callExists = try Int.fetchOne(
+                db,
+                sql: "SELECT 1 FROM calls WHERE id = ? LIMIT 1",
+                arguments: [callID]
+            ) != nil
+            let pendingEraseExists = try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT 1 FROM call_media_mutations
+                    WHERE callId = ? AND kind = ? AND state NOT IN (?, ?, ?)
+                    LIMIT 1
+                    """,
+                arguments: [
+                    callID,
+                    CallMediaMutationKind.erase.rawValue,
+                    CallMediaMutationState.completed.rawValue,
+                    CallMediaMutationState.rolledBack.rawValue,
+                    CallMediaMutationState.failed.rawValue,
+                ]
+            ) != nil
+            return !callExists && !pendingEraseExists
+        }
+    }
+
     func referencedCallMediaPaths() async throws -> Set<String> {
         try await evidenceStorage.read { db in
             Set(try String.fetchAll(db, sql: "SELECT relativePath FROM call_audio_chunks"))

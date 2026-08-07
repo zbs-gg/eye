@@ -17,10 +17,21 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
         }
     }
 
+    private var sessionPolicySource: String {
+        get throws {
+            return try String(
+                contentsOf: projectRoot.appending(path: "ZBSEyeApp/Capture/CaptureSessionPolicy.swift"),
+                encoding: .utf8
+            )
+        }
+    }
+
     func testStartSeedsAConservativeGateFromTheCurrentSession() throws {
         let source = try coordinatorSource
+        let policySource = try sessionPolicySource
 
-        XCTAssertTrue(source.contains("CGSessionCopyCurrentDictionary"))
+        XCTAssertTrue(source.contains("CaptureSessionPolicy.currentSessionLocked()"))
+        XCTAssertTrue(policySource.contains("CGSessionCopyCurrentDictionary"))
         XCTAssertTrue(source.contains("CaptureSessionPolicy.startupGate"))
         XCTAssertTrue(source.contains("applySessionGate(initialSessionGate)"))
         XCTAssertTrue(source.contains("if initialSessionGate.isOpen { trigger() }"))

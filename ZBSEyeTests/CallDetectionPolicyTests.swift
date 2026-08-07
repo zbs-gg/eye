@@ -1,7 +1,7 @@
 import XCTest
 
 final class CallDetectionPolicyTests: XCTestCase {
-    func testNativeCallNeedsMicrophoneAndIndependentCallMarker() {
+    func testAnyNativeMicrophoneOwnerStartsWithoutCallMarker() {
         var policy = CallDetectionPolicy()
 
         XCTAssertEqual(
@@ -17,7 +17,81 @@ final class CallDetectionPolicyTests: XCTestCase {
         voiceMessage.now = 20
         voiceMessage.monotonicNow = 20
         var secondPolicy = CallDetectionPolicy()
-        XCTAssertEqual(secondPolicy.reduce(voiceMessage), .none)
+        XCTAssertEqual(
+            secondPolicy.reduce(voiceMessage),
+            .start(fingerprint: "telegram-voice-message")
+        )
+    }
+
+    func testMuteStartsGraceAndUnmuteRecoversTheSameFingerprint() {
+        var policy = CallDetectionPolicy()
+        let started = native(
+            bundleID: "us.zoom.xos",
+            marker: .nativeCallControls,
+            fingerprint: "zoom-muted"
+        )
+        XCTAssertEqual(policy.reduce(started), .start(fingerprint: "zoom-muted"))
+
+        var outputOnly = started
+        outputOnly.microphoneAudioActive = false
+        outputOnly.systemAudioActive = true
+        XCTAssertEqual(policy.reduce(outputOnly), .strongEnd(fingerprint: "zoom-muted"))
+
+        var controlsOnly = outputOnly
+        controlsOnly.systemAudioActive = false
+        XCTAssertEqual(policy.reduce(controlsOnly), .strongEnd(fingerprint: "zoom-muted"))
+
+        var unmuted = started
+        unmuted.now = 20
+        unmuted.monotonicNow = 20
+        XCTAssertEqual(policy.reduce(unmuted), .activity(fingerprint: "zoom-muted"))
+    }
+
+    func testKrispCannotStartOrHoldCallAfterChatGPTInitiatorDisappears() {
+        for bundleID in [
+            "ai.krisp.krispMac",
+            "ai.krisp.krispMac.helper.Audio",
+        ] {
+            var relayOnlyPolicy = CallDetectionPolicy()
+            XCTAssertEqual(
+                relayOnlyPolicy.reduce(native(
+                    bundleID: bundleID,
+                    marker: nil,
+                    fingerprint: "krisp-relay"
+                )),
+                .none,
+                "Krisp relay activity must produce zero automatic Calls."
+            )
+        }
+
+        var activePolicy = CallDetectionPolicy()
+        let chatGPT = native(
+            bundleID: "com.openai.codex",
+            marker: nil,
+            fingerprint: "chatgpt-call"
+        )
+        XCTAssertEqual(
+            activePolicy.reduce(chatGPT),
+            .start(fingerprint: "chatgpt-call")
+        )
+
+        var krispStillActive = chatGPT
+        krispStillActive.now = 12
+        krispStillActive.monotonicNow = 12
+        krispStillActive.microphoneOwnerBundleID = "ai.krisp.krispMac"
+        krispStillActive.microphoneOwnerDisplayName = "Krisp"
+        krispStillActive.surface = CallSurfaceEvidence(
+            kind: .generic,
+            ownerBundleID: "ai.krisp.krispMac",
+            trustedOrigin: nil,
+            marker: .microphoneActivity,
+            observedAt: 12
+        )
+        XCTAssertEqual(
+            activePolicy.reduce(krispStillActive),
+            .strongEnd(fingerprint: "chatgpt-call"),
+            "The real initiator disappearing must enter end grace even while Krisp keeps input open."
+        )
     }
 
     func testTelegramCallSurfaceStartsButPlaybackAndCalendarDoNot() {
@@ -60,7 +134,7 @@ final class CallDetectionPolicyTests: XCTestCase {
         XCTAssertEqual(calendarPolicy.reduce(calendar), .none)
     }
 
-    func testBrowserCallRequiresTrustedHTTPSOriginMarkerAndTwoSidedAudio() {
+    func testBrowserMicrophoneStartsBeforeTrustedSurfaceEnrichment() {
         var policy = CallDetectionPolicy()
         XCTAssertEqual(
             policy.reduce(browser(origin: "https://meet.google.com/abc-defg-hij")),
@@ -70,19 +144,22 @@ final class CallDetectionPolicyTests: XCTestCase {
         var copiedTitlePolicy = CallDetectionPolicy()
         XCTAssertEqual(
             copiedTitlePolicy.reduce(browser(origin: nil)),
-            .none
+            .start(fingerprint: "browser-session")
         )
 
         var untrustedPolicy = CallDetectionPolicy()
         XCTAssertEqual(
             untrustedPolicy.reduce(browser(origin: "https://evil.example/meet.google.com")),
-            .none
+            .start(fingerprint: "browser-session")
         )
 
         var oneSidedPolicy = CallDetectionPolicy()
         var oneSided = browser(origin: "https://app.zoom.us/wc/123")
         oneSided.systemAudioActive = false
-        XCTAssertEqual(oneSidedPolicy.reduce(oneSided), .none)
+        XCTAssertEqual(
+            oneSidedPolicy.reduce(oneSided),
+            .start(fingerprint: "browser-session")
+        )
     }
 
     func testQualifiedBrowserAndServiceCrossProductCanStart() {
@@ -112,7 +189,7 @@ final class CallDetectionPolicyTests: XCTestCase {
         }
     }
 
-    func testUnqualifiedBrowsersCannotStart() {
+    func testSafariArcAndOtherBrowsersStartFromMicrophoneActivity() {
         for bundleID in [
             "com.apple.Safari",
             "company.thebrowser.Browser",
@@ -122,8 +199,8 @@ final class CallDetectionPolicyTests: XCTestCase {
             var policy = CallDetectionPolicy()
             XCTAssertEqual(
                 policy.reduce(browser(bundleID: bundleID, origin: "https://meet.google.com/abc")),
-                .none,
-                "\(bundleID) is manual-only in 0.5.1"
+                .start(fingerprint: "browser-session"),
+                "\(bundleID) should start without a browser allowlist"
             )
         }
     }
@@ -143,7 +220,7 @@ final class CallDetectionPolicyTests: XCTestCase {
         )
     }
 
-    func testOutputOnlyBrowserAudioStartsGraceAndRecoveryKeepsFingerprint() {
+    func testOutputOnlyBrowserAudioStartsGraceAndMicReturnKeepsTheFingerprint() {
         var policy = CallDetectionPolicy()
         let initial = browser(origin: "https://meet.google.com/abc-defg-hij")
         XCTAssertEqual(policy.reduce(initial), .start(fingerprint: "browser-session"))
@@ -173,8 +250,8 @@ final class CallDetectionPolicyTests: XCTestCase {
         let initial = browser(origin: "https://meet.google.com/abc-defg-hij")
         XCTAssertEqual(policy.reduce(initial), .start(fingerprint: "browser-session"))
 
-        // More than the 30-second end grace plus the 15-second recovery window. The detector only
-        // emits this same-fingerprint evidence while the mic and exact trusted call control remain.
+        // More than the 30-second end grace. The detector emits the same fingerprint while the mic
+        // remains active; output silence is not a session boundary.
         for elapsed in [20.0, 46.0, 90.0] {
             var quietCall = initial
             quietCall.now = elapsed
@@ -200,12 +277,10 @@ final class CallDetectionPolicyTests: XCTestCase {
         )
     }
 
-    func testBrowserAssistantPodcastDictationAndVoiceMessageCannotStart() {
-        let falsePositives: [CallEvidenceSnapshot] = [
+    func testDictationAssistantAndVoiceMessageStartButPlaybackDoesNot() {
+        let microphoneUses: [CallEvidenceSnapshot] = [
             // Dia assistant mic: input, but no output or trusted call surface.
             browserCandidate(bundleID: "company.thebrowser.dia", input: true, output: false),
-            // Podcast/video playback: output only.
-            browserCandidate(bundleID: "com.google.Chrome", input: false, output: true),
             // Browser dictation: microphone only.
             browserCandidate(bundleID: "com.microsoft.edgemac", input: true, output: false),
             // Voice message recording: microphone only, even if the tab happens to be on Meet.
@@ -230,10 +305,64 @@ final class CallDetectionPolicyTests: XCTestCase {
             ),
         ]
 
-        for evidence in falsePositives {
+        for evidence in microphoneUses {
             var policy = CallDetectionPolicy()
-            XCTAssertEqual(policy.reduce(evidence), .none)
+            XCTAssertEqual(
+                policy.reduce(evidence),
+                .start(fingerprint: evidence.fingerprint)
+            )
         }
+
+        var playbackPolicy = CallDetectionPolicy()
+        XCTAssertEqual(
+            playbackPolicy.reduce(
+                browserCandidate(bundleID: "com.google.Chrome", input: false, output: true)
+            ),
+            .none
+        )
+    }
+
+    func testGenericUnknownOwnerStartsImmediatelyAndOwnerSwitchKeepsFingerprint() {
+        var policy = CallDetectionPolicy()
+        let unknown = CallEvidenceSnapshot(
+            now: 10,
+            monotonicNow: 10,
+            microphoneOwnerBundleID: "process:unknown-helper",
+            microphoneOwnerDisplayName: "unknown-helper",
+            surface: CallSurfaceEvidence(
+                kind: .generic,
+                ownerBundleID: "process:unknown-helper",
+                trustedOrigin: nil,
+                marker: .microphoneActivity,
+                observedAt: 10
+            ),
+            microphoneAudioActive: true,
+            systemAudioActive: false,
+            calendarHint: false,
+            isStale: false,
+            fingerprint: "stable-activation"
+        )
+        XCTAssertEqual(
+            policy.reduce(unknown),
+            .start(fingerprint: "stable-activation")
+        )
+
+        var chatGPT = unknown
+        chatGPT.now = 12
+        chatGPT.monotonicNow = 12
+        chatGPT.microphoneOwnerBundleID = "com.openai.codex"
+        chatGPT.microphoneOwnerDisplayName = "ChatGPT"
+        chatGPT.surface = CallSurfaceEvidence(
+            kind: .generic,
+            ownerBundleID: "com.openai.codex",
+            trustedOrigin: nil,
+            marker: .microphoneActivity,
+            observedAt: 12
+        )
+        XCTAssertEqual(
+            policy.reduce(chatGPT),
+            .activity(fingerprint: "stable-activation")
+        )
     }
 
     func testRejectionSuppressesOnlySameFingerprintUntilIdle() {
@@ -251,7 +380,7 @@ final class CallDetectionPolicyTests: XCTestCase {
         idle.surface = nil
         idle.microphoneAudioActive = false
         idle.systemAudioActive = false
-        XCTAssertEqual(policy.reduce(idle), .becameIdle)
+        XCTAssertEqual(policy.reduce(idle), .becameIdle(fingerprint: "zoom-session"))
 
         let restarted = native(
             bundleID: "us.zoom.xos",
@@ -306,7 +435,7 @@ final class CallDetectionPolicyTests: XCTestCase {
             "B remains end evidence for A throughout its grace/tail ownership."
         )
 
-        policy.resetAfterCompletion()
+        policy.reject(fingerprint: "native-a")
         XCTAssertEqual(policy.reduce(callB), .start(fingerprint: "native-b"))
     }
 
@@ -344,7 +473,7 @@ final class CallDetectionPolicyTests: XCTestCase {
             "B cannot be admitted while A still owns the Call Envelope."
         )
 
-        policy.resetAfterCompletion()
+        policy.reject(fingerprint: "browser-session")
         XCTAssertEqual(
             policy.reduce(callB),
             .start(fingerprint: "browser-successor")
@@ -387,6 +516,64 @@ final class CallDetectionPolicyTests: XCTestCase {
         )
     }
 
+    func testDeferredSuccessorKeepsOldOwnerSuppressedUntilEnvelopeClears() {
+        var policy = CallDetectionPolicy()
+        let old = native(
+            bundleID: "us.zoom.xos",
+            marker: .nativeCallControls,
+            fingerprint: "old-call"
+        )
+        XCTAssertEqual(policy.reduce(old), .start(fingerprint: "old-call"))
+        policy.reject(fingerprint: "old-call")
+
+        var successor = native(
+            bundleID: "com.openai.codex",
+            marker: nil,
+            fingerprint: "successor",
+            now: 20
+        )
+        XCTAssertEqual(policy.reduce(successor), .start(fingerprint: "successor"))
+
+        // AppEnvironment cannot open B until A's physical teardown completes. Restoring A's
+        // suppression (instead of resetting policy to idle) prevents A's still-open microphone
+        // from being promoted again while B waits for the one post-finish re-probe.
+        policy.reject(fingerprint: "old-call")
+        var oldStillUsingMic = old
+        oldStillUsingMic.now = 21
+        oldStillUsingMic.monotonicNow = 21
+        XCTAssertEqual(policy.reduce(oldStillUsingMic), .none)
+
+        successor.now = 22
+        successor.monotonicNow = 22
+        XCTAssertEqual(policy.reduce(successor), .start(fingerprint: "successor"))
+    }
+
+    func testOlderSuppressedOwnerCannotRestartAfterANewerCallIsSaved() {
+        var policy = CallDetectionPolicy()
+        let callA = native(
+            bundleID: "com.example.recorder-a",
+            marker: nil,
+            fingerprint: "call-a"
+        )
+        XCTAssertEqual(policy.reduce(callA), .start(fingerprint: "call-a"))
+        policy.reject(fingerprint: "call-a")
+
+        let callB = native(
+            bundleID: "com.openai.codex",
+            marker: nil,
+            fingerprint: "call-b",
+            now: 20
+        )
+        XCTAssertEqual(policy.reduce(callB), .start(fingerprint: "call-b"))
+        policy.reject(fingerprint: "call-b")
+
+        var stillSuppressedA = callA
+        stillSuppressedA.now = 30
+        stillSuppressedA.monotonicNow = 30
+        stillSuppressedA.isRetainedMissing = true
+        XCTAssertEqual(policy.reduce(stillSuppressedA), .none)
+    }
+
     func testSuppressionDoesNotBecomeIdleDuringRetainedAudioRouteGap() {
         var policy = CallDetectionPolicy()
         let call = browser(origin: "https://meet.google.com/abc-defg-hij")
@@ -414,7 +601,7 @@ final class CallDetectionPolicyTests: XCTestCase {
         released.monotonicNow = 30
         released.isRetainedMissing = false
         released.fingerprint = "idle"
-        XCTAssertEqual(policy.reduce(released), .becameIdle)
+        XCTAssertEqual(policy.reduce(released), .becameIdle(fingerprint: "browser-session"))
     }
 
     func testFailedAutomaticStartCanSuppressThenAdmitNextCallAfterIdle() {
@@ -434,7 +621,7 @@ final class CallDetectionPolicyTests: XCTestCase {
         idle.microphoneAudioActive = false
         idle.systemAudioActive = false
         idle.fingerprint = "idle"
-        XCTAssertEqual(policy.reduce(idle), .becameIdle)
+        XCTAssertEqual(policy.reduce(idle), .becameIdle(fingerprint: "browser-session"))
 
         var next = browser(origin: "https://teams.live.com/meet/next")
         next.now = 30
@@ -538,12 +725,12 @@ final class CallDetectionPolicyTests: XCTestCase {
         )
     }
 
-    func testTemporaryCapturePauseCanRearmSameSurfaceAfterCompletionReset() {
+    func testTemporaryCapturePauseIgnoresQueuedOldEvidenceAndRearmsFreshActivation() {
         var policy = CallDetectionPolicy()
         var call = browser(origin: "https://meet.google.com/abc-defg-hij")
         XCTAssertEqual(policy.reduce(call), .start(fingerprint: "browser-session"))
 
-        policy.resetAfterCompletion()
+        policy.reject(fingerprint: "browser-session")
         call.now = 30
         call.monotonicNow = 30
         call.surface = call.surface.map {
@@ -555,7 +742,17 @@ final class CallDetectionPolicyTests: XCTestCase {
                 observedAt: 30
             )
         }
-        XCTAssertEqual(policy.reduce(call), .start(fingerprint: "browser-session"))
+        XCTAssertEqual(
+            policy.reduce(call),
+            .none,
+            "Queued evidence from the released detector identity must stay suppressed."
+        )
+
+        call.fingerprint = "fresh-browser-activation"
+        XCTAssertEqual(
+            policy.reduce(call),
+            .start(fingerprint: "fresh-browser-activation")
+        )
     }
 
     func testRealCaptureFailureRemainsSuppressedWithoutIdle() {
