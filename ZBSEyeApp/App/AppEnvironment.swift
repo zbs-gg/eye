@@ -1063,6 +1063,9 @@ final class AppEnvironment {
                 openIntervals: openCoverage
             )
             self.captureHealthController = captureHealthController
+            // ScreenCaptureKit start/update/stop calls from the persistent
+            // screen stream and the system-audio stream share one FIFO owner.
+            let sckResourceCoordinator = SCKResourceCoordinator()
             captureHealthController.setSnapshotSink { [weak self] snapshot in
                 self?.captureHealth = snapshot
             }
@@ -1084,7 +1087,8 @@ final class AppEnvironment {
             let coordinator = CaptureCoordinator(
                 ingest: ingestService,
                 browserContent: browserContent,
-                healthController: captureHealthController
+                healthController: captureHealthController,
+                resourceCoordinator: sckResourceCoordinator
             )
             coordinator.onFrame = { [weak rec = recording] in rec?.noteFrame() }
             // The independent disk monitor owns transitions. This cycle gate is
@@ -1095,6 +1099,9 @@ final class AppEnvironment {
             }
             coordinator.isIgnoredApp = { [weak self] in self?.privacy.isIgnored($0) ?? false }
             coordinator.ignoredBundleIds = { [weak self] in Set(self?.privacy.ignoredBundleIds ?? []) }
+            privacy.onIgnoredBundleIdsChanged = { [weak coordinator] in
+                coordinator?.privacyExclusionsDidChange()
+            }
             recording.coordinator = coordinator
             // Honest recording: won't start without the critical permissions (instead of a false green dot).
             recording.canCapture = { [weak self] in self?.permissions.allCriticalGranted ?? false }
@@ -1106,7 +1113,8 @@ final class AppEnvironment {
             let audioCoordinator = AudioCoordinator(
                 storage: storage,
                 ingest: ingestService,
-                healthController: captureHealthController
+                healthController: captureHealthController,
+                resourceCoordinator: sckResourceCoordinator
             )
             audioCoordinator.onSegment = { [weak rec = recording] in rec?.noteAudioChunk() }
             recording.audio = audioCoordinator

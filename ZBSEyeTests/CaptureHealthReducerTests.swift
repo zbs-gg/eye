@@ -147,7 +147,7 @@ final class CaptureHealthReducerTests: XCTestCase {
             at: 10
         ).compactMap(\.coverageOpen).first)
         let failureAttempt = failure.reduce(.coverageOpened(failureOpen), at: 11)
-        XCTAssertEqual(failureAttempt.compactMap(\.recoveryAttempt).first?.delayMs, 0)
+        XCTAssertEqual(failureAttempt.compactMap(\.recoveryAttempt).first?.delayMs, 1_000)
         let failureClose = failure.reduce(.observation(.progress(
             leg: .screen,
             generation: failureOpen.generation,
@@ -200,19 +200,19 @@ final class CaptureHealthReducerTests: XCTestCase {
 
         XCTAssertEqual(
             reducer.reduce(.coverageOpened(open), at: 11).compactMap(\.recoveryAttempt).first,
-            .init(leg: .screen, generation: open.generation, attempt: 1, delayMs: 0)
+            .init(leg: .screen, generation: open.generation, attempt: 1, delayMs: 1_000)
         )
         XCTAssertEqual(
             reducer.reduce(.recoveryAttemptFailed(
                 leg: .screen, generation: open.generation, reason: .screenRequestFailed
             ), at: 12).compactMap(\.recoveryAttempt).first?.delayMs,
-            1_000
+            3_000
         )
         XCTAssertEqual(
             reducer.reduce(.recoveryAttemptFailed(
                 leg: .screen, generation: open.generation, reason: .screenRequestFailed
             ), at: 13).compactMap(\.recoveryAttempt).first?.delayMs,
-            3_000
+            10_000
         )
         XCTAssertTrue(reducer.reduce(.recoveryAttemptFailed(
             leg: .screen, generation: open.generation, reason: .screenRequestFailed

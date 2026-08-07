@@ -181,8 +181,12 @@ targets:
       - path: ZBSEyeApp/State/BuiltInModelStore.swift
       - path: ZBSEyeApp/State/RecordingMaintenanceAdmission.swift
       - path: ZBSEyeApp/Capture/CaptureSessionPolicy.swift
+      - path: ZBSEyeApp/Capture/SCKResourceCoordinator.swift
+      - path: ZBSEyeApp/Capture/ScreenStreamPolicy.swift
       - path: ZBSEyeApp/Capture/CaptureConfig.swift
       - path: ZBSEyeApp/Capture/BrowserCapturePolicy.swift
+      - path: ZBSEyeApp/Capture/ScreenshotPriorityYieldGate.swift
+      - path: ZBSEyeApp/Capture/ScreenshotHotkeyMonitor.swift
       - path: ZBSEyeApp/Browser/BrowserSnapshot.swift
       - path: ZBSEyeApp/State/LowDiskGuard.swift
       - path: ZBSEyeApp/State/RecordingStore.swift

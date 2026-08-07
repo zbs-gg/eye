@@ -161,6 +161,9 @@ struct RecordingStatusView: View {
     }
 
     private func captureLabel(_ leg: CaptureLeg, state: CaptureLegState) -> String {
+        if leg == .screen, state == .repairRequired {
+            return String(localized: "Capture needs repair")
+        }
         let source = switch leg {
         case .screen: String(localized: "Screen")
         case .systemAudio: String(localized: "System audio")

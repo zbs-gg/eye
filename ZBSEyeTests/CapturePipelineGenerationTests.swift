@@ -2,167 +2,180 @@ import XCTest
 
 @MainActor
 final class CapturePipelineGenerationTests: XCTestCase {
-    private let baselineContext = CaptureContext(
-        displayID: "display-1",
-        frontmostBundleID: "com.example.editor",
-        focusedWindowID: "window-1",
-        axRevision: 1,
-        inputRevision: 1
-    )
-
-    func testInvalidationRejectsLateCompletionBeforeAdmittingOneReplacement() {
+    func testInvalidationRejectsLateFramesBeforePublishingReplacement() {
         let controller = CaptureHealthController(nowMs: 0)
-        let old = try! XCTUnwrap(controller.beginScreenRequest(nowMs: 1))
+        controller.screenStreamDidStart(generation: 1, nowMs: 1)
+        controller.recordScreenStreamFrame(
+            .init(generation: 1, status: .complete, displayTime: 10),
+            nowMs: 2
+        )
+        let firstProgress = controller.snapshot.legs[.screen]?.lastVerifiedProgressAtMs
 
-        controller.invalidatePipeline(.displayChanged, screenLocked: false, nowMs: 2)
-
-        XCTAssertNil(controller.beginScreenRequest(nowMs: 3))
+        controller.invalidatePipeline(.displayChanged, screenLocked: false, nowMs: 3)
+        controller.recordScreenStreamFrame(
+            .init(generation: 1, status: .complete, displayTime: 11),
+            nowMs: 4
+        )
         XCTAssertEqual(
-            controller.completeScreenRequest(
-                old,
-                result: .success(fingerprint: "old", context: baselineContext, wasDuplicate: false),
-                nowMs: 4
-            ),
-            .rejectedOldGeneration
+            controller.snapshot.legs[.screen]?.lastVerifiedProgressAtMs,
+            firstProgress
         )
 
-        let replacement = try! XCTUnwrap(controller.beginScreenRequest(nowMs: 5))
-        XCTAssertEqual(replacement.pipelineGeneration, old.pipelineGeneration + 1)
-        XCTAssertNil(controller.beginScreenRequest(nowMs: 6))
-        XCTAssertEqual(
-            controller.completeScreenRequest(
-                replacement,
-                result: .success(fingerprint: "new", context: baselineContext, wasDuplicate: false),
-                nowMs: 7
-            ),
-            .accepted
+        controller.screenStreamDidStart(generation: 2, nowMs: 5)
+        controller.recordScreenStreamFrame(
+            .init(generation: 2, status: .idle, displayTime: 1),
+            nowMs: 6
         )
+        XCTAssertEqual(controller.pipelineGeneration, 2)
+        XCTAssertEqual(controller.snapshot.legs[.screen]?.lastVerifiedProgressAtMs, 6)
     }
 
-    func testDisplayWakeAndUnlockInvalidateButWakeWhileLockedAdmitsNothing() {
+    func testWakeWhileLockedCannotPublishAStreamGeneration() {
         let controller = CaptureHealthController(nowMs: 0)
-        let initialGeneration = controller.pipelineGeneration
-
-        controller.invalidatePipeline(.displayChanged, screenLocked: false, nowMs: 1)
-        XCTAssertEqual(controller.pipelineGeneration, initialGeneration + 1)
-
-        controller.invalidatePipeline(.wake, screenLocked: true, nowMs: 2)
-        XCTAssertEqual(controller.pipelineGeneration, initialGeneration + 2)
-        XCTAssertNil(controller.beginScreenRequest(nowMs: 3))
+        controller.invalidatePipeline(.wake, screenLocked: true, nowMs: 1)
+        controller.screenStreamDidStart(generation: 1, nowMs: 2)
+        controller.recordScreenStreamFrame(
+            .init(generation: 1, status: .complete, displayTime: 1),
+            nowMs: 3
+        )
+        XCTAssertNil(controller.snapshot.legs[.screen]?.lastVerifiedProgressAtMs)
 
         controller.invalidatePipeline(.unlock, screenLocked: false, nowMs: 4)
-        XCTAssertEqual(controller.pipelineGeneration, initialGeneration + 3)
-        XCTAssertNotNil(controller.beginScreenRequest(nowMs: 5))
+        controller.screenStreamDidStart(generation: 2, nowMs: 5)
+        controller.recordScreenStreamFrame(
+            .init(generation: 2, status: .complete, displayTime: 2),
+            nowMs: 6
+        )
+        XCTAssertEqual(controller.snapshot.legs[.screen]?.lastVerifiedProgressAtMs, 6)
     }
 
-    func testFailureOriginCanRecoverWithIdenticalValidPixels() {
+    func testDelegateFailureRecoversWithFreshIdenticalPixels() {
         var effects: [CaptureHealthEffect] = []
         let controller = CaptureHealthController(nowMs: 0) { effects.append($0) }
-
-        let failed = try! XCTUnwrap(controller.beginScreenRequest(nowMs: 1))
-        XCTAssertEqual(
-            controller.completeScreenRequest(
-                failed,
-                result: .failure(.screenRequestFailed),
-                nowMs: 2
-            ),
-            .accepted
+        controller.screenStreamDidStart(generation: 1, nowMs: 1)
+        controller.recordScreenStreamFrame(
+            .init(generation: 1, status: .complete, displayTime: 1),
+            nowMs: 2
         )
-        let open = try! XCTUnwrap(effects.openCoverage)
-        controller.coverageDidOpen(open, nowMs: 3)
-        let attempt = try! XCTUnwrap(effects.recoveryAttempt)
-        controller.invalidatePipeline(.recovery, screenLocked: false, nowMs: 3)
+        controller.recordScreenStreamFailure(
+            generation: 1,
+            reason: .screenStreamStopped,
+            nowMs: 3
+        )
+        let open = try! XCTUnwrap(effects.lastOpen)
+        controller.coverageDidOpen(open, nowMs: 4)
+        let attempt = try! XCTUnwrap(effects.lastAttempt)
+        XCTAssertEqual(attempt.delayMs, 1_000)
         XCTAssertTrue(controller.markScreenRecoveryReady(attempt))
 
-        let recovery = try! XCTUnwrap(controller.beginScreenRequest(nowMs: 4))
-        XCTAssertEqual(
-            controller.completeScreenRequest(
-                recovery,
-                result: .success(fingerprint: "same", context: baselineContext, wasDuplicate: false),
-                nowMs: 5
-            ),
-            .accepted
+        controller.screenStreamDidStart(generation: 2, nowMs: 5)
+        // No pixel hash is supplied. A fresh idle compositor event proves that
+        // an unchanged/static screen recovered normally.
+        controller.recordScreenStreamFrame(
+            .init(generation: 2, status: .idle, displayTime: 1),
+            nowMs: 6
         )
-        XCTAssertNotNil(effects.closeCoverage)
+        XCTAssertNotNil(effects.lastClose)
     }
 
-    func testStaleOriginMustAdvanceBeyondContradictedFingerprint() {
+    func testControllerPipelineFailureRetiresActiveGenerationAndOpensRecovery() {
         var effects: [CaptureHealthEffect] = []
         let controller = CaptureHealthController(nowMs: 0) { effects.append($0) }
-
-        completeSuccess(controller, fingerprint: "same", context: baselineContext, nowMs: 1)
-        let changedContext = CaptureContext(
-            displayID: baselineContext.displayID,
-            frontmostBundleID: "com.example.browser",
-            focusedWindowID: "window-2",
-            axRevision: 2,
-            inputRevision: 2
+        controller.screenStreamDidStart(generation: 7, nowMs: 1)
+        controller.recordScreenStreamFrame(
+            .init(generation: 7, status: .complete, displayTime: 1),
+            nowMs: 2
         )
-        completeSuccess(controller, fingerprint: "same", context: changedContext, duplicate: true, nowMs: 2)
-        completeSuccess(controller, fingerprint: "same", context: changedContext, duplicate: true, nowMs: 3)
-        completeSuccess(controller, fingerprint: "same", context: changedContext, duplicate: true, nowMs: 4)
 
-        let open = try! XCTUnwrap(effects.openCoverage)
-        controller.coverageDidOpen(open, nowMs: 5)
-        let attempt = try! XCTUnwrap(effects.recoveryAttempt)
-        controller.invalidatePipeline(.recovery, screenLocked: false, nowMs: 6)
-        XCTAssertTrue(controller.markScreenRecoveryReady(attempt))
+        controller.recordScreenPipelineFailure(nowMs: 3)
 
-        completeSuccess(controller, fingerprint: "same", context: changedContext, nowMs: 7)
-        XCTAssertNil(effects.closeCoverage)
-        let secondAttempt = try! XCTUnwrap(effects.recoveryAttempt)
-        XCTAssertEqual(secondAttempt.attempt, 2)
-        controller.invalidatePipeline(.recovery, screenLocked: false, nowMs: 8)
-        XCTAssertTrue(controller.markScreenRecoveryReady(secondAttempt))
-
-        completeSuccess(controller, fingerprint: "advanced", context: changedContext, nowMs: 9)
-        XCTAssertNotNil(effects.closeCoverage)
+        XCTAssertEqual(effects.lastOpen?.reason, .screenStreamStopped)
+        controller.recordScreenStreamFrame(
+            .init(generation: 7, status: .complete, displayTime: 2),
+            nowMs: 4
+        )
+        XCTAssertEqual(controller.snapshot.legs[.screen]?.lastVerifiedProgressAtMs, 2)
     }
 
-    func testDeadlineClosesAdmissionAndLateResultCannotRestoreHealth() {
+    func testRepeatedStaticFramesNeverOpenRecovery() {
         var effects: [CaptureHealthEffect] = []
         let controller = CaptureHealthController(nowMs: 0) { effects.append($0) }
-        let request = try! XCTUnwrap(controller.beginScreenRequest(nowMs: 1))
+        controller.screenStreamDidStart(generation: 8, nowMs: 1)
 
-        XCTAssertTrue(controller.screenRequestDeadlineElapsed(request, nowMs: 2))
-        XCTAssertNil(controller.beginScreenRequest(nowMs: 3))
-        XCTAssertEqual(
-            controller.snapshot.legs[.screen]?.state,
-            .healthy,
-            "recovery is not published before the uncertainty interval commits"
+        for displayTime in 1...100 {
+            controller.recordScreenStreamFrame(
+                .init(generation: 8, status: .idle, displayTime: UInt64(displayTime)),
+                nowMs: Int64(displayTime + 1)
+            )
+        }
+
+        XCTAssertEqual(controller.snapshot.legs[.screen]?.state, .healthy)
+        XCTAssertEqual(controller.snapshot.legs[.screen]?.reason, .verifiedProgress)
+        XCTAssertNil(effects.lastOpen)
+    }
+
+    func testOldDelegateFailureCannotBreakReplacementGeneration() {
+        var effects: [CaptureHealthEffect] = []
+        let controller = CaptureHealthController(nowMs: 0) { effects.append($0) }
+        controller.screenStreamDidStart(generation: 1, nowMs: 1)
+        controller.invalidatePipeline(.displayChanged, screenLocked: false, nowMs: 2)
+        controller.screenStreamDidStart(generation: 2, nowMs: 3)
+
+        controller.recordScreenStreamFailure(
+            generation: 1,
+            reason: .screenStreamStopped,
+            nowMs: 4
         )
-        let open = try! XCTUnwrap(effects.openCoverage)
-        controller.coverageDidOpen(open, nowMs: 3)
-        XCTAssertEqual(controller.snapshot.legs[.screen]?.state, .recovering)
 
-        XCTAssertEqual(
-            controller.completeScreenRequest(
-                request,
-                result: .success(fingerprint: "late", context: baselineContext, wasDuplicate: false),
-                nowMs: 4
-            ),
-            .rejectedOldGeneration
+        XCTAssertNil(effects.lastOpen)
+        controller.recordScreenStreamFrame(
+            .init(generation: 2, status: .complete, displayTime: 1),
+            nowMs: 5
         )
-        XCTAssertEqual(controller.snapshot.legs[.screen]?.state, .recovering)
-        XCTAssertNil(effects.closeCoverage)
+        XCTAssertEqual(controller.snapshot.legs[.screen]?.state, .healthy)
+    }
 
-        let attempt = try! XCTUnwrap(effects.recoveryAttempt)
-        controller.screenRecoveryOwnershipUnavailable(attempt, nowMs: 5)
+    func testAutomaticRecoveryUsesOneThreeTenSecondBackoff() {
+        var effects: [CaptureHealthEffect] = []
+        let controller = CaptureHealthController(nowMs: 0) { effects.append($0) }
+        controller.screenStreamDidStart(generation: 1, nowMs: 1)
+        controller.recordScreenStreamFailure(
+            generation: 1,
+            reason: .screenStreamStalled,
+            nowMs: 2
+        )
+        controller.coverageDidOpen(try! XCTUnwrap(effects.lastOpen), nowMs: 3)
+
+        XCTAssertEqual(effects.lastAttempt?.delayMs, 1_000)
+        let generation = try! XCTUnwrap(effects.lastAttempt?.generation)
+        controller.recoveryAttemptFailed(
+            leg: .screen,
+            generation: generation,
+            reason: .screenStreamStalled,
+            nowMs: 4
+        )
+        XCTAssertEqual(effects.lastAttempt?.delayMs, 3_000)
+        controller.recoveryAttemptFailed(
+            leg: .screen,
+            generation: generation,
+            reason: .screenStreamStalled,
+            nowMs: 5
+        )
+        XCTAssertEqual(effects.lastAttempt?.delayMs, 10_000)
+        controller.recoveryAttemptFailed(
+            leg: .screen,
+            generation: generation,
+            reason: .screenStreamStalled,
+            nowMs: 6
+        )
         XCTAssertEqual(controller.snapshot.legs[.screen]?.state, .repairRequired)
-
-        controller.repairRequested(.screen, nowMs: 6)
-        let repair = try! XCTUnwrap(effects.reversed().compactMap {
-            if case .attemptRecovery(let value) = $0 { value } else { nil }
-        }.first)
-        XCTAssertTrue(controller.markScreenRecoveryReady(repair))
-        XCTAssertNotNil(controller.beginScreenRequest(nowMs: 7))
     }
 
-    func testHydratedRecoveryAdmitsOnlyAControllerApprovedReplacementRequest() {
+    func testHydratedRecoveryRequiresControllerApprovalBeforeNewStream() {
         let interval = CaptureCoverageInterval(
             id: 1,
             leg: .screen,
-            reason: .screenRequestFailed,
+            reason: .screenStreamStopped,
             episodeID: "open-after-crash",
             generation: 7,
             startMs: 1,
@@ -176,49 +189,75 @@ final class CapturePipelineGenerationTests: XCTestCase {
             emit: { effects.append($0) }
         )
 
-        XCTAssertNil(controller.beginScreenRequest(nowMs: 3))
-        controller.repairRequested(.screen, nowMs: 4)
-        let attempt = try! XCTUnwrap(effects.compactMap {
-            if case .attemptRecovery(let value) = $0 { value } else { nil }
-        }.last)
+        controller.screenStreamDidStart(generation: 1, nowMs: 3)
+        controller.recordScreenStreamFrame(
+            .init(generation: 1, status: .complete, displayTime: 1),
+            nowMs: 4
+        )
+        XCTAssertNil(effects.lastClose)
+
+        controller.repairRequested(.screen, nowMs: 5)
+        let attempt = try! XCTUnwrap(effects.lastAttempt)
         XCTAssertTrue(controller.markScreenRecoveryReady(attempt))
-        XCTAssertNotNil(controller.beginScreenRequest(nowMs: 5))
-        XCTAssertNil(controller.beginScreenRequest(nowMs: 6))
+        controller.screenStreamDidStart(generation: 2, nowMs: 6)
+        controller.recordScreenStreamFrame(
+            .init(generation: 2, status: .complete, displayTime: 1),
+            nowMs: 7
+        )
+        XCTAssertNotNil(effects.lastClose)
     }
 
-    private func completeSuccess(
-        _ controller: CaptureHealthController,
-        fingerprint: String,
-        context: CaptureContext,
-        duplicate: Bool = false,
-        nowMs: Int64
-    ) {
-        let request = try! XCTUnwrap(controller.beginScreenRequest(nowMs: nowMs))
-        XCTAssertEqual(
-            controller.completeScreenRequest(
-                request,
-                result: .success(fingerprint: fingerprint, context: context, wasDuplicate: duplicate),
-                nowMs: nowMs
-            ),
-            .accepted
+    func testMissingUserIgnoredHelperFailsShareableContentAttestation() {
+        let ignored = UserIgnoredCaptureApplicationIdentity(
+            processIdentifier: 42,
+            bundleIdentifier: "com.example.private"
         )
+
+        XCTAssertFalse(CaptureSessionPolicy.contentCoversUserIgnoredApplications(
+            expected: [ignored],
+            represented: []
+        ))
+        XCTAssertTrue(CaptureSessionPolicy.contentCoversUserIgnoredApplications(
+            expected: [ignored],
+            represented: [ignored]
+        ))
+    }
+
+    func testUserIgnoredAttestationRequiresExactPIDAndBundleIdentity() {
+        let expected = UserIgnoredCaptureApplicationIdentity(
+            processIdentifier: 42,
+            bundleIdentifier: "com.example.private"
+        )
+        let reusedPID = UserIgnoredCaptureApplicationIdentity(
+            processIdentifier: 42,
+            bundleIdentifier: "com.example.other"
+        )
+        let siblingProcess = UserIgnoredCaptureApplicationIdentity(
+            processIdentifier: 43,
+            bundleIdentifier: "com.example.private"
+        )
+
+        XCTAssertFalse(CaptureSessionPolicy.contentCoversUserIgnoredApplications(
+            expected: [expected],
+            represented: [reusedPID, siblingProcess]
+        ))
     }
 }
 
 private extension Array where Element == CaptureHealthEffect {
-    var openCoverage: CaptureCoverageOpen? {
+    var lastOpen: CaptureCoverageOpen? {
         reversed().compactMap {
             if case .openCoverage(let value) = $0 { value } else { nil }
         }.first
     }
 
-    var closeCoverage: CaptureCoverageClose? {
+    var lastClose: CaptureCoverageClose? {
         reversed().compactMap {
             if case .closeCoverage(let value) = $0 { value } else { nil }
         }.first
     }
 
-    var recoveryAttempt: CaptureRecoveryAttempt? {
+    var lastAttempt: CaptureRecoveryAttempt? {
         reversed().compactMap {
             if case .attemptRecovery(let value) = $0 { value } else { nil }
         }.first

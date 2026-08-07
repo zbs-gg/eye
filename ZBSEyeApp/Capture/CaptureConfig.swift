@@ -20,9 +20,11 @@ struct CaptureConfig: Sendable {
                                            // frames: the old untuned default was ≈q0.8; 0.6 is ~19% smaller with no
                                            // visible loss (0.5 ≈ −35%, 0.4 ≈ −44% if you want more aggressive).
     var activeTickSeconds = 3.0            // active-text fallback tick (single-flight + dedup protect it)
+    var streamFrameIntervalSec = 2.0       // one persistent SCK stream; low-frequency enough to coexist with screenshots
+    var streamQueueDepth = 3               // Apple's recommended small IOSurface queue; processing remains latest-wins
+    var streamLivenessTimeoutSec = 8.0     // only complete/idle frame silence this long is a screen-leg failure
     var idleThresholdSec = 180.0           // no input for longer → rare idle mode (not a full stop)
     var idleCaptureIntervalSec = 60.0      // in idle: one frame per minute — "incoming without input" isn't lost
-    var burstTrioDelays: [Double] = [0.7, 2.0]  // extra frames after an app switch (Electron finishes rendering)
     var ocrOnlyEmptyStreak = 2             // consecutive empty AX → mark the bundleId as ocrOnly
     var browserOCRIntervalSec = 30.0       // canvas/PDF/video fallback: never OCR more often than this
 }

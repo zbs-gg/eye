@@ -13,7 +13,9 @@ actor AXReader {
     /// so a hung app doesn't eat the budget of every cycle.
     private var failStreak: [pid_t: Int] = [:]
     private var sickUntil: [pid_t: Date] = [:]
-    private let queue = DispatchQueue(label: "com.zbseye.axreader", qos: .userInitiated)
+    // Timeline enrichment must always yield to direct user actions such as a
+    // macOS screenshot. AX calls are bounded background work, never UI work.
+    private let queue = DispatchQueue(label: "com.zbseye.axreader", qos: .utility)
     /// Our own PID. INVARIANT: AXReader NEVER inspects its own process — otherwise the traversal reads
     /// our own SwiftUI tree, and `kAXValue` on our Slider SYNCHRONOUSLY calls its @MainActor `Binding.get`
     /// (TimelineView) right on this serial queue → `dispatch_assert_queue(main)` → crash (Pro's diagnosis).
