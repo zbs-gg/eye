@@ -61,7 +61,8 @@ final class AudioCoordinator {
         storage: StorageManager,
         ingest: IngestService,
         config: AudioConfig = AudioConfig(),
-        healthController: CaptureHealthController? = nil
+        healthController: CaptureHealthController? = nil,
+        resourceCoordinator: SCKResourceCoordinator
     ) {
         let backend = SFSpeechBackend()
         let transcription = TranscriptionService(backend: backend, ingest: ingest, config: config)
@@ -71,7 +72,10 @@ final class AudioCoordinator {
         self.systemPipeline = AudioPipeline(storage: storage, ingest: ingest,
                                             transcription: transcription, config: config, channel: "system")
         self.micEngine = AudioCaptureEngine(config: config)
-        self.systemEngine = SystemAudioCaptureEngine(config: config)
+        self.systemEngine = SystemAudioCaptureEngine(
+            config: config,
+            resourceCoordinator: resourceCoordinator
+        )
         self.healthController = healthController
 
         // 24/7 resilience: an audio-device change (AirPods) / SCStream death → auto-restart the leg
@@ -423,27 +427,54 @@ final class AudioCoordinator {
         let epoch = systemEpoch
         systemTask = Task { @MainActor [weak self] in
             _ = await previous?.value
+            guard let self else { return nil }
+            guard self.systemEpoch == epoch,
+                  self.isRunning,
+                  self.legGeneration == generation,
+                  self.systemStarting,
+                  self.desiredSources.system,
+                  !self.suppressSystemStopObservation else {
+                if self.systemEpoch == epoch { self.systemStarting = false }
+                return nil
+            }
+            do {
+                try Task.checkCancellation()
+            } catch {
+                if self.systemEpoch == epoch { self.systemStarting = false }
+                return nil
+            }
             let stream: AsyncStream<AudioFrame>
             do {
                 stream = try await engine.start()
             } catch let cancellation as SystemAudioCaptureStartCancelled {
-                self?.systemStarting = false
+                if self.systemEpoch == epoch { self.systemStarting = false }
                 return cancellation.teardownOutcome
             } catch is CancellationError {
-                self?.systemStarting = false
+                if self.systemEpoch == epoch { self.systemStarting = false }
                 return nil
             } catch {
+                guard self.systemEpoch == epoch else { return nil }
+                guard self.isRunning,
+                      self.legGeneration == generation,
+                      self.systemStarting,
+                      self.desiredSources.system,
+                      !self.suppressSystemStopObservation else {
+                    self.systemStarting = false
+                    return await engine.stopAndDrain()
+                }
                 Log.audio.error("system_audio_start_failed")
-                guard let self, self.isRunning,
-                      self.legGeneration == generation else { return nil }
                 self.systemStarting = false
                 self.systemStartFailed = true
                 self.healthController?.recordSystemAudioFailure(nowMs: Self.epochMs())
                 return nil
             }
-            guard let self, self.isRunning,
-                  self.legGeneration == generation else {
-                self?.systemStarting = false
+            guard self.systemEpoch == epoch,
+                  self.isRunning,
+                  self.legGeneration == generation,
+                  self.systemStarting,
+                  self.desiredSources.system,
+                  !self.suppressSystemStopObservation else {
+                if self.systemEpoch == epoch { self.systemStarting = false }
                 return await engine.stopAndDrain()
             }
             self.systemStarting = false

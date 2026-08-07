@@ -221,6 +221,16 @@ final class SystemAudioCaptureLifecycle<Session: AnyObject> {
         return false
     }
 
+    /// Re-attestation immediately before touching ScreenCaptureKit. Stop can
+    /// invalidate a token while its owner is waiting for a prior teardown or
+    /// for the shared SCK control-plane lease.
+    func isStartCurrent(_ token: StartToken) -> Bool {
+        startingGeneration == token.generation
+            && generation == token.generation
+            && rejectedStartTeardown == nil
+            && session == nil
+    }
+
     func failStart(token: StartToken) {
         if startingGeneration == token.generation {
             startingGeneration = nil

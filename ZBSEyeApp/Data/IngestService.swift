@@ -124,6 +124,7 @@ actor IngestService {
 
     @discardableResult
     func ingest(_ rec: ScreenCaptureRecord) async throws -> Int64 {
+        try Task.checkCancellation()
         guard writeBarrier.beginWrite() else {
             throw DatabaseWriterMaintenanceError.suspendedForRelocation
         }
@@ -148,7 +149,16 @@ actor IngestService {
         let blocks = rec.textBlocks
 
         do {
+            // Capture admission can close while the synchronous file write is
+            // finishing. Do not enter the database transaction with a frame
+            // whose owning capture cycle was revoked; the catch below removes
+            // this layer's staged HEIC.
+            try Task.checkCancellation()
             return try await db.pool.write { dbc -> Int64 in
+                // DatabasePool.write is cancellation-aware and rolls this
+                // transaction back. Explicit checks bound both sides of our
+                // insert sequence and make that privacy contract local.
+                try Task.checkCancellation()
                 // upsert app
                 let appId = try Self.upsertApp(dbc, bundleId: rec.bundleId, name: rec.appName)
                 let tel = rec.telemetry
@@ -179,6 +189,7 @@ actor IngestService {
                     try dbc.execute(sql: "INSERT OR IGNORE INTO embed_queue(row_id, kind, ts) VALUES (?, 0, ?)",
                                     arguments: [captureId, tsMs])
                 }
+                try Task.checkCancellation()
                 return captureId
             }
         } catch {
