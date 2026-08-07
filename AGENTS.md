@@ -21,8 +21,9 @@ proprietary equivalents (which moved to subscription + cloud).
 - Swift 6 (strict concurrency = `complete`), SwiftUI, target macOS 15+.
 - Storage: GRDB (`DatabasePool` + WAL) + FTS5 (external-content) + sqlite-vec (statically linked).
 - Search: hybrid FTS + semantics (multilingual-e5-small, 384-dim) via RRF.
-- ~9,300 lines of Swift. No App Sandbox (Hardened Runtime) — otherwise SCK + cross-app AX + a local server
-  are impossible. Self-signed "ZBS Eye Dev" signature (without a paid Apple Developer account).
+- ~77,800 lines of Swift. No App Sandbox (Hardened Runtime) — otherwise SCK + cross-app AX + a local server
+  are impossible. Public artifacts use Developer ID + notarization; self-signed "ZBS Eye Dev" is only the
+  local fallback when a paid Apple Developer identity is unavailable.
 
 ## Build and run
 
@@ -42,8 +43,10 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
 | Folder | What |
 |---|---|
 | `App/` | `ZBSEyeMain` (@main, CLI/GUI dispatch), `ZBSEyeApp` (Scene + AppDelegate), `AppEnvironment` (owns the service graph, `bootstrap()`) |
-| `Capture/` | `CaptureCoordinator` (capture loop, idle/active/burst modes), `FramePipeline` (capture+HEIC+phash, ONE actor), `AXReader` (accessibility extraction, dedicated thread, per-PID health) |
-| `Audio/` | `AudioCoordinator`, mic/system engines, `VADSegmenter`, `TranscriptionService` (SFSpeech on-device) |
+| `Capture/` | `CaptureCoordinator`, one persistent low-rate `ScreenCaptureStream`, `FramePipeline` (HEIC+phash+OCR, ONE actor), `SCKResourceCoordinator`, screenshot-priority yield, capture health/recovery, `AXReader` (dedicated thread, per-PID health) |
+| `Audio/` | `AudioCoordinator`, mic/system engines, `VADSegmenter`, `TranscriptionService` (SFSpeech on-device); system-audio SCK lifecycle shares `SCKResourceCoordinator` with screen capture |
+| `Meeting/` | `MeetingDetector`, CoreAudio process evidence, native/browser enrichment, exact automatic-Call admission and suppression |
+| `Calls/` | `CallCoordinator`, crash-forward spools/evidence, Whisper and diarization workers, call query/projection and privacy deletion |
 | `Data/` | `ZBSEyeDatabase` (pool + migrations), `StorageManager` (media), **`StorageLocation`** (the single path resolver — see invariants), `StorageRelocation` (move), `BackupManager` (iCloud), `RetentionManager`, `IngestService` (the only writer) |
 | `Search/` | `SearchService` (FTS+vector RRF), `EmbeddingService` (e5), `TimelineService`, `VectorBackfill` |
 | `Server/` | `ZBSEyeHTTPServer` (FlyingFox REST, 127.0.0.1, Bearer), `KeychainStore`, DTO |
@@ -71,6 +74,21 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
 5. **Keep Media is the only automatic retention contract.** Fresh empty profiles start at 5 GB; upgrades never
    shorten retention without an explicit selection and authoritative reconciliation. `Forever` closes automatic
    deletion. Critically low disk pauses capture for every policy and never overrides the selected retention promise.
+6. **One persistent screen stream; bounded latest-wins work.** Normal screen capture uses one low-rate
+   ScreenCaptureKit stream, not a new screenshot request per cycle. Expensive AX/OCR/HEIC work retains at most
+   one processing intent and one pending intent; a newer trigger replaces the pending one. `SCKResourceCoordinator`
+   serializes the complete asynchronous start/update/stop operation across the screen and system-audio streams.
+7. **Native screenshots get a best-effort, permission-neutral yield.** Eye observes Shift-Command-3/4/5 and
+   their Control variants through a listen-only event tap only when macOS already permits it, and also watches
+   the exact native screenshot helper processes. Either signal drops pending heavy work and opens a short quiet
+   window. Eye never requests a new Input Monitoring/Accessibility grant for this, never consumes the shortcut,
+   and fails open when early hotkey observation is unavailable; do not describe this as a guaranteed intercept.
+8. **Automatic Calls are microphone-owned and have a separate privacy list.** Any eligible external microphone
+   initiator can open a local Call; exact `Don’t auto-record these apps` bundle IDs affect only this admission and
+   do not hide the app from screen history. Krisp is relay-only: it may participate but cannot start, name, or keep
+   a Call alive. The exact `codex_chronicle` helper is ignored before owner folding. `Pause Timeline` does not
+   disarm automatic Calls; `Audio Off` and privacy pause do. A detected end waits 30 seconds, offering `End & save`
+   or destructive `This wasn’t a call`; there is no post-end Undo.
 
 ## Gotchas (already stepped on — don't again)
 
@@ -92,6 +110,10 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
   frame/audio segment is orphaned (outside the backup snapshot / outside the media copy).
 - **The AX tree is often empty on Electron apps** — hence adaptive AX-first + OCR-fallback per-app, not
   "we beat Electron". OCR is an equal path, not a rare fallback.
+- **Static pixels are healthy.** The persistent stream proves liveness from current complete/idle compositor
+  events, not from pixel changes. A real stall or start/update/stop failure opens a durable coverage interval and
+  bounded Eye-owned retries after 1/3/10 seconds; exhaustion becomes `repairRequired`. Repair never changes TCC,
+  relaunches another app, or restarts a global macOS capture service.
 
 ## How to review (where the risk lives)
 
@@ -103,6 +125,11 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
 3. **Security:** auth on everything except `/health`, path traversal in serving frames/files (numeric id →
    lookup, the media-directory boundary), no egress.
 4. **Honest state:** the UI doesn't lie (the recording icon, permission statuses, "busy").
+5. **Capture coexistence:** a healthy Eye must not make native screenshots slow, stale, or unavailable under
+   ChatGPT/Chronicle/two-track-call contention; check one stream per process lifetime, best-effort hotkey yield,
+   lifecycle recovery, and durable coverage gaps.
+6. **Automatic-Call privacy:** verify exact mic-owner attribution, relay/excluded-helper behavior, the separate
+   audio exclusion list, hard Audio Off/privacy boundaries, one terminal owner, and crash-forward erase/finalize.
 
 Check both the build and the unhosted `ZBSEyeUnitTests` target. Pure production policies are shared into
 that target explicitly so verification does not launch an ad-hoc `gg.zbs.eye` app or churn the installed
@@ -110,9 +137,17 @@ app's TCC grants. Distribution and OS-integration changes still require installe
 
 ## Status (what works)
 
-Working and verified live: screen capture (HEIC + AX/OCR), audio + transcription, hybrid search
-(cross-lingual), timeline, REST + MCP, import of previous history, retention, **relocatable storage**,
-**iCloud backup** (compressed, keep-N, on exit), size tracking, the daily-summary automation, export.
+Previously verified live product baseline: screen capture (HEIC + AX/OCR), audio + transcription, hybrid search
+(cross-lingual), Timeline, REST + MCP, history import, 5 GB fresh-profile retention with explicit
+**Forever**, **relocatable storage**, **iCloud backup** (compressed, keep-N, on exit), size tracking, daily summary,
+and export.
+
+The `0.7.0 (21)` checkout is an **implemented and deterministically verified candidate**, not yet a physically
+qualified release. It adds the persistent latest-wins screen stream, shared SCK control-plane serialization,
+best-effort native-screenshot yield, truthful capture health/recovery, and microphone-owned automatic Calls with
+the privacy/lifecycle boundaries above. Publication still requires a new exact notarized ZIP + manifest, full
+capture-coexistence v2 qualification, and the installed-app automatic-Call physical checklist (including 60- and
+120-minute calls). Deterministic fixtures do not replace those gates.
 
 Deferred: source_id for multi-monitor dedup (~0.15% of frames, documented in `HistoryImporter`).
 

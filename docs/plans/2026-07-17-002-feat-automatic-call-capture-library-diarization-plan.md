@@ -5,10 +5,23 @@ date: 2026-07-17
 deepened: 2026-07-18
 topic: automatic-call-capture-library-diarization
 artifact_contract: ce-unified-plan/v1
-artifact_readiness: implementation-ready
+artifact_readiness: superseded-historical
 product_contract_source: ce-brainstorm
 execution: code
+status: superseded
+superseded_on: 2026-08-08
 ---
+
+> **Historical plan — superseded.** This file preserves the July 17 design record and is intentionally not
+> rewritten to match the product that was later implemented. Do not use its combined-signal start gate,
+> generic-microphone rejection, Krisp ownership assumptions, soft-end tail/Undo, or old qualification checklist
+> as current authority. The `0.7.0 (21)` candidate instead starts automatic Calls from eligible external
+> microphone initiators; treats Krisp as relay-only and `codex_chronicle` as excluded; keeps audio exclusions
+> separate from screen privacy; leaves automatic Calls armed during Pause Timeline but disarms them for Audio Off
+> and privacy pause; and uses one 30-second End & save/delete window with no post-end Undo. Current product and
+> release authority: [`AGENTS.md`](../../AGENTS.md), [`ABOUT.md`](../ABOUT.md), [`ROADMAP.md`](../../ROADMAP.md),
+> and [`NOTARIZE.md`](../NOTARIZE.md). Implemented/deterministic verification is complete; physical qualification
+> of the exact installed release artifact remains pending.
 
 # Automatic Call Capture, Library, and Diarization - Plan
 

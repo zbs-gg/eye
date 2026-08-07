@@ -31,14 +31,16 @@ xcodebuild -project ZBSEye.xcodeproj -scheme ZBSEyeUnitTests -configuration Debu
 bash scripts/verify-local-ai.sh --all-fixtures
 bash scripts/verify-call-recording.sh --fixtures
 bash scripts/verify-call-automation.sh
+bash scripts/verify-capture-coexistence.sh --self-test
 ```
 
 ## Architecture
 ```
 ZBSEyeApp/
   App/        ZBSEyeApp (@main), AppEnvironment (@Observable root)
-  Capture/    CaptureCoordinator, FramePipeline (capture+HEIC+phash), AXReader
+  Capture/    Persistent screen stream, latest-wins FramePipeline, SCKResourceCoordinator, screenshot priority, AXReader
   Audio/      AudioCoordinator, mic/system engines, VADSegmenter, TranscriptionService
+  Meeting/    CoreAudio mic-owner listener, initiator/relay resolution, automatic Call detection
   Calls/      CallCoordinator, lifecycle policy, dual-source spool, Calls projection, Whisper/diarization helpers
   Data/       ZBSEyeDatabase, StorageLocation, StorageManager, BackupManager, RetentionManager, IngestService
   Search/     SearchService (FTS+vector RRF), EmbeddingService (e5), TimelineService, VectorBackfill
@@ -77,8 +79,29 @@ ZBS_EYE_CALL_PHYSICAL_GATE=YES scripts/verify-call-recording.sh --physical-prefl
 ```
 
 That command only verifies the installed stable signature and creates an ignored local checklist. The operator
-then runs the short, 60-minute, and 120-minute synthetic calls against `/Applications/ZBS Eye.app`; personal
-audio/transcripts and the local physical report are never committed.
+then verifies real mic-triggered starts, Krisp relay and user exclusions, the 30-second save/delete lifecycle,
+offline saving, mute/device/lock/`coreaudiod`/relaunch recovery, short mic-only and dual-track Calls, and the
+60-minute and 120-minute synthetic Calls against `/Applications/ZBS Eye.app`. Personal audio/transcripts and
+the local physical report are never committed.
+
+## Capture coexistence release gate
+
+Screen-capture changes also require the exact installed notarized candidate to pass the operator-driven gate
+documented in [`docs/CAPTURE_COEXISTENCE.md`](docs/CAPTURE_COEXISTENCE.md). Its protocol self-test is safe in
+ordinary development, but the physical nine-arm bracket must run from Terminal because Eye, ChatGPT, and
+Chronicle must be genuinely absent in baseline arms:
+
+```bash
+bash scripts/verify-capture-coexistence.sh \
+  --app "/Applications/ZBS Eye.app" \
+  --data-root "/absolute/path/to/the/current/ZBS Eye data root" \
+  --manifest "dist/ZBSEye-<version>-<build>-<sha>-notarized.manifest.json"
+```
+
+The listen-only shortcut observer never requests a new TCC permission. If the existing grant is unavailable,
+Eye fails open and yields through the later screenshot-helper process signal; manual shortcut freshness remains
+a required release check. Automated fixtures do not replace the physical shortcut matrix, lifecycle/recovery
+matrix, 30-minute churn, or two-hour installed soak.
 
 ### Optional speaker diarization
 

@@ -86,7 +86,8 @@ struct WorkspaceHeader: View {
                 Label(recordingButtonTitle, systemImage: recordingButtonIcon)
             }
             .buttonStyle(.borderedProminent)
-            .tint(env.recording.isCapturing ? .red : .accentColor)
+            .tint(recordingButtonStopsIntent ? .red : .accentColor)
+            .help("Automatic Calls stay armed until Audio is Off or privacy pause is active.")
         }
     }
 
@@ -143,12 +144,17 @@ struct WorkspaceHeader: View {
 
     private var recordingButtonTitle: LocalizedStringKey {
         if env.recording.lowDiskPaused, env.recording.wantsRecording {
-            return "Stop"
+            return "Stop Timeline"
         }
-        return env.recording.isCapturing ? "Stop" : "Record"
+        return env.recording.isCapturing ? "Pause Timeline" : "Record Timeline"
     }
 
     private var recordingButtonIcon: String {
-        env.recording.isCapturing ? "stop.circle.fill" : "record.circle"
+        recordingButtonStopsIntent ? "stop.circle.fill" : "record.circle"
+    }
+
+    private var recordingButtonStopsIntent: Bool {
+        env.recording.isCapturing
+            || (env.recording.lowDiskPaused && env.recording.wantsRecording)
     }
 }

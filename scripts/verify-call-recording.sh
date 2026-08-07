@@ -20,7 +20,7 @@ fixture_gate() {
   xcodegen generate >/dev/null
   # An override lets a checkout escape stale absolute SPM artifact links left by an older
   # worktree without touching that checkout's build cache.
-  local derived="${ZBS_EYE_CALL_DERIVED_DATA_PATH:-build/DerivedData}"
+  local derived="${ZBS_EYE_CALL_DERIVED_DATA_PATH:-build/CallRecordingDerivedData}"
   local selected=(
     -only-testing:ZBSEyeTests/AIComputeCoordinatorTests
     -only-testing:ZBSEyeTests/AudioIngressPublisherTests

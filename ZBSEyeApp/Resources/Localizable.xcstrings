@@ -3030,6 +3030,27 @@
         }
       }
     },
+    "Stop Timeline capture": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Остановить запись Таймлайна" } } }
+    },
+    "Pause Timeline capture": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Приостановить запись Таймлайна" } } }
+    },
+    "Start Timeline capture": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Начать запись Таймлайна" } } }
+    },
+    "Stop Timeline": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Остановить Таймлайн" } } }
+    },
+    "Pause Timeline": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Приостановить Таймлайн" } } }
+    },
+    "Record Timeline": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Записывать Таймлайн" } } }
+    },
+    "Automatic Calls stay armed until Audio is Off or privacy pause is active.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Автозапись звонков остаётся включённой, пока не выбран режим «Аудио выключено» или пауза приватности." } } }
+    },
     "MCP": {
       "localizations": {
         "ru": {
@@ -10299,8 +10320,8 @@
     "Always": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Всегда" } } }
     },
-    "Any non-excluded app using the microphone starts a local Call.": {
-      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Любое приложение не в исключениях, использующее микрофон, запускает локальную запись звонка." } } }
+    "Eligible microphone use starts a Call even while screen recording is stopped. Audio Off or privacy pause disables it.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Подходящее приложение запускает запись звонка даже при остановленной записи экрана. Режим «Аудио выключено» или пауза приватности отключают это." } } }
     },
     "Don’t auto-record": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Не записывать автоматически" } } }
@@ -10317,8 +10338,8 @@
     "Recording a Call": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Запись звонка" } } }
     },
-    "Microphone — once enabled, any app using it starts a local Call recording by default": {
-      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Микрофон — после включения любое использующее его приложение по умолчанию запускает локальную запись звонка" } } }
+    "Microphone — when Audio is enabled, eligible apps start a local Call; relays like Krisp only join one": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Микрофон — при включённом аудио подходящие приложения запускают локальную запись звонка; ретрансляторы вроде Krisp могут только присоединиться" } } }
     },
     "Never auto-record %@": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Никогда не записывать %@ автоматически" } } }

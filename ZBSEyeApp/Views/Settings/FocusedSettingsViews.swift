@@ -125,7 +125,7 @@ struct PermissionsSettingsView: View {
     private var audioModeSummary: String {
         switch env.audioSettings.audioMode {
         case .off: String(localized: "Audio is off. Screen capture continues.")
-        case .meetingsOnly: String(localized: "Any non-excluded app using the microphone starts a local Call.")
+        case .meetingsOnly: String(localized: "Eligible microphone use starts a Call even while screen recording is stopped. Audio Off or privacy pause disables it.")
         case .always: String(localized: "Audio follows recording continuously.")
         }
     }

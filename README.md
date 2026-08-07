@@ -19,8 +19,8 @@ their life to somebody else's cloud. It quietly captures screen moments, accessi
 microphone and optional system audio. Everything is indexed locally and can be explored in the Timeline,
 opened as a call, searched in Ask, or read by your own agent over localhost.
 
-> **Release status:** this README documents ZBS Eye 0.7.0. The download link always points to the latest
-> notarized public build.
+> **Release status:** the public stable release is 0.6.0. This README also documents the 0.7.0 (build 21)
+> source candidate, which is not public until its exact notarized artifact passes the physical release gates.
 
 <p align="center">
   <img src="./assets/readme/product-proof.svg" width="100%"
@@ -50,19 +50,30 @@ Eye records useful evidence and gives it back. It is not a CRM, a calendar manag
 
 Screen capture is adaptive: Accessibility text is the cheap first path, while Vision OCR handles apps whose
 UI trees are empty. Images use HEIC and perceptual-hash deduplication. Static screens do not become thousands
-of duplicate files.
+of duplicate files. Eye keeps one low-rate capture stream and processes only the newest useful frame, so work
+cannot accumulate behind a busy OCR pass. With listen-event access already available, Eye sees native screenshot
+shortcuts early, cancels pending heavy work, and rejects any in-flight result that crosses the screenshot boundary;
+otherwise the screenshot-helper fallback yields as soon as macOS exposes it. Already-running synchronous AX or
+Vision work may finish in the background, but cannot be saved as an Eye frame. Eye never requests a new permission
+for this and does not stop or rebuild its stream.
 
 ## Calls without a visible bot
 
-Any external application using the microphone starts one local Call immediately. This includes native apps,
-browsers, ChatGPT, Krisp, and unknown helper processes; several microphone owners and device or helper changes
-stay inside the same Call. Known Zoom, Meet, and Teams signals may improve the saved source context, but they
-never decide whether recording is allowed to start. Detection, recording, and saving do not require internet
-access.
+Any eligible external application using the microphone starts one local Call immediately. This includes
+native apps, browsers, ChatGPT, and unknown microphone owners; several owners and device or helper changes
+stay inside the same Call. Krisp is treated as an audio relay: it may join an existing Call, but cannot start,
+name, or keep one alive by itself. Eye also excludes its own processes, a narrow system list, and ChatGPT's
+`codex_chronicle` capture helper. Known Zoom, Meet, and Teams signals may improve the saved source context, but
+they never decide whether recording is allowed to start. Detection, recording, and saving do not require
+internet access.
 
 Eye requests separate microphone and system-audio tracks. If one track is unavailable, the Call remains
 recording and reports the missing track instead of silently hiding the gap. `Audio Off`, privacy pause,
 critically low disk, and storage relocation remain hard stops.
+
+The main **Record Timeline / Pause Timeline** control governs ordinary screen and Timeline audio capture; it
+does not disarm microphone-triggered Calls. Choose **Audio Off** or start a privacy pause when no automatic
+Call should begin. Privacy pause remains available from the menu bar even while Timeline capture is paused.
 
 Eye itself and a narrow list of macOS system daemons are always excluded. **Settings → Audio → Don’t
 auto-record these apps** adds user-selected bundle identifiers to a separate audio exclusion list; this does
@@ -109,7 +120,7 @@ and storage never become provider uploads. API credentials live in the macOS dat
 1. Open the [current stable release](https://github.com/zbs-gg/eye/releases/latest), download the notarized ZIP,
    move **ZBS Eye.app** to `/Applications`, and launch it.
 2. Grant Screen Recording and Accessibility. Microphone is optional; system audio has its own switch.
-3. Press **Start**. Open Timeline and change windows once to see the first moments appear.
+3. Press **Record Timeline**. Open Timeline and change windows once to see the first moments appear.
 
 ZBS Eye is distributed outside the Mac App Store because cross-app Accessibility and continuous capture are
 incompatible with the App Sandbox. Release artifacts use Developer ID, Hardened Runtime, Apple notarization,

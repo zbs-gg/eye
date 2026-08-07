@@ -32,12 +32,31 @@ enable an external provider, only the text excerpts needed for that action leave
 ### Capture
 - **Screen** → accessibility text (accurate and battery-friendly) + OCR where AX is unavailable (GPU
   renderers, canvas, some Electron); frames in HEIC with perceptual-hash dedup (identical screens aren't
-  duplicated). Adaptive per-app: AX where the app exposes semantics, OCR where it doesn't; decided at runtime by content quality.
+  duplicated). Adaptive per-app: AX where the app exposes semantics, OCR where it doesn't; decided at runtime by
+  content quality. One low-rate ScreenCaptureKit stream stays alive instead of opening a new native screenshot
+  request for every moment. Heavy processing is latest-wins, with at most one moment processing and one pending,
+  so app switching cannot build an unbounded queue.
+- **Native screenshots keep priority.** Eye yields pending heavy work around Shift-Command-3/4/5 and their
+  Control variants, and while the native Screenshot helpers are running. Early hotkey observation is best-effort
+  and listen-only: Eye uses it only when macOS already permits listening, never consumes the shortcut, never asks
+  for a new permission, and leaves native screenshots untouched when the observer is unavailable.
+- **Capture health is explicit.** Current compositor progress, not changing pixels, proves that screen capture is
+  alive. A real stream or system-audio failure creates a visible coverage gap and bounded Eye-owned recovery;
+  repeated failure asks the person to repair Capture instead of showing a false green state. Repair touches only
+  Eye's own streams, not macOS permissions, other apps, or global capture services.
 - **Audio** → system audio (calls, meetings, video) and microphone → **on-device** transcription (SFSpeech),
-  with VAD (we don't transcribe silence/music). An explicit **Call** mode keeps microphone and system audio
-  as separate durable sources until End Call. Bookmark never stops recording: it schedules a local checkpoint
-  transcript, while the preferred whole-call transcript is produced after the call by the optional one-click
-  Whisper Large V3 Turbo model. The UI intentionally does not become a live meeting workspace.
+  with VAD (we don't transcribe silence/music). With the default **Mic in use** mode, an eligible external app
+  using the microphone starts a local **Call** even when the screen Timeline is paused. Eye keeps microphone and
+  system audio as separate durable sources; missing tracks remain honest gaps. Bookmark never stops recording:
+  it schedules a local checkpoint transcript, while the preferred whole-call transcript is produced after the
+  call by the optional one-click Whisper Large V3 Turbo model. Manual Start remains available.
+- **Automatic Call boundaries stay understandable.** Krisp may relay an eligible app's audio but cannot start,
+  name, or keep a Call alive by itself; the `codex_chronicle` helper is ignored. `Don’t auto-record these apps`
+  is an exact audio-only exclusion list: those apps may still appear in screen history. `Pause Timeline` does not
+  disarm Calls; **Audio Off** and privacy pause do. When microphone ownership ends, Eye waits 30 seconds: renewed
+  microphone activity resumes the same Call, while the banner offers **End & save** or destructive
+  **This wasn’t a call**. There is no post-end Undo; a saved Call can be deleted from Calls.
+  The UI intentionally does not become a live meeting workspace.
 
 ### Sense-making (not just raw data, but structure)
 - **Scenes / "Day in activities"** — frames are grouped into **activity scenes**: "VS Code, 14:00–14:25,
@@ -119,9 +138,11 @@ enable an external provider, only the text excerpts needed for that action leave
   (`IngestService`); non-Sendable (`CVPixelBuffer`/`AXUIElement`/…) live and die inside a single actor.
 - **Storage:** GRDB (`DatabasePool` + WAL) + **FTS5** (external-content) + **sqlite-vec** (statically linked —
   notarization without a loadable extension). A single path resolver `StorageLocation` (relocate-aware).
-- **Capture:** ScreenCaptureKit (HEIC, perceptual-hash), Accessibility API on a dedicated thread (cross-app,
-  per-PID health), Vision OCR (multilingual, ANE). AXReader does NOT inspect its own process (otherwise self-AX
-  reentrancy crashes SwiftUI on a foreign thread — a real bug, fixed).
+- **Capture:** one persistent low-rate ScreenCaptureKit stream (HEIC, perceptual-hash), latest-wins processing
+  with one active + one pending intent, and a shared `SCKResourceCoordinator` that serializes complete
+  screen/system-audio start-update-stop operations. Accessibility runs on a dedicated thread (cross-app,
+  per-PID health); Vision OCR is multilingual and ANE-backed. AXReader does NOT inspect its own process
+  (otherwise self-AX reentrancy crashes SwiftUI on a foreign thread — a real bug, fixed).
 - **Audio:** CoreAudio process tap (system) + microphone, a VAD segmenter, SFSpeech on-device.
 - **Search:** SearchService (FTS+vector RRF), EmbeddingService (multilingual-e5, **mean-pooling** — not CLS,
   otherwise 3× worse cross-lingually), temporal shards.
@@ -146,8 +167,8 @@ the signature is stable (permissions survive updates). Setup — `docs/NOTARIZE.
 
 ## 6. Place in the Garden ecosystem
 
-ZBS Eye lives in `~/dev/ai/Garden/eye` alongside the other products of the family (Atlas, Cartographer, Pulse,
-Garden-app) — each a separate repo (`zbs-gg/eye`). It currently runs autonomously and locally; later
+ZBS Eye lives in this repository (`zbs-gg/eye`; current local checkout `~/dev/__PROJECTS/____ZBS/eye`) alongside
+the other products of the family, each in its own repository. It currently runs autonomously and locally; later
 "Cartographer" connects to **Pulse / Atlas** into a single sense-making loop (Mac memory → insights → actions),
 staying faithful to the "everything on-device" principle.
 
@@ -155,15 +176,18 @@ staying faithful to the "everything on-device" principle.
 
 ## 7. Status
 
-**Working and verified live:** capture (screen + audio), hybrid search (cross-lingual), timeline (smooth),
-scenes/"Day in activities", "Ask" (RAG over the global provider/model pair), Daily Insights,
-progress/milestones, REST + MCP, history
-import, retention (5 GB media default with explicit Forever), relocatable storage, iCloud backup, daily summary, export. A notarized
-Developer ID release exists.
+**Previously verified live product baseline:** screen/audio capture, hybrid cross-lingual search, smooth Timeline,
+scenes/"Day in activities", Ask, Daily Insights, progress/milestones, REST + MCP, history import, 5 GB
+fresh-profile retention with explicit Forever, relocatable storage, iCloud backup, daily summary, and export.
+The Developer ID/notarization pipeline has produced earlier installed builds.
 
-**Implemented and deterministic-fixture qualified:** explicit Call Envelopes, uninterrupted Bookmark
-checkpoints, optional post-call Whisper, preferred-only call search, and read-only REST/MCP evidence.
-Installed-app short, 60-minute, and 120-minute physical gates remain before field qualification.
+**Implemented and deterministically qualified in the `0.7.0 (21)` candidate:** the persistent latest-wins screen
+stream, shared ScreenCaptureKit lifecycle serialization, best-effort native-screenshot yield, capture
+health/recovery, explicit Call Envelopes/Bookmarks/Calls library and local processing, and microphone-owned
+automatic Calls with relay, exclusion, pause, and 30-second end semantics. This does **not** make build 21 a
+release yet. It still needs a new exact notarized ZIP/manifest and physical qualification of that installed
+artifact: the full capture-coexistence v2 bracket + manual shortcuts + recovery matrix + churn/two-hour soak,
+and the complete automatic-Call checklist including 60- and 120-minute calls.
 
 **Deferred:** Sparkle auto-updates and deep integration of Cartographer with Pulse/Atlas. Live transcription,
 calendar automation, call maps, and CRM/call intelligence belong in another product, not Eye.
