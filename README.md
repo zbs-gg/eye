@@ -19,8 +19,13 @@ their life to somebody else's cloud. It quietly captures screen moments, accessi
 microphone and optional system audio. Everything is indexed locally and can be explored in the Timeline,
 opened as a call, searched in Ask, or read by your own agent over localhost.
 
-> **Release status:** the public stable release is 0.6.0. This README also documents the 0.7.0 (build 21)
-> source candidate, which is not public until its exact notarized artifact passes the physical release gates.
+> **Release status:** 0.7.0 (build 21) is the public stable release. Its exact Developer ID signed,
+> Apple-notarized ZIP and manifest are published on GitHub. The installed capture-coexistence/soak and
+> 60-/120-minute automatic-Call physical matrix was not completed before publication; those checks remain
+> required before making broader performance or long-call reliability claims.
+>
+> The Activities day recap described below is implemented on the current source branch but is **not part of
+> 0.7.0**. It remains unreleased until its prompt-quality checks and the next release gates pass.
 
 <p align="center">
   <img src="./assets/readme/product-proof.svg" width="100%"
@@ -36,6 +41,9 @@ Eye records useful evidence and gives it back. It is not a CRM, a calendar manag
 
 - **Timeline** combines screen frames, extracted text, app context, audio density, call spans, and bookmarks
   in one scrubbable view.
+- **Activities** groups a day into useful blocks. The unreleased source candidate can also show one
+  locally cached, factual 3–6 item recap of what you did without changing the primary model used by Ask and
+  Daily Insights. Eye shows the provider's existing recommendation but does not guess model prices.
 - **Calls** keeps meetings out of the all-day activity stream. Microphone and system audio remain separate;
   a bookmark schedules a checkpoint transcript without interrupting the recording.
 - **Search** combines FTS5 with local multilingual semantic retrieval, so a query in one language can find
@@ -111,8 +119,10 @@ Recording, indexing, Timeline, Calls, search, REST, and MCP do not require an AI
 On qualified Apple Silicon hardware, one click can download the pinned ZBS Eye Local model. You may instead
 connect a local server, signed-in CLI, or cloud API provider.
 
-That choice changes only generation features such as Ask and Daily Insights. Before any non-local provider
-receives a prompt excerpt, Eye names the recipient and asks for scoped consent. Raw recordings, the database,
+The primary choice changes only generation features such as Ask and Daily Insights. In the unreleased source
+candidate, Activity day recaps are the one narrow exception: in **Settings → AI** you may assign them a different
+already-connected model, including a provider-recommended one. Before any non-local provider receives a prompt
+excerpt, Eye names the recipient and asks for consent specifically for that use. Raw recordings, the database,
 and storage never become provider uploads. API credentials live in the macOS data-protection Keychain.
 
 ## Install

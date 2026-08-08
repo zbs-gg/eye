@@ -328,7 +328,7 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertTrue(notices.contains("Release: 0.7.0 (build 21 candidate)"))
     }
 
-    func testUnqualifiedCandidateDocumentationDoesNotClaimAPublicRelease() throws {
+    func testPublishedStableAndUnreleasedActivityCandidateAreDocumentedHonestly() throws {
         let readme = try String(
             contentsOf: repositoryRoot.appending(path: "README.md"),
             encoding: .utf8
@@ -342,11 +342,13 @@ final class ReleaseConfigurationTests: XCTestCase {
             .filter { !$0.isEmpty }
             .joined(separator: " ")
 
-        XCTAssertTrue(normalizedReadme.contains("public stable release is 0.6.0"))
-        XCTAssertTrue(normalizedReadme.contains("0.7.0 (build 21)"))
-        XCTAssertTrue(normalizedReadme.contains("source candidate"))
-        XCTAssertTrue(changelog.contains("Unreleased — 0.7.0 (build 21 candidate)"))
-        XCTAssertFalse(changelog.contains("## [0.7.0]"))
+        XCTAssertTrue(normalizedReadme.contains("0.7.0 (build 21) is the public stable release"))
+        XCTAssertTrue(normalizedReadme.contains("It remains unreleased until"))
+        XCTAssertTrue(normalizedReadme.contains("unreleased source candidate"))
+        XCTAssertTrue(changelog.contains("## Unreleased"))
+        XCTAssertTrue(changelog.contains("Activities can show one factual 3–6 item recap"))
+        XCTAssertTrue(changelog.contains("## [0.7.0] — 2026-08-08"))
+        XCTAssertFalse(normalizedReadme.contains("public stable release is 0.6.0"))
     }
 
     func testCallQualificationScriptsDoNotShareTheGenericDerivedDataCache() throws {

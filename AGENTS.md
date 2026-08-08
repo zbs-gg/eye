@@ -51,7 +51,7 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
 | `Search/` | `SearchService` (FTS+vector RRF), `EmbeddingService` (e5), `TimelineService`, `VectorBackfill` |
 | `Server/` | `ZBSEyeHTTPServer` (FlyingFox REST, 127.0.0.1, Bearer), `KeychainStore`, DTO |
 | `MCP/` | `ZBSEyeMCPServer` (stdio, proxies into the GUI instance) |
-| `Automations/` | `HistoryImporter` (history import), `DailySummaryService`, `ExportService` |
+| `Automations/` | `HistoryImporter` (history import), `DailySummaryService`, the bounded Activities day-recap service, `ExportService` |
 | `State/` | `@MainActor @Observable` stores (Recording/Permissions/Storage/Backup/…) |
 | `Views/` | SwiftUI (Timeline, Settings, onboarding) |
 
@@ -89,6 +89,12 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
    a Call alive. The exact `codex_chronicle` helper is ignored before owner folding. `Pause Timeline` does not
    disarm automatic Calls; `Audio Off` and privacy pause do. A detected end waits 30 seconds, offering `End & save`
    or destructive `This wasn’t a call`; there is no post-end Undo.
+9. **The Activities recap has one narrow, consented route.** It may use one separately selected model from an
+   already-connected provider; do not turn this into a speculative per-consumer routing framework. Only bounded
+   app/time/topic text may cross an approved external boundary. The one-row-per-day local cache carries
+   provenance and must be invalidated by intersecting privacy deletion or automatic screen-history retention.
+   A privacy deletion drains recap generation before mutating sources, while the database invalidation epoch
+   rejects any late write that raced a deletion or retention transaction.
 
 ## Gotchas (already stepped on — don't again)
 
@@ -149,6 +155,12 @@ It was published by explicit owner decision before capture-coexistence v2 and th
 physical checklist (including 60- and 120-minute calls) were completed. Those checks remain unqualified and must
 not be described as passed; the public release notes disclose that exception, and the normal gate below remains
 the contract for later releases.
+
+The Activities day recap is implemented only in the current source candidate. It is not present in 0.7.0 and
+must not be described as shipped until its exact prompt-quality checks and release artifact gates pass. A
+2026-08-08 developer diagnostic on macOS 26.2 also measured about 420 ms of added native-screenshot shortcut
+latency while Eye's persistent ScreenCaptureKit stream was active. Chronicle was absent and Timeline capture
+remained healthy, so this is a next-release coexistence blocker rather than a Chronicle failure.
 
 Deferred: source_id for multi-monitor dedup (~0.15% of frames, documented in `HistoryImporter`).
 

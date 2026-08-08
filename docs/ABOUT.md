@@ -62,6 +62,11 @@ enable an external provider, only the text excerpts needed for that action leave
 - **Scenes / "Day in activities"** — frames are grouped into **activity scenes**: "VS Code, 14:00–14:25,
   editing AXReader" instead of a thousand separate frames. You see how the day breaks into blocks. Instead of
   a raw OCR dump on the right — a **clean scene summary** (app, window/URL, key topics; LLM enhancement optional).
+- **"What I did" recap in Activities (unreleased source candidate)** — an optional model turns bounded
+  app/time/topic fragments into one
+  factual 3–6 item recap for the selected day. It is cached on the Mac and may use a separate model from an
+  already-connected provider. External providers require a dedicated consent; raw screenshots, audio, full
+  URLs, OCR dumps, and file paths are not sent.
 - **Daily Insights** (formerly "Cartographer") — an optional daily AI insight: the model you chose in **Settings → AI**
   looks at the day's activity (top apps, context switches, topics) and gives **2–3 concrete
   observations/tips** (self-improvement). AI is off by default; local and external choices are explicit.
@@ -86,8 +91,9 @@ enable an external provider, only the text excerpts needed for that action leave
 - **"Ask"** — ask your memory a question → hybrid search finds fragments → your **processing model**
   answers with citation links (click → jump on the timeline). A local equivalent of "Ask Rewind".
   The model is picked in **Settings → AI**. One action can download ZBS Eye's verified built-in MLX model;
-  external providers and OpenAI-compatible endpoints remain optional. Background summaries and activity
-  labels each require their own explicit consent when the active provider is external.
+  external providers and OpenAI-compatible endpoints remain optional. Scheduled summaries, generated activity
+  labels, and the separate Activities day recap each require their own explicit consent when their provider is
+  external.
 
 ### Rewards and progress
 - **Gamification** — day streaks, milestones (1k/5k/10k/… frames), "memory age", progress to the next
@@ -181,13 +187,19 @@ scenes/"Day in activities", Ask, Daily Insights, progress/milestones, REST + MCP
 fresh-profile retention with explicit Forever, relocatable storage, iCloud backup, daily summary, and export.
 The Developer ID/notarization pipeline has produced earlier installed builds.
 
-**Implemented and deterministically qualified in the `0.7.0 (21)` candidate:** the persistent latest-wins screen
-stream, shared ScreenCaptureKit lifecycle serialization, best-effort native-screenshot yield, capture
-health/recovery, explicit Call Envelopes/Bookmarks/Calls library and local processing, and microphone-owned
-automatic Calls with relay, exclusion, pause, and 30-second end semantics. This does **not** make build 21 a
-release yet. It still needs a new exact notarized ZIP/manifest and physical qualification of that installed
-artifact: the full capture-coexistence v2 bracket + manual shortcuts + recovery matrix + churn/two-hour soak,
-and the complete automatic-Call checklist including 60- and 120-minute calls.
+**Public stable `0.7.0 (21)`:** its exact Developer ID signed, Apple-notarized ZIP and manifest are published on
+GitHub. It contains the persistent latest-wins screen stream, shared ScreenCaptureKit lifecycle serialization,
+best-effort native-screenshot yield, capture health/recovery, explicit Call Envelopes/Bookmarks/Calls library
+and local processing, and microphone-owned automatic Calls with relay, exclusion, pause, and 30-second end
+semantics. It was published by explicit owner decision before the full capture-coexistence v2 bracket, manual
+shortcuts, recovery/churn/two-hour soak, and the 60-/120-minute Call checklist were completed. Those physical
+checks remain unqualified and must not be described as passed.
+
+**Current unreleased source candidate:** the optional Activities day recap is implemented with a separate,
+consented model route and a local privacy-invalidated cache. Its exact prompt still needs a new versioned quality
+qualification. A 2026-08-08 developer diagnostic also found about 420 ms of added native-screenshot shortcut
+latency while Eye's persistent ScreenCaptureKit stream was active, even with Chronicle absent and Timeline
+healthy. A later release is blocked on a reviewed capture-path fix and the full gate above.
 
 **Deferred:** Sparkle auto-updates and deep integration of Cartographer with Pulse/Atlas. Live transcription,
 calendar automation, call maps, and CRM/call intelligence belong in another product, not Eye.
