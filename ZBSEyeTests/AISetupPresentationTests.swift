@@ -34,14 +34,50 @@ final class AISetupPresentationTests: XCTestCase {
         XCTAssertFalse(presentation.hasEphemeralWork)
     }
 
-    func testAIOffIsACompleteActiveStatusWithoutInventingAProvider() {
+    func testPrimaryAIStatusDoesNotPretendEveryAIRouteIsOff() {
         XCTAssertEqual(
             AISetupPresentation.activeLabel(provider: nil, modelID: nil),
-            "AI Off"
+            "Primary AI is off"
         )
         XCTAssertEqual(
             AISetupPresentation.activeLabel(provider: .openrouter, modelID: "model"),
             "OpenRouter · model"
+        )
+    }
+
+    func testSettingsSummaryReportsActivityOnlyCloudRouteAsOn() {
+        var route = ActivitySummaryRouteSettings.disabled
+        route.enable(
+            providerID: AIProvider.anthropic.rawValue,
+            modelID: "claude-haiku-4-5-20251001"
+        )
+
+        XCTAssertEqual(
+            AISetupPresentation.settingsSummary(
+                primaryProvider: .openrouter,
+                primaryModelID: "gpt-5-mini",
+                activitySummaryRoute: route,
+                allProcessingDisabled: false
+            ),
+            "OpenRouter · gpt-5-mini · Activity summaries on"
+        )
+        XCTAssertEqual(
+            AISetupPresentation.settingsSummary(
+                primaryProvider: nil,
+                primaryModelID: nil,
+                activitySummaryRoute: route,
+                allProcessingDisabled: false
+            ),
+            "Activity summaries · Anthropic"
+        )
+        XCTAssertEqual(
+            AISetupPresentation.settingsSummary(
+                primaryProvider: nil,
+                primaryModelID: nil,
+                activitySummaryRoute: route,
+                allProcessingDisabled: true
+            ),
+            "Off · optional"
         )
     }
 

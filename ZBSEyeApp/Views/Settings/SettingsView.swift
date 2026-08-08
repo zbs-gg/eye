@@ -94,10 +94,12 @@ struct SettingsView: View {
                 ? String(localized: "Ready · screen, microphone, sound")
                 : String(localized: "\(permissionIssueCount) need attention")
         case .ai:
-            if let provider = env.ai.activeProvider, let model = env.ai.activeModelID {
-                return AISetupPresentation.activeLabel(provider: provider, modelID: model)
-            }
-            return String(localized: "Off · optional")
+            return AISetupPresentation.settingsSummary(
+                primaryProvider: env.ai.activeProvider,
+                primaryModelID: env.ai.activeModelID,
+                activitySummaryRoute: env.ai.activitySummaryRoute,
+                allProcessingDisabled: env.ai.allProcessingDisabledByUser
+            )
         case .dataStorage:
             return "\(StorageSettingsStore.format(env.storageSettings.totalBytes)) · Keep \(env.storageSettings.keepMediaPolicy.settingsLabel)"
         case .browserCapture:

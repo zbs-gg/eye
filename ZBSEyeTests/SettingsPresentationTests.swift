@@ -38,6 +38,32 @@ final class SettingsPresentationTests: XCTestCase {
         ])
     }
 
+    func testAISettingsExposeExactPrimaryAndDurableDisableBoundaries() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let focused = try String(
+            contentsOf: repositoryRoot.appendingPathComponent(
+                "ZBSEyeApp/Views/Settings/FocusedSettingsViews.swift"
+            ),
+            encoding: .utf8
+        )
+        let setup = try String(
+            contentsOf: repositoryRoot.appendingPathComponent(
+                "ZBSEyeApp/Views/AISetup/AISetupView.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(focused.contains(#"let acknowledged = env.ai.deactivateAll()"#))
+        XCTAssertTrue(focused.contains(#"let acknowledged = env.ai.disableActivitySummaryRoute()"#))
+        XCTAssertTrue(focused.contains("env.ai.persistenceWarning"))
+        XCTAssertTrue(focused.contains(#"SettingsGroup("Primary AI")"#))
+        XCTAssertTrue(setup.contains(#"Button("Turn primary AI off")"#))
+        XCTAssertTrue(setup.contains("env.ai.deactivatePrimary()"))
+        XCTAssertFalse(setup.contains(#"Button("Disconnect")"#))
+    }
+
     func testTimelineCaptureControlsDoNotPretendToDisableAutomaticCalls() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

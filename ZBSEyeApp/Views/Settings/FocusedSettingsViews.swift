@@ -197,16 +197,32 @@ struct PermissionsSettingsView: View {
 
 struct AISettingsView: View {
     @Environment(AppEnvironment.self) private var env
-    @State private var pendingAutomaticConsent: AIConsumer?
+    @State private var pendingConsent: PendingConsent?
+    @State private var activitySummaryRouteError: String?
+    @State private var aiActionError: String?
+
+    private enum PendingConsent: Identifiable {
+        case automatic(AIConsumer)
+        case activitySummary(provider: AIProvider, modelID: String)
+
+        var id: String {
+            switch self {
+            case .automatic(let consumer):
+                return "automatic:\(consumer.rawValue)"
+            case .activitySummary(let provider, let modelID):
+                return "activity-summary:\(provider.rawValue):\(modelID)"
+            }
+        }
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                SettingsGroup("Active") {
+                SettingsGroup("Primary AI") {
                     HStack(spacing: 12) {
-                        Image(systemName: env.ai.activeProvider == nil
+                        Image(systemName: env.ai.selectionSnapshot == nil
                               ? "pause.circle" : "checkmark.circle.fill")
-                            .foregroundStyle(env.ai.activeProvider == nil
+                            .foregroundStyle(env.ai.selectionSnapshot == nil
                                              ? Color.secondary : Color.green)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(activeLabel).font(.headline)
@@ -221,8 +237,63 @@ struct AISettingsView: View {
                         env.aiSetup.present(origin: .settings)
                     }
                     .buttonStyle(.borderedProminent)
-                    if env.ai.activeProvider != nil {
-                        Button("Turn AI off", role: .destructive) { env.ai.deactivate() }
+                    if env.ai.selectionSnapshot != nil || activitySummaryRouteIsActive {
+                        Button("Turn AI off", role: .destructive) {
+                            let acknowledged = env.ai.deactivateAll()
+                            aiActionError = acknowledged
+                                ? nil
+                                : env.ai.persistenceWarning ?? String(
+                                    localized: "Eye couldn't confirm the saved AI setting. Try again."
+                                )
+                            activitySummaryRouteDidChange()
+                        }
+                    }
+                    if let warning = aiActionError ?? env.ai.persistenceWarning {
+                        Label(warning, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                SettingsGroup("Activity summaries") {
+                    HStack(spacing: 12) {
+                        Image(systemName: activitySummaryRouteIsActive
+                              ? "text.page.fill" : "text.page")
+                            .foregroundStyle(activitySummaryRouteIsActive
+                                             ? Color.accentColor : Color.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(activitySummaryRouteLabel).font(.headline)
+                            Text("Show a factual 3–6 item recap at the top of Activities. This can use a separate model without changing Ask.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    Divider()
+                    if env.ai.activitySummaryRouteCandidates.isEmpty {
+                        Text("Connect and check a provider above before choosing an Activity summary model.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Add or check a provider…") {
+                            env.aiSetup.present(origin: .settings)
+                        }
+                    } else {
+                        activitySummaryModelMenu
+                    }
+                    if activitySummaryRouteIsActive {
+                        Button("Turn Activity summaries off", role: .destructive) {
+                            let acknowledged = env.ai.disableActivitySummaryRoute()
+                            activitySummaryRouteError = acknowledged
+                                ? nil
+                                : env.ai.persistenceWarning ?? String(
+                                    localized: "Eye couldn't confirm the saved Activity summaries setting. Try again."
+                                )
+                            activitySummaryRouteDidChange()
+                        }
+                    }
+                    if let activitySummaryRouteError {
+                        Text(activitySummaryRouteError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
                     }
                 }
                 SettingsGroup("Call processing") {
@@ -259,27 +330,89 @@ struct AISettingsView: View {
         .alert(
             "Allow background AI?",
             isPresented: Binding(
-                get: { pendingAutomaticConsent != nil },
-                set: { if !$0 { pendingAutomaticConsent = nil } }
+                get: { pendingConsent != nil },
+                set: { if !$0 { pendingConsent = nil } }
             ),
-            presenting: pendingAutomaticConsent
-        ) { consumer in
+            presenting: pendingConsent
+        ) { pending in
             Button("Allow") {
-                guard let provider = env.ai.activeProvider else { return }
-                _ = env.ai.setAutomaticConsumerConsent(consumer, enabled: true, for: provider)
-                pendingAutomaticConsent = nil
+                commitConsent(pending)
             }
-            Button("Cancel", role: .cancel) { pendingAutomaticConsent = nil }
-        } message: { consumer in
-            Text(automaticConsentMessage(for: consumer))
+            Button("Cancel", role: .cancel) { pendingConsent = nil }
+        } message: { pending in
+            Text(consentMessage(for: pending))
         }
     }
 
     private var activeLabel: String {
         AISetupPresentation.activeLabel(
-            provider: env.ai.activeProvider,
-            modelID: env.ai.activeModelID
+            provider: env.ai.selectionSnapshot.flatMap {
+                AIProvider(rawValue: $0.providerID)
+            },
+            modelID: env.ai.selectionSnapshot?.modelID
         )
+    }
+
+    private var activitySummaryRouteIsActive: Bool {
+        !env.ai.allProcessingDisabledByUser && env.ai.activitySummaryRoute.enabled
+    }
+
+    private var activitySummaryRouteLabel: String {
+        let route = env.ai.activitySummaryRoute
+        guard activitySummaryRouteIsActive,
+              let providerID = route.providerID,
+              let provider = AIProvider(rawValue: providerID),
+              let modelID = route.modelID else {
+            return String(localized: "Activity summaries are off")
+        }
+        return "\(provider.displayName) · \(modelID)"
+    }
+
+    private var activitySummaryModelMenu: some View {
+        Menu {
+            ForEach(env.ai.activitySummaryRouteCandidates) { candidate in
+                Menu(candidate.provider.displayName) {
+                    let recommended = candidate.provider.recommendedModel(in: candidate.modelIDs)
+                    ForEach(candidate.modelIDs, id: \.self) { modelID in
+                        Button {
+                            chooseActivitySummaryRoute(
+                                provider: candidate.provider,
+                                modelID: modelID
+                            )
+                        } label: {
+                            if recommended == modelID {
+                                Label("\(modelID) — Recommended", systemImage: "sparkles")
+                            } else {
+                                Text(modelID)
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            Label(
+                activitySummaryRouteIsActive
+                    ? String(localized: "Change model…")
+                    : String(localized: "Choose model…"),
+                systemImage: "cpu"
+            )
+        }
+    }
+
+    private func chooseActivitySummaryRoute(provider: AIProvider, modelID: String) {
+        activitySummaryRouteError = nil
+        if provider.isCloud,
+           !env.ai.hasConsent(provider, for: .activitySummary) {
+            pendingConsent = .activitySummary(provider: provider, modelID: modelID)
+            return
+        }
+        guard env.ai.commitActivitySummaryRoute(provider: provider, modelID: modelID) else {
+            activitySummaryRouteError = String(
+                localized: "That model is no longer available. Check the provider and try again."
+            )
+            return
+        }
+        activitySummaryRouteDidChange()
     }
 
     @ViewBuilder
@@ -296,7 +429,7 @@ struct AISettingsView: View {
             set: { enabled in
                 guard let provider = env.ai.activeProvider else { return }
                 if enabled {
-                    pendingAutomaticConsent = consumer
+                    pendingConsent = .automatic(consumer)
                 } else {
                     _ = env.ai.setAutomaticConsumerConsent(
                         consumer,
@@ -313,14 +446,51 @@ struct AISettingsView: View {
         }
     }
 
-    private func automaticConsentMessage(for consumer: AIConsumer) -> String {
-        let recipient = env.ai.activeProvider
+    private func commitConsent(_ pending: PendingConsent) {
+        switch pending {
+        case .automatic(let consumer):
+            guard let provider = env.ai.activeProvider else { break }
+            _ = env.ai.setAutomaticConsumerConsent(consumer, enabled: true, for: provider)
+        case .activitySummary(let provider, let modelID):
+            if env.ai.commitActivitySummaryRoute(
+                provider: provider,
+                modelID: modelID,
+                grantCloudConsent: true
+            ) {
+                activitySummaryRouteDidChange()
+            } else {
+                activitySummaryRouteError = String(
+                    localized: "That model is no longer available. Check the provider and try again."
+                )
+            }
+        }
+        pendingConsent = nil
+    }
+
+    private func consentMessage(for pending: PendingConsent) -> String {
+        let provider: AIProvider?
+        let purpose: String
+        switch pending {
+        case .automatic(let consumer):
+            provider = env.ai.activeProvider
+            purpose = consumer == .scheduledSummary
+                ? String(localized: "scheduled summaries")
+                : String(localized: "activity labels")
+        case .activitySummary(let selectedProvider, _):
+            provider = selectedProvider
+            purpose = String(localized: "activity summaries")
+        }
+        let recipient = provider
             .flatMap { env.ai.recipientDisclosure(for: $0) }
-            ?? String(localized: "the active cloud provider")
-        let purpose = consumer == .scheduledSummary
-            ? String(localized: "scheduled summaries")
-            : String(localized: "activity labels")
-        return String(localized: "ZBS Eye will automatically send only the text excerpts needed for \(purpose) to \(recipient). Raw screenshots, audio, and file paths are not sent.")
+            ?? String(localized: "the selected cloud provider")
+        return String(localized: "ZBS Eye will automatically send only the bounded text excerpts needed for \(purpose) to \(recipient). Raw screenshots, audio, full URLs, and file paths are not sent.")
+    }
+
+    private func activitySummaryRouteDidChange() {
+        guard let store = env.activityDaySummaryStore else { return }
+        let day = store.selectedDay
+        store.reset()
+        Task { await store.load(day: day) }
     }
 }
 

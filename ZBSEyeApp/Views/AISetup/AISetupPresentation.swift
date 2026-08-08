@@ -69,9 +69,39 @@ final class AISetupPresentation {
         guard let provider,
               let modelID,
               !modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return String(localized: "AI Off")
+            return String(localized: "Primary AI is off")
         }
         return "\(provider.displayName) · \(modelID)"
+    }
+
+    static func settingsSummary(
+        primaryProvider: AIProvider?,
+        primaryModelID: String?,
+        activitySummaryRoute: ActivitySummaryRouteSettings,
+        allProcessingDisabled: Bool
+    ) -> String {
+        guard !allProcessingDisabled else { return String(localized: "Off · optional") }
+        let primary = primaryProvider.flatMap { provider -> String? in
+            guard let primaryModelID,
+                  !primaryModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return nil
+            }
+            return "\(provider.displayName) · \(primaryModelID)"
+        }
+        let activity = activitySummaryRoute.enabled
+            ? activitySummaryRoute.providerID.flatMap(AIProvider.init(rawValue:))
+            : nil
+
+        switch (primary, activity) {
+        case let (primary?, _?):
+            return String(localized: "\(primary) · Activity summaries on")
+        case let (primary?, nil):
+            return primary
+        case let (nil, provider?):
+            return String(localized: "Activity summaries · \(provider.displayName)")
+        case (nil, nil):
+            return String(localized: "Off · optional")
+        }
     }
 
     var hasEphemeralWork: Bool { ephemeralTask != nil }
