@@ -24,6 +24,36 @@ struct ActivityBlock: Sendable, Identifiable {
     var frameCount: Int { scenes.reduce(0) { $0 + $1.frameCount } }
     /// "Xcode, Chrome, Finder" — for the collapsed block header.
     var topAppsLine: String { topApps.prefix(3).map(\.name).joined(separator: ", ") }
+
+    /// The longest visual scene from the dominant app best represents the
+    /// block. If that app has no retained image, use the longest visual scene
+    /// in the block rather than showing an unrelated future frame.
+    var representativeVisualScene: ActivityScene? {
+        let visualScenes = scenes.filter { scene in
+            guard let path = scene.representativeVisualPath else { return false }
+            return !path.isEmpty && path != "imported"
+        }
+        guard !visualScenes.isEmpty else { return nil }
+        if let dominant = topApps.first {
+            let fromDominantApp = visualScenes.filter {
+                ($0.appName ?? $0.bundleId ?? "App") == dominant.name
+            }
+            if let scene = Self.longestScene(fromDominantApp) { return scene }
+        }
+        return Self.longestScene(visualScenes)
+    }
+
+    var representativeVisualPath: String? {
+        representativeVisualScene?.representativeVisualPath
+    }
+
+    private static func longestScene(_ candidates: [ActivityScene]) -> ActivityScene? {
+        candidates.sorted { lhs, rhs in
+            if lhs.durationSec != rhs.durationSec { return lhs.durationSec > rhs.durationSec }
+            if lhs.startTs != rhs.startTs { return lhs.startTs < rhs.startTs }
+            return lhs.id < rhs.id
+        }.first
+    }
 }
 
 /// Pure scenes → blocks assembly (no DB, independently testable). Reuses the existing labeling

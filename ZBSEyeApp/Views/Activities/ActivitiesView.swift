@@ -168,12 +168,16 @@ private struct ActivitiesBody: View {
 
 /// Collapsed: "14:00–15:30 · Working on X · Xcode, Chrome". Expanded: the underlying app sessions.
 private struct BlockCard: View {
+    @Environment(AppEnvironment.self) private var env
     let block: ActivityBlock
     let llmLabel: String?              // arrives async; heuristic label until (and unless) it does
     let onSelectScene: (ActivityScene) -> Void
 
     @State private var expanded = false
     @State private var appIcon: NSImage?
+    @State private var visualImage: NSImage?
+    @State private var appIconIdentity: String?
+    @State private var visualImageIdentity: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -197,26 +201,32 @@ private struct BlockCard: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.06)))
         .task(id: block.topApps.first?.bundleId) {
-            appIcon = await loadAppIcon(bundleId: block.topApps.first?.bundleId)
+            let bundleID = block.topApps.first?.bundleId
+            appIconIdentity = bundleID
+            appIcon = nil
+            let icon = await loadAppIcon(bundleId: bundleID)
+            guard !Task.isCancelled, appIconIdentity == bundleID else { return }
+            appIcon = icon
+        }
+        .task(id: block.representativeVisualPath) {
+            let path = block.representativeVisualPath
+            visualImageIdentity = path
+            visualImage = nil
+            guard let path,
+                  let loader = env.visualFrameImageLoader else { return }
+            let image = await loader.image(
+                relativePath: path,
+                maxPixel: 480,
+                priority: .current
+            )
+            guard !Task.isCancelled, visualImageIdentity == path else { return }
+            visualImage = image
         }
     }
 
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
-            Group {
-                if let icon = appIcon {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                } else {
-                    Image(systemName: "square.stack.3d.up")
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(width: 32, height: 32)
-            .cornerRadius(7)
+            leadingVisual
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -252,6 +262,47 @@ private struct BlockCard: View {
         .contentShape(Rectangle())
     }
 
+    @ViewBuilder
+    private var leadingVisual: some View {
+        if let visualImage {
+            ZStack(alignment: .bottomLeading) {
+                Image(nsImage: visualImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 160, height: 90)
+                    .clipped()
+
+                appIconView
+                    .frame(width: 24, height: 24)
+                    .padding(4)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+                    .padding(6)
+            }
+            .frame(width: 160, height: 90)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Representative screen from \(block.topApps.first?.name ?? "activity")")
+        } else {
+            appIconView
+                .frame(width: 32, height: 32)
+                .cornerRadius(7)
+        }
+    }
+
+    @ViewBuilder
+    private var appIconView: some View {
+        if let icon = appIcon {
+            Image(nsImage: icon)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        } else {
+            Image(systemName: "square.stack.3d.up")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private func timeRangeLabel(start: Date, end: Date) -> String {
         "\(cardTimeFormatter.string(from: start))–\(cardTimeFormatter.string(from: end))"
     }
@@ -264,6 +315,7 @@ private struct SceneCard: View {
     let onTap: () -> Void
 
     @State private var appIcon: NSImage?
+    @State private var appIconIdentity: String?
     @State private var hovered = false
 
     var body: some View {
@@ -344,7 +396,12 @@ private struct SceneCard: View {
         .animation(.easeInOut(duration: 0.12), value: hovered)
         .help("Open in Timeline")
         .task(id: scene.bundleId) {
-            appIcon = await loadAppIcon(bundleId: scene.bundleId)
+            let bundleID = scene.bundleId
+            appIconIdentity = bundleID
+            appIcon = nil
+            let icon = await loadAppIcon(bundleId: bundleID)
+            guard !Task.isCancelled, appIconIdentity == bundleID else { return }
+            appIcon = icon
         }
     }
 
@@ -391,6 +448,7 @@ struct SceneSummaryCard: View {
     let onJump: (() -> Void)?
 
     @State private var appIcon: NSImage?
+    @State private var appIconIdentity: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -433,9 +491,11 @@ struct SceneSummaryCard: View {
         .padding(10)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
         .task(id: card.bundleId) {
+            let bundleID = card.bundleId
+            appIconIdentity = bundleID
             appIcon = nil
-            let icon = await loadAppIcon(bundleId: card.bundleId)
-            guard !Task.isCancelled else { return }
+            let icon = await loadAppIcon(bundleId: bundleID)
+            guard !Task.isCancelled, appIconIdentity == bundleID else { return }
             appIcon = icon
         }
     }

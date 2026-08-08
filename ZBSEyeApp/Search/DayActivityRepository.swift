@@ -10,6 +10,29 @@ struct CaptureLite: Sendable {
     let bundleId: String?
     let windowTitle: String?
     let browserUrl: String?
+    /// Existing HEIC asset for this moment. `nil` and the history-import sentinel
+    /// mean that the moment has context but no locally loadable screen image.
+    let relativePath: String?
+
+    init(
+        id: Int64,
+        ts: Int64,
+        appId: Int64?,
+        appName: String?,
+        bundleId: String?,
+        windowTitle: String?,
+        browserUrl: String?,
+        relativePath: String? = nil
+    ) {
+        self.id = id
+        self.ts = ts
+        self.appId = appId
+        self.appName = appName
+        self.bundleId = bundleId
+        self.windowTitle = windowTitle
+        self.browserUrl = browserUrl
+        self.relativePath = relativePath
+    }
 }
 
 /// One activity session: consecutive frames of one group (app or app+window) with a pause tolerance.
@@ -25,6 +48,24 @@ struct ActivitySession: Sendable {
     var durationMs: Int64 { last.ts - first.ts }
     var appId: Int64? { first.appId }
     var captureIds: [Int64] { captures.map(\.id) }
+
+    /// The real image nearest the session's temporal midpoint. Choosing by time
+    /// (rather than by array index) keeps long, unevenly sampled scenes honest.
+    var representativeVisualCapture: CaptureLite? {
+        let midpoint = startMs + ((endMs - startMs) / 2)
+        return captures
+            .filter { capture in
+                guard let path = capture.relativePath else { return false }
+                return !path.isEmpty && path != "imported"
+            }
+            .min { lhs, rhs in
+                let lhsDistance = abs(lhs.ts - midpoint)
+                let rhsDistance = abs(rhs.ts - midpoint)
+                if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
+                if lhs.ts != rhs.ts { return lhs.ts < rhs.ts }
+                return lhs.id < rhs.id
+            }
+    }
 
     /// Up to `max` captureIds spread EVENLY across the session (not just the start) — so the text selection
     /// isn't skewed toward the start of a long session (the longest text block can be anywhere).
@@ -57,13 +98,15 @@ actor DayActivityRepository {
             let captures = try Row.fetchAll(dbc, sql: """
                 SELECT c.id AS id, c.ts AS ts, c.appId AS appId,
                        a.name AS appName, a.bundleId AS bundleId,
-                       c.windowTitle AS windowTitle, c.browserUrl AS browserUrl
+                       c.windowTitle AS windowTitle, c.browserUrl AS browserUrl,
+                       c.relativePath AS relativePath
                 FROM screen_captures c LEFT JOIN apps a ON a.id = c.appId
                 WHERE c.ts BETWEEN ? AND ? ORDER BY c.ts ASC, c.id ASC
                 """, arguments: [fromMs, toMs]).map {
                 CaptureLite(id: $0["id"], ts: $0["ts"], appId: $0["appId"],
                             appName: $0["appName"], bundleId: $0["bundleId"],
-                            windowTitle: $0["windowTitle"], browserUrl: $0["browserUrl"])
+                            windowTitle: $0["windowTitle"], browserUrl: $0["browserUrl"],
+                            relativePath: $0["relativePath"])
             }
             return captures.filter { !SystemAppFilter.isProtectedCaptureSurface($0) }
         }
@@ -82,7 +125,8 @@ actor DayActivityRepository {
             let captures = try Row.fetchAll(dbc, sql: """
                 SELECT c.id AS id, c.ts AS ts, c.appId AS appId,
                        a.name AS appName, a.bundleId AS bundleId,
-                       c.windowTitle AS windowTitle, c.browserUrl AS browserUrl
+                       c.windowTitle AS windowTitle, c.browserUrl AS browserUrl,
+                       c.relativePath AS relativePath
                 FROM screen_captures c LEFT JOIN apps a ON a.id = c.appId
                 WHERE c.ts BETWEEN ? AND ? AND c.id <= ?
                 ORDER BY c.ts ASC, c.id ASC
@@ -90,7 +134,8 @@ actor DayActivityRepository {
                 """, arguments: [fromMs, toMs, snapshotMaxCaptureID, limit]).map {
                     CaptureLite(id: $0["id"], ts: $0["ts"], appId: $0["appId"],
                                 appName: $0["appName"], bundleId: $0["bundleId"],
-                                windowTitle: $0["windowTitle"], browserUrl: $0["browserUrl"])
+                                windowTitle: $0["windowTitle"], browserUrl: $0["browserUrl"],
+                                relativePath: $0["relativePath"])
                 }
             return captures.filter { !SystemAppFilter.isProtectedCaptureSurface($0) }
         }

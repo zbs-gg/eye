@@ -48,9 +48,12 @@ final class CaptureCoordinator {
     private var distributedObservers: [NSObjectProtocol] = []
     private var runningApplicationsObservation: NSKeyValueObservation?
     private var cycleTask: Task<Void, Never>?
+    private var meaningfulInputTask: Task<Void, Never>?
     private var cycleGeneration: UInt64 = 0
+    private var frontmostApplicationRevision: UInt64 = 0
     private var contentTopologyRevision: UInt64 = 0
     private var workPolicy = LatestCaptureWorkPolicy()
+    private var meaningfulInputPolicy: MeaningfulCaptureTriggerPolicy
     private var privacyApplicationInventory: Set<CapturePrivacyApplicationIdentity>?
 
     private var capability: [String: CaptureClass] = [:]
@@ -62,7 +65,9 @@ final class CaptureCoordinator {
     private var lastIdleCaptureAt = Date.distantPast
     private var lastProtectedSystemShell: String?
 
-    var onFrame: (@MainActor () -> Void)?
+    /// Publishes the exact timestamp committed with the frame so Timeline can
+    /// refresh its live edge without approximating it with a later `Date()`.
+    var onFrame: (@MainActor (Date) -> Void)?
     /// Returns false at critically low free space — the cycle skips capture (we don't fill the disk to the brim).
     var diskOK: @MainActor () -> Bool = { true }
     /// Privacy exclusions (1Password/bank): true → we don't record the app. Default — record everything.
@@ -89,6 +94,12 @@ final class CaptureCoordinator {
         self.streamEventFence = eventFence
         self.screenshotPriorityGate = screenshotPriorityGate
         self.screenshotHotkeyMonitor = ScreenshotHotkeyMonitor(gate: screenshotPriorityGate)
+        self.meaningfulInputPolicy = MeaningfulCaptureTriggerPolicy(
+            clickDelayMs: config.clickCaptureDelayMs,
+            typingPauseDelayMs: config.typingPauseDelayMs,
+            scrollStopDelayMs: config.scrollStopDelayMs,
+            softFloorMs: config.softCaptureFloorMs
+        )
         self.pipeline = FramePipeline(
             config: config,
             resourceCoordinator: resourceCoordinator,
@@ -115,6 +126,9 @@ final class CaptureCoordinator {
         loadCapability()
         screenshotPriorityGate.onSuppressionOpened = { [weak self] _ in
             self?.yieldToNativeScreenshot()
+        }
+        screenshotHotkeyMonitor.onMeaningfulInput = { [weak self] input in
+            self?.observeMeaningfulInput(input)
         }
     }
 
@@ -157,6 +171,9 @@ final class CaptureCoordinator {
     func start() {
         guard !isRunning else { return }
         isRunning = true
+        meaningfulInputTask?.cancel()
+        meaningfulInputTask = nil
+        meaningfulInputPolicy.reset()
         // Notifications only describe transitions and can be missed when ZBS Eye
         // launches under lock. Seed from the current session, failing closed when
         // the query is unavailable; the active tick reconciles it again later.
@@ -171,7 +188,7 @@ final class CaptureCoordinator {
         let wsc = NSWorkspace.shared.notificationCenter
         observers.append(wsc.addObserver(forName: NSWorkspace.didActivateApplicationNotification,
                                          object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.trigger() }
+            MainActor.assumeIsolated { self?.triggerApplicationSwitch() }
         })
         observers.append(wsc.addObserver(forName: NSWorkspace.willSleepNotification,
                                          object: nil, queue: .main) { [weak self] _ in
@@ -243,7 +260,7 @@ final class CaptureCoordinator {
                     )
                     return
                 }
-                if self.isRunning, !self.suspended { self.trigger() }
+                if self.isRunning, !self.suspended { self.trigger(.displayChange) }
             }
         })
 
@@ -271,7 +288,7 @@ final class CaptureCoordinator {
             Task { @MainActor in await self?.tickFired() }
         }
         _ = screenshotHotkeyMonitor.start()
-        if initialSessionGate.isOpen { trigger() }
+        if initialSessionGate.isOpen { trigger(.startup) }
     }
 
     func stop() {
@@ -353,7 +370,7 @@ final class CaptureCoordinator {
             )
             return
         }
-        trigger()
+        trigger(.recovery)
     }
 
     private func stopAdmission() -> Task<Void, Never>? {
@@ -372,6 +389,9 @@ final class CaptureCoordinator {
         privacyApplicationInventory = nil
         tickTimer?.invalidate(); tickTimer = nil
         screenshotHotkeyMonitor.stop()
+        meaningfulInputTask?.cancel()
+        meaningfulInputTask = nil
+        meaningfulInputPolicy.reset()
         gateRevision &+= 1
         cycleGeneration &+= 1
         let cycle = cycleTask
@@ -418,14 +438,14 @@ final class CaptureCoordinator {
             let now = Date()
             if now.timeIntervalSince(lastIdleCaptureAt) >= config.idleCaptureIntervalSec {
                 lastIdleCaptureAt = now
-                trigger()
+                trigger(.idleFallback)
             }
             return
         }
-        trigger()
+        trigger(.activeFallback)
     }
 
-    private func trigger() {
+    private func trigger(_: CaptureTriggerReason) {
         guard isRunning, !suspended,
               CaptureSessionPolicy.mayCapture(screenLocked: screenLocked),
               !screenshotPriorityGate.isSuppressed() else { return }
@@ -451,9 +471,71 @@ final class CaptureCoordinator {
     }
 
     private func yieldToNativeScreenshot() {
+        meaningfulInputTask?.cancel()
+        meaningfulInputTask = nil
+        meaningfulInputPolicy.cancelPending()
         workPolicy.discardWaiting()
         cycleTask?.cancel()
         Task { [pipeline] in await pipeline.discardPendingIntent() }
+    }
+
+    /// A hard focus edge owns the next moment. Retire the delayed typing or
+    /// scroll intent synchronously so input observed in the previous app can
+    /// never fire after the new app becomes frontmost.
+    private func triggerApplicationSwitch() {
+        frontmostApplicationRevision &+= 1
+        meaningfulInputTask?.cancel()
+        meaningfulInputTask = nil
+        meaningfulInputPolicy.cancelPending()
+        cycleTask?.cancel()
+        trigger(.applicationSwitch)
+    }
+
+    private func observeMeaningfulInput(_ input: MeaningfulCaptureInput) {
+        guard isRunning, !suspended,
+              CaptureSessionPolicy.mayCapture(screenLocked: screenLocked),
+              !screenshotPriorityGate.isSuppressed() else { return }
+        handleMeaningfulInputDecision(
+            meaningfulInputPolicy.observe(input, at: Self.monotonicMs())
+        )
+    }
+
+    private func handleMeaningfulInputDecision(
+        _ decision: MeaningfulCaptureTriggerDecision
+    ) {
+        switch decision {
+        case .capture(let reason):
+            meaningfulInputTask?.cancel()
+            meaningfulInputTask = nil
+            trigger(reason)
+        case .schedule(let deadlineMs):
+            scheduleMeaningfulInputDeadline(deadlineMs)
+        case .none:
+            meaningfulInputTask?.cancel()
+            meaningfulInputTask = nil
+        }
+    }
+
+    private func scheduleMeaningfulInputDeadline(_ deadlineMs: UInt64) {
+        meaningfulInputTask?.cancel()
+        let nowMs = Self.monotonicMs()
+        let delayMs = deadlineMs > nowMs ? deadlineMs - nowMs : 0
+        meaningfulInputTask = Task { @MainActor [weak self] in
+            if delayMs > 0 {
+                try? await Task.sleep(for: .milliseconds(Int(clamping: delayMs)))
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.meaningfulInputTask = nil
+            guard self.isRunning, !self.suspended,
+                  CaptureSessionPolicy.mayCapture(screenLocked: self.screenLocked),
+                  !self.screenshotPriorityGate.isSuppressed() else {
+                self.meaningfulInputPolicy.cancelPending()
+                return
+            }
+            self.handleMeaningfulInputDecision(
+                self.meaningfulInputPolicy.timerFired(at: Self.monotonicMs())
+            )
+        }
     }
 
     /// A newly launched or terminated excluded/protected process changes the
@@ -464,6 +546,9 @@ final class CaptureCoordinator {
         _ reason: CapturePipelineInvalidationReason
     ) {
         contentTopologyRevision &+= 1
+        meaningfulInputTask?.cancel()
+        meaningfulInputTask = nil
+        meaningfulInputPolicy.cancelPending()
         workPolicy.discardWaiting()
         cycleTask?.cancel()
         invalidateScreenPipeline(
@@ -540,7 +625,7 @@ final class CaptureCoordinator {
                 )
                 return
             }
-            if self.isRunning, !self.suspended { self.trigger() }
+            if self.isRunning, !self.suspended { self.trigger(.contentTopologyChange) }
         }
     }
 
@@ -571,6 +656,7 @@ final class CaptureCoordinator {
     // MARK: cycle
 
     private func runCycle() async {
+        let expectedFrontmostApplicationRevision = frontmostApplicationRevision
         if reconcileRunningPrivacyApplications() { return }
         let expectedPrivacyApplicationInventory = privacyApplicationInventory
             ?? currentPrivacyApplicationInventory()
@@ -613,6 +699,12 @@ final class CaptureCoordinator {
         lastProtectedSystemShell = nil
         let pid = app.processIdentifier
         let windowInfo = Self.frontmostWindowInfo(pid: pid)
+        let expectedCaptureSource = CaptureSourceIdentity(
+            processIdentifier: pid,
+            bundleIdentifier: bundleId,
+            windowNumber: windowInfo.windowNumber,
+            displayID: windowInfo.displayID
+        )
         var excludes = ignoredBundleIds()
         if let own = Bundle.main.bundleIdentifier { excludes.insert(own) }
         let protectedApplicationSnapshot = CaptureSessionPolicy.protectedRunningApplicationSnapshot()
@@ -720,6 +812,10 @@ final class CaptureCoordinator {
               ),
               screenshotPriorityGate.revision == screenshotPriorityRevision,
               !screenshotPriorityGate.isSuppressed() else { return }
+        guard reattestCaptureSourceOrQueueLatest(
+            expectedCaptureSource,
+            expectedFrontmostApplicationRevision: expectedFrontmostApplicationRevision
+        ) else { return }
 
         // The display of the FRONTMOST window by GEOMETRY. NSScreen.main won't do here: it's the screen of OUR
         // app's key window — when ZBS Eye is in the background (always while recording), it would give the primary
@@ -776,6 +872,10 @@ final class CaptureCoordinator {
               ),
               screenshotPriorityGate.revision == screenshotPriorityRevision,
               !screenshotPriorityGate.isSuppressed() else { return }
+        guard reattestCaptureSourceOrQueueLatest(
+            expectedCaptureSource,
+            expectedFrontmostApplicationRevision: expectedFrontmostApplicationRevision
+        ) else { return }
 
         if frame.isDuplicate {
             // Same pixels may still carry a new SPA/iframe document.
@@ -843,6 +943,10 @@ final class CaptureCoordinator {
         Int64(date.timeIntervalSince1970 * 1_000)
     }
 
+    private static func monotonicMs() -> UInt64 {
+        DispatchTime.now().uptimeNanoseconds / 1_000_000
+    }
+
     private func resumeIfSessionUnlocked(clearing reason: CaptureSuspensionReasons) async {
         let previousGate = sessionGate
         let gate = CaptureSessionPolicy.resumeSignalGate(
@@ -878,7 +982,7 @@ final class CaptureCoordinator {
         }
         applySessionGate(gate)
         guard gate.isOpen else { return }
-        trigger()
+        trigger(.sessionResume)
     }
 
     private func suspend(for reason: CaptureSuspensionReasons) {
@@ -886,6 +990,9 @@ final class CaptureCoordinator {
         let gate = CaptureSessionPolicy.suspendedGate(previous: sessionGate, adding: reason)
         applySessionGate(gate)
         guard wasOpen, gate.suspended else { return }
+        meaningfulInputTask?.cancel()
+        meaningfulInputTask = nil
+        meaningfulInputPolicy.cancelPending()
         invalidateScreenPipeline(
             .suspension,
             screenLocked: gate.screenLocked,
@@ -940,6 +1047,42 @@ final class CaptureCoordinator {
         )
     }
 
+    /// AX and the next stream frame arrive across suspension points. If focus
+    /// moved meanwhile, discard the mixed result and retain one newest intent.
+    private func reattestCaptureSourceOrQueueLatest(
+        _ expected: CaptureSourceIdentity,
+        expectedFrontmostApplicationRevision: UInt64
+    ) -> Bool {
+        let current = Self.currentFrontmostCaptureSourceIdentity()
+        guard CaptureSourceAttestationPolicy.accepts(
+            expected: expected,
+            current: current,
+            expectedFocusRevision: expectedFrontmostApplicationRevision,
+            currentFocusRevision: frontmostApplicationRevision
+        ) else {
+            // A real activation edge has already queued the latest intent. If
+            // identity changed without an observed notification, synthesize
+            // that edge now so one current cycle still follows this discard.
+            if frontmostApplicationRevision == expectedFrontmostApplicationRevision {
+                triggerApplicationSwitch()
+            }
+            return false
+        }
+        return true
+    }
+
+    private static func currentFrontmostCaptureSourceIdentity() -> CaptureSourceIdentity? {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              let bundleIdentifier = app.bundleIdentifier else { return nil }
+        let windowInfo = frontmostWindowInfo(pid: app.processIdentifier)
+        return CaptureSourceIdentity(
+            processIdentifier: app.processIdentifier,
+            bundleIdentifier: bundleIdentifier,
+            windowNumber: windowInfo.windowNumber,
+            displayID: windowInfo.displayID
+        )
+    }
+
     private static func currentSessionLocked() -> Bool? {
         CaptureSessionPolicy.currentSessionLocked()
     }
@@ -947,13 +1090,14 @@ final class CaptureCoordinator {
     /// The display of the topmost normal window (layer 0) of the process — by intersecting bounds with displays.
     private struct FrontmostWindowInfo {
         let displayID: CGDirectDisplayID?
+        let windowNumber: CGWindowID?
         let title: String?
     }
 
     private static func frontmostWindowInfo(pid: pid_t) -> FrontmostWindowInfo {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                     kCGNullWindowID) as? [[String: Any]] else {
-            return FrontmostWindowInfo(displayID: nil, title: nil)
+            return FrontmostWindowInfo(displayID: nil, windowNumber: nil, title: nil)
         }
         for w in list {
             guard let owner = w[kCGWindowOwnerPID as String] as? Int, pid_t(owner) == pid,
@@ -966,11 +1110,12 @@ final class CaptureCoordinator {
             if CGGetDisplaysWithRect(rect, 1, &display, &count) == .success, count > 0 {
                 return FrontmostWindowInfo(
                     displayID: display,
+                    windowNumber: (w[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
                     title: w[kCGWindowName as String] as? String
                 )
             }
         }
-        return FrontmostWindowInfo(displayID: nil, title: nil)
+        return FrontmostWindowInfo(displayID: nil, windowNumber: nil, title: nil)
     }
 
     private func write(bundleId: String, appName: String, ax: AXExtraction,
@@ -1003,8 +1148,9 @@ final class CaptureCoordinator {
                 : (browser?.requiresOCR == true ? "browser=pixelOnly" : "ax=\(ax.quality.rawValue)"),
             manualAccessibilityResult: ax.manualResult, enhancedUiResult: ax.enhancedResult)
 
+        let capturedAt = Date()
         let record = ScreenCaptureRecord(
-            timestamp: Date(), bundleId: bundleId, appName: appName,
+            timestamp: capturedAt, bundleId: bundleId, appName: appName,
             windowTitle: browser?.title ?? ax.windowTitle,
             browserURL: browser?.url ?? ax.browserURL,
             monitorId: monitorId,
@@ -1012,7 +1158,7 @@ final class CaptureCoordinator {
             textBlocks: blocks, axQuality: quality, telemetry: tel)
         do {
             _ = try await ingest.ingest(record)
-            onFrame?()
+            onFrame?(capturedAt)
         } catch {
             Log.ingest.error("screen_frame_ingest_failed")
         }

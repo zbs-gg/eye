@@ -184,6 +184,122 @@ actor TimelineService {
         try await fetchFrame(where: "c.id = ?", orderBy: nil, args: [id])
     }
 
+    /// The visual context for a timeline moment: at most two images before the
+    /// selected image, that selected image, and four after it. The selected
+    /// image is the nearest real image at or before the full `(time, anchorID)`
+    /// order. A later image is never substituted for an empty/context-only
+    /// moment, including when multiple captures share one timestamp.
+    func visualWindow(
+        atOrBefore time: Date,
+        anchorID: Int64? = nil,
+        previousCount: Int = 2,
+        nextCount: Int = 4
+    ) async throws -> FrameVisualWindow {
+        let boundedPrevious = max(0, min(previousCount, 12))
+        let boundedNext = max(0, min(nextCount, 12))
+        let timeMs = msFromDate(time)
+        return try await db.pool.read { db in
+            let protectedIDs = try SystemAppFilter.protectedAppIDs(in: db)
+            let visible = SystemAppFilter.visibleCapturePredicate(
+                .c,
+                protectedAppIDs: protectedIDs
+            )
+            let visual = "c.relativePath IS NOT NULL AND length(trim(c.relativePath)) > 0 AND c.relativePath <> 'imported'"
+
+            // `anchorID` is deliberately resolved even when it belongs to a
+            // context-only capture. It establishes a complete order at equal
+            // timestamps, so selecting id 2 cannot display the later id 3.
+            let resolvedAnchor: (timestamp: Int64, id: Int64?)
+            if let anchorID,
+               let anchorTimestamp: Int64 = try Row.fetchOne(
+                   db,
+                   sql: "SELECT ts FROM screen_captures WHERE id = ? AND ts <= ?",
+                   arguments: [anchorID, timeMs]
+               )?["ts"] {
+                resolvedAnchor = (anchorTimestamp, anchorID)
+            } else {
+                resolvedAnchor = (timeMs, nil)
+            }
+
+            let selectedRow: Row?
+            if let anchorID = resolvedAnchor.id {
+                selectedRow = try Row.fetchOne(db, sql: """
+                    SELECT c.id AS id, c.ts AS ts, c.relativePath AS relativePath,
+                           a.bundleId AS bundleId, a.name AS appName
+                    FROM screen_captures c LEFT JOIN apps a ON a.id = c.appId
+                    WHERE (c.ts < ? OR (c.ts = ? AND c.id <= ?))
+                      AND \(visual) AND \(visible)
+                    ORDER BY c.ts DESC, c.id DESC
+                    LIMIT 1
+                    """, arguments: [resolvedAnchor.timestamp, resolvedAnchor.timestamp, anchorID])
+            } else {
+                selectedRow = try Row.fetchOne(db, sql: """
+                    SELECT c.id AS id, c.ts AS ts, c.relativePath AS relativePath,
+                           a.bundleId AS bundleId, a.name AS appName
+                    FROM screen_captures c LEFT JOIN apps a ON a.id = c.appId
+                    WHERE c.ts <= ? AND \(visual) AND \(visible)
+                    ORDER BY c.ts DESC, c.id DESC
+                    LIMIT 1
+                    """, arguments: [resolvedAnchor.timestamp])
+            }
+
+            guard let selectedRow,
+                  let selected = Self.visualRef(from: selectedRow) else {
+                return FrameVisualWindow(frames: [], selectedID: nil)
+            }
+
+            let previousRows = boundedPrevious == 0 ? [] : try Row.fetchAll(db, sql: """
+                SELECT c.id AS id, c.ts AS ts, c.relativePath AS relativePath,
+                       a.bundleId AS bundleId, a.name AS appName
+                FROM screen_captures c LEFT JOIN apps a ON a.id = c.appId
+                WHERE (c.ts < ? OR (c.ts = ? AND c.id < ?))
+                  AND \(visual) AND \(visible)
+                ORDER BY c.ts DESC, c.id DESC
+                LIMIT ?
+                """, arguments: [msFromDate(selected.ts), msFromDate(selected.ts), selected.id, boundedPrevious])
+            let nextRows = boundedNext == 0 ? [] : try Row.fetchAll(db, sql: """
+                SELECT c.id AS id, c.ts AS ts, c.relativePath AS relativePath,
+                       a.bundleId AS bundleId, a.name AS appName
+                FROM screen_captures c LEFT JOIN apps a ON a.id = c.appId
+                WHERE (c.ts > ? OR (c.ts = ? AND c.id > ?))
+                  AND \(visual) AND \(visible)
+                ORDER BY c.ts ASC, c.id ASC
+                LIMIT ?
+                """, arguments: [msFromDate(selected.ts), msFromDate(selected.ts), selected.id, boundedNext])
+
+            let previous = previousRows.compactMap { Self.visualRef(from: $0) }.reversed()
+            let next = nextRows.compactMap { Self.visualRef(from: $0) }
+            return FrameVisualWindow(
+                frames: Array(previous) + [selected] + next,
+                selectedID: selected.id
+            )
+        }
+    }
+
+    /// Used only when a database-owned image file disappeared or cannot be
+    /// decoded. Recovery walks backward; it never crosses into the future.
+    func previousVisualFrame(before frame: FrameVisualRef) async throws -> FrameVisualRef? {
+        try await db.pool.read { db in
+            let protectedIDs = try SystemAppFilter.protectedAppIDs(in: db)
+            let visible = SystemAppFilter.visibleCapturePredicate(
+                .c,
+                protectedAppIDs: protectedIDs
+            )
+            let row = try Row.fetchOne(db, sql: """
+                SELECT c.id AS id, c.ts AS ts, c.relativePath AS relativePath,
+                       a.bundleId AS bundleId, a.name AS appName
+                FROM screen_captures c LEFT JOIN apps a ON a.id = c.appId
+                WHERE (c.ts < ? OR (c.ts = ? AND c.id < ?))
+                  AND c.relativePath IS NOT NULL AND length(trim(c.relativePath)) > 0
+                  AND c.relativePath <> 'imported'
+                  AND \(visible)
+                ORDER BY c.ts DESC, c.id DESC
+                LIMIT 1
+                """, arguments: [msFromDate(frame.ts), msFromDate(frame.ts), frame.id])
+            return row.flatMap { Self.visualRef(from: $0) }
+        }
+    }
+
     /// AUDIO activity density (the density strip's second track): where in history there's speech.
     func audioDensity(from: Date, to: Date, bucketMs: Int64) async throws -> [DensityBucket] {
         let f = msFromDate(from), t = msFromDate(to)
@@ -252,5 +368,32 @@ actor TimelineService {
                 windowTitle: row["windowTitle"], browserURL: row["browserUrl"],
                 text: text, axQuality: row["axQuality"], sources: sources)
         }
+    }
+
+    private static func visualRef(from row: Row) -> FrameVisualRef? {
+        let bundleID: String? = row["bundleId"]
+        let appName: String? = row["appName"]
+        guard !SystemAppFilter.isProtectedCaptureSurface(
+            bundleId: bundleID,
+            appName: appName
+        ), let relativePath = row["relativePath"] as String?,
+           !relativePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           relativePath != "imported" else {
+            return nil
+        }
+        let trimmedName = appName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBundle = bundleID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let appLabel = [trimmedName, trimmedBundle]
+            .compactMap { value -> String? in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }
+            .first ?? "Unknown app"
+        return FrameVisualRef(
+            id: row["id"],
+            ts: dateFromMs(row["ts"]),
+            relativePath: relativePath,
+            appLabel: appLabel
+        )
     }
 }

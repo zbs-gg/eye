@@ -23,10 +23,44 @@ enum ScreenshotHotkeyPolicy {
     }
 }
 
-/// A listen-only observer for Shift-Command-3/4/5 and their Control variants.
-/// It cannot consume, replace, or delay-deliver the system event. Creating a
-/// listen-only tap is best-effort: failure leaves native screenshots untouched
-/// and never triggers a TCC prompt or opens System Settings.
+enum CaptureInputEventAction: Sendable, Equatable {
+    case nativeScreenshot
+    case meaningful(MeaningfulCaptureInput)
+    case ignore
+}
+
+/// Routes raw event primitives before anything is retained. Screenshot
+/// shortcuts win over ordinary typing, so Shift-Command-3/4/5 synchronously
+/// open the native-screenshot gate and emit no capture trigger.
+enum CaptureInputEventPolicy {
+    static func action(
+        type: CGEventType,
+        keyCode: CGKeyCode,
+        flags: CGEventFlags
+    ) -> CaptureInputEventAction {
+        switch type {
+        case .keyDown:
+            if ScreenshotHotkeyPolicy.isNativeScreenshotHotkey(
+                keyCode: keyCode,
+                flags: flags
+            ) {
+                return .nativeScreenshot
+            }
+            return .meaningful(.typingActivity)
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            return .meaningful(.click)
+        case .scrollWheel:
+            return .meaningful(.scrollActivity)
+        default:
+            return .ignore
+        }
+    }
+}
+
+/// A listen-only observer for coarse input activity plus Shift-Command-3/4/5
+/// and their Control variants. It cannot consume, replace, or delay-deliver a
+/// system event. Creating the tap is best-effort: failure leaves native input
+/// untouched and never triggers a TCC prompt or opens System Settings.
 @MainActor
 final class ScreenshotHotkeyMonitor {
     enum StartResult: Sendable, Equatable {
@@ -41,6 +75,10 @@ final class ScreenshotHotkeyMonitor {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var runningApplicationsObservation: NSKeyValueObservation?
     private var isStarted = false
+
+    /// Emits only an opaque semantic activity kind. Raw event content and
+    /// positions never leave the callback and are never retained.
+    var onMeaningfulInput: (@MainActor (MeaningfulCaptureInput) -> Void)?
 
     init(gate: ScreenshotPriorityYieldGate) {
         self.gate = gate
@@ -59,7 +97,15 @@ final class ScreenshotHotkeyMonitor {
             Log.capture.notice("screenshot_hotkey_monitor_unavailable")
             return .unavailable
         }
-        let eventMask = CGEventMask(1) << CGEventType.keyDown.rawValue
+        let eventMask = [
+            CGEventType.keyDown,
+            .leftMouseDown,
+            .rightMouseDown,
+            .otherMouseDown,
+            .scrollWheel,
+        ].reduce(CGEventMask(0)) { mask, type in
+            mask | (CGEventMask(1) << type.rawValue)
+        }
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
@@ -105,7 +151,7 @@ final class ScreenshotHotkeyMonitor {
         gate.replaceActiveScreenshotProcesses([])
     }
 
-    fileprivate func handleEventTap(
+    func handleEventTap(
         typeRawValue: UInt32,
         keyCode: CGKeyCode,
         flagsRawValue: UInt64
@@ -115,15 +161,21 @@ final class ScreenshotHotkeyMonitor {
             if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
             return
         }
-        guard type == .keyDown,
-              ScreenshotHotkeyPolicy.isNativeScreenshotHotkey(
-                keyCode: keyCode,
-                flags: CGEventFlags(rawValue: flagsRawValue)
-              ) else { return }
-
-        // No Task or queue hop here: suppression is open before this listen-only
-        // callback returns and before Eye can admit more heavy screenshot work.
-        gate.openSuppression()
+        guard let type else { return }
+        switch CaptureInputEventPolicy.action(
+            type: type,
+            keyCode: keyCode,
+            flags: CGEventFlags(rawValue: flagsRawValue)
+        ) {
+        case .nativeScreenshot:
+            // No Task or queue hop here: suppression is open before this
+            // listen-only callback returns and no typing trigger is emitted.
+            gate.openSuppression()
+        case .meaningful(let input):
+            onMeaningfulInput?(input)
+        case .ignore:
+            break
+        }
     }
 
     private func startScreenshotProcessObservation() {

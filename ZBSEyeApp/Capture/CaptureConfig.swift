@@ -20,6 +20,10 @@ struct CaptureConfig: Sendable {
                                            // frames: the old untuned default was ≈q0.8; 0.6 is ~19% smaller with no
                                            // visible loss (0.5 ≈ −35%, 0.4 ≈ −44% if you want more aggressive).
     var activeTickSeconds = 3.0            // active-text fallback tick (single-flight + dedup protect it)
+    var clickCaptureDelayMs: UInt64 = 0    // mouse-down requests the newest frame immediately
+    var typingPauseDelayMs: UInt64 = 700   // capture only after typing has been quiet this long
+    var scrollStopDelayMs: UInt64 = 350    // capture after scrolling settles, not for every wheel event
+    var softCaptureFloorMs: UInt64 = 1_500 // click/type/scroll share one heavy-work rate limit
     var streamFrameIntervalSec = 2.0       // one persistent SCK stream; low-frequency enough to coexist with screenshots
     var streamQueueDepth = 3               // Apple's recommended small IOSurface queue; processing remains latest-wins
     var streamLivenessTimeoutSec = 8.0     // only complete/idle frame silence this long is a screen-leg failure

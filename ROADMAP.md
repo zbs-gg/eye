@@ -50,7 +50,10 @@ Previously verified live baseline:
 - Built-in local generation on qualified hardware, with one global provider/model pair and provider-owned
   model lists; Ollama and LM Studio remain separate alternatives.
 
-Implemented and deterministically verified in the **`0.7.0 (21)` candidate**:
+The exact notarized **`0.7.0 (21)`** build is the current public stable release. Its screenshot-coexistence and
+long-Call checks were not completed before publication and must not be described as passed.
+
+Implemented in the **`0.8.0 (22)` source candidate**:
 
 - Explicit Call Envelopes, the Calls library/detail, uninterrupted Bookmarks, optional local Whisper and
   per-call speaker processing, preferred-only search, and bounded read-only agent evidence.
@@ -65,11 +68,14 @@ Implemented and deterministically verified in the **`0.7.0 (21)` candidate**:
   from screen privacy. Audio Off and privacy pause disarm Calls.
 - A 30-second detected-end window with resumed-mic continuation, **End & save**, or destructive
   **This wasn’t a call**. There is no post-end Undo.
+- Meaningful visual moments on app switch and, with existing listen-event access, click, scroll-stop, and
+  typing-pause while retaining one persistent stream, the bounded latest-wins pipeline, and the three-second fallback.
+- Past-only image selection, a clickable seven-image filmstrip, one shared 128 MB loader with at most two
+  decodes, and lazy representative images in top-level Activity cards.
 
-Build 21 is **not physically release-qualified yet**. A new exact notarized ZIP/manifest must pass the complete
-capture-coexistence v2 bracket, native-shortcut and recovery matrix, 30-minute churn and two-hour installed soak,
-plus the full automatic-Call physical checklist including 60- and 120-minute calls. Deterministic tests do not
-replace those installed-artifact gates.
+Build 22 is **not a release yet**. Its exact notarized ZIP/manifest must show zero failed, empty, or stale native
+screenshots across the full screenshot comparison and shortcut matrix, then pass normal-use/Call checks and the
+complete deterministic suite. Deterministic tests do not replace those installed-app checks.
 
 ---
 
@@ -89,6 +95,8 @@ replace those installed-artifact gates.
   (`diskOK`/`freeBytes`). Critically low disk pauses capture; it never overrides Keep Media by deleting history.
 - ✅ Screen capture uses one persistent low-rate stream and latest-wins processing rather than per-cycle native
   screenshot requests or an unbounded work queue.
+- ✅ App switches, clicks, scroll-stop, and typing-pause request useful visual moments without retaining raw input;
+  the Timeline uses past-only image lookup and bounded shared decoding.
 - ✅ Screen and system-audio start/update/stop operations cannot overlap; capture health records real gaps and
   retries only Eye-owned resources before asking for explicit repair.
 

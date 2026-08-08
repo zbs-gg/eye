@@ -71,6 +71,86 @@ final class ScreenshotPriorityYieldGateTests: XCTestCase {
         ))
     }
 
+    func testRawInputRoutingCarriesOnlySemanticKinds() {
+        XCTAssertEqual(
+            CaptureInputEventPolicy.action(
+                type: .keyDown,
+                keyCode: 0,
+                flags: []
+            ),
+            .meaningful(.typingActivity)
+        )
+        XCTAssertEqual(
+            CaptureInputEventPolicy.action(
+                type: .leftMouseDown,
+                keyCode: 0,
+                flags: []
+            ),
+            .meaningful(.click)
+        )
+        XCTAssertEqual(
+            CaptureInputEventPolicy.action(
+                type: .scrollWheel,
+                keyCode: 0,
+                flags: []
+            ),
+            .meaningful(.scrollActivity)
+        )
+        XCTAssertEqual(
+            CaptureInputEventPolicy.action(
+                type: .mouseMoved,
+                keyCode: 0,
+                flags: []
+            ),
+            .ignore
+        )
+    }
+
+    @MainActor
+    func testScreenshotHotkeyOpensGateSynchronouslyAndEmitsNoCaptureInput() {
+        let gate = ScreenshotPriorityYieldGate(nowMilliseconds: { 1_000 })
+        let monitor = ScreenshotHotkeyMonitor(gate: gate)
+        var ordering: [String] = []
+        gate.onSuppressionOpened = { _ in ordering.append("gate") }
+        monitor.onMeaningfulInput = { _ in ordering.append("capture") }
+
+        monitor.handleEventTap(
+            typeRawValue: CGEventType.keyDown.rawValue,
+            keyCode: 20,
+            flagsRawValue: CGEventFlags.maskCommand.union(.maskShift).rawValue
+        )
+
+        XCTAssertEqual(ordering, ["gate"])
+        XCTAssertTrue(gate.isSuppressed(now: 1_001))
+    }
+
+    @MainActor
+    func testOrdinaryInputEmitsOnlyOpaqueSemanticSignals() {
+        let gate = ScreenshotPriorityYieldGate(nowMilliseconds: { 1_000 })
+        let monitor = ScreenshotHotkeyMonitor(gate: gate)
+        var observed: [MeaningfulCaptureInput] = []
+        monitor.onMeaningfulInput = { observed.append($0) }
+
+        monitor.handleEventTap(
+            typeRawValue: CGEventType.keyDown.rawValue,
+            keyCode: 11,
+            flagsRawValue: 0
+        )
+        monitor.handleEventTap(
+            typeRawValue: CGEventType.rightMouseDown.rawValue,
+            keyCode: 0,
+            flagsRawValue: 0
+        )
+        monitor.handleEventTap(
+            typeRawValue: CGEventType.scrollWheel.rawValue,
+            keyCode: 0,
+            flagsRawValue: 0
+        )
+
+        XCTAssertEqual(observed, [.typingActivity, .click, .scrollActivity])
+        XCTAssertEqual(gate.revision, 0)
+    }
+
     @MainActor
     func testHotkeyOpensAndRepeatedHotkeyExtendsTwoSecondWindow() {
         let gate = ScreenshotPriorityYieldGate(nowMilliseconds: { 1_000 })
@@ -118,6 +198,7 @@ final class ScreenshotPriorityYieldGateTests: XCTestCase {
         XCTAssertTrue(source.contains("options: .listenOnly"))
         XCTAssertTrue(source.contains("CGPreflightListenEventAccess()"))
         XCTAssertTrue(source.contains("gate.openSuppression()"))
+        XCTAssertTrue(source.contains("onMeaningfulInput?(input)"))
         XCTAssertTrue(source.contains("return Unmanaged.passUnretained(event)"))
         XCTAssertTrue(source.contains("\\.runningApplications"))
         XCTAssertTrue(source.contains("options: [.initial, .new]"))
@@ -126,6 +207,10 @@ final class ScreenshotPriorityYieldGateTests: XCTestCase {
             "CGRequestListenEventAccess",
             "AXIsProcessTrustedWithOptions",
             "tccutil",
+            "CGEventKeyboardGetUnicodeString",
+            "NSPasteboard",
+            "mouseEventPoint",
+            "scrollWheelEventDeltaAxis",
         ] {
             XCTAssertFalse(source.contains(forbidden), forbidden)
         }

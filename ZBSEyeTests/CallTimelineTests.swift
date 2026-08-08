@@ -124,6 +124,137 @@ final class CallTimelineTests: XCTestCase {
         XCTAssertEqual(statuses[degraded], .degraded)
         XCTAssertEqual(statuses[failed], .retryable)
     }
+
+    func testVisualWindowCarriesOnlyTheNearestPastRealImage() async throws {
+        let fixture = try CallTimelineFixture()
+        let first = try await fixture.insertScreen(
+            timestampMs: 500,
+            bundleID: "com.example.first",
+            appName: "First",
+            relativePath: "frames/first.heic"
+        )
+        let selected = try await fixture.insertScreen(
+            timestampMs: 1_000,
+            bundleID: "com.example.selected",
+            appName: "Selected",
+            relativePath: "frames/selected.heic"
+        )
+        let contextOnly = try await fixture.insertScreen(
+            timestampMs: 1_500,
+            bundleID: "com.example.context",
+            appName: "Context",
+            relativePath: nil
+        )
+        _ = try await fixture.insertScreen(
+            timestampMs: 1_600,
+            bundleID: "com.example.imported",
+            appName: "Imported",
+            relativePath: "imported"
+        )
+        _ = try await fixture.insertScreen(
+            timestampMs: 1_700,
+            bundleID: "com.apple.LocalAuthentication.UIAgent",
+            appName: "LocalAuthentication UIAgent",
+            relativePath: "frames/private.heic"
+        )
+        let future = try await fixture.insertScreen(
+            timestampMs: 2_000,
+            bundleID: "com.example.future",
+            appName: "Future",
+            relativePath: "frames/future.heic"
+        )
+
+        let context = try await fixture.timeline.frameAt(dateFromMs(1_500))
+        let visual = try await fixture.timeline.visualWindow(atOrBefore: dateFromMs(1_500))
+
+        XCTAssertEqual(context?.id, contextOnly)
+        XCTAssertNil(context?.relativePath)
+        XCTAssertEqual(visual.selectedID, selected)
+        XCTAssertEqual(visual.frames.map(\.id), [first, selected, future])
+        XCTAssertEqual(visual.selected?.appLabel, "Selected")
+        XCTAssertLessThanOrEqual(try XCTUnwrap(visual.selected).ts, dateFromMs(1_500))
+    }
+
+    func testVisualWindowIsExactlyTwoPreviousCurrentAndFourNext() async throws {
+        let fixture = try CallTimelineFixture()
+        var ids: [Int64] = []
+        for index in 1...10 {
+            ids.append(try await fixture.insertScreen(
+                timestampMs: Int64(index * 1_000),
+                bundleID: "com.example.app-\(index)",
+                appName: "App \(index)",
+                relativePath: "frames/\(index).heic"
+            ))
+        }
+
+        let visual = try await fixture.timeline.visualWindow(atOrBefore: dateFromMs(6_000))
+
+        XCTAssertEqual(visual.selectedID, ids[5])
+        XCTAssertEqual(visual.frames.map(\.id), Array(ids[3...9]))
+        XCTAssertEqual(visual.frames.count, 7)
+    }
+
+    func testInvalidPreferredVisualFallsBackOnlyBackward() async throws {
+        let fixture = try CallTimelineFixture()
+        let earlier = try await fixture.insertScreen(
+            timestampMs: 1_000,
+            bundleID: "com.example.earlier",
+            appName: "Earlier",
+            relativePath: "frames/earlier.heic"
+        )
+        let imported = try await fixture.insertScreen(
+            timestampMs: 2_000,
+            bundleID: "com.example.imported",
+            appName: "Imported",
+            relativePath: "imported"
+        )
+        let later = try await fixture.insertScreen(
+            timestampMs: 3_000,
+            bundleID: "com.example.later",
+            appName: "Later",
+            relativePath: "frames/later.heic"
+        )
+
+        let visual = try await fixture.timeline.visualWindow(
+            atOrBefore: dateFromMs(2_000),
+            anchorID: imported
+        )
+
+        XCTAssertEqual(visual.selectedID, earlier)
+        XCTAssertEqual(visual.frames.map(\.id), [earlier, later])
+        XCTAssertLessThanOrEqual(try XCTUnwrap(visual.selected).ts, dateFromMs(2_000))
+    }
+
+    func testContextOnlyEqualTimestampAnchorCannotSelectLaterVisual() async throws {
+        let fixture = try CallTimelineFixture()
+        let first = try await fixture.insertScreen(
+            timestampMs: 1_000,
+            bundleID: "com.example.first",
+            appName: "First",
+            relativePath: "frames/first.heic"
+        )
+        let contextOnly = try await fixture.insertScreen(
+            timestampMs: 1_000,
+            bundleID: "com.example.context",
+            appName: "Context",
+            relativePath: nil
+        )
+        let laterAtSameTimestamp = try await fixture.insertScreen(
+            timestampMs: 1_000,
+            bundleID: "com.example.later",
+            appName: "Later",
+            relativePath: "frames/later.heic"
+        )
+
+        let visual = try await fixture.timeline.visualWindow(
+            atOrBefore: dateFromMs(1_000),
+            anchorID: contextOnly
+        )
+
+        XCTAssertEqual(visual.selectedID, first)
+        XCTAssertNotEqual(visual.selectedID, laterAtSameTimestamp)
+        XCTAssertEqual(visual.frames.map(\.id), [first, laterAtSameTimestamp])
+    }
 }
 
 private final class CallTimelineFixture {
@@ -191,7 +322,8 @@ private final class CallTimelineFixture {
     func insertScreen(
         timestampMs: Int64,
         bundleID: String,
-        appName: String
+        appName: String,
+        relativePath: String? = nil
     ) async throws -> Int64 {
         try await database.pool.write { db in
             try db.execute(
@@ -201,10 +333,10 @@ private final class CallTimelineFixture {
             let appID = db.lastInsertedRowID
             try db.execute(
                 sql: """
-                    INSERT INTO screen_captures(ts, appId, monitorId, windowTitle)
-                    VALUES (?, ?, 'main', 'Fixture')
+                    INSERT INTO screen_captures(ts, appId, monitorId, windowTitle, relativePath)
+                    VALUES (?, ?, 'main', 'Fixture', ?)
                     """,
-                arguments: [timestampMs, appID]
+                arguments: [timestampMs, appID, relativePath]
             )
             return db.lastInsertedRowID
         }
