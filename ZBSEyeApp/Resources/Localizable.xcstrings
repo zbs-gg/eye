@@ -10368,6 +10368,126 @@
     "Turn this off to keep ordinary playback out of Timeline. An automatically detected or manually started Call still records separate microphone and system tracks; Audio Off disables both.": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Выключите это, чтобы обычное воспроизведение не попадало в Таймлайн. Автоматически найденный или запущенный вручную звонок всё равно пишет отдельные дорожки микрофона и системного звука; режим «Аудио выключено» отключает обе." } } }
     },
+    "%@ · Activity summaries on": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "%@ · сводки активности включены" } } }
+    },
+    "Activity summaries · %@": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Сводки активности · %@" } } }
+    },
+    "What I did": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Что я делал" } } }
+    },
+    "Choose an Activity summary model in Settings → AI, or retry after it reconnects.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Выберите модель для сводок активности в «Настройки → ИИ» или повторите попытку после восстановления подключения." } } }
+    },
+    "This recap is out of date. Reconnect the Activity summary model to update it.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Эта сводка устарела. Переподключите модель сводок активности, чтобы обновить её." } } }
+    },
+    "Summarizing this day…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Составляю сводку дня…" } } }
+    },
+    "Updating…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Обновляю…" } } }
+    },
+    "There is no activity to summarize for this day.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "За этот день нет активности для сводки." } } }
+    },
+    "Refresh": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Обновить" } } }
+    },
+    "Generated with %@%@ · %@": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Создано через %1$@%2$@ · %3$@" } } }
+    },
+    "Generated on this Mac via %@ · %@": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Создано на этом Mac через %1$@ · %2$@" } } }
+    },
+    "Generated on this Mac · %@": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Создано на этом Mac · %@" } } }
+    },
+    "The summary could not be generated.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Не удалось создать сводку." } } }
+    },
+    "No activity was recorded for this day.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "За этот день не записано ни одной активности." } } }
+    },
+    "The model did not return a factual 3–6 item summary.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Модель не вернула фактическую сводку из 3–6 пунктов." } } }
+    },
+    "Primary AI": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Основной ИИ" } } }
+    },
+    "Eye couldn't confirm the saved AI setting. Try again.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Eye не смог подтвердить сохранение настройки ИИ. Попробуйте ещё раз." } } }
+    },
+    "Activity summaries": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Сводки активности" } } }
+    },
+    "activity summaries": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "сводок активности" } } }
+    },
+    "Show a factual 3–6 item recap at the top of Activities. This can use a separate model without changing Ask.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Показывать вверху раздела «Активности» фактическую сводку из 3–6 пунктов. Для неё можно выбрать отдельную модель, не меняя модель для Ask." } } }
+    },
+    "Connect and check a provider above before choosing an Activity summary model.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Подключите и проверьте провайдера выше, прежде чем выбирать модель для сводок активности." } } }
+    },
+    "Add or check a provider…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Добавить или проверить провайдера…" } } }
+    },
+    "Turn Activity summaries off": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Отключить сводки активности" } } }
+    },
+    "Eye couldn't confirm the saved Activity summaries setting. Try again.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Eye не смог подтвердить сохранение настройки сводок активности. Попробуйте ещё раз." } } }
+    },
+    "Activity summaries are off": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Сводки активности отключены" } } }
+    },
+    "%@ — Recommended": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "%@ — рекомендуется" } } }
+    },
+    "Change model…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Сменить модель…" } } }
+    },
+    "Choose model…": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Выбрать модель…" } } }
+    },
+    "That model is no longer available. Check the provider and try again.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Эта модель больше недоступна. Проверьте провайдера и попробуйте ещё раз." } } }
+    },
+    "the selected cloud provider": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "выбранному облачному провайдеру" } } }
+    },
+    "ZBS Eye will automatically send only the bounded text excerpts needed for %@ to %@. Raw screenshots, audio, full URLs, and file paths are not sent.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "ZBS Eye будет автоматически отправлять %2$@ только ограниченные текстовые фрагменты, необходимые для %1$@. Снимки экрана, аудио, полные URL-адреса и пути к файлам не отправляются." } } }
+    },
+    "Couldn't confirm that AI was turned on. Processing remains off; try again.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Не удалось подтвердить включение ИИ. Обработка остаётся выключенной; попробуйте ещё раз." } } }
+    },
+    "Activity summaries are off for now, but Eye couldn't confirm the saved setting. Turn them off again after restarting.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Сводки активности сейчас выключены, но Eye не смог подтвердить сохранение настройки. После перезапуска выключите их ещё раз." } } }
+    },
+    "Primary AI is off for now, but Eye couldn't confirm the saved setting. Turn it off again after restarting.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Основной ИИ сейчас выключен, но Eye не смог подтвердить сохранение настройки. После перезапуска выключите его ещё раз." } } }
+    },
+    "AI is off, but Eye couldn't confirm the saved setting. Turn it off again after restarting.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "ИИ выключен, но Eye не смог подтвердить сохранение настройки. После перезапуска выключите его ещё раз." } } }
+    },
+    "AI is off for now, but Eye couldn't confirm the saved setting. Turn it off again after restarting.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "ИИ сейчас выключен, но Eye не смог подтвердить сохранение настройки. После перезапуска выключите его ещё раз." } } }
+    },
+    "Primary AI is off": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Основной ИИ отключён" } } }
+    },
+    "Activity summaries are configured separately in Settings.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Сводки активности настраиваются отдельно в «Настройках»." } } }
+    },
+    "Turn primary AI off": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Отключить основной ИИ" } } }
+    },
+    "Eye couldn't confirm the saved Primary AI setting. Try again.": {
+      "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Eye не смог подтвердить сохранение настройки основного ИИ. Попробуйте ещё раз." } } }
+    },
     "Waiting": {
       "localizations": { "ru": { "stringUnit": { "state": "translated", "value": "Ожидание" } } }
     }

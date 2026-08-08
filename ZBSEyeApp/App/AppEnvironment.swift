@@ -78,7 +78,7 @@ final class AppEnvironment {
     let recording = RecordingStore()
     let server = ServerStore()
     let connections = ConnectionStore()   // destination-folder config persists itself, no db needed
-    let ai = AIProviderStore()            // Optional AI: one active provider/model pair or Off.
+    let ai = AIProviderStore()            // Optional AI: primary pair plus the narrow Activities-summary route.
     let aiSetup = AISetupPresentation()
     let mcpReadiness = MCPReadinessService()
     let audioSettings = AudioSettingsStore()
@@ -235,6 +235,7 @@ final class AppEnvironment {
     private(set) var automations: DaySummaryStore?
     private(set) var callAutomation: CallAutomationStore?
     private(set) var sceneStore: SceneStore?
+    private(set) var activityDaySummaryStore: ActivityDaySummaryStore?
     private(set) var audio: AudioCoordinator?
     private(set) var storage: StorageManager?   // for the Settings storage card (used/delete/Finder)
     private(set) var db: ZBSEyeDatabase?         // for the Settings size breakdown / backup
@@ -1520,6 +1521,14 @@ final class AppEnvironment {
                 labeler: BlockLabelService(generator: consumerGenerator),
                 readiness: ai
             )
+            self.activityDaySummaryStore = ActivityDaySummaryStore(
+                service: ActivityDaySummaryService(
+                    provider: activityRepo,
+                    generator: consumerGenerator
+                ),
+                cache: ActivityDaySummaryRepository(database: db),
+                readiness: ai
+            )
 
             // "Ask your memory": hybrid retrieval completes first, then the
             // exact authorized snapshot crosses the process-wide router.
@@ -1623,12 +1632,14 @@ final class AppEnvironment {
             retentionTask = Task.detached(priority: .utility) { [weak self] in
                 while !Task.isCancelled {
                     let report: PruneReport?
+                    var activitySummarySourceWasDeleted = false
                     if let permit = automaticRetentionAdmission.currentPermit() {
                         do {
                             let automatic = try await retention.pruneAutomatically(
                                 permit: permit,
                                 admission: automaticRetentionAdmission
                             )
+                            activitySummarySourceWasDeleted = automatic.framesDeleted > 0
                             report = PruneReport(
                                 framesDeleted: automatic.framesDeleted,
                                 audioDeleted: automatic.audioDeleted,
@@ -1636,12 +1647,26 @@ final class AppEnvironment {
                                 callBytesDeleted: automatic.callBytesDeleted,
                                 orphansDeleted: 0
                             )
-                        } catch AutomaticRetentionError.postCommitFileDeletionFailed {
+                        } catch let AutomaticRetentionError.postCommitFileDeletionFailed(ledger) {
+                            // The frame row and overlapping recap invalidation already committed
+                            // before the media-file deletion failed. Keep the visible derived
+                            // recap consistent with that durable state even though no success
+                            // report can be emitted for the incomplete retention run.
+                            activitySummarySourceWasDeleted = ledger.committedVictims.contains {
+                                $0.kind == .frame
+                            }
                             Log.retention.error(
                                 "automatic retention paused after post-commit media deletion failure"
                             )
                             report = nil
                         } catch {
+                            // Some failures can surface only after a batch transaction has
+                            // already removed screen rows and invalidated its recap. We do not
+                            // have a trustworthy committed-victim report on this generic path,
+                            // so conservatively discard and reload the visible recap. This is
+                            // harmless when no frame committed and prevents stale derived text
+                            // when one did.
+                            activitySummarySourceWasDeleted = true
                             Log.retention.error("automatic retention failed closed")
                             report = nil
                         }
@@ -1653,6 +1678,14 @@ final class AppEnvironment {
                         Log.retention.info(
                             "prune: frames \(r.framesDeleted) audio \(r.audioDeleted) calls \(r.callsDeleted) orphans \(r.orphansDeleted)"
                         )
+                    }
+                    if activitySummarySourceWasDeleted {
+                        await MainActor.run {
+                            guard let summary = self?.activityDaySummaryStore else { return }
+                            let day = summary.selectedDay
+                            summary.reset()
+                            Task { await summary.load(day: day) }
+                        }
                     }
                     // 👁 delighter: warmly mark a crossed "round" memory milestone (once each)
                     if let frames = try? await db.pool.read({
@@ -1800,6 +1833,9 @@ final class AppEnvironment {
         let now = Date()
         let toMs: Int64 = lastSeconds == nil ? Int64.max : msFromDate(now)
         let fromMs: Int64 = lastSeconds.map { msFromDate(now.addingTimeInterval(-$0)) } ?? 0
+        let activitySummary = activityDaySummaryStore
+        await activitySummary?.suspendAndDrainForPrivacyMutation()
+        defer { activitySummary?.resumeAfterPrivacyMutation() }
         var ownsWorkerResume = false
         var ownsSpeakerWorkerResume = false
         if let callTranscriptWorker {

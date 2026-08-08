@@ -213,6 +213,7 @@ targets:
       - path: ZBSEyeApp/State/CallAutomationStore.swift
       - path: ZBSEyeApp/Automations/AutomationAuditWriter.swift
       - path: ZBSEyeApp/Automations/AutomationMarkdownSafety.swift
+      - path: ZBSEyeApp/Automations/ActivityDaySummaryService.swift
       - path: ZBSEyeApp/Data/StorageLocation.swift
       - path: ZBSEyeApp/Data/KeepMediaPolicy.swift
       - path: ZBSEyeApp/Data/AutomaticRetentionAdmission.swift
@@ -228,6 +229,7 @@ targets:
       - path: ZBSEyeApp/Data/CaptureCoverageQuery.swift
       - path: ZBSEyeApp/Server/CaptureStatusDTO.swift
       - path: ZBSEyeApp/Data/ZBSEyeDatabase.swift
+      - path: ZBSEyeApp/Data/ActivityDaySummaryRepository.swift
       - path: ZBSEyeApp/Data/StorageManager.swift
       - path: ZBSEyeApp/Data/RetentionManager.swift
       - path: ZBSEyeApp/Data/IngestService.swift
@@ -278,6 +280,7 @@ targets:
       - path: ZBSEyeApp/Server/ZBSEyeAPIDTO.swift
       - path: ZBSEyeApp/Search/AskService.swift
       - path: ZBSEyeApp/State/AskStore.swift
+      - path: ZBSEyeApp/State/ActivityDaySummaryStore.swift
       - path: ZBSEyeApp/State/AutomaticCallCaptureState.swift
       - path: ZBSEyeApp/State/CallRecordingStore.swift
       - path: ZBSEyeApp/State/CallsStore.swift
