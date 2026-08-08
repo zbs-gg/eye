@@ -5,6 +5,7 @@ struct AISetupView: View {
     @Environment(AppEnvironment.self) private var env
     let sessionID: UUID
     var showsCloseButton = true
+    @State private var primaryDisableError: String?
 
     private var setup: AISetupPresentation { env.aiSetup }
 
@@ -58,17 +59,36 @@ struct AISetupView: View {
     }
 
     private var activeSelection: some View {
-        HStack(spacing: 10) {
-            Image(systemName: env.ai.activeProvider == nil ? "pause.circle" : "checkmark.circle.fill")
-                .foregroundStyle(env.ai.activeProvider == nil ? Color.secondary : Color.green)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Active").font(.caption).foregroundStyle(.secondary)
-                Text(activeLabel).font(.headline)
-            }
-            Spacer()
-            if env.ai.activeProvider != nil {
-                Button("Disconnect") { env.ai.deactivate() }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: env.ai.selectionSnapshot == nil
+                      ? "pause.circle" : "checkmark.circle.fill")
+                    .foregroundStyle(env.ai.selectionSnapshot == nil
+                                     ? Color.secondary : Color.green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Primary AI").font(.caption).foregroundStyle(.secondary)
+                    Text(activeLabel).font(.headline)
+                    Text("Activity summaries are configured separately in Settings.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if env.ai.selectionSnapshot != nil {
+                    Button("Turn primary AI off") {
+                        let acknowledged = env.ai.deactivatePrimary()
+                        primaryDisableError = acknowledged
+                            ? nil
+                            : env.ai.persistenceWarning ?? String(
+                                localized: "Eye couldn't confirm the saved Primary AI setting. Try again."
+                            )
+                    }
                     .buttonStyle(.borderless)
+                }
+            }
+            if let primaryDisableError {
+                Text(primaryDisableError)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
             }
         }
         .padding(12)
@@ -77,8 +97,10 @@ struct AISetupView: View {
 
     private var activeLabel: String {
         AISetupPresentation.activeLabel(
-            provider: env.ai.activeProvider,
-            modelID: env.ai.activeModelID
+            provider: env.ai.selectionSnapshot.flatMap {
+                AIProvider(rawValue: $0.providerID)
+            },
+            modelID: env.ai.selectionSnapshot?.modelID
         )
     }
 

@@ -392,6 +392,117 @@ final class RetentionManagerTests: XCTestCase {
         XCTAssertEqual(afterRetry, [second, third])
     }
 
+    func testAutomaticRetentionInvalidatesOnlySummaryContainingDeletedScreenSource() async throws {
+        let harness = try Harness()
+        defer { harness.remove() }
+        _ = try await harness.insertScreenFile(ts: 100, name: "old.heic", bytes: 6 * gb)
+        let summaries = ActivityDaySummaryRepository(database: harness.db)
+        try await insert(summary(dayKey: "2026-08-07", startMs: 0, endMs: 1_000), into: summaries)
+        try await insert(summary(dayKey: "2026-08-08", startMs: 1_000, endMs: 2_000), into: summaries)
+        let admission = admittedFiveGB()
+        let permit = try XCTUnwrap(admission.currentPermit())
+        let retention = RetentionManager(db: harness.db, storage: harness.storage)
+
+        _ = try await retention.pruneAutomatically(permit: permit, admission: admission)
+
+        let deleted = try await summaries.snapshot(dayKey: "2026-08-07")
+        let retained = try await summaries.snapshot(dayKey: "2026-08-08")
+        XCTAssertNil(deleted.entry)
+        XCTAssertNotNil(retained.entry)
+        XCTAssertEqual(deleted.invalidationEpoch, 1)
+    }
+
+    func testAutomaticRetentionEpochOverflowRollsBackSourceAndCacheDeletion() async throws {
+        let harness = try Harness()
+        defer { harness.remove() }
+        let frameID = try await harness.insertScreenFile(
+            ts: 100,
+            name: "overflow.heic",
+            bytes: 6 * gb
+        )
+        let summaries = ActivityDaySummaryRepository(database: harness.db)
+        let cached = summary(dayKey: "2026-08-07", startMs: 0, endMs: 1_000)
+        try await insert(cached, into: summaries)
+        try await harness.db.pool.write { db in
+            try db.execute(
+                sql: "UPDATE activity_day_summary_state SET invalidationEpoch = ? WHERE singleton = 1",
+                arguments: [Int64.max]
+            )
+        }
+        let admission = admittedFiveGB()
+        let permit = try XCTUnwrap(admission.currentPermit())
+        let retention = RetentionManager(db: harness.db, storage: harness.storage)
+
+        do {
+            _ = try await retention.pruneAutomatically(permit: permit, admission: admission)
+            XCTFail("Expected epoch exhaustion to fail the retention transaction")
+        } catch {
+            XCTAssertTrue(error is DatabaseError)
+        }
+
+        let retainedFrameIDs = try await harness.screenIDs()
+        XCTAssertEqual(retainedFrameIDs, [frameID])
+        XCTAssertTrue(harness.fileExists("overflow.heic"))
+        let afterFailure = try await summaries.snapshot(dayKey: cached.dayKey)
+        XCTAssertEqual(afterFailure.entry, cached)
+        XCTAssertEqual(afterFailure.invalidationEpoch, Int64.max)
+    }
+
+    func testManualPrivacyRangeAndFullWipeInvalidateDerivedSummaries() async throws {
+        let harness = try Harness()
+        defer { harness.remove() }
+        let summaries = ActivityDaySummaryRepository(database: harness.db)
+        try await insert(summary(dayKey: "2026-08-07", startMs: 0, endMs: 1_000), into: summaries)
+        try await insert(summary(dayKey: "2026-08-08", startMs: 1_000, endMs: 2_000), into: summaries)
+        let retention = RetentionManager(db: harness.db, storage: harness.storage)
+
+        _ = try await retention.deleteRange(fromMs: 250, toMs: 300)
+
+        let rangeDeleted = try await summaries.snapshot(dayKey: "2026-08-07")
+        let rangeRetained = try await summaries.snapshot(dayKey: "2026-08-08")
+        XCTAssertNil(rangeDeleted.entry)
+        XCTAssertNotNil(rangeRetained.entry)
+        _ = try await retention.deleteRange(fromMs: 0, toMs: Int64.max)
+        let fullWipeDeleted = try await summaries.snapshot(dayKey: "2026-08-08")
+        XCTAssertNil(fullWipeDeleted.entry)
+    }
+
+    private func summary(
+        dayKey: String,
+        startMs: Int64,
+        endMs: Int64
+    ) -> ActivityDaySummaryCacheEntry {
+        ActivityDaySummaryCacheEntry(
+            dayKey: dayKey,
+            inputFingerprint: "sha256:\(dayKey)",
+            summary: "- Worked on \(dayKey).",
+            providerID: "fixture-provider",
+            modelID: "fixture-model",
+            executedLocally: true,
+            brokerUpstream: nil,
+            recipientDisclosure: nil,
+            endpointDisclosure: nil,
+            endpointIdentity: nil,
+            promptVersion: "activity-day-summary-v1",
+            generatedAtMs: startMs,
+            sourceStartMs: startMs,
+            sourceEndMs: endMs,
+            sourceCount: 1
+        )
+    }
+
+    private func insert(
+        _ entry: ActivityDaySummaryCacheEntry,
+        into repository: ActivityDaySummaryRepository
+    ) async throws {
+        let snapshot = try await repository.snapshot(dayKey: entry.dayKey)
+        let accepted = try await repository.replace(
+            entry,
+            expectedInvalidationEpoch: snapshot.invalidationEpoch
+        )
+        XCTAssertTrue(accepted)
+    }
+
     private func admittedFiveGB() -> AutomaticRetentionAdmission {
         AutomaticRetentionAdmission(record: AutomaticRetentionRecord(
             revision: 1,
@@ -433,6 +544,7 @@ private final class Harness: @unchecked Sendable {
     }
 
     func remove() {
+        try? db.pool.close()
         try? FileManager.default.removeItem(at: root)
     }
 

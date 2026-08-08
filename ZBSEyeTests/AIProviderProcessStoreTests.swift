@@ -3,14 +3,21 @@ import XCTest
 
 @MainActor
 final class AIProviderProcessStoreTests: XCTestCase {
-    func testConfigureProcessProvidersDoesNotProbeActiveCodexWithoutScopedConsent() async {
+    func testConfigureProcessProvidersDoesNotProbeGlobalCodexForSummaryOnlyConsent() async {
         let codex = ScriptedStoreCodexProvider(updates: [])
         let (store, overlay, defaults) = makeStore(codex: codex)
         defer { clear(defaults) }
+        let summaryOnly = ScopedAIConsentGrant(
+            providerID: AIProvider.codex.rawValue,
+            recipientDisclosure: AIProvider.codex.egressDestination,
+            consumers: [.activitySummary],
+            policyRevision: ScopedAIConsentGrant.currentPolicyRevision
+        )
         store.settings = AIProviderSettings(
             active: AIProvider.codex.rawValue,
             activeModelID: "gpt-5.4-mini",
-            models: [AIProvider.codex.rawValue: "gpt-5.4-mini"]
+            models: [AIProvider.codex.rawValue: "gpt-5.4-mini"],
+            consentGrants: [AIProvider.codex.rawValue: summaryOnly]
         )
 
         store.configureProcessProviders(
@@ -84,6 +91,62 @@ final class AIProviderProcessStoreTests: XCTestCase {
         let claudeCalls = await claude.probeCallCount()
         XCTAssertEqual(codexCalls, 0)
         XCTAssertEqual(claudeCalls, 1)
+    }
+
+    func testConfigureProcessProvidersReconnectsRouteOnlyCodexWithDedicatedConsent() async throws {
+        let modelID = "gpt-5.4-mini"
+        let firstCodex = ScriptedStoreCodexProvider(updates: [
+            CodexConnectionUpdate(
+                state: .authenticated(
+                    version: CodexBinaryPolicy.allowedVersion,
+                    models: [modelID]
+                ),
+                registration: LLMAdapterRegistration(
+                    providerID: AIProvider.codex.rawValue,
+                    executedLocally: false,
+                    adapter: StoreCountingAdapter(providerID: AIProvider.codex.rawValue)
+                )
+            ),
+        ])
+        let (store, _, defaults) = makeStore(codex: firstCodex)
+        defer { clear(defaults) }
+        await store.connect(.codex)
+        XCTAssertTrue(store.commitActivitySummaryRoute(
+            provider: .codex,
+            modelID: modelID,
+            grantCloudConsent: true
+        ))
+        XCTAssertNil(store.selectionSnapshot)
+        XCTAssertTrue(store.hasConsent(.codex, for: .activitySummary))
+
+        let restartedCodex = ScriptedStoreCodexProvider(updates: [
+            CodexConnectionUpdate(
+                state: .authenticated(
+                    version: CodexBinaryPolicy.allowedVersion,
+                    models: [modelID]
+                ),
+                registration: LLMAdapterRegistration(
+                    providerID: AIProvider.codex.rawValue,
+                    executedLocally: false,
+                    adapter: StoreCountingAdapter(providerID: AIProvider.codex.rawValue)
+                )
+            ),
+        ])
+        let restarted = AIProviderStore(defaults: defaults)
+        restarted.configureProcessProviders(
+            codex: restartedCodex,
+            claudeCode: ScriptedStoreClaudeProvider(updates: []),
+            overlay: LLMAdapterRegistry()
+        )
+        for _ in 0..<20 { await Task.yield() }
+
+        let restartedProbeCount = await restartedCodex.probeCallCount()
+        XCTAssertEqual(restartedProbeCount, 1)
+        XCTAssertNil(restarted.selectionSnapshot)
+        XCTAssertEqual(
+            restarted.currentExecutionContext(for: .activitySummary)?.selection.modelID,
+            modelID
+        )
     }
 
     func testCodexProbePublishesCatalogAndOverlayWithoutMutatingSelectionOrConsent() async throws {
@@ -544,6 +607,7 @@ final class AIProviderProcessStoreTests: XCTestCase {
         )
         XCTAssertTrue(store.commitActivation(intent, grantCloudConsent: true))
         XCTAssertTrue(store.hasConsent(.codex, for: .ask))
+        XCTAssertFalse(store.hasConsent(.codex, for: .activitySummary))
         let router = LLMRouter(snapshotProvider: store, adapterRegistry: overlay)
 
         store.revokeConsent(.codex)
@@ -599,6 +663,515 @@ final class AIProviderProcessStoreTests: XCTestCase {
             for: provider
         ))
         XCTAssertFalse(store.hasConsent(provider, for: .scheduledSummary))
+    }
+
+    func testActivitySummaryRouteUsesSeparateConnectedLocalModelAndPersists() async throws {
+        let catalog = ScriptedStoreCatalogClient(results: [
+            .authoritative(["ask-model", "summary-model"]),
+        ])
+        let (store, _, defaults) = makeStore(catalogClient: catalog)
+        defer { clear(defaults) }
+        store.setEndpoint("http://127.0.0.1:18080/v1", for: .custom)
+        await store.connect(.custom)
+
+        let askIntent = try XCTUnwrap(
+            store.activationIntent(for: .custom, modelID: "ask-model")
+        )
+        XCTAssertTrue(store.commitActivation(askIntent))
+        let askSnapshot = try XCTUnwrap(store.selectionSnapshot)
+        XCTAssertTrue(store.activitySummaryRouteCandidates.contains(where: {
+            $0.provider == .custom && $0.modelIDs == ["ask-model", "summary-model"]
+        }))
+
+        XCTAssertTrue(store.commitActivitySummaryRoute(
+            provider: .custom,
+            modelID: "summary-model"
+        ))
+        XCTAssertEqual(store.selectionSnapshot, askSnapshot)
+        XCTAssertEqual(store.activitySummarySelectionSnapshot?.modelID, "summary-model")
+        XCTAssertEqual(
+            store.currentExecutionContext(for: .activitySummary)?.selection.modelID,
+            "summary-model"
+        )
+
+        let restarted = AIProviderStore(
+            defaults: defaults,
+            catalogClient: ScriptedStoreCatalogClient(results: [
+                .authoritative(["ask-model", "summary-model"]),
+            ])
+        )
+        XCTAssertEqual(restarted.activitySummaryRoute, store.activitySummaryRoute)
+        await restarted.connect(.custom)
+        XCTAssertEqual(
+            restarted.currentExecutionContext(for: .activitySummary)?.selection.modelID,
+            "summary-model"
+        )
+
+        restarted.deactivateAll()
+        XCTAssertNil(restarted.selectionSnapshot)
+        XCTAssertFalse(restarted.activitySummaryRoute.enabled)
+        XCTAssertEqual(restarted.activitySummaryRoute.modelID, "summary-model")
+    }
+
+    func testTurnAllAIPersistsKillSwitchBeforeRouteDisableSoCrashWindowCannotResurrectIt() async throws {
+        let name = "AIProviderProcessStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let settings = AIProviderSettings(
+            active: AIProvider.custom.rawValue,
+            activeModelID: "ask-model",
+            models: [AIProvider.custom.rawValue: "ask-model"]
+        )
+        var route = ActivitySummaryRouteSettings.disabled
+        route.enable(providerID: AIProvider.custom.rawValue, modelID: "summary-model")
+        defaults.set(try JSONEncoder().encode(settings), forKey: "zbseye.ai.provider")
+        defaults.set(
+            try JSONEncoder().encode(route),
+            forKey: "zbseye.ai.activitySummaryRoute"
+        )
+
+        var restartInsideCrashWindow: AIProviderStore?
+        var persistenceAcknowledgementCount = 0
+        let store = AIProviderStore(
+            defaults: defaults,
+            persistenceSynchronizer: {
+                // `deactivateAll` has persisted the product-wide switch here,
+                // but has deliberately not touched the separate route yet.
+                persistenceAcknowledgementCount += 1
+                if persistenceAcknowledgementCount == 1 {
+                    restartInsideCrashWindow = AIProviderStore(defaults: defaults)
+                }
+                return true
+            }
+        )
+        XCTAssertNotNil(store.routingSelectionSnapshot(for: .activitySummary))
+
+        XCTAssertTrue(store.deactivateAll())
+
+        let crashRestart = try XCTUnwrap(restartInsideCrashWindow)
+        XCTAssertTrue(crashRestart.activitySummaryRoute.enabled)
+        XCTAssertTrue(crashRestart.allProcessingDisabledByUser)
+        XCTAssertNil(crashRestart.activitySummaryRouteIdentity())
+        XCTAssertNil(crashRestart.routingSelectionSnapshot(for: .activitySummary))
+        XCTAssertNil(crashRestart.routingSelectionSnapshot(for: .ask))
+        XCTAssertFalse(store.activitySummaryRoute.enabled)
+
+        let completedRestart = AIProviderStore(defaults: defaults)
+        XCTAssertTrue(completedRestart.allProcessingDisabledByUser)
+        XCTAssertNil(completedRestart.routingSelectionSnapshot(for: .activitySummary))
+        XCTAssertNil(completedRestart.routingSelectionSnapshot(for: .ask))
+
+        // Recreate the exact crash residue: durable global-off plus the old
+        // enabled route. Explicitly enabling only Ask must disable that stale
+        // route before it clears the global switch.
+        defaults.set(
+            try JSONEncoder().encode(route),
+            forKey: "zbseye.ai.activitySummaryRoute"
+        )
+        let recoveryStore = AIProviderStore(
+            defaults: defaults,
+            catalogClient: ScriptedStoreCatalogClient(results: [
+                .authoritative(["ask-model", "summary-model"]),
+            ]),
+            persistenceSynchronizer: { true }
+        )
+        recoveryStore.setEndpoint("http://127.0.0.1:18080/v1", for: .custom)
+        await recoveryStore.connect(.custom)
+        let recoveryIntent = try XCTUnwrap(
+            recoveryStore.activationIntent(for: .custom, modelID: "ask-model")
+        )
+        XCTAssertTrue(recoveryStore.commitActivation(recoveryIntent))
+        XCTAssertFalse(recoveryStore.allProcessingDisabledByUser)
+        XCTAssertFalse(recoveryStore.activitySummaryRoute.enabled)
+        XCTAssertNotNil(recoveryStore.routingSelectionSnapshot(for: .ask))
+        XCTAssertNil(recoveryStore.routingSelectionSnapshot(for: .activitySummary))
+    }
+
+    func testActivityOnlyDisableIsAcknowledgedBeforeSuccessAndSurvivesRestart() throws {
+        let name = "AIProviderProcessStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        var route = ActivitySummaryRouteSettings.disabled
+        route.enable(providerID: AIProvider.anthropic.rawValue, modelID: "summary-model")
+        defaults.set(
+            try JSONEncoder().encode(route),
+            forKey: "zbseye.ai.activitySummaryRoute"
+        )
+        var restartAtAcknowledgement: AIProviderStore?
+        let store = AIProviderStore(
+            defaults: defaults,
+            persistenceSynchronizer: {
+                restartAtAcknowledgement = AIProviderStore(defaults: defaults)
+                return true
+            }
+        )
+
+        XCTAssertTrue(store.disableActivitySummaryRoute())
+        XCTAssertFalse(store.activitySummaryRoute.enabled)
+        XCTAssertFalse(try XCTUnwrap(restartAtAcknowledgement).activitySummaryRoute.enabled)
+        XCTAssertFalse(AIProviderStore(defaults: defaults).activitySummaryRoute.enabled)
+        XCTAssertNil(store.persistenceWarning)
+    }
+
+    func testActivityOnlyDisableFailureClosesRuntimeWithoutClaimingDurability() throws {
+        let name = "AIProviderProcessStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        var route = ActivitySummaryRouteSettings.disabled
+        route.enable(providerID: AIProvider.anthropic.rawValue, modelID: "summary-model")
+        let oldRouteData = try JSONEncoder().encode(route)
+        defaults.set(oldRouteData, forKey: "zbseye.ai.activitySummaryRoute")
+        let store = AIProviderStore(
+            defaults: defaults,
+            persistenceSynchronizer: {
+                // Fault injection: the attempted write did not reach durable
+                // storage even though runtime must still close immediately.
+                defaults.set(oldRouteData, forKey: "zbseye.ai.activitySummaryRoute")
+                return false
+            }
+        )
+
+        XCTAssertFalse(store.disableActivitySummaryRoute())
+        XCTAssertFalse(store.activitySummaryRoute.enabled)
+        XCTAssertNotNil(store.persistenceWarning)
+        XCTAssertTrue(AIProviderStore(defaults: defaults).activitySummaryRoute.enabled)
+    }
+
+    func testFailedActivityDisableThenGlobalOffThenPrimaryEnableCannotResurrectRoute() async throws {
+        let name = "AIProviderProcessStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let settings = AIProviderSettings(
+            active: AIProvider.custom.rawValue,
+            activeModelID: "ask-model",
+            models: [AIProvider.custom.rawValue: "ask-model"],
+            endpoints: [AIProvider.custom.rawValue: "http://127.0.0.1:18080/v1"]
+        )
+        var route = ActivitySummaryRouteSettings.disabled
+        route.enable(providerID: AIProvider.custom.rawValue, modelID: "summary-model")
+        let oldRouteData = try JSONEncoder().encode(route)
+        defaults.set(try JSONEncoder().encode(settings), forKey: "zbseye.ai.provider")
+        defaults.set(oldRouteData, forKey: "zbseye.ai.activitySummaryRoute")
+
+        var acknowledgementCount = 0
+        let store = AIProviderStore(
+            defaults: defaults,
+            catalogClient: ScriptedStoreCatalogClient(results: [
+                .authoritative(["ask-model", "summary-model"]),
+            ]),
+            persistenceSynchronizer: {
+                acknowledgementCount += 1
+                if acknowledgementCount == 1 {
+                    defaults.set(oldRouteData, forKey: "zbseye.ai.activitySummaryRoute")
+                    return false
+                }
+                return true
+            }
+        )
+        await store.connect(.custom)
+
+        XCTAssertFalse(store.disableActivitySummaryRoute())
+        XCTAssertFalse(store.activitySummaryRoute.enabled)
+        XCTAssertTrue(AIProviderStore(defaults: defaults).activitySummaryRoute.enabled)
+
+        XCTAssertTrue(store.deactivateAll())
+        XCTAssertTrue(store.allProcessingDisabledByUser)
+        XCTAssertFalse(AIProviderStore(defaults: defaults).activitySummaryRoute.enabled)
+
+        let intent = try XCTUnwrap(
+            store.activationIntent(for: .custom, modelID: "ask-model")
+        )
+        XCTAssertTrue(store.commitActivation(intent))
+        XCTAssertFalse(store.allProcessingDisabledByUser)
+
+        let restarted = AIProviderStore(defaults: defaults)
+        XCTAssertNotNil(restarted.routingSelectionSnapshot(for: .ask))
+        XCTAssertFalse(restarted.activitySummaryRoute.enabled)
+        XCTAssertNil(restarted.routingSelectionSnapshot(for: .activitySummary))
+        XCTAssertEqual(acknowledgementCount, 5)
+    }
+
+    func testPrimaryDisableIsDurableAndLeavesActivityRouteEnabled() throws {
+        let name = "AIProviderProcessStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let settings = AIProviderSettings(
+            active: AIProvider.ollama.rawValue,
+            activeModelID: "ask-model",
+            models: [AIProvider.ollama.rawValue: "ask-model"]
+        )
+        var route = ActivitySummaryRouteSettings.disabled
+        route.enable(providerID: AIProvider.anthropic.rawValue, modelID: "summary-model")
+        defaults.set(try JSONEncoder().encode(settings), forKey: "zbseye.ai.provider")
+        defaults.set(
+            try JSONEncoder().encode(route),
+            forKey: "zbseye.ai.activitySummaryRoute"
+        )
+        let store = AIProviderStore(
+            defaults: defaults,
+            persistenceSynchronizer: { true }
+        )
+
+        XCTAssertTrue(store.deactivatePrimary())
+        XCTAssertNil(store.selectionSnapshot)
+        XCTAssertNotNil(store.activitySummarySelectionSnapshot)
+
+        let restarted = AIProviderStore(defaults: defaults)
+        XCTAssertNil(restarted.selectionSnapshot)
+        XCTAssertTrue(restarted.activitySummaryRoute.enabled)
+        XCTAssertNotNil(restarted.activitySummarySelectionSnapshot)
+    }
+
+    func testTurnAllAIFailsClosedWhenPersistenceAcknowledgementFails() throws {
+        let name = "AIProviderProcessStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let settings = AIProviderSettings(
+            active: AIProvider.custom.rawValue,
+            activeModelID: "ask-model",
+            models: [AIProvider.custom.rawValue: "ask-model"]
+        )
+        var route = ActivitySummaryRouteSettings.disabled
+        route.enable(providerID: AIProvider.custom.rawValue, modelID: "summary-model")
+        let routeData = try JSONEncoder().encode(route)
+        defaults.set(try JSONEncoder().encode(settings), forKey: "zbseye.ai.provider")
+        defaults.set(routeData, forKey: "zbseye.ai.activitySummaryRoute")
+        let store = AIProviderStore(
+            defaults: defaults,
+            persistenceSynchronizer: { false }
+        )
+
+        XCTAssertFalse(store.deactivateAll())
+
+        XCTAssertTrue(store.allProcessingDisabledByUser)
+        XCTAssertNil(store.routingSelectionSnapshot(for: .activitySummary))
+        XCTAssertNil(store.routingSelectionSnapshot(for: .ask))
+        XCTAssertFalse(store.activitySummaryRoute.enabled)
+
+        // Simulate losing the later route-disable write. The earlier durable
+        // switch must still close the remembered route after a restart.
+        defaults.set(routeData, forKey: "zbseye.ai.activitySummaryRoute")
+        let restarted = AIProviderStore(defaults: defaults)
+        XCTAssertTrue(restarted.activitySummaryRoute.enabled)
+        XCTAssertTrue(restarted.allProcessingDisabledByUser)
+        XCTAssertNil(restarted.routingSelectionSnapshot(for: .activitySummary))
+        XCTAssertNil(restarted.routingSelectionSnapshot(for: .ask))
+    }
+
+    func testExplicitPrimaryOrActivityRouteEnableClearsProductWideSwitch() async throws {
+        let name = "AIProviderProcessStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        defer { defaults.removePersistentDomain(forName: name) }
+        let catalog = ScriptedStoreCatalogClient(results: [
+            .authoritative(["ask-model", "summary-model"]),
+        ])
+        let store = AIProviderStore(
+            defaults: defaults,
+            catalogClient: catalog,
+            persistenceSynchronizer: { true }
+        )
+        store.settings = AIProviderSettings(allProcessingDisabledByUser: true)
+        store.setEndpoint("http://127.0.0.1:18080/v1", for: .custom)
+        await store.connect(.custom)
+
+        let intent = try XCTUnwrap(
+            store.activationIntent(for: .custom, modelID: "ask-model")
+        )
+        XCTAssertTrue(store.commitActivation(intent))
+        XCTAssertFalse(store.allProcessingDisabledByUser)
+        XCTAssertNotNil(store.routingSelectionSnapshot(for: .ask))
+
+        XCTAssertTrue(store.deactivateAll())
+        XCTAssertTrue(store.allProcessingDisabledByUser)
+        XCTAssertTrue(store.commitActivitySummaryRoute(
+            provider: .custom,
+            modelID: "summary-model"
+        ))
+        XCTAssertFalse(store.allProcessingDisabledByUser)
+        XCTAssertNotNil(store.routingSelectionSnapshot(for: .activitySummary))
+    }
+
+    func testActivitySummaryRouteIdentityUsesSchemeLessEndpoint() throws {
+        let name = "AIProviderProcessStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let settings = AIProviderSettings(
+            endpoints: [
+                AIProvider.custom.rawValue:
+                    "  127.0.0.1:18080/private/v1?token=secret#fragment  ",
+            ]
+        )
+        var route = ActivitySummaryRouteSettings.disabled
+        route.enable(providerID: AIProvider.custom.rawValue, modelID: "summary-model")
+        defaults.set(try JSONEncoder().encode(settings), forKey: "zbseye.ai.provider")
+        defaults.set(
+            try JSONEncoder().encode(route),
+            forKey: "zbseye.ai.activitySummaryRoute"
+        )
+
+        let store = AIProviderStore(defaults: defaults)
+        let identity = try XCTUnwrap(store.activitySummaryRouteIdentity())
+        XCTAssertEqual(identity.providerID, AIProvider.custom.rawValue)
+        XCTAssertEqual(identity.modelID, "summary-model")
+        XCTAssertTrue(identity.executedLocally)
+        XCTAssertNil(identity.recipientDisclosure)
+        XCTAssertEqual(identity.endpointDisclosure, "http://127.0.0.1:18080")
+        XCTAssertEqual(identity.endpointIdentity?.count, 64)
+        XCTAssertFalse(identity.endpointIdentity?.contains("private") == true)
+    }
+
+    func testActivitySummaryRouteIdentityDoesNotRequireCloudCredentialsOrReadiness() throws {
+        let name = "AIProviderProcessStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        var route = ActivitySummaryRouteSettings.disabled
+        route.enable(
+            providerID: AIProvider.anthropic.rawValue,
+            modelID: "claude-haiku-4-5-20251001"
+        )
+        defaults.set(
+            try JSONEncoder().encode(route),
+            forKey: "zbseye.ai.activitySummaryRoute"
+        )
+
+        let store = AIProviderStore(
+            defaults: defaults,
+            storedKeyExists: { _ in false }
+        )
+        XCTAssertNil(store.currentExecutionContext(for: .activitySummary))
+        XCTAssertEqual(
+            store.activitySummaryRouteIdentity(),
+            ActivitySummaryRouteIdentity(
+                providerID: AIProvider.anthropic.rawValue,
+                modelID: "claude-haiku-4-5-20251001",
+                executedLocally: false,
+                recipientDisclosure: "Anthropic",
+                endpointDisclosure: nil,
+                endpointIdentity: nil
+            )
+        )
+    }
+
+    func testEndpointIdentitySeparatesSafeDisclosureFromOpaquePathIdentity() throws {
+        let secretBearing = try XCTUnwrap(
+            AIProviderStore.normalizedEndpointRouteIdentity(
+                "HTTPS://user:password@Example.COM:443/private/v1?token=secret#fragment"
+            )
+        )
+        let sameRoute = try XCTUnwrap(
+            AIProviderStore.normalizedEndpointRouteIdentity(
+                "https://example.com/private/v1"
+            )
+        )
+        let otherPath = try XCTUnwrap(
+            AIProviderStore.normalizedEndpointRouteIdentity(
+                "https://example.com/other/v1"
+            )
+        )
+        let nonDefaultPort = try XCTUnwrap(
+            AIProviderStore.normalizedEndpointRouteIdentity(
+                "http://Example.COM:18080/v1"
+            )
+        )
+
+        XCTAssertEqual(secretBearing.disclosure, "https://example.com")
+        XCTAssertEqual(secretBearing.disclosure, otherPath.disclosure)
+        XCTAssertEqual(secretBearing.opaqueIdentity, sameRoute.opaqueIdentity)
+        XCTAssertNotEqual(secretBearing.opaqueIdentity, otherPath.opaqueIdentity)
+        XCTAssertEqual(secretBearing.opaqueIdentity.count, 64)
+        XCTAssertFalse(secretBearing.opaqueIdentity.contains("private"))
+        XCTAssertEqual(nonDefaultPort.disclosure, "http://example.com:18080")
+        XCTAssertNil(
+            AIProviderStore.normalizedEndpointRouteIdentity("ftp://example.com/private")
+        )
+        XCTAssertNil(AIProviderStore.normalizedEndpointRouteIdentity("   "))
+    }
+
+    func testCloudActivitySummaryConsentIsDedicatedAndPreservesExistingConsumers() async throws {
+        let provider = AIProvider.anthropic
+        let account = try XCTUnwrap(provider.keychainAccount)
+        let credentials = StoreCredentialStore(values: [account: "secret"])
+        let catalog = ScriptedStoreCatalogClient(results: [
+            .authoritative(["claude-haiku-4-5-20251001"]),
+        ])
+        let (store, _, defaults) = makeStore(
+            catalogClient: catalog,
+            storedKeyExists: { $0 == provider },
+            credentialStore: credentials
+        )
+        defer { clear(defaults) }
+        let recipient = try XCTUnwrap(provider.egressDestination)
+        let existingGrantData = try JSONSerialization.data(withJSONObject: [
+            "providerID": provider.rawValue,
+            "recipientDisclosure": recipient,
+            "consumers": [AIConsumer.ask.rawValue, "future.digest"],
+            "policyRevision": ScopedAIConsentGrant.currentPolicyRevision,
+        ])
+        let existingGrant = try JSONDecoder().decode(
+            ScopedAIConsentGrant.self,
+            from: existingGrantData
+        )
+        store.settings = AIProviderSettings(
+            consentGrants: [provider.rawValue: existingGrant]
+        )
+        await store.connect(provider)
+
+        XCTAssertFalse(store.commitActivitySummaryRoute(
+            provider: provider,
+            modelID: "claude-haiku-4-5-20251001"
+        ))
+        XCTAssertTrue(store.commitActivitySummaryRoute(
+            provider: provider,
+            modelID: "claude-haiku-4-5-20251001",
+            grantCloudConsent: true
+        ))
+        XCTAssertTrue(store.hasConsent(provider, for: .activitySummary))
+        XCTAssertTrue(store.hasConsent(provider, for: .ask))
+        XCTAssertNil(store.selectionSnapshot, "the global Ask pair must stay unchanged")
+        XCTAssertNotNil(store.currentExecutionContext(for: .activitySummary))
+        let summaryAuthorization = await store.currentAuthorization(for: .activitySummary)
+        let askAuthorization = await store.currentAuthorization(for: .ask)
+        XCTAssertEqual(
+            summaryAuthorization.selection,
+            store.activitySummarySelectionSnapshot
+        )
+        XCTAssertNil(askAuthorization.selection)
+
+        let updatedGrant = try XCTUnwrap(store.consentGrant(provider))
+        let encoded = try JSONEncoder().encode(updatedGrant)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        let consumerIDs = try XCTUnwrap(object["consumers"] as? [String])
+        XCTAssertEqual(
+            Set(consumerIDs),
+            Set([AIConsumer.ask.rawValue, AIConsumer.activitySummary.rawValue, "future.digest"])
+        )
+
+        let beforeRevoke = try XCTUnwrap(store.activitySummarySelectionSnapshot)
+        store.revokeConsent(provider)
+        XCTAssertNil(store.currentExecutionContext(for: .activitySummary))
+        XCTAssertNotEqual(
+            store.activitySummarySelectionSnapshot?.authorizationEpoch,
+            beforeRevoke.authorizationEpoch
+        )
     }
 
     func testSelectionAndAuthorizationMutationsNotifyRouterOncePerSettingsCommit() async throws {

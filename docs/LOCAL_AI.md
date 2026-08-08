@@ -105,16 +105,31 @@ and partial assets, not recordings, search data, provider preferences, or genera
 `ZBS Eye Local` is one provider, not a model marketplace. The screen also supports Codex, OpenRouter,
 Anthropic, Moonshot AI/Kimi, Z.AI/GLM, Xiaomi/MiMo, OpenAI, Claude Code, Ollama, LM Studio, and an advanced
 localhost connection. Each provider owns its authentication, catalog, selected model, and optional
-recommendation. Catalog discovery cannot activate a model; activation changes one global `Provider · Model`
-pair through an explicit, revision-checked intent.
+recommendation. Catalog discovery cannot activate a model; activation changes the primary `Provider · Model`
+pair through an explicit, revision-checked intent. The Activities day recap is the one narrow exception: it may
+use a separate model from an already-connected provider. Existing provider recommendations remain visible, but
+Eye does not infer or advertise model prices. This is not a generic per-consumer routing table, and it does not
+redirect Ask, Daily Insights, labels, or automations.
+
+Settings name these two boundaries explicitly. **Turn primary AI off** disables only the Ask / Insights pair;
+the Activities recap route stays as configured. **Turn AI off** disables both routes behind one durable
+fail-closed switch. Eye shows a persistent warning instead of claiming success when macOS does not acknowledge
+an off-setting write, and a later primary activation must first durably confirm that any remembered recap route
+is disabled.
 
 Local providers do not need egress consent. Cloud, broker, and signed-in CLI providers show the actual
 recipient and requested consumer scopes before activation. Cancelling leaves the previous pair intact.
 Previously granted manual-use consent does not silently authorize new background features such as generated
-activity labels. Revocation and provider/model changes invalidate queued work, and stale results are discarded.
+activity labels or the Activities day recap. The recap's external route has its own explicit consent. Revocation
+and provider/model changes invalidate queued work, and stale results are discarded. Its factual 3–6 item output
+is cached locally with provenance and is invalidated when intersecting source history is deleted or pruned.
 
 The REST and MCP surfaces do not expose model setup, credentials, consent, or generation. Those remain GUI-only
 product boundaries. Existing authenticated search/timeline/diagnostic contracts stay unchanged.
+
+The immutable V9 quality record predates this fifth prompt and qualifies only Ask, Daily Insights, Day Summary,
+and Activity Label. It must not be edited or cited as proof of Activities-recap quality. Before the recap ships in
+a later release, its exact production prompt and both language paths need a new versioned physical qualification.
 
 ## Troubleshooting
 

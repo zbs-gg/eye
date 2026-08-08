@@ -15,11 +15,20 @@ struct ActivitiesView: View {
     var body: some View {
         Group {
             if let store = env.sceneStore {
-                ActivitiesBody(store: store, onOpenMoment: onOpenMoment)
+                ActivitiesBody(
+                    store: store,
+                    summaryStore: env.activityDaySummaryStore,
+                    onOpenMoment: onOpenMoment
+                )
                     .environment(env)
                     .task {
                         AchievementCounters.bump(.activitiesOpened)   // "Day Chronicler" achievement
+                        let day = store.selectedDay
                         await store.load()
+                        if Calendar.current.isDate(store.selectedDay, inSameDayAs: day),
+                           store.error == nil {
+                            await env.activityDaySummaryStore?.load(day: day)
+                        }
                         await env.achievements?.refresh()
                     }
             } else if let err = env.dataError {
@@ -54,6 +63,7 @@ private enum ActivityRow: Identifiable {
 
 private struct ActivitiesBody: View {
     @Bindable var store: SceneStore
+    let summaryStore: ActivityDaySummaryStore?
     let onOpenMoment: (Date) -> Void
 
     var body: some View {
@@ -79,15 +89,21 @@ private struct ActivitiesBody: View {
                 .toggleStyle(.checkbox)
                 .controlSize(.small)
             Button("Today") {
-                store.selectedDay = Calendar.current.startOfDay(for: Date())
-                Task { await store.load() }
+                let today = Calendar.current.startOfDay(for: Date())
+                if Calendar.current.isDate(store.selectedDay, inSameDayAs: today) {
+                    Task { await reload(day: today) }
+                } else {
+                    store.selectedDay = today
+                }
             }
             .controlSize(.small)
             DatePicker("", selection: $store.selectedDay, displayedComponents: .date)
                 .labelsHidden()
                 .datePickerStyle(.compact)
                 .controlSize(.small)
-                .onChange(of: store.selectedDay) { _, _ in Task { await store.load() } }
+                .onChange(of: store.selectedDay) { _, day in
+                    Task { await reload(day: day) }
+                }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -119,6 +135,12 @@ private struct ActivitiesBody: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
+                    if let summaryStore {
+                        ActivityDaySummaryCard(store: summaryStore)
+                            .padding(.horizontal, 16)
+                            .padding(.top, 8)
+                    }
+
                     let totalTime = totalDurationLabel(store.blocks)
                     HStack {
                         Text("\(store.blocks.count) activities · \(totalTime)")
@@ -155,12 +177,119 @@ private struct ActivitiesBody: View {
         onOpenMoment(scene.startTs)
     }
 
+    private func reload(day: Date) async {
+        guard Calendar.current.isDate(store.selectedDay, inSameDayAs: day) else { return }
+        await store.load()
+        guard Calendar.current.isDate(store.selectedDay, inSameDayAs: day),
+              store.error == nil else { return }
+        await summaryStore?.load(day: day)
+    }
+
     private func totalDurationLabel(_ blocks: [ActivityBlock]) -> String {
         let total = blocks.reduce(0) { $0 + $1.durationSec }
         let hours = Int(total) / 3600
         let minutes = (Int(total) % 3600) / 60
         if hours > 0 { return "\(hours) h \(minutes) min" }
         return "\(minutes) min"
+    }
+}
+
+// MARK: - factual day summary
+
+private struct ActivityDaySummaryCard: View {
+    @Bindable var store: ActivityDaySummaryStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(.tint)
+                Text(ActivityDaySummaryPresentation.title)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                if showsAction {
+                    Button(actionTitle) {
+                        Task { await store.refresh() }
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(store.isBusy)
+                }
+            }
+
+            if let content = store.content {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(content.bullets.enumerated()), id: \.offset) { _, bullet in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(verbatim: "•")
+                                .foregroundStyle(.secondary)
+                            Text(bullet)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                .font(.callout)
+            }
+
+            status
+
+            if let provenance = store.provenanceLabel {
+                Text(provenance)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.tint.opacity(0.18)))
+        .accessibilityElement(children: .contain)
+    }
+
+    private var showsAction: Bool {
+        switch store.phase {
+        case .cached, .failed, .unavailable:
+            true
+        case .idle, .loading, .updating, .noActivity:
+            false
+        }
+    }
+
+    private var actionTitle: String {
+        (store.phase == .failed || store.phase == .unavailable)
+            ? ActivityDaySummaryPresentation.retry
+            : ActivityDaySummaryPresentation.refresh
+    }
+
+    @ViewBuilder
+    private var status: some View {
+        switch store.phase {
+        case .loading:
+            ProgressView(ActivityDaySummaryPresentation.loading)
+                .controlSize(.small)
+        case .updating:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text(ActivityDaySummaryPresentation.updating)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        case .unavailable:
+            Text(ActivityDaySummaryPresentation.unavailableMessage(hasContent: store.hasContent))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .noActivity:
+            Text(ActivityDaySummaryPresentation.noActivity)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .failed:
+            Text(store.errorText ?? String(localized: "The summary could not be generated."))
+                .font(.caption)
+                .foregroundStyle(.red)
+        case .idle, .cached:
+            EmptyView()
+        }
     }
 }
 

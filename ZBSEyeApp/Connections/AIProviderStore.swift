@@ -1,5 +1,15 @@
+import CryptoKit
 import Foundation
 import Observation
+
+struct ProviderEndpointRouteIdentity: Sendable, Equatable {
+    /// Credential-free scheme/host/non-default-port origin safe for UI and
+    /// provenance. It deliberately omits the deployment path.
+    let disclosure: String
+    /// SHA-256 of canonical scheme/host/non-default-port/path. This keeps
+    /// same-origin deployments distinct without persisting their raw paths.
+    let opaqueIdentity: String
+}
 
 protocol AIProviderCatalogLoading: Sendable {
     func load(
@@ -25,12 +35,13 @@ struct KeychainAIProviderCredentialStore: AIProviderCredentialStoring {
     func delete(_ account: String) -> Bool { KeychainStore.delete(account) }
 }
 
-/// State behind compact AI setup: one card per provider, exactly ONE active processing model across
-/// all of them. @MainActor @Observable — the UI binds straight to it; the network probes go through the
-/// process-wide LLMRouter. Persistence: UserDefaults "zbseye.ai.provider" (JSON, no secrets) with a one-time
-/// migration from the legacy "zbseye.connections.llm" {baseURL, model} — an existing local setup keeps
-/// working without the user touching anything. API keys are ONLY in the Keychain (never in defaults,
-/// never in this observable state, never logged).
+/// State behind compact AI setup: one card per provider and one global active
+/// processing model. The Activities day summary is the sole separate route.
+/// @MainActor @Observable — the UI binds straight to it; network probes go
+/// through the process-wide LLMRouter. Provider settings live in UserDefaults
+/// "zbseye.ai.provider" (JSON, no secrets), with a one-time migration from the
+/// legacy "zbseye.connections.llm" {baseURL, model}. API keys are ONLY in the
+/// Keychain (never in defaults, observable state, or logs).
 @MainActor
 @Observable
 final class AIProviderStore {
@@ -107,6 +118,15 @@ final class AIProviderStore {
             }
         }
     }
+    private(set) var activitySummaryRoute: ActivitySummaryRouteSettings {
+        didSet {
+            guard activitySummaryRoute != oldValue else { return }
+            if !activitySummaryRouteAlreadyPersisted {
+                _ = persistActivitySummaryRoute(activitySummaryRoute)
+            }
+            notifyRouterOfRoutingChange()
+        }
+    }
     /// Per-provider reachability/auth state. This is deliberately independent from both the user's
     /// persisted model preference and the global committed active pair.
     private(set) var statuses: [String: CardStatus] = [:]
@@ -149,9 +169,11 @@ final class AIProviderStore {
     /// next-process recovery receipt owns crash safety instead.
     @ObservationIgnored private let persistenceSynchronizer: () -> Bool
     @ObservationIgnored private var settingsAlreadyPersisted = false
+    @ObservationIgnored private var activitySummaryRouteAlreadyPersisted = false
     private static let key = "zbseye.ai.provider"
     private static let lastKnownGoodKey = "zbseye.ai.provider.lastKnownGood"
     private static let unreadableRecoveryKey = "zbseye.ai.provider.unreadableRecovery"
+    private static let activitySummaryRouteKey = "zbseye.ai.activitySummaryRoute"
     private static let legacyKey = "zbseye.connections.llm"
 
     init(
@@ -167,6 +189,15 @@ final class AIProviderStore {
         catalogClient = injectedCatalogClient ?? ProviderHTTPCatalogClient(
             credentials: KeychainProviderHTTPCredentials()
         )
+        if let routeData = persistedDefaults.data(forKey: Self.activitySummaryRouteKey),
+           let route = try? JSONDecoder().decode(
+               ActivitySummaryRouteSettings.self,
+               from: routeData
+           ) {
+            activitySummaryRoute = route
+        } else {
+            activitySummaryRoute = .disabled
+        }
         let resolvedCredentialStore = injectedCredentialStore
             ?? KeychainAIProviderCredentialStore()
         credentialStore = resolvedCredentialStore
@@ -207,9 +238,9 @@ final class AIProviderStore {
 
     /// Installs the process-provider control plane after AppEnvironment has
     /// resolved the real generative data root. A persisted process provider is
-    /// reconnected only when it is still the active choice and owns at least
-    /// one valid scoped consent grant. Inactive or unconsented providers stay
-    /// completely quiet until the user presses their explicit Check button.
+    /// reconnected only when it is the global choice or the enabled Activities
+    /// route and owns the corresponding valid scoped consent. Other inactive or
+    /// unconsented providers stay quiet until the user presses Check.
     func configureProcessProviders(
         codex: any CodexProviderConnecting,
         claudeCode: any ClaudeCodeProviderConnecting,
@@ -218,12 +249,26 @@ final class AIProviderStore {
         codexProvider = codex
         claudeCodeProvider = claudeCode
         processOverlay = overlay
-        guard let active = settings.activeProvider,
-              active.isSubprocess,
-              AIConsumer.allCases.contains(where: {
-                  settings.isAuthorized(providerID: active.rawValue, consumer: $0)
-              }) else { return }
-        Task { [weak self] in await self?.connect(active) }
+        guard !settings.allProcessingDisabledByUser else { return }
+        var providersToReconnect: [AIProvider] = []
+        if let active = settings.activeProvider,
+           active.isSubprocess,
+           AIConsumer.allCases.lazy.filter({ $0 != .activitySummary }).contains(where: {
+               settings.isAuthorized(providerID: active.rawValue, consumer: $0)
+           }) {
+            providersToReconnect.append(active)
+        }
+        if activitySummaryRoute.enabled,
+           let providerID = activitySummaryRoute.providerID,
+           let provider = AIProvider(rawValue: providerID),
+           provider.isSubprocess,
+           settings.isAuthorized(providerID: providerID, consumer: .activitySummary),
+           !providersToReconnect.contains(provider) {
+            providersToReconnect.append(provider)
+        }
+        for provider in providersToReconnect {
+            Task { [weak self] in await self?.connect(provider) }
+        }
     }
 
     /// Wires the app-lifetime router after bootstrap constructs it. Routing
@@ -244,7 +289,28 @@ final class AIProviderStore {
 
     var activeProvider: AIProvider? { settings.activeProvider }
     var activeModelID: String? { settings.activeModelID }
-    var selectionSnapshot: ProviderSelectionSnapshot? { settings.selectionSnapshot }
+    var allProcessingDisabledByUser: Bool {
+        settings.allProcessingDisabledByUser
+    }
+    var selectionSnapshot: ProviderSelectionSnapshot? {
+        guard !allProcessingDisabledByUser else { return nil }
+        return settings.selectionSnapshot
+    }
+    var activitySummarySelectionSnapshot: ProviderSelectionSnapshot? {
+        guard !allProcessingDisabledByUser else { return nil }
+        return activitySummaryRoute.selectionSnapshot(
+            authorizationEpoch: settings.authorizationEpoch
+        )
+    }
+
+    func routingSelectionSnapshot(
+        for consumer: AIConsumer
+    ) -> ProviderSelectionSnapshot? {
+        guard !allProcessingDisabledByUser else { return nil }
+        return consumer == .activitySummary
+            ? activitySummarySelectionSnapshot
+            : selectionSnapshot
+    }
     /// The revision exists independently of an active pair. In particular, an
     /// explicit "None" selection still owns its advanced revision and must not
     /// be mistaken for a fresh revision zero by delayed provisioning work.
@@ -274,7 +340,11 @@ final class AIProviderStore {
         // but invalidate authorization for work that may have snapshotted the old endpoint.
         statuses[p.rawValue] = .notConfigured
         catalogs[p.rawValue] = .notLoaded
-        if isActive(p) { settings.authorizationEpoch.advance() }
+        if isActive(p)
+            || (activitySummaryRoute.enabled
+                && activitySummaryRoute.providerID == p.rawValue) {
+            settings.authorizationEpoch.advance()
+        }
     }
 
     func status(_ p: AIProvider) -> CardStatus { statuses[p.rawValue] ?? .notConfigured }
@@ -325,6 +395,23 @@ final class AIProviderStore {
         }
     }
 
+    /// Only providers whose connection/catalog has already been proven are
+    /// offered here. Choosing this route never performs discovery or silently
+    /// configures another provider.
+    var activitySummaryRouteCandidates: [ActivitySummaryRouteCandidate] {
+        AIProvider.allCases.compactMap { provider in
+            guard case .connected = status(provider) else { return nil }
+            var seen = Set<String>()
+            let models = availableModels(for: provider).compactMap { raw -> String? in
+                let model = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !model.isEmpty, seen.insert(model).inserted else { return nil }
+                return model
+            }
+            guard !models.isEmpty else { return nil }
+            return ActivitySummaryRouteCandidate(provider: provider, modelIDs: models)
+        }
+    }
+
     /// True once the USER has configured or activated any provider by hand — a saved API key, a saved
     /// local endpoint override, or an active selection. Merely auto-detected presence (e.g. the Claude
     /// Code CLI, or a probed local server) does NOT count, so first-run onboarding still auto-expands for
@@ -339,6 +426,49 @@ final class AIProviderStore {
 
     func recipientDisclosure(for p: AIProvider) -> String? {
         p.egressDestination(for: endpoint(for: p))
+    }
+
+    /// Splits a configured endpoint into a safe origin disclosure and an
+    /// opaque route identity. Userinfo, query and fragment never participate;
+    /// the path participates only inside the SHA-256 input.
+    nonisolated static func normalizedEndpointRouteIdentity(
+        _ raw: String
+    ) -> ProviderEndpointRouteIdentity? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedValue = value.contains("://") ? value : "http://\(value)"
+        guard let components = URLComponents(string: normalizedValue),
+              let rawScheme = components.scheme?.lowercased(),
+              ["http", "https"].contains(rawScheme),
+              let rawHost = components.host?.lowercased(),
+              !rawHost.isEmpty else { return nil }
+
+        let rawPort = components.port
+        var origin = URLComponents()
+        origin.scheme = rawScheme
+        origin.host = rawHost
+        if !((rawScheme == "http" && rawPort == 80)
+            || (rawScheme == "https" && rawPort == 443)) {
+            origin.port = rawPort
+        }
+        // Constructing a fresh URLComponents explicitly omits credentials and
+        // every potentially sensitive deployment path component.
+        origin.path = ""
+        origin.query = nil
+        origin.fragment = nil
+        guard let disclosure = origin.string else { return nil }
+
+        var canonicalRoute = origin
+        canonicalRoute.percentEncodedPath = components.percentEncodedPath.isEmpty
+            ? "/"
+            : components.percentEncodedPath
+        guard let canonicalValue = canonicalRoute.string else { return nil }
+        let digest = SHA256.hash(data: Data(canonicalValue.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return ProviderEndpointRouteIdentity(
+            disclosure: disclosure,
+            opaqueIdentity: digest
+        )
     }
 
     func consentGrant(_ p: AIProvider) -> ScopedAIConsentGrant? {
@@ -440,7 +570,10 @@ final class AIProviderStore {
         }
         catalogs[provider.rawValue] = nextCatalog
         statuses[provider.rawValue] = nextStatus
-        if isActive(provider), previousCatalog != nextCatalog {
+        if (isActive(provider)
+            || (activitySummaryRoute.enabled
+                && activitySummaryRoute.providerID == provider.rawValue)),
+           previousCatalog != nextCatalog {
             // The router's immutable snapshot must change when an active local
             // runtime disappears or becomes usable after bootstrap.
             settings.authorizationEpoch.advance()
@@ -456,7 +589,9 @@ final class AIProviderStore {
     func commitActivation(
         _ intent: ActivationIntent,
         grantCloudConsent: Bool = false,
-        consumers: Set<AIConsumer> = Set(AIConsumer.allCases)
+        consumers: Set<AIConsumer> = Set(
+            AIConsumer.allCases.filter { $0 != .activitySummary }
+        )
     ) -> Bool {
         guard let p = AIProvider(rawValue: intent.providerID),
               canActivate(p, modelID: intent.modelID) else { return false }
@@ -474,11 +609,35 @@ final class AIProviderStore {
             consentDraft = nil
         }
 
-        return settings.commitActivation(
+        var candidate = settings
+        guard candidate.commitActivation(
             intent,
             consentDraft: consentDraft,
             requiredConsumers: consumers
-        )
+        ) else { return false }
+
+        if settings.allProcessingDisabledByUser {
+            // A crash may have persisted the global kill switch before the
+            // separately stored Activities route was disabled. Enabling only
+            // the primary model must not resurrect that remembered route, so
+            // queue its disable before acknowledging the switch clear.
+            guard disableActivitySummaryRoute() else { return false }
+            let disabledSnapshot = settings
+            guard commitProviderSettingsWithAcknowledgement(candidate) else {
+                // The attempted clear may already be queued in UserDefaults.
+                // Restore the acknowledged fail-closed snapshot before
+                // returning so a restart cannot interpret a failed enable as
+                // permission to process.
+                _ = persist(disabledSnapshot)
+                persistenceWarning = String(
+                    localized: "Couldn't confirm that AI was turned on. Processing remains off; try again."
+                )
+                return false
+            }
+        } else {
+            settings = candidate
+        }
+        return true
     }
 
     /// Captures ownership for an asynchronous remove/disconnect flow. The
@@ -511,11 +670,20 @@ final class AIProviderStore {
               canActivate(.zbsEyeLocal, modelID: intent.modelID) else {
             return .stale
         }
+        if settings.allProcessingDisabledByUser,
+           !disableActivitySummaryRoute() {
+            return .retryablePersistenceFailure
+        }
+        let disabledSnapshot = settings
         var candidate = settings
         guard candidate.commitActivation(intent) else { return .stale }
-        return commitProviderSettingsWithAcknowledgement(candidate)
-            ? .applied
-            : .retryablePersistenceFailure
+        guard commitProviderSettingsWithAcknowledgement(candidate) else {
+            if disabledSnapshot.allProcessingDisabledByUser {
+                _ = persist(disabledSnapshot)
+            }
+            return .retryablePersistenceFailure
+        }
+        return .applied
     }
 
     func commitBuiltInDeactivation(
@@ -529,6 +697,81 @@ final class AIProviderStore {
         return commitProviderSettingsWithAcknowledgement(candidate)
             ? .applied
             : .retryablePersistenceFailure
+    }
+
+    /// Commits only the Activities day-summary route. It never edits the
+    /// global Ask pair or the provider-card model preference.
+    @discardableResult
+    func commitActivitySummaryRoute(
+        provider: AIProvider,
+        modelID: String,
+        grantCloudConsent: Bool = false
+    ) -> Bool {
+        let cleanModel = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard activitySummaryRouteCandidates.contains(where: {
+            $0.provider == provider && $0.modelIDs.contains(cleanModel)
+        }) else { return false }
+
+        if provider.isCloud {
+            guard let recipient = recipientDisclosure(for: provider) else { return false }
+            if !hasConsent(provider, for: .activitySummary) {
+                guard grantCloudConsent else { return false }
+                var grant: ScopedAIConsentGrant
+                if let current = settings.consentGrant(forProviderID: provider.rawValue),
+                   current.recipientDisclosure == recipient {
+                    grant = current
+                    grant.consumers.insert(.activitySummary)
+                    grant.policyRevision = ScopedAIConsentGrant.currentPolicyRevision
+                } else {
+                    grant = ScopedAIConsentGrant(
+                        providerID: provider.rawValue,
+                        recipientDisclosure: recipient,
+                        consumers: [.activitySummary],
+                        policyRevision: ScopedAIConsentGrant.currentPolicyRevision
+                    )
+                }
+                settings.setConsent(grant)
+            }
+            guard hasConsent(provider, for: .activitySummary) else { return false }
+        } else {
+            guard !grantCloudConsent else { return false }
+        }
+
+        let previousRoute = activitySummaryRoute
+        var route = previousRoute
+        route.enable(providerID: provider.rawValue, modelID: cleanModel)
+        activitySummaryRoute = route
+        guard clearAllProcessingDisableWithAcknowledgement() else {
+            activitySummaryRoute = previousRoute
+            return false
+        }
+        return activitySummarySelectionSnapshot != nil
+    }
+
+    /// Disables only the Activities route. The runtime closes immediately on
+    /// failure, but the caller receives false unless UserDefaults acknowledged
+    /// the durable write, so UI must not claim the setting survived restart.
+    @discardableResult
+    func disableActivitySummaryRoute() -> Bool {
+        var route = activitySummaryRoute
+        route.disable()
+        // Do not short-circuit when runtime is already off. A previous
+        // unacknowledged write may have left an enabled route on disk; every
+        // path that can later clear the global kill switch must first replace
+        // and acknowledge those stale bytes.
+        let acknowledged = persistActivitySummaryRoute(
+            route,
+            requireAcknowledgement: true
+        )
+        publishActivitySummaryRouteWithoutPersistence(route)
+        if acknowledged {
+            persistenceWarning = nil
+            return true
+        }
+        persistenceWarning = String(
+            localized: "Activity summaries are off for now, but Eye couldn't confirm the saved setting. Turn them off again after restarting."
+        )
+        return false
     }
 
     private func canActivate(_ p: AIProvider, modelID: String) -> Bool {
@@ -554,7 +797,55 @@ final class AIProviderStore {
     /// selections, keys and consent are untouched, so re-activating later is a single tap. Records the
     /// deliberate "off" so a connected local server can't silently re-activate on the next AI setup visit.
     func deactivate() {
-        settings.deactivate()
+        _ = deactivatePrimary()
+    }
+
+    /// Turns off only the primary Ask / Insights pair. A separately configured
+    /// Activities route is deliberately untouched.
+    @discardableResult
+    func deactivatePrimary() -> Bool {
+        var candidate = settings
+        candidate.deactivate()
+        guard candidate != settings else { return true }
+        guard commitProviderSettingsWithAcknowledgement(candidate) else {
+            publishSettingsWithoutPersistence(candidate)
+            persistenceWarning = String(
+                localized: "Primary AI is off for now, but Eye couldn't confirm the saved setting. Turn it off again after restarting."
+            )
+            return false
+        }
+        persistenceWarning = nil
+        return true
+    }
+
+    /// Settings' product-wide "Turn AI off" boundary. Credentials, consent,
+    /// and the remembered Activities pair remain intact.
+    @discardableResult
+    func deactivateAll() -> Bool {
+        var candidate = settings
+        candidate.deactivate()
+        candidate.disableAllProcessing()
+        let settingsAcknowledged = commitProviderSettingsWithAcknowledgement(candidate)
+        if !settingsAcknowledged {
+            // Runtime must honor the person's click even when UserDefaults
+            // cannot acknowledge durability. Publishing the same fail-closed
+            // candidate prevents any request from leaving this process.
+            publishSettingsWithoutPersistence(candidate)
+            persistenceWarning = String(
+                localized: "AI is off, but Eye couldn't confirm the saved setting. Turn it off again after restarting."
+            )
+        }
+        let routeAcknowledged = disableActivitySummaryRoute()
+        guard settingsAcknowledged, routeAcknowledged else {
+            if !settingsAcknowledged {
+                persistenceWarning = String(
+                    localized: "AI is off for now, but Eye couldn't confirm the saved setting. Turn it off again after restarting."
+                )
+            }
+            return false
+        }
+        persistenceWarning = nil
+        return true
     }
 
     /// The request config consumers use. nil = nothing usable is active → Ask/Insights degrade honestly.
@@ -565,7 +856,7 @@ final class AIProviderStore {
     /// Scoped configuration snapshot for a concrete consumer. The committed active model is used here,
     /// never the mutable provider-card preference.
     func activeConfig(for consumer: AIConsumer) -> LLMConfig? {
-        guard let snapshot = settings.selectionSnapshot,
+        guard let snapshot = routingSelectionSnapshot(for: consumer),
               let p = AIProvider(rawValue: snapshot.providerID) else { return nil }
         switch catalogState(p).selectionAvailability(for: snapshot.modelID) {
         case .missingFromAuthoritativeCatalog, .providerUnavailable, .unsupported:
@@ -1219,6 +1510,24 @@ final class AIProviderStore {
         return !requireAcknowledgement || persistenceSynchronizer()
     }
 
+    @discardableResult
+    private func persistActivitySummaryRoute(
+        _ snapshot: ActivitySummaryRouteSettings,
+        requireAcknowledgement: Bool = false
+    ) -> Bool {
+        guard let data = try? JSONEncoder().encode(snapshot) else { return false }
+        defaults.set(data, forKey: Self.activitySummaryRouteKey)
+        return !requireAcknowledgement || persistenceSynchronizer()
+    }
+
+    private func publishActivitySummaryRouteWithoutPersistence(
+        _ candidate: ActivitySummaryRouteSettings
+    ) {
+        activitySummaryRouteAlreadyPersisted = true
+        activitySummaryRoute = candidate
+        activitySummaryRouteAlreadyPersisted = false
+    }
+
     private func commitProviderSettingsWithAcknowledgement(
         _ candidate: AIProviderSettings
     ) -> Bool {
@@ -1228,6 +1537,25 @@ final class AIProviderStore {
         settingsAlreadyPersisted = true
         settings = candidate
         settingsAlreadyPersisted = false
+        return true
+    }
+
+    /// The Activities route is stored separately from the global settings.
+    /// When the product-wide switch is off, the route is written first; only
+    /// then may this acknowledged settings commit reopen AI. A failed
+    /// acknowledgement restores the disabled bytes and keeps runtime closed.
+    private func clearAllProcessingDisableWithAcknowledgement() -> Bool {
+        guard settings.allProcessingDisabledByUser else { return true }
+        let disabledSnapshot = settings
+        var candidate = disabledSnapshot
+        candidate.enableAllProcessing()
+        guard commitProviderSettingsWithAcknowledgement(candidate) else {
+            _ = persist(disabledSnapshot)
+            persistenceWarning = String(
+                localized: "Couldn't confirm that AI was turned on. Processing remains off; try again."
+            )
+            return false
+        }
         return true
     }
 

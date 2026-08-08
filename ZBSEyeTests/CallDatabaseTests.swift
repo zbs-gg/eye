@@ -214,7 +214,7 @@ final class CallDatabaseTests: XCTestCase {
             )
         }
         XCTAssertEqual(snapshot.appCount, 1)
-        XCTAssertEqual(snapshot.migrations.last, "v15_capture_coverage")
+        XCTAssertEqual(snapshot.migrations.last, "v16_activity_day_summary")
         XCTAssertGreaterThanOrEqual(snapshot.triggerCount, 6)
     }
 

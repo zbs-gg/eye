@@ -213,6 +213,8 @@ actor RetentionManager {
         let isFullDeletion = fromMs == 0 && toMs == Int64.max
         if isFullDeletion, let callDeletion {
             try await callDeletion.requireNoActiveCall()
+        }
+        if isFullDeletion, let callDeletion {
             for erasure in try await callDeletion.resumePendingErases(
                 nowMs: Int64(Date().timeIntervalSince1970 * 1_000)
             ) {
@@ -242,6 +244,12 @@ actor RetentionManager {
                 let ids = rows.compactMap(\.id)
                 try ScreenCaptureRow.filter(ids.contains(Column("id"))).deleteAll(database)
                 try Self.deleteVectors(database, captureIds: ids)
+                let endExclusive = toMs == Int64.max ? Int64.max : toMs + 1
+                try ActivityDaySummaryRepository.deleteOverlapping(
+                    in: database,
+                    fromMs: fromMs,
+                    toMs: endExclusive
+                )
                 return (rows.count, rows.compactMap(\.relativePath).filter { $0 != "imported" })
             }
             guard count > 0 else { break }
@@ -290,6 +298,18 @@ actor RetentionManager {
                 fromMs: fromMs,
                 toMs: coverageEndExclusive
             )
+            if isFullDeletion {
+                try ActivityDaySummaryRepository.deleteAll(in: database)
+            } else {
+                // The terminal bump closes snapshots opened between batches
+                // and invalidates an already-stale cache even when the source
+                // loop found no remaining screen row in this range.
+                try ActivityDaySummaryRepository.deleteOverlapping(
+                    in: database,
+                    fromMs: fromMs,
+                    toMs: coverageEndExclusive
+                )
+            }
         }
         try? await checkpoint()
         try checkOperationContinuation()
@@ -436,6 +456,10 @@ actor RetentionManager {
                 sql: "DELETE FROM screen_captures WHERE id IN (\(idList(frameIDs)))"
             )
             try deleteVectors(database, captureIds: frameIDs)
+            try ActivityDaySummaryRepository.deleteSummariesContainingSources(
+                in: database,
+                sourceTimestampsMs: victims.filter { $0.kind == .frame }.map(\.ts)
+            )
         }
         if !audioIDs.isEmpty {
             try database.execute(

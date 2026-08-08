@@ -338,6 +338,25 @@ final class AIConsumerGenerationTests: XCTestCase {
         XCTAssertEqual(summary.purpose, .summary)
         XCTAssertTrue(summary.userPostamble.contains("## What I worked on"))
 
+        let activitySummary = AIConsumerPromptFactory.activitySummary(
+            language: .ru,
+            dateLine: "11 июля 2026",
+            fragments: [
+                .init(sourceID: "activity:0", text: "Собирал релиз ZBS Eye"),
+                .init(sourceID: "activity:1", text: "Проверял автоматические звонки"),
+                .init(sourceID: "activity:2", text: "Исправлял приоритет скриншотов"),
+            ],
+            maximumFragmentCharacters: 900,
+            maximumOutputTokens: 500,
+            timeout: .seconds(30)
+        )
+        XCTAssertEqual(activitySummary.consumer, .activitySummary)
+        XCTAssertEqual(activitySummary.priority, .explicitInsight)
+        XCTAssertEqual(activitySummary.promptVersion, "activity-summary-v1")
+        XCTAssertEqual(activitySummary.purpose, .summary)
+        XCTAssertTrue(activitySummary.systemPrompt.contains("3–6"))
+        XCTAssertTrue(activitySummary.userPostamble.contains("ровно 3–6"))
+
         let label = AIConsumerPromptFactory.generatedLabel(
             serializedBlock: #"{"apps":["Xcode"]}"#,
             language: .ru,
@@ -349,6 +368,49 @@ final class AIConsumerGenerationTests: XCTestCase {
         XCTAssertEqual(label.promptVersion, "block-label-v4")
         XCTAssertEqual(label.purpose, .label)
         XCTAssertTrue(label.systemPrompt.contains("по-русски"))
+    }
+
+    func testActivitySummaryOutputRequiresThreeToSixPlainGroundedBullets() async throws {
+        let execution = context(
+            provider: .anthropic,
+            model: "claude-haiku-4-5-20251001",
+            local: false,
+            recipient: AIProvider.anthropic.egressDestination
+        )
+        let plan = AIConsumerPromptFactory.activitySummary(
+            language: .en,
+            dateLine: "Friday",
+            fragments: [
+                .init(sourceID: "activity:0", text: "Prepared the ZBS Eye release"),
+                .init(sourceID: "activity:1", text: "Tested automatic Calls"),
+                .init(sourceID: "activity:2", text: "Fixed screenshot priority"),
+            ],
+            maximumFragmentCharacters: 900,
+            maximumOutputTokens: 500,
+            timeout: .seconds(30)
+        )
+        let valid = "- Prepared the ZBS Eye release\n- Tested automatic Calls\n- Fixed screenshot priority"
+        XCTAssertTrue(ActivitySummaryOutputValidator.isValid(valid))
+        XCTAssertFalse(ActivitySummaryOutputValidator.isValid("## What I did\n\(valid)"))
+        XCTAssertFalse(ActivitySummaryOutputValidator.isValid("- One\n- Two"))
+        XCTAssertFalse(ActivitySummaryOutputValidator.isValid("\(valid)\n- Read https://example.com"))
+
+        let accepted = try await RoutedAIConsumerGenerator(
+            router: StubConsumerRouter(result: .success(response(
+                content: valid,
+                execution: execution
+            )))
+        ).generate(plan: plan, execution: execution, requestID: UUID())
+        XCTAssertEqual(accepted.content, valid)
+
+        await assertGenerationError(.generationFailed) {
+            _ = try await RoutedAIConsumerGenerator(
+                router: StubConsumerRouter(result: .success(self.response(
+                    content: "## Generic paragraph",
+                    execution: execution
+                )))
+            ).generate(plan: plan, execution: execution, requestID: UUID())
+        }
     }
 
     func testSummaryMetadataStaysOutOfContentAndLabelBudgetCoversToolEnvelope() {

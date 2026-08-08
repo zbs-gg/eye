@@ -60,6 +60,26 @@ The only final classifications are:
 - `upstream-blocked` — a native baseline or the ChatGPT + Chronicle control is already broken or too slow.
 - `invalid` — process state, artifact identity, sample count, or baseline controls were contaminated.
 
+## Current developer diagnostic — not a qualification receipt
+
+On 2026-08-08, an installed 0.7.0 build 20 was checked on macOS 26.2 after Chronicle had been fully disabled.
+Eye reported healthy capture, Timeline advanced, and there were no open coverage intervals. Repeated native
+Control-Shift-Command-3 clipboard captures all succeeded, but their median completion time was about 1.26 seconds
+with Eye running versus about 0.84 seconds after Eye had been stopped and the capture stack had settled. The
+roughly 420 ms increase is too large for the next release even though no capture failed.
+
+A separately signed developer probe reproduced the delay with an otherwise empty persistent ScreenCaptureKit
+stream. Changing its cadence from 0.5 to 30 frames per second, shrinking the captured image, and removing Eye's
+AX, OCR, and HEIC work did not remove the delay. Stopping the stream at shortcut intent was also too late to make
+the current screenshot immediate. This narrows the problem to coexistence with an active ScreenCaptureKit stream
+on this OS/hardware path; it does not prove an acceptable production fix.
+
+Earlier in the same investigation, Chronicle's `--screen-capture-child` did collide with native
+`screencapture` and produced a timeout. Disabling Chronicle removed that independent failure, but did not remove
+Eye's measured latency. Because the installed app was build 20 rather than the exact build 21 artifact and the
+full 5 + 100 bracket was not run, these numbers are a diagnostic only. They cannot qualify 0.7.0 or a later
+release; the next public artifact remains blocked on a reviewed capture-path change and the full gate below.
+
 ## Before running
 
 - Build, notarize, staple, and install one clean Release candidate in `/Applications/ZBS Eye.app`.

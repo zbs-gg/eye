@@ -2,6 +2,20 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
+## Unreleased
+
+### Added
+- Activities can show one factual 3–6 item recap for the selected day. The recap uses one explicitly chosen,
+  already-connected model that is separate from the primary Ask / Daily Insights model. Eye preserves each
+  provider's existing model recommendation without making an unverified price claim. External and signed-in CLI
+  providers require a dedicated Activity summaries consent before any excerpt leaves the Mac.
+- Day recaps are cached locally with model provenance. Protected/system surfaces are excluded, prompt input is
+  reduced to bounded app/time/topic fragments, and deleting or automatically pruning intersecting screen
+  history invalidates the derived recap. This adds no REST or MCP generation surface.
+- AI settings now distinguish the primary Ask / Insights model from the separate Activity summaries route.
+  Turning all AI off is durable and fail-closed across restart; an unconfirmed settings write is shown as an
+  error instead of being reported as saved.
+
 ## [0.7.0] — 2026-08-08
 
 ### Added

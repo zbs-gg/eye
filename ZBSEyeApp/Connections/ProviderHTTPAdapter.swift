@@ -6,7 +6,9 @@ struct ProviderHTTPAuthorizationState: Sendable, Equatable {
 }
 
 protocol ProviderHTTPAuthorizationProviding: Sendable {
-    func currentAuthorization() async -> ProviderHTTPAuthorizationState
+    func currentAuthorization(
+        for consumer: AIConsumer
+    ) async -> ProviderHTTPAuthorizationState
 }
 
 protocol ProviderHTTPCredentialProviding: Sendable {
@@ -307,7 +309,7 @@ struct ProviderHTTPAdapter: LLMAdapter, Sendable {
         selection: ProviderSelectionSnapshot,
         consumer: AIConsumer
     ) async throws {
-        let current = await authorization.currentAuthorization()
+        let current = await authorization.currentAuthorization(for: consumer)
         guard current.selection == selection else {
             throw ProviderHTTPAdapterError.authorizationChanged
         }

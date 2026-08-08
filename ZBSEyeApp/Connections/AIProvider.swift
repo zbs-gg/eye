@@ -316,6 +316,63 @@ struct DeactivationIntent: Codable, Sendable, Equatable, Hashable {
     let expectedSelectionRevision: SelectionRevision
 }
 
+/// The one deliberately separate model route used by the Activities day
+/// summary. It is not a general per-consumer routing table: Ask and every
+/// existing consumer continue to use the global active pair.
+struct ActivitySummaryRouteSettings: Codable, Sendable, Equatable {
+    var providerID: String?
+    var modelID: String?
+    var enabled: Bool
+    var revision: SelectionRevision
+
+    static let disabled = Self(
+        providerID: nil,
+        modelID: nil,
+        enabled: false,
+        revision: .zero
+    )
+
+    mutating func enable(providerID: String, modelID: String) {
+        let cleanModel = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !providerID.isEmpty, !cleanModel.isEmpty else { return }
+        guard self.providerID != providerID
+                || self.modelID != cleanModel
+                || !enabled else { return }
+        self.providerID = providerID
+        self.modelID = cleanModel
+        enabled = true
+        revision.advance()
+    }
+
+    mutating func disable() {
+        guard enabled else { return }
+        enabled = false
+        revision.advance()
+    }
+
+    func selectionSnapshot(
+        authorizationEpoch: AuthorizationEpoch
+    ) -> ProviderSelectionSnapshot? {
+        guard enabled,
+              let providerID,
+              let modelID = modelID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !modelID.isEmpty else { return nil }
+        return ProviderSelectionSnapshot(
+            providerID: providerID,
+            modelID: modelID,
+            selectionRevision: revision,
+            authorizationEpoch: authorizationEpoch
+        )
+    }
+}
+
+struct ActivitySummaryRouteCandidate: Sendable, Equatable, Identifiable {
+    let provider: AIProvider
+    let modelIDs: [String]
+
+    var id: String { provider.rawValue }
+}
+
 /// Pure loading policy shared by the store and persistence tests. A corrupt
 /// current payload is never mistaken for an intentional reset: the most recent
 /// decodable snapshot is recovered when available, and the unreadable bytes are
@@ -390,6 +447,10 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
     /// checks use `consentGrants` with an explicit consumer scope.
     var cloudConsent: [String: Bool]
     var processingDisabledByUser: Bool
+    /// Durable product-wide kill switch. Unlike `processingDisabledByUser`,
+    /// which remembers that the primary Ask model was disconnected, this also
+    /// gates the separately persisted Activities summary route.
+    var allProcessingDisabledByUser: Bool
     var selectionRevision: SelectionRevision
     var authorizationEpoch: AuthorizationEpoch
     var consentGrants: [String: ScopedAIConsentGrant]
@@ -401,6 +462,7 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
         endpoints: [String: String] = [:],
         cloudConsent: [String: Bool] = [:],
         processingDisabledByUser: Bool = false,
+        allProcessingDisabledByUser: Bool = false,
         selectionRevision: SelectionRevision = .zero,
         authorizationEpoch: AuthorizationEpoch = .zero,
         consentGrants: [String: ScopedAIConsentGrant]? = nil,
@@ -415,6 +477,7 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
         self.endpoints = endpoints
         self.cloudConsent = cloudConsent
         self.processingDisabledByUser = processingDisabledByUser
+        self.allProcessingDisabledByUser = allProcessingDisabledByUser
         self.selectionRevision = selectionRevision
         self.authorizationEpoch = authorizationEpoch
         self.consentGrants = consentGrants ?? Self.migrateLegacyConsent(cloudConsent)
@@ -464,7 +527,9 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
     mutating func commitActivation(
         _ intent: ActivationIntent,
         consentDraft: ScopedAIConsentGrant? = nil,
-        requiredConsumers: Set<AIConsumer> = Set(AIConsumer.allCases)
+        requiredConsumers: Set<AIConsumer> = Set(
+            AIConsumer.allCases.filter { $0 != .activitySummary }
+        )
     ) -> Bool {
         guard intent.expectedSelectionRevision == selectionRevision else { return false }
         return commitCurrentActivation(
@@ -515,13 +580,29 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
         }
 
         let pairChanged = active != providerID || activeModelID != cleanModel
+        let productWideDisableChanged = allProcessingDisabledByUser
         models[providerID] = cleanModel
         active = providerID
         activeModelID = cleanModel
         processingDisabledByUser = false
+        allProcessingDisabledByUser = false
         if pairChanged { selectionRevision.advance() }
-        if pairChanged || consentChanged { authorizationEpoch.advance() }
+        if pairChanged || consentChanged || productWideDisableChanged {
+            authorizationEpoch.advance()
+        }
         return true
+    }
+
+    mutating func disableAllProcessing() {
+        guard !allProcessingDisabledByUser else { return }
+        allProcessingDisabledByUser = true
+        authorizationEpoch.advance()
+    }
+
+    mutating func enableAllProcessing() {
+        guard allProcessingDisabledByUser else { return }
+        allProcessingDisabledByUser = false
+        authorizationEpoch.advance()
     }
 
     mutating func deactivate() {
@@ -573,6 +654,7 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
         case endpoints
         case cloudConsent
         case processingDisabledByUser
+        case allProcessingDisabledByUser
         case selectionRevision
         case authorizationEpoch
         case consentGrants
@@ -612,6 +694,11 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
         endpoints = lossy([String: String].self, .endpoints, default: [:])
         cloudConsent = lossy([String: Bool].self, .cloudConsent, default: [:])
         processingDisabledByUser = lossy(Bool.self, .processingDisabledByUser, default: false)
+        allProcessingDisabledByUser = lossy(
+            Bool.self,
+            .allProcessingDisabledByUser,
+            default: false
+        )
         selectionRevision = lossy(SelectionRevision.self, .selectionRevision, default: .zero)
         authorizationEpoch = lossy(AuthorizationEpoch.self, .authorizationEpoch, default: .zero)
         if values.contains(.consentGrants) {
@@ -648,6 +735,7 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
         try values.encode(endpoints, forKey: .endpoints)
         try values.encode(cloudConsent, forKey: .cloudConsent)
         try values.encode(processingDisabledByUser, forKey: .processingDisabledByUser)
+        try values.encode(allProcessingDisabledByUser, forKey: .allProcessingDisabledByUser)
         try values.encode(selectionRevision, forKey: .selectionRevision)
         try values.encode(authorizationEpoch, forKey: .authorizationEpoch)
         try values.encode(consentGrants, forKey: .consentGrants)

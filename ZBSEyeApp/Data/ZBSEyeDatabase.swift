@@ -88,6 +88,7 @@ final class ZBSEyeDatabase: Sendable {
             "v13_call_processing_ready_event",
             "v14_protected_capture_vector_cleanup",
             "v15_capture_coverage",
+            "v16_activity_day_summary",
         ]
     private static func warnIfNewerSchema(_ pool: DatabasePool) {
         let applied = (try? pool.read { db in
@@ -985,6 +986,51 @@ final class ZBSEyeDatabase: Sendable {
                 WHERE end_ms IS NULL;
                 CREATE INDEX idx_capture_coverage_overlap
                 ON capture_coverage_intervals(start_ms, end_ms);
+                """)
+        }
+
+        // v16: one durable factual Activities summary per calendar day. Its
+        // explicit source range lets privacy and retention invalidate derived
+        // text without re-deriving timezone boundaries during deletion.
+        m.registerMigration("v16_activity_day_summary") { db in
+            try db.execute(sql: """
+                CREATE TABLE activity_day_summaries (
+                    dayKey             TEXT PRIMARY KEY
+                                       CHECK (
+                                           dayKey GLOB
+                                           '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+                                       ),
+                    inputFingerprint   TEXT NOT NULL CHECK (length(inputFingerprint) > 0),
+                    summary            TEXT NOT NULL CHECK (length(trim(summary)) > 0),
+                    providerID         TEXT NOT NULL CHECK (length(providerID) > 0),
+                    modelID            TEXT NOT NULL CHECK (length(modelID) > 0),
+                    executedLocally    INTEGER NOT NULL CHECK (executedLocally IN (0, 1)),
+                    brokerUpstream     TEXT CHECK (
+                                           brokerUpstream IS NULL OR length(brokerUpstream) > 0
+                                       ),
+                    recipientDisclosure TEXT CHECK (
+                                           recipientDisclosure IS NULL OR length(recipientDisclosure) > 0
+                                       ),
+                    endpointDisclosure  TEXT CHECK (
+                                           endpointDisclosure IS NULL OR length(endpointDisclosure) > 0
+                                       ),
+                    endpointIdentity    TEXT CHECK (
+                                           endpointIdentity IS NULL OR length(endpointIdentity) > 0
+                                       ),
+                    promptVersion      TEXT NOT NULL CHECK (length(promptVersion) > 0),
+                    generatedAtMs      INTEGER NOT NULL,
+                    sourceStartMs      INTEGER NOT NULL,
+                    sourceEndMs        INTEGER NOT NULL,
+                    sourceCount        INTEGER NOT NULL CHECK (sourceCount > 0),
+                    CHECK (sourceEndMs > sourceStartMs)
+                ) WITHOUT ROWID;
+
+                CREATE TABLE activity_day_summary_state (
+                    singleton           INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    invalidationEpoch    INTEGER NOT NULL CHECK (invalidationEpoch >= 0)
+                ) WITHOUT ROWID;
+                INSERT INTO activity_day_summary_state(singleton, invalidationEpoch)
+                VALUES (1, 0);
                 """)
         }
         return m
