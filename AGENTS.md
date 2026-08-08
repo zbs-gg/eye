@@ -142,12 +142,13 @@ Previously verified live product baseline: screen capture (HEIC + AX/OCR), audio
 **Forever**, **relocatable storage**, **iCloud backup** (compressed, keep-N, on exit), size tracking, daily summary,
 and export.
 
-The `0.7.0 (21)` checkout is an **implemented and deterministically verified candidate**, not yet a physically
-qualified release. It adds the persistent latest-wins screen stream, shared SCK control-plane serialization,
-best-effort native-screenshot yield, truthful capture health/recovery, and microphone-owned automatic Calls with
-the privacy/lifecycle boundaries above. Publication still requires a new exact notarized ZIP + manifest, full
-capture-coexistence v2 qualification, and the installed-app automatic-Call physical checklist (including 60- and
-120-minute calls). Deterministic fixtures do not replace those gates.
+The exact Developer ID + notarized `0.7.0 (21)` artifact is public stable/latest as of 2026-08-08. It adds the
+persistent latest-wins screen stream, shared SCK control-plane serialization, best-effort native-screenshot yield,
+truthful capture health/recovery, and microphone-owned automatic Calls with the privacy/lifecycle boundaries above.
+It was published by explicit owner decision before capture-coexistence v2 and the installed-app automatic-Call
+physical checklist (including 60- and 120-minute calls) were completed. Those checks remain unqualified and must
+not be described as passed; the public release notes disclose that exception, and the normal gate below remains
+the contract for later releases.
 
 Deferred: source_id for multi-monitor dedup (~0.15% of frames, documented in `HistoryImporter`).
 
