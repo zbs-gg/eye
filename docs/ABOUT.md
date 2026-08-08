@@ -191,14 +191,12 @@ scenes/"Day in activities", Ask, Daily Insights, progress/milestones, REST + MCP
 fresh-profile retention with explicit Forever, relocatable storage, iCloud backup, daily summary, and export.
 The Developer ID/notarization pipeline has produced earlier installed builds.
 
-The exact Developer ID + notarized `0.7.0 (21)` artifact is the current public stable release. Its previously
-disclosed physical screenshot and long-Call checks remain unqualified and must not be described as passed.
-
-**The `0.8.0 (22)` source candidate adds the live visual Timeline:** meaningful app/input moments, immediate
-Timeline invalidation, past-only visual resolution, the seven-image filmstrip, one bounded shared image loader,
-and representative Activity-card images. It is not a release until the exact installed artifact passes the full
-native-screenshot comparison—including Shift-Command-3/4/5, Control variants, and the open Screenshot UI—with
-zero failed, empty, or stale screenshots, followed by normal-use and Call checks.
+The exact Developer ID + notarized `0.8.0 (22)` artifact is the current public stable release. It adds the live
+visual Timeline: meaningful app/input moments, immediate Timeline invalidation, past-only visual resolution, the
+seven-image filmstrip, one bounded shared image loader, and representative Activity-card images. The exact artifact
+was installed locally, reported healthy, wrote a Timeline frame, and coexisted with one successful native screenshot.
+The larger native-screenshot matrix, normal-use soak, and long physical Call checks remain unqualified and must not
+be described as passed.
 
 **Deferred:** Sparkle auto-updates and deep integration of Cartographer with Pulse/Atlas. Live transcription,
 calendar automation, call maps, and CRM/call intelligence belong in another product, not Eye.

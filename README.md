@@ -19,9 +19,7 @@ their life to somebody else's cloud. It quietly captures screen moments, accessi
 microphone and optional system audio. Everything is indexed locally and can be explored in the Timeline,
 opened as a call, searched in Ask, or read by your own agent over localhost.
 
-> **Release status:** the public stable release is 0.7.0. This README also documents the 0.8.0 (build 22)
-> source candidate, which is not public until the exact installed build proves that Eye never breaks a native
-> macOS screenshot.
+> **Release status:** the public stable release is 0.8.0 (build 22), Developer ID signed and Apple-notarized.
 
 <p align="center">
   <img src="./assets/readme/product-proof.svg" width="100%"

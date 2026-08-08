@@ -146,18 +146,13 @@ Previously verified live product baseline: screen capture (HEIC + AX/OCR), audio
 **Forever**, **relocatable storage**, **iCloud backup** (compressed, keep-N, on exit), size tracking, daily summary,
 and export.
 
-The exact Developer ID + notarized `0.7.0 (21)` artifact is public stable/latest as of 2026-08-08. It adds the
-persistent latest-wins screen stream, shared SCK control-plane serialization, best-effort native-screenshot yield,
-truthful capture health/recovery, and microphone-owned automatic Calls with the privacy/lifecycle boundaries above.
-It was published by explicit owner decision before capture-coexistence v2 and the installed-app automatic-Call
-physical checklist (including 60- and 120-minute calls) were completed. Those checks remain unqualified and must
-not be described as passed; the public release notes disclose that exception, and the normal gate below remains
-the contract for later releases.
-
-The `0.8.0 (22)` source candidate adds meaningful visual moments, immediate Timeline refresh, past-only image
-selection, a bounded seven-image filmstrip/cache, and representative Activity images without changing the database,
-media format, REST, MCP, privacy, or Calls. It is not public until the exact installed notarized artifact completes
-the native-screenshot matrix with zero failures, then the normal-use/Call soak and full deterministic checks.
+The exact Developer ID + notarized `0.8.0 (22)` artifact is public stable/latest as of 2026-08-08. It includes the
+persistent latest-wins screen stream, microphone-owned automatic Calls, meaningful visual moments, immediate
+Timeline refresh, past-only image selection, a bounded seven-image filmstrip/cache, and representative Activity
+images without changing the database, media format, REST, MCP, privacy, or Calls. The exact artifact was installed
+locally, reported healthy, wrote a Timeline frame, and coexisted with one successful native 3840x2160 screenshot.
+The larger screenshot matrix, normal-use soak, and long physical Call checks were not completed before publication
+and must not be described as passed.
 
 Deferred: source_id for multi-monitor dedup (~0.15% of frames, documented in `HistoryImporter`).
 
