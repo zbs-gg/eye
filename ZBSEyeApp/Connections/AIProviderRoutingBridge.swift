@@ -30,14 +30,50 @@ actor LLMAdapterRegistry: LLMAdapterRegistering {
 extension AIProviderStore: LLMSelectionSnapshotProviding {
     func currentSnapshot(for consumer: AIConsumer) async -> ProviderSelectionSnapshot? {
         guard activeConfig(for: consumer) != nil else { return nil }
-        return selectionSnapshot
+        return routingSelectionSnapshot(for: consumer)
     }
 }
 
 extension AIProviderStore: AIConsumerReadinessProviding {
+    func activitySummaryRouteIdentity() -> ActivitySummaryRouteIdentity? {
+        guard !allProcessingDisabledByUser,
+              activitySummaryRoute.enabled,
+              let providerID = activitySummaryRoute.providerID,
+              let provider = AIProvider(rawValue: providerID),
+              let rawModelID = activitySummaryRoute.modelID else {
+            return nil
+        }
+        let modelID = rawModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !modelID.isEmpty else { return nil }
+
+        let endpointDisclosure: String?
+        let endpointIdentity: String?
+        if provider.allowsEndpointOverride {
+            guard let normalized = Self.normalizedEndpointRouteIdentity(
+                endpoint(for: provider)
+            ) else { return nil }
+            endpointDisclosure = normalized.disclosure
+            endpointIdentity = normalized.opaqueIdentity
+        } else {
+            endpointDisclosure = nil
+            endpointIdentity = nil
+        }
+
+        let recipient = recipientDisclosure(for: provider)
+        if provider.isCloud, recipient == nil { return nil }
+        return ActivitySummaryRouteIdentity(
+            providerID: providerID,
+            modelID: modelID,
+            executedLocally: !provider.isCloud,
+            recipientDisclosure: recipient,
+            endpointDisclosure: endpointDisclosure,
+            endpointIdentity: endpointIdentity
+        )
+    }
+
     func currentExecutionContext(for consumer: AIConsumer) -> AIConsumerExecutionContext? {
         guard activeConfig(for: consumer) != nil,
-              let selection = selectionSnapshot,
+              let selection = routingSelectionSnapshot(for: consumer),
               let provider = AIProvider(rawValue: selection.providerID) else {
             return nil
         }
@@ -128,8 +164,10 @@ final class ApplicationLLMAdapterRegistry: LLMAdapterRegistering {
 }
 
 extension AIProviderStore: ProviderHTTPAuthorizationProviding {
-    func currentAuthorization() async -> ProviderHTTPAuthorizationState {
-        guard let selection = selectionSnapshot else {
+    func currentAuthorization(
+        for consumer: AIConsumer
+    ) async -> ProviderHTTPAuthorizationState {
+        guard let selection = routingSelectionSnapshot(for: consumer) else {
             return ProviderHTTPAuthorizationState(selection: nil, consentGrant: nil)
         }
         return ProviderHTTPAuthorizationState(

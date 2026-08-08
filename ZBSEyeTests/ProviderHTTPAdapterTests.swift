@@ -766,7 +766,9 @@ private actor StubProviderHTTPAuthorization: ProviderHTTPAuthorizationProviding 
         self.state = state
     }
 
-    func currentAuthorization() async -> ProviderHTTPAuthorizationState { state }
+    func currentAuthorization(
+        for consumer: AIConsumer
+    ) async -> ProviderHTTPAuthorizationState { state }
     func setState(_ newState: ProviderHTTPAuthorizationState) { state = newState }
 }
 

@@ -290,6 +290,46 @@ final class LLMRouterTests: XCTestCase {
         XCTAssertFalse(starts.contains(labelA2.id), "duplicate content must share one generation")
     }
 
+    func testActivitySummaryIsLatestWinsBelowAskAndAboveBackgroundWork() async throws {
+        let adapter = ControlledLLMAdapter()
+        let (router, _, _) = makeRouter(
+            adapter: adapter,
+            drainTimeout: .milliseconds(300)
+        )
+        let ask = makeRequest(.ask, id: 70)
+        let oldSummary = makeRequest(.activitySummary, id: 71, user: "old day state")
+        let newSummary = makeRequest(.activitySummary, id: 72, user: "new day state")
+        await adapter.setBehavior(.gate, for: ask.id)
+        let askTask = Task { try await router.generate(ask) }
+        await waitUntilStarted(ask.id, adapter: adapter)
+
+        let oldTask = Task { try await router.generate(oldSummary) }
+        await waitForConsumer(.activitySummary, router: router)
+        let newTask = Task { try await router.generate(newSummary) }
+        await assertError(.superseded, from: oldTask)
+        let startsWhileAskBlocked = await adapter.startedRequestIDs()
+        XCTAssertEqual(startsWhileAskBlocked, [ask.id])
+
+        await adapter.complete(ask.id)
+        _ = try await askTask.value
+        _ = try await newTask.value
+        let startsAfterSummary = await adapter.startedRequestIDs()
+        XCTAssertEqual(startsAfterSummary, [ask.id, newSummary.id])
+
+        let labels = makeRequest(.generatedLabels, id: 73)
+        let summary = makeRequest(.activitySummary, id: 74, user: "manual refresh")
+        await adapter.setBehavior(
+            .gateCancellationDelay(.milliseconds(20)),
+            for: labels.id
+        )
+        let labelsTask = Task { try await router.generate(labels) }
+        await waitUntilStarted(labels.id, adapter: adapter)
+        let summaryTask = Task { try await router.generate(summary) }
+        await assertError(.preempted, from: labelsTask)
+        _ = try await summaryTask.value
+        XCTAssertEqual(LLMRouter.expectedPriority(for: .activitySummary), .explicitInsight)
+    }
+
     func testLabelRequestsWithDifferentLocalOutputContractsDoNotCoalesce() async throws {
         let adapter = ControlledLLMAdapter()
         let (router, _, _) = makeRouter(adapter: adapter, labelBacklogLimit: 8)

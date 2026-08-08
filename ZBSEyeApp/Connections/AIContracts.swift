@@ -30,10 +30,11 @@ enum AIConsumer: String, Codable, Sendable, CaseIterable, Hashable {
     case manualSummary
     case scheduledSummary
     case generatedLabels
+    case activitySummary
 
     var isAutomatic: Bool {
         switch self {
-        case .scheduledSummary, .generatedLabels: true
+        case .scheduledSummary, .generatedLabels, .activitySummary: true
         case .ask, .dailyInsights, .manualSummary: false
         }
     }

@@ -151,7 +151,7 @@ actor LLMRouter {
         switch consumer {
         case .ask:
             return .ask
-        case .dailyInsights, .manualSummary:
+        case .dailyInsights, .manualSummary, .activitySummary:
             return .explicitInsight
         case .scheduledSummary:
             return .scheduledSummary
@@ -364,7 +364,7 @@ actor LLMRouter {
         )
 
         switch request.consumer {
-        case .ask, .dailyInsights, .manualSummary:
+        case .ask, .dailyInsights, .manualSummary, .activitySummary:
             if var existing = interactivePending[request.consumer],
                Self.isEquivalent(existing, to: request, snapshot: snapshot, fingerprint: fingerprint) {
                 existing.waiters[waiterID] = waiter

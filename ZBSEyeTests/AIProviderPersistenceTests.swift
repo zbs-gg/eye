@@ -60,6 +60,7 @@ final class AIProviderPersistenceTests: XCTestCase {
         XCTAssertEqual(settings.active, AIProvider.lmstudio.rawValue)
         XCTAssertEqual(settings.models[AIProvider.lmstudio.rawValue], "qwen2.5-7b-instruct")
         XCTAssertFalse(settings.processingDisabledByUser)
+        XCTAssertFalse(settings.allProcessingDisabledByUser)
         XCTAssertEqual(settings.selectionRevision, SelectionRevision.zero)
         XCTAssertEqual(settings.authorizationEpoch, AuthorizationEpoch.zero)
     }
@@ -76,8 +77,31 @@ final class AIProviderPersistenceTests: XCTestCase {
         XCTAssertTrue(grant.consumers.contains(.manualSummary))
         XCTAssertTrue(grant.consumers.contains(.scheduledSummary))
         XCTAssertFalse(grant.consumers.contains(.generatedLabels))
+        XCTAssertFalse(grant.consumers.contains(.activitySummary))
         XCTAssertTrue(settings.isAuthorized(providerID: AIProvider.openrouter.rawValue, consumer: .ask))
         XCTAssertFalse(settings.isAuthorized(providerID: AIProvider.openrouter.rawValue, consumer: .generatedLabels))
+        XCTAssertFalse(settings.isAuthorized(providerID: AIProvider.openrouter.rawValue, consumer: .activitySummary))
+    }
+
+    func testActivitySummaryRouteRoundTripsIndependentlyAndKeepsPairWhenDisabled() throws {
+        var route = ActivitySummaryRouteSettings.disabled
+
+        route.enable(providerID: AIProvider.anthropic.rawValue, modelID: "claude-haiku")
+        XCTAssertEqual(route.revision, SelectionRevision(rawValue: 1))
+        XCTAssertEqual(route.selectionSnapshot(authorizationEpoch: .zero)?.modelID, "claude-haiku")
+
+        route.disable()
+        XCTAssertFalse(route.enabled)
+        XCTAssertEqual(route.providerID, AIProvider.anthropic.rawValue)
+        XCTAssertEqual(route.modelID, "claude-haiku")
+        XCTAssertEqual(route.revision, SelectionRevision(rawValue: 2))
+        XCTAssertNil(route.selectionSnapshot(authorizationEpoch: .zero))
+
+        let decoded = try JSONDecoder().decode(
+            ActivitySummaryRouteSettings.self,
+            from: JSONEncoder().encode(route)
+        )
+        XCTAssertEqual(decoded, route)
     }
 
     func testExplicitNoneAndPerProviderChoicesSurviveMigration() throws {
