@@ -2,7 +2,7 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
-## Unreleased — 0.7.0 (build 21 candidate)
+## [0.7.0] — 2026-08-08
 
 ### Added
 - Any external user application with active microphone input now starts one local automatic Call immediately,
