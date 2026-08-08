@@ -18,4 +18,42 @@ struct ActivityScene: Sendable, Identifiable {
     let frameCount: Int
     let summary: String
     let isSystem: Bool
+    /// Existing image closest to the middle of this scene. The path remains
+    /// relative to Eye's media root so storage relocation keeps working.
+    let representativeCaptureID: Int64?
+    let representativeVisualPath: String?
+
+    init(
+        id: String,
+        captureIds: Set<Int64>,
+        appId: Int64?,
+        bundleId: String?,
+        appName: String?,
+        repWindowTitle: String?,
+        browserURL: String?,
+        startTs: Date,
+        endTs: Date,
+        durationSec: Double,
+        frameCount: Int,
+        summary: String,
+        isSystem: Bool,
+        representativeCaptureID: Int64? = nil,
+        representativeVisualPath: String? = nil
+    ) {
+        self.id = id
+        self.captureIds = captureIds
+        self.appId = appId
+        self.bundleId = bundleId
+        self.appName = appName
+        self.repWindowTitle = repWindowTitle
+        self.browserURL = browserURL
+        self.startTs = startTs
+        self.endTs = endTs
+        self.durationSec = durationSec
+        self.frameCount = frameCount
+        self.summary = summary
+        self.isSystem = isSystem
+        self.representativeCaptureID = representativeCaptureID
+        self.representativeVisualPath = representativeVisualPath
+    }
 }

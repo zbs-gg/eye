@@ -67,6 +67,7 @@ actor SceneService {
 
     private static func buildScene(_ seg: ActivitySession, repText: String) -> ActivityScene {
         let first = seg.first, rep = seg.rep
+        let visual = seg.representativeVisualCapture
         let repTitle = rep.windowTitle ?? first.windowTitle
         let repURL = rep.browserUrl ?? first.browserUrl
         let summary = buildSummary(appName: first.appName, bundleId: first.bundleId,
@@ -79,7 +80,9 @@ actor SceneService {
             startTs: dateFromMs(seg.startMs), endTs: dateFromMs(seg.endMs),
             durationSec: max(1, Double(seg.durationMs) / 1000.0),
             frameCount: seg.count, summary: summary,
-            isSystem: SystemAppFilter.isSystem(first))
+            isSystem: SystemAppFilter.isSystem(first),
+            representativeCaptureID: visual?.id,
+            representativeVisualPath: visual?.relativePath)
     }
 
     // MARK: - heuristic summary (no LLM, no DB)

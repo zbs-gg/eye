@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import ImageIO
 
 struct TimelineView: View {
     @Environment(AppEnvironment.self) private var env
@@ -10,6 +9,8 @@ struct TimelineView: View {
             if let store = env.timelineStore {
                 TimelineBody(store: store)
                     .environment(env)
+                    .onAppear { store.setPresentationActive(true) }
+                    .onDisappear { store.setPresentationActive(false) }
                     .task {
                         // The store outlives mode switches. Reloading would move a returning
                         // user to the newest frame and destroy cursor/zoom/search context.
@@ -273,8 +274,28 @@ private struct TimelineBody: View {
                 }
             } else {
                 HSplitView {
-                    FramePreview(frameID: store.current?.id, url: store.imageURL(store.current?.relativePath),
-                                 reduceMotion: reduceMotion)
+                    VStack(spacing: 0) {
+                        FramePreview(
+                            frame: store.previewVisual,
+                            image: store.previewImage,
+                            hasMoment: store.current != nil,
+                            isLoading: store.isVisualLoading,
+                            carriesEarlierFrame: store.previewCarriesEarlierFrame,
+                            reduceMotion: reduceMotion
+                        )
+                        if !store.visualFrames.isEmpty {
+                            Divider()
+                            VisualFilmstrip(
+                                frames: store.visualFrames,
+                                selectedID: store.selectedVisualID,
+                                imageLoader: store.imageLoader,
+                                reduceMotion: reduceMotion
+                            ) { frame in
+                                Task { await store.selectVisual(frame) }
+                            }
+                            .frame(height: 108)
+                        }
+                    }
                         .frame(minWidth: 320)
                     detailPanel
                         .frame(minWidth: 260, idealWidth: 320)
@@ -406,7 +427,7 @@ private struct TimelineBody: View {
     }
 
     private func scheduleSeek(toEpoch v: Double) {
-        if store.isPlaying { store.pause() }            // a manual scrub stops the player immediately
+        store.beginManualScrub()                        // live-tail releases before the debounce
         store.cursor = Date(timeIntervalSince1970: v)   // the cursor follows instantly
         seekTask?.cancel()
         seekTask = Task {
@@ -699,58 +720,160 @@ private struct LegendSwatch: View {
     }
 }
 
-// MARK: - frame (crossfade on change)
+// MARK: - visual reel
 
 private struct FramePreview: View {
-    let frameID: Int64?
-    let url: URL?
+    let frame: FrameVisualRef?
+    let image: NSImage?
+    let hasMoment: Bool
+    let isLoading: Bool
+    let carriesEarlierFrame: Bool
     let reduceMotion: Bool
-    @State private var loaded: LoadedFrame?     // what's on screen — id+image atomically (no desync)
-
-    private struct LoadedFrame { let id: Int64; let image: NSImage }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottomLeading) {
             Color.black.opacity(0.04)
-            if let loaded {
-                // .id(loaded.id)+transition: the outgoing frame holds the snapshot of the OLD struct, the incoming — the new one.
-                // id and image switch in ONE assignment → the fade isn't broken by a re-render (review fix).
-                Image(nsImage: loaded.image).resizable().aspectRatio(contentMode: .fit)
-                    .id(loaded.id)
+            if let image, let frame {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .id(frame.id)
                     .transition(.opacity)
-            }
-            if frameID != nil, url == nil {
-                // A deduped moment (context-only) — calm/neutral note OVER the previous frame, not an error.
+
+                if carriesEarlierFrame {
+                    Label("Previous available screen", systemImage: "arrow.uturn.backward.circle")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .background(.regularMaterial, in: Capsule())
+                        .padding(12)
+                        .help("This moment has no usable image, so Eye shows the nearest earlier screen.")
+                }
+            } else if isLoading {
+                VStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading screen…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if hasMoment {
                 ContentUnavailableView(
-                    "Screen unchanged here",
-                    systemImage: "rectangle.on.rectangle",
-                    description: Text("Nothing new was captured — the previous frame still stands."))
-                    .background(.ultraThinMaterial)
-            } else if loaded == nil {
+                    "No earlier screen image",
+                    systemImage: "photo",
+                    description: Text("Text and activity context are still available for this moment."))
+            } else {
                 ContentUnavailableView("No moment", systemImage: "photo")
             }
         }
-        // With reduceMotion — an instant change (nil duration = no animation); when normal — a smooth crossfade.
-        .animation(reduceMotion ? .none : .easeInOut(duration: 0.15), value: loaded?.id)
-        .task(id: frameID) {
-            guard let u = url, let fid = frameID else { return }   // url==nil: keep the previous loaded under the badge
-            let img = await Task.detached(priority: .userInitiated) { FramePreview.thumbnail(u, maxPixel: 2400) }.value
-            if Task.isCancelled { return }
-            if let img { loaded = LoadedFrame(id: fid, image: img) }
-        }
+        .animation(reduceMotion ? .none : .easeInOut(duration: 0.15), value: frame?.id)
     }
+}
 
-    /// A downscaled thumbnail via ImageIO: we don't decode a full-size HEIC for every frame (memory during play).
-    /// nonisolated — a pure function, called from Task.detached off the MainActor.
-    nonisolated static func thumbnail(_ url: URL, maxPixel: Int) -> NSImage? {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        let opts: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
-        ]
-        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
-        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+private struct VisualFilmstrip: View {
+    let frames: [FrameVisualRef]
+    let selectedID: Int64?
+    let imageLoader: VisualFrameImageLoader
+    let reduceMotion: Bool
+    let onSelect: (FrameVisualRef) -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 8) {
+                    ForEach(frames) { frame in
+                        VisualFilmstripItem(
+                            frame: frame,
+                            selected: frame.id == selectedID,
+                            imageLoader: imageLoader,
+                            reduceMotion: reduceMotion,
+                            onSelect: { onSelect(frame) }
+                        )
+                        .id(frame.id)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            }
+            .scrollIndicators(.hidden)
+            .onChange(of: selectedID) { _, selectedID in
+                guard let selectedID else { return }
+                if reduceMotion {
+                    proxy.scrollTo(selectedID, anchor: .center)
+                } else {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        proxy.scrollTo(selectedID, anchor: .center)
+                    }
+                }
+            }
+        }
+        .background(.quaternary.opacity(0.18))
+        .accessibilityLabel("Nearby screen moments")
+    }
+}
+
+private struct VisualFilmstripItem: View {
+    let frame: FrameVisualRef
+    let selected: Bool
+    let imageLoader: VisualFrameImageLoader
+    let reduceMotion: Bool
+    let onSelect: () -> Void
+    @State private var image: NSImage?
+
+    var body: some View {
+        Button(action: onSelect) {
+            ZStack(alignment: .bottomLeading) {
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Color.black.opacity(0.08))
+                if let image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 132, height: 84)
+                        .clipped()
+                } else {
+                    Image(systemName: "photo")
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.62)],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(frame.appLabel).lineLimit(1)
+                    Text(frame.ts.formatted(date: .omitted, time: .standard))
+                        .monospacedDigit()
+                }
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.white)
+                .padding(6)
+            }
+            .frame(width: 132, height: 84)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7)
+                    .strokeBorder(
+                        selected ? Color.accentColor : Color.white.opacity(0.1),
+                        lineWidth: selected ? 3 : 1
+                    )
+            }
+            .scaleEffect(selected && !reduceMotion ? 1.02 : 1)
+            .animation(reduceMotion ? .none : .snappy(duration: 0.14), value: selected)
+        }
+        .buttonStyle(.plain)
+        .help("\(frame.appLabel) · \(frame.ts.formatted(date: .abbreviated, time: .standard))")
+        .accessibilityLabel("\(frame.appLabel), \(frame.ts.formatted(date: .abbreviated, time: .standard))")
+        .accessibilityValue(selected ? "Selected" : "")
+        .task(id: frame.id) {
+            image = await imageLoader.image(
+                relativePath: frame.relativePath,
+                maxPixel: 360,
+                priority: .prefetch
+            )
+        }
     }
 }
 

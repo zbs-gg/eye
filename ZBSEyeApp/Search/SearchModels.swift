@@ -112,6 +112,28 @@ struct FrameDetail: Sendable, Identifiable {
     var hasOCR: Bool { sources.contains("ocr") }
 }
 
+/// A privacy-filtered screen image that can be shown independently from the
+/// context row selected by the timeline. Context-only rows deliberately have
+/// no visual reference; the UI carries the nearest real image from the past.
+struct FrameVisualRef: Sendable, Identifiable, Equatable, Hashable {
+    let id: Int64
+    let ts: Date
+    let relativePath: String
+    let appLabel: String
+}
+
+/// The bounded filmstrip around the image used for the selected moment.
+/// `selectedID` is always one of `frames`, unless there was no earlier image.
+struct FrameVisualWindow: Sendable, Equatable {
+    let frames: [FrameVisualRef]
+    let selectedID: Int64?
+
+    var selected: FrameVisualRef? {
+        guard let selectedID else { return nil }
+        return frames.first { $0.id == selectedID }
+    }
+}
+
 struct TimeBounds: Sendable {
     let oldest: Date?
     let newest: Date?

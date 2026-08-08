@@ -322,10 +322,10 @@ final class ReleaseConfigurationTests: XCTestCase {
         )
 
         XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION:").count - 1, 2)
-        XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION: \"0.7.0\"").count - 1, 2)
+        XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION: \"0.8.0\"").count - 1, 2)
         XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION:").count - 1, 2)
-        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"21\"").count - 1, 2)
-        XCTAssertTrue(notices.contains("Release: 0.7.0 (build 21 candidate)"))
+        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"22\"").count - 1, 2)
+        XCTAssertTrue(notices.contains("Release: 0.8.0 (build 22 candidate)"))
     }
 
     func testUnqualifiedCandidateDocumentationDoesNotClaimAPublicRelease() throws {
@@ -342,11 +342,11 @@ final class ReleaseConfigurationTests: XCTestCase {
             .filter { !$0.isEmpty }
             .joined(separator: " ")
 
-        XCTAssertTrue(normalizedReadme.contains("public stable release is 0.6.0"))
-        XCTAssertTrue(normalizedReadme.contains("0.7.0 (build 21)"))
+        XCTAssertTrue(normalizedReadme.contains("public stable release is 0.7.0"))
+        XCTAssertTrue(normalizedReadme.contains("0.8.0 (build 22)"))
         XCTAssertTrue(normalizedReadme.contains("source candidate"))
-        XCTAssertTrue(changelog.contains("Unreleased — 0.7.0 (build 21 candidate)"))
-        XCTAssertFalse(changelog.contains("## [0.7.0]"))
+        XCTAssertTrue(changelog.contains("## [0.8.0] — Unreleased"))
+        XCTAssertFalse(changelog.contains("## [0.8.0] — 2026"))
     }
 
     func testCallQualificationScriptsDoNotShareTheGenericDerivedDataCache() throws {

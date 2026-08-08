@@ -2,6 +2,29 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
+## [0.8.0] — Unreleased
+
+### Added
+- Timeline now shows a clickable seven-image filmstrip around the selected visual moment and keeps decoded
+  Timeline/Activity images in one shared 128 MB cache with at most two file decodes at once.
+- Top-level Activity cards lazily show a 160×90 representative image from the longest useful episode while
+  preserving the existing app-icon card when no retained image exists.
+
+### Changed
+- The persistent screen stream now requests useful moments on app switch and, when listen-event access already
+  exists, click, scroll-stop after 350 ms, and typing-pause after 700 ms without asking for a new permission.
+  Frequent click/key activity shares a 1.5-second heavy-work floor; the existing
+  three-second active fallback and sparse idle capture remain.
+- Timeline resolves context-only moments to the nearest real image at or before the selected time. It never
+  substitutes a future frame, and missing/corrupt files can only fall back farther into the past.
+- A committed screen moment wakes Timeline immediately. Its four-second background refresh remains as recovery
+  for audio, Calls, or a missed notification, and it does not pull someone away from older history.
+
+### Privacy
+- The listen-only input observer retains only the activity kind. It never stores key codes, entered text,
+  pointer coordinates, scroll contents, or clipboard data. Native screenshot shortcuts only make Eye yield and
+  never create a Timeline moment.
+
 ## [0.7.0] — 2026-08-08
 
 ### Added

@@ -1,6 +1,76 @@
 import XCTest
 
 final class ScreenStreamPolicyTests: XCTestCase {
+    func testCaptureSourceAttestationRejectsAppWindowAndDisplayChanges() {
+        let expected = CaptureSourceIdentity(
+            processIdentifier: 42,
+            bundleIdentifier: "com.example.editor",
+            windowNumber: 7,
+            displayID: 1
+        )
+
+        XCTAssertTrue(CaptureSourceAttestationPolicy.accepts(expected: expected, current: expected))
+        XCTAssertFalse(CaptureSourceAttestationPolicy.accepts(expected: expected, current: nil))
+        XCTAssertFalse(CaptureSourceAttestationPolicy.accepts(
+            expected: expected,
+            current: CaptureSourceIdentity(
+                processIdentifier: 43,
+                bundleIdentifier: expected.bundleIdentifier,
+                windowNumber: expected.windowNumber,
+                displayID: expected.displayID
+            )
+        ))
+        XCTAssertFalse(CaptureSourceAttestationPolicy.accepts(
+            expected: expected,
+            current: CaptureSourceIdentity(
+                processIdentifier: expected.processIdentifier,
+                bundleIdentifier: "com.example.other",
+                windowNumber: expected.windowNumber,
+                displayID: expected.displayID
+            )
+        ))
+        XCTAssertFalse(CaptureSourceAttestationPolicy.accepts(
+            expected: expected,
+            current: CaptureSourceIdentity(
+                processIdentifier: expected.processIdentifier,
+                bundleIdentifier: expected.bundleIdentifier,
+                windowNumber: 8,
+                displayID: expected.displayID
+            )
+        ))
+        XCTAssertFalse(CaptureSourceAttestationPolicy.accepts(
+            expected: expected,
+            current: CaptureSourceIdentity(
+                processIdentifier: expected.processIdentifier,
+                bundleIdentifier: expected.bundleIdentifier,
+                windowNumber: expected.windowNumber,
+                displayID: 2
+            )
+        ))
+    }
+
+    func testCaptureSourceAttestationRejectsABAFocusRoundTrip() {
+        let expected = CaptureSourceIdentity(
+            processIdentifier: 41,
+            bundleIdentifier: "com.example.editor",
+            windowNumber: 7,
+            displayID: 1
+        )
+
+        XCTAssertTrue(CaptureSourceAttestationPolicy.accepts(
+            expected: expected,
+            current: expected,
+            expectedFocusRevision: 12,
+            currentFocusRevision: 12
+        ))
+        XCTAssertFalse(CaptureSourceAttestationPolicy.accepts(
+            expected: expected,
+            current: expected,
+            expectedFocusRevision: 12,
+            currentFocusRevision: 14
+        ))
+    }
+
     func testHundredTriggersRetainOneProcessingAndLatestWaitingIntent() {
         var policy = LatestCaptureWorkPolicy()
 
@@ -12,6 +82,99 @@ final class ScreenStreamPolicyTests: XCTestCase {
         XCTAssertEqual(policy.complete(1), 100)
         XCTAssertNil(policy.waiting)
         XCTAssertEqual(policy.retainedCount, 1)
+    }
+
+    func testHundredTypingEventsProduceOneCaptureAfterExactPause() {
+        var policy = MeaningfulCaptureTriggerPolicy()
+
+        for timestamp in 0..<100 {
+            XCTAssertEqual(
+                policy.observe(.typingActivity, at: UInt64(timestamp)),
+                .schedule(deadlineMs: UInt64(timestamp) + 700)
+            )
+        }
+
+        XCTAssertEqual(policy.pending?.reason, .typingPause)
+        XCTAssertEqual(policy.pending?.deadlineMs, 799)
+        XCTAssertEqual(policy.timerFired(at: 798), .schedule(deadlineMs: 799))
+        XCTAssertEqual(policy.timerFired(at: 799), .capture(.typingPause))
+        XCTAssertNil(policy.pending)
+    }
+
+    func testHundredClickBurstKeepsOnlyLatestPendingAndSharesFloor() {
+        var policy = MeaningfulCaptureTriggerPolicy()
+
+        XCTAssertEqual(policy.observe(.click, at: 0), .capture(.click))
+        for timestamp in 1..<100 {
+            XCTAssertEqual(
+                policy.observe(.click, at: UInt64(timestamp)),
+                .schedule(deadlineMs: 1_500)
+            )
+        }
+
+        XCTAssertEqual(policy.pending, .init(reason: .click, deadlineMs: 1_500))
+        XCTAssertEqual(policy.timerFired(at: 1_499), .schedule(deadlineMs: 1_500))
+        XCTAssertEqual(policy.timerFired(at: 1_500), .capture(.click))
+        XCTAssertNil(policy.pending)
+    }
+
+    func testScrollUsesExactStopDelayAndLatestEventWins() {
+        var policy = MeaningfulCaptureTriggerPolicy()
+
+        XCTAssertEqual(
+            policy.observe(.scrollActivity, at: 0),
+            .schedule(deadlineMs: 350)
+        )
+        XCTAssertEqual(
+            policy.observe(.scrollActivity, at: 349),
+            .schedule(deadlineMs: 699)
+        )
+        XCTAssertEqual(policy.timerFired(at: 698), .schedule(deadlineMs: 699))
+        XCTAssertEqual(policy.timerFired(at: 699), .capture(.scrollStop))
+    }
+
+    func testAllInputKindsShareOneFloorAndNewerReasonReplacesOlder() {
+        var policy = MeaningfulCaptureTriggerPolicy()
+
+        XCTAssertEqual(policy.observe(.click, at: 100), .capture(.click))
+        XCTAssertEqual(
+            policy.observe(.typingActivity, at: 200),
+            .schedule(deadlineMs: 1_600)
+        )
+        XCTAssertEqual(
+            policy.observe(.scrollActivity, at: 300),
+            .schedule(deadlineMs: 1_600)
+        )
+        XCTAssertEqual(policy.pending?.reason, .scrollStop)
+        XCTAssertEqual(policy.timerFired(at: 1_600), .capture(.scrollStop))
+    }
+
+    func testScreenshotYieldCanCancelPendingInputCapture() {
+        var policy = MeaningfulCaptureTriggerPolicy()
+        XCTAssertEqual(
+            policy.observe(.typingActivity, at: 10),
+            .schedule(deadlineMs: 710)
+        )
+
+        policy.cancelPending()
+
+        XCTAssertEqual(policy.timerFired(at: 710), .none)
+        XCTAssertNil(policy.pending)
+    }
+
+    func testApplicationSwitchCanRetireTypingAndScrollFromPreviousApp() {
+        for input in [MeaningfulCaptureInput.typingActivity, .scrollActivity] {
+            var policy = MeaningfulCaptureTriggerPolicy()
+            let decision = policy.observe(input, at: 10)
+            guard case .schedule(let deadlineMs) = decision else {
+                return XCTFail("typing and scrolling must begin as delayed intents")
+            }
+
+            policy.cancelPending()
+
+            XCTAssertEqual(policy.timerFired(at: deadlineMs), .none)
+            XCTAssertNil(policy.pending)
+        }
     }
 
     func testIntentNeedsFreshCompleteOrIdleFrameFromCurrentGeneration() {

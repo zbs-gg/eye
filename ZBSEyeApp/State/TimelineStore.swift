@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -23,17 +24,31 @@ final class TimelineStore {
     @ObservationIgnored private let timeline: TimelineService
     @ObservationIgnored private let coverageQuery: CaptureCoverageQuery?
     @ObservationIgnored let mediaDirectory: URL
+    @ObservationIgnored let imageLoader: VisualFrameImageLoader
     @ObservationIgnored private var searchGen = 0
     @ObservationIgnored private var coverageGen = 0
     @ObservationIgnored private var playTask: Task<Void, Never>?
     @ObservationIgnored private var playGen = 0   // like searchGen: invalidates a stale player loop
     @ObservationIgnored private var windowStart: Date?   // left edge of the strip window; nil = all history (.full)
     @ObservationIgnored private var liveTask: Task<Void, Never>?
+    @ObservationIgnored private var visualLoadTask: Task<Void, Never>?
+    @ObservationIgnored private var visualGeneration = 0
+    /// One monotonic token for every direct user movement through history. It
+    /// is bumped synchronously at intent time, before any database/image await,
+    /// so an older seek can never write over a newer one when it comes back.
+    @ObservationIgnored private var navigationGeneration = 0
+    @ObservationIgnored private var followsLiveTail = true
+    @ObservationIgnored private var isPresentationActive = false
 
     var bounds = TimeBounds(oldest: nil, newest: nil)
     var cursor = Date()
     var zoom: Zoom = .full
     var current: FrameDetail?
+    var visualFrames: [FrameVisualRef] = []
+    var selectedVisualID: Int64?
+    var previewVisual: FrameVisualRef?
+    var previewImage: NSImage?
+    var isVisualLoading = false
     var density: [DensityBucket] = []
     var audioDensity: [DensityBucket] = []   // the strip's second track: where in history there's speech
     var callSpans: [CallTimelineSpan] = []
@@ -109,38 +124,217 @@ final class TimelineStore {
         return changed
     }
 
-    private func refreshDensity() async {
-        if let d = try? await timeline.density(from: rangeStart, to: rangeEnd, bucketMs: effectiveBucketMs) {
+    private func navigationIsCurrent(_ expected: Int?) -> Bool {
+        expected == nil || expected == navigationGeneration
+    }
+
+    @discardableResult
+    private func beginUserNavigation() -> Int {
+        navigationGeneration &+= 1
+        // A visual load may be suspended in ImageIO or SQLite. Invalidate it
+        // now, not later when the next lookup happens to start.
+        visualGeneration &+= 1
+        visualLoadTask?.cancel()
+        visualLoadTask = nil
+        isVisualLoading = false
+        return navigationGeneration
+    }
+
+    private func refreshDensity(navigationGeneration expected: Int? = nil) async {
+        let from = rangeStart
+        let to = rangeEnd
+        let bucketMs = effectiveBucketMs
+        if let d = try? await timeline.density(from: from, to: to, bucketMs: bucketMs) {
+            guard navigationIsCurrent(expected) else { return }
             density = d
         }
-        if let a = try? await timeline.audioDensity(from: rangeStart, to: rangeEnd, bucketMs: effectiveBucketMs) {
+        guard navigationIsCurrent(expected) else { return }
+        if let a = try? await timeline.audioDensity(from: from, to: to, bucketMs: bucketMs) {
+            guard navigationIsCurrent(expected) else { return }
             audioDensity = a
         }
-        if let calls = try? await timeline.callSpans(from: rangeStart, to: rangeEnd) {
+        guard navigationIsCurrent(expected) else { return }
+        if let calls = try? await timeline.callSpans(from: from, to: to) {
+            guard navigationIsCurrent(expected) else { return }
             callSpans = calls
         }
-        await refreshCoverage(from: rangeStart, to: rangeEnd)
+        guard navigationIsCurrent(expected) else { return }
+        await refreshCoverage(
+            from: from,
+            to: to,
+            navigationGeneration: expected
+        )
     }
 
     init(
         search: SearchService,
         timeline: TimelineService,
         coverage: CaptureCoverageQuery? = nil,
-        mediaDirectory: URL
+        mediaDirectory: URL,
+        imageLoader: VisualFrameImageLoader
     ) {
         self.search = search
         self.timeline = timeline
         coverageQuery = coverage
         self.mediaDirectory = mediaDirectory
+        self.imageLoader = imageLoader
     }
 
-    private func refreshCoverage(from: Date?, to: Date?) async {
+    var previewCarriesEarlierFrame: Bool {
+        guard let previewVisual else { return false }
+        return current?.id != previewVisual.id
+    }
+
+    /// Starts a latest-wins visual lookup. A previous preview may remain while
+    /// a newer image loads only when it is still in the selected moment's past;
+    /// an image from the future is cleared immediately.
+    private func refreshVisualContext(
+        at time: Date,
+        anchorID: Int64? = nil,
+        navigationGeneration expectedNavigationGeneration: Int? = nil
+    ) async {
+        guard isPresentationActive,
+              navigationIsCurrent(expectedNavigationGeneration) else { return }
+        visualLoadTask?.cancel()
+        visualGeneration += 1
+        let generation = visualGeneration
+        visualFrames = []
+        selectedVisualID = nil
+        if let previewVisual,
+           previewIsAfterAnchor(previewVisual, time: time, anchorID: anchorID) {
+            self.previewVisual = nil
+            previewImage = nil
+        }
+        isVisualLoading = true
+
+        let task = Task<Void, Never> { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performVisualLoad(
+                at: time,
+                anchorID: anchorID,
+                generation: generation,
+                navigationGeneration: expectedNavigationGeneration
+            )
+        }
+        visualLoadTask = task
+        await task.value
+        guard isPresentationActive,
+              navigationIsCurrent(expectedNavigationGeneration) else { return }
+        if generation == visualGeneration {
+            isVisualLoading = false
+            visualLoadTask = nil
+        }
+    }
+
+    private func previewIsAfterAnchor(
+        _ preview: FrameVisualRef,
+        time: Date,
+        anchorID: Int64?
+    ) -> Bool {
+        if preview.ts != time { return preview.ts > time }
+        guard let anchorID else { return false }
+        return preview.id > anchorID
+    }
+
+    private func performVisualLoad(
+        at time: Date,
+        anchorID: Int64?,
+        generation: Int,
+        navigationGeneration expectedNavigationGeneration: Int?
+    ) async {
+        guard !Task.isCancelled,
+              isPresentationActive,
+              navigationIsCurrent(expectedNavigationGeneration),
+              let initialWindow = try? await timeline.visualWindow(
+                  atOrBefore: time,
+                  anchorID: anchorID
+              ), generation == visualGeneration,
+              isPresentationActive,
+              navigationIsCurrent(expectedNavigationGeneration) else { return }
+
+        visualFrames = initialWindow.frames
+        selectedVisualID = initialWindow.selectedID
+        imageLoader.replacePrefetch(with: initialWindow.frames.compactMap { frame in
+            guard frame.id != initialWindow.selectedID else { return nil }
+            return VisualFrameImageRequest(
+                relativePath: frame.relativePath,
+                maxPixel: 360
+            )
+        })
+
+        guard var candidate = initialWindow.selected else {
+            previewVisual = nil
+            previewImage = nil
+            return
+        }
+
+        var visited: Set<Int64> = []
+        while !Task.isCancelled, generation == visualGeneration,
+              isPresentationActive,
+              navigationIsCurrent(expectedNavigationGeneration),
+              visited.insert(candidate.id).inserted {
+            if let image = await imageLoader.image(
+                relativePath: candidate.relativePath,
+                maxPixel: 2_400,
+                priority: .current
+            ) {
+                guard !Task.isCancelled, generation == visualGeneration,
+                      isPresentationActive,
+                      navigationIsCurrent(expectedNavigationGeneration) else { return }
+                previewVisual = candidate
+                previewImage = image
+                selectedVisualID = candidate.id
+
+                // A missing current file may have pushed the preview beyond the
+                // initial two-item look-back. Re-center so the strip remains
+                // exactly 2 previous + current + 4 next around what is shown.
+                if candidate.id != initialWindow.selectedID,
+                   let fallbackWindow = try? await timeline.visualWindow(
+                       atOrBefore: time,
+                       anchorID: candidate.id
+                   ), generation == visualGeneration,
+                   isPresentationActive,
+                   navigationIsCurrent(expectedNavigationGeneration) {
+                    visualFrames = fallbackWindow.frames
+                    selectedVisualID = candidate.id
+                    imageLoader.replacePrefetch(with: fallbackWindow.frames.compactMap { frame in
+                        guard frame.id != candidate.id else { return nil }
+                        return VisualFrameImageRequest(
+                            relativePath: frame.relativePath,
+                            maxPixel: 360
+                        )
+                    })
+                }
+                return
+            }
+            guard !Task.isCancelled, generation == visualGeneration,
+                  isPresentationActive,
+                  navigationIsCurrent(expectedNavigationGeneration),
+                  let previous = try? await timeline.previousVisualFrame(before: candidate) else { break }
+            candidate = previous
+        }
+
+        guard !Task.isCancelled, generation == visualGeneration,
+              isPresentationActive,
+              navigationIsCurrent(expectedNavigationGeneration) else { return }
+        previewVisual = nil
+        previewImage = nil
+        selectedVisualID = nil
+    }
+
+    private func refreshCoverage(
+        from: Date?,
+        to: Date?,
+        navigationGeneration expectedNavigationGeneration: Int? = nil
+    ) async {
+        guard navigationIsCurrent(expectedNavigationGeneration) else { return }
         coverageGen += 1
         let generation = coverageGen
         let disclosure: CaptureCoverageDisclosure
         guard let coverageQuery else {
             disclosure = .clean
-            guard generation == coverageGen else { return }
+            guard generation == coverageGen,
+                  navigationIsCurrent(expectedNavigationGeneration) else { return }
             coverageDisclosure = disclosure
             return
         }
@@ -149,16 +343,21 @@ final class TimelineStore {
         } catch {
             disclosure = .metadataUnavailable
         }
-        guard generation == coverageGen else { return }
+        guard generation == coverageGen,
+              navigationIsCurrent(expectedNavigationGeneration) else { return }
         coverageDisclosure = disclosure
     }
 
     func load() async {
+        let generation = navigationGeneration
         if let b = try? await timeline.bounds() {
+            guard generation == navigationGeneration else { return }
             bounds = b
             if let newest = b.newest { cursor = newest }
+            followsLiveTail = true
         }
-        await refresh()
+        guard generation == navigationGeneration else { return }
+        await refresh(navigationGeneration: generation)
     }
 
     /// Live timeline: while recording, bounds/density update by themselves (previously "History is empty" hung
@@ -174,35 +373,132 @@ final class TimelineStore {
         }
     }
 
-    private func liveTick() async {
-        guard !isPlaying else { return }                       // the player moves time itself
-        guard let b = try? await timeline.bounds() else { return }
-        guard b.newest != bounds.newest || b.oldest != bounds.oldest else { return }
-        let wasEmpty = bounds.oldest == nil
-        // "at the tail" = cursor on/after the previous newest (5s tolerance) — then we follow the recording
-        let atTail = wasEmpty || (bounds.newest.map { cursor >= $0.addingTimeInterval(-5) } ?? true)
-        bounds = b
-        if atTail, let n = b.newest {
-            cursor = n
-            current = try? await timeline.frameAt(n)
+    func setPresentationActive(_ active: Bool) {
+        guard isPresentationActive != active else { return }
+        isPresentationActive = active
+        if !active {
+            visualGeneration &+= 1
+            visualLoadTask?.cancel()
+            visualLoadTask = nil
+            imageLoader.cancelPrefetch()
+            isVisualLoading = false
+            return
         }
-        _ = reframeWindowIfNeeded()
-        await refreshDensity()
+
+        // Restore the selected moment only after Timeline is visible again.
+        // The captured token prevents an older activation task from racing a
+        // seek or a new selection made immediately afterwards.
+        let generation = navigationGeneration
+        let selectedTime = cursor
+        let anchorID = current?.id
+        Task { @MainActor [weak self] in
+            guard let self,
+                  self.isPresentationActive,
+                  self.navigationGeneration == generation else { return }
+            await self.refreshVisualContext(
+                at: selectedTime,
+                anchorID: anchorID,
+                navigationGeneration: generation
+            )
+        }
     }
 
-    func refresh() async {
+    /// Drop every strong reference to decoded history pixels at a manual
+    /// privacy-erasure boundary. The shared loader is invalidated separately
+    /// by AppEnvironment because Activities uses it too.
+    func discardVisualStateForPrivacyErase() {
+        visualGeneration &+= 1
+        navigationGeneration &+= 1
+        visualLoadTask?.cancel()
+        visualLoadTask = nil
+        imageLoader.cancelPrefetch()
+        visualFrames = []
+        selectedVisualID = nil
+        previewVisual = nil
+        previewImage = nil
+        isVisualLoading = false
+    }
+
+    private func liveTick() async {
+        guard isPresentationActive else { return }
+        guard !isPlaying else { return }                       // the player moves time itself
+        let generation = navigationGeneration
+        guard let b = try? await timeline.bounds() else { return }
+        guard generation == navigationGeneration, !isPlaying else { return }
+        guard b.newest != bounds.newest || b.oldest != bounds.oldest else { return }
+        bounds = b
+        if followsLiveTail, let n = b.newest {
+            cursor = n
+            let loadedCurrent = try? await timeline.frameAt(n)
+            guard generation == navigationGeneration, followsLiveTail else { return }
+            current = loadedCurrent
+            await refreshVisualContext(at: n, anchorID: current?.id)
+        }
+        guard generation == navigationGeneration else { return }
         _ = reframeWindowIfNeeded()
-        await refreshDensity()
+        await refreshDensity(navigationGeneration: generation)
+    }
+
+    /// Immediate post-commit hook for AppEnvironment. It preserves the same
+    /// four-second poll as a safety net, but a live Timeline can move as soon as
+    /// IngestService has durably committed a frame.
+    func noteFrameAvailable(at timestamp: Date) async {
+        guard isPresentationActive else { return }
+        let generation = navigationGeneration
+        guard !isPlaying, let b = try? await timeline.bounds() else { return }
+        guard generation == navigationGeneration, !isPlaying else { return }
+        let changed = b.newest != bounds.newest || b.oldest != bounds.oldest
+        bounds = b
+        if followsLiveTail, let newest = b.newest {
+            cursor = newest
+            let loadedCurrent = try? await timeline.frameAt(newest)
+            guard generation == navigationGeneration, followsLiveTail else { return }
+            current = loadedCurrent
+            await refreshVisualContext(
+                at: newest,
+                anchorID: current?.id
+            )
+        }
+        guard generation == navigationGeneration else { return }
+        if changed || timestamp >= rangeStart {
+            _ = reframeWindowIfNeeded()
+            await refreshDensity(navigationGeneration: generation)
+        }
+    }
+
+    func refresh(navigationGeneration expectedNavigationGeneration: Int? = nil) async {
+        guard navigationIsCurrent(expectedNavigationGeneration) else { return }
+        _ = reframeWindowIfNeeded()
+        await refreshDensity(navigationGeneration: expectedNavigationGeneration)
+        guard navigationIsCurrent(expectedNavigationGeneration) else { return }
         // Direct assignment: before the first frame of history frameAt returns nil — the frame must be CLEARED,
         // otherwise the previous frame sticks in an empty zone (the "No frame" details would be unreachable).
-        current = try? await timeline.frameAt(cursor)
+        let loadedCurrent = try? await timeline.frameAt(cursor)
+        guard navigationIsCurrent(expectedNavigationGeneration) else { return }
+        current = loadedCurrent
+        await refreshVisualContext(
+            at: cursor,
+            anchorID: current?.id,
+            navigationGeneration: expectedNavigationGeneration
+        )
     }
 
     func seek(to t: Date) async {
         if isPlaying { pause() }        // a manual scrub takes control away from the player
+        let generation = beginUserNavigation()
+        followsLiveTail = false
         cursor = t
-        current = try? await timeline.frameAt(t)   // nil before the start of history → clear (see refresh)
-        if reframeWindowIfNeeded() { await refreshDensity() }   // the window shifted (e.g. coarse-seek via the slider)
+        let loadedCurrent = try? await timeline.frameAt(t)   // nil before the start of history → clear (see refresh)
+        guard generation == navigationGeneration else { return }
+        current = loadedCurrent
+        await refreshVisualContext(
+            at: t,
+            anchorID: current?.id,
+            navigationGeneration: generation
+        )
+        guard generation == navigationGeneration else { return }
+        if reframeWindowIfNeeded() { await refreshDensity(navigationGeneration: generation) }   // the window shifted (e.g. coarse-seek via the slider)
+        guard generation == navigationGeneration else { return }
         // moved far from the open audio segment and it isn't playing → the card of someone else's moment closes
         if let a = audioDetail, !audioPlayer.isPlaying,
            abs(t.timeIntervalSince(a.ts)) > max(60, a.durationSec + 60) {
@@ -210,11 +506,33 @@ final class TimelineStore {
         }
     }
 
+    /// Slider and density-strip drags have a short debounce before their
+    /// database lookup. Mark them as manual immediately so a live frame cannot
+    /// snap the thumb back to the tail during those 70 milliseconds.
+    func beginManualScrub() {
+        if isPlaying { pause() }
+        _ = beginUserNavigation()
+        followsLiveTail = false
+    }
+
     // MARK: date navigation
 
     /// "Today" = the tail of history (the newest frame).
     func jumpToNewest() async {
-        if let n = bounds.newest { await seek(to: n) }
+        guard let newest = bounds.newest else { return }
+        let generation = beginUserNavigation()
+        followsLiveTail = true
+        cursor = newest
+        let loadedCurrent = try? await timeline.frameAt(newest)
+        guard generation == navigationGeneration else { return }
+        current = loadedCurrent
+        await refreshVisualContext(
+            at: newest,
+            anchorID: current?.id,
+            navigationGeneration: generation
+        )
+        guard generation == navigationGeneration else { return }
+        if reframeWindowIfNeeded() { await refreshDensity(navigationGeneration: generation) }
     }
 
     /// Jump to a day: noon of the chosen date, clamped to the history bounds.
@@ -238,6 +556,7 @@ final class TimelineStore {
         if let o = bounds.oldest, let n = bounds.newest, o == n { return }
         // if we're at the end — start from the beginning of history (otherwise play "does nothing")
         if let newest = bounds.newest, cursor >= newest, let oldest = bounds.oldest { cursor = oldest }
+        followsLiveTail = false
         isPlaying = true
         startLoop()
     }
@@ -259,16 +578,32 @@ final class TimelineStore {
     /// the tie-breaker for equal ts (multi-monitor): each frame is visited exactly once.
     func stepForward() async {
         pause()
+        let generation = beginUserNavigation()
+        followsLiveTail = false
         let anchor = current?.ts ?? cursor   // anchor — the visible frame: cursor may have drifted via the slider
         if let f = try? await timeline.nextFrame(after: anchor, afterId: current?.id) {
+            guard generation == navigationGeneration else { return }
             cursor = f.ts; current = f
+            await refreshVisualContext(
+                at: f.ts,
+                anchorID: f.id,
+                navigationGeneration: generation
+            )
         }
     }
     func stepBackward() async {
         pause()
+        let generation = beginUserNavigation()
+        followsLiveTail = false
         let anchor = current?.ts ?? cursor   // otherwise the first "step back" after a seek returned the same frame
         if let f = try? await timeline.prevFrame(before: anchor, beforeId: current?.id) {
+            guard generation == navigationGeneration else { return }
             cursor = f.ts; current = f
+            await refreshVisualContext(
+                at: f.ts,
+                anchorID: f.id,
+                navigationGeneration: generation
+            )
         }
     }
 
@@ -294,6 +629,11 @@ final class TimelineStore {
             guard isPlaying, !Task.isCancelled, gen == playGen else { return }  // don't write a stale cursor
             cursor = next.ts
             current = next
+            await refreshVisualContext(
+                at: next.ts,
+                anchorID: next.id
+            )
+            guard isPlaying, !Task.isCancelled, gen == playGen else { return }
             if reframeWindowIfNeeded() { await refreshDensity() }   // the playhead reached the window's edge → page shift
         }
     }
@@ -339,6 +679,8 @@ final class TimelineStore {
 
     func select(_ r: SearchResult) async {
         pause()                // jumping to a hit = manual navigation, not autoplay
+        let generation = beginUserNavigation()
+        followsLiveTail = false
         results = []
         searchQuery = ""
         cursor = r.ts          // cursor first — refresh computes the frame+density for the new moment
@@ -347,11 +689,14 @@ final class TimelineStore {
             selectedCallID = r.id
             return
         }
-        await refresh()
+        await refresh(navigationGeneration: generation)
+        guard generation == navigationGeneration else { return }
         // Audio hit: open the transcript/playback panel (instead of silently losing the found call).
         if r.kind == .audio {
             if audioDetail?.id != r.id { audioPlayer.stop() }   // call A's audio must not play under card B
-            audioDetail = try? await timeline.audioDetail(id: r.id)
+            let loadedAudioDetail = try? await timeline.audioDetail(id: r.id)
+            guard generation == navigationGeneration else { return }
+            audioDetail = loadedAudioDetail
         } else {
             closeAudio()
         }
@@ -359,6 +704,8 @@ final class TimelineStore {
 
     func openCall(_ call: CallTimelineSpan) {
         pause()
+        _ = beginUserNavigation()
+        followsLiveTail = false
         cursor = call.start
         closeAudio()
         selectedCallID = call.id
@@ -371,6 +718,23 @@ final class TimelineStore {
     func closeAudio() {
         audioPlayer.stop()
         audioDetail = nil
+    }
+
+    func selectVisual(_ frame: FrameVisualRef) async {
+        pause()
+        let generation = beginUserNavigation()
+        followsLiveTail = false
+        cursor = frame.ts
+        let loadedCurrent = try? await timeline.frameDetail(id: frame.id)
+        guard generation == navigationGeneration else { return }
+        current = loadedCurrent
+        await refreshVisualContext(
+            at: frame.ts,
+            anchorID: frame.id,
+            navigationGeneration: generation
+        )
+        guard generation == navigationGeneration else { return }
+        if reframeWindowIfNeeded() { await refreshDensity(navigationGeneration: generation) }
     }
 
     func imageURL(_ relativePath: String?) -> URL? {

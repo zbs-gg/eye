@@ -19,8 +19,9 @@ their life to somebody else's cloud. It quietly captures screen moments, accessi
 microphone and optional system audio. Everything is indexed locally and can be explored in the Timeline,
 opened as a call, searched in Ask, or read by your own agent over localhost.
 
-> **Release status:** the public stable release is 0.6.0. This README also documents the 0.7.0 (build 21)
-> source candidate, which is not public until its exact notarized artifact passes the physical release gates.
+> **Release status:** the public stable release is 0.7.0. This README also documents the 0.8.0 (build 22)
+> source candidate, which is not public until the exact installed build proves that Eye never breaks a native
+> macOS screenshot.
 
 <p align="center">
   <img src="./assets/readme/product-proof.svg" width="100%"
@@ -35,7 +36,7 @@ stored in this repository.
 Eye records useful evidence and gives it back. It is not a CRM, a calendar manager, or a meeting bot.
 
 - **Timeline** combines screen frames, extracted text, app context, audio density, call spans, and bookmarks
-  in one scrubbable view.
+  in one scrubbable view. A seven-image filmstrip makes nearby visual moments immediately reachable.
 - **Calls** keeps meetings out of the all-day activity stream. Microphone and system audio remain separate;
   a bookmark schedules a checkpoint transcript without interrupting the recording.
 - **Search** combines FTS5 with local multilingual semantic retrieval, so a query in one language can find
@@ -50,12 +51,24 @@ Eye records useful evidence and gives it back. It is not a CRM, a calendar manag
 
 Screen capture is adaptive: Accessibility text is the cheap first path, while Vision OCR handles apps whose
 UI trees are empty. Images use HEIC and perceptual-hash deduplication. Static screens do not become thousands
-of duplicate files. Eye keeps one low-rate capture stream and processes only the newest useful frame, so work
-cannot accumulate behind a busy OCR pass. With listen-event access already available, Eye sees native screenshot
-shortcuts early, cancels pending heavy work, and rejects any in-flight result that crosses the screenshot boundary;
-otherwise the screenshot-helper fallback yields as soon as macOS exposes it. Already-running synchronous AX or
-Vision work may finish in the background, but cannot be saved as an Eye frame. Eye never requests a new permission
-for this and does not stop or rebuild its stream.
+of duplicate files. One low-rate stream always notices app switches and, when macOS already permits listen-only
+input observation, clicks, the end of scrolling, and a pause after typing; Eye never asks for a new permission
+for these signals. A three-second tick remains the fallback, followed by one sparse minute tick after sustained inactivity.
+The input observer retains only the kind of activity. It never stores keys, entered text, pointer coordinates,
+scroll contents, or clipboard data. Heavy work remains latest-wins, with at most one current and one pending
+moment, and frequent input cannot start it more than once per 1.5 seconds.
+
+With listen-event access already available, Eye sees native screenshot shortcuts early, cancels pending heavy
+work, and rejects any in-flight result that crosses the screenshot boundary; those shortcuts never create an Eye
+moment. Otherwise the screenshot-helper fallback yields as soon as macOS exposes it. Already-running synchronous
+AX or Vision work may finish in the background, but cannot be saved as an Eye frame. Eye never requests a new
+permission for this and does not stop or rebuild its stream.
+
+Timeline resolves every selected time to the nearest real image at or before that time—never a future frame.
+It keeps two earlier, the current, and four later images close at hand, loads at most two files concurrently,
+and caps decoded-image memory at 128 MB. Missing or retained-away files fall back only to an earlier image.
+Activity cards lazily show a representative 160×90 frame when one still exists and keep their app-only layout
+when it does not.
 
 ## Calls without a visible bot
 

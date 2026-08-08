@@ -1,5 +1,37 @@
 import Foundation
 
+/// Context that must still own the frontmost pixels when an asynchronous AX +
+/// ScreenCaptureKit cycle is ready to commit. Window and display identity keep
+/// a rapid same-process window switch from pairing old text with new pixels.
+struct CaptureSourceIdentity: Sendable, Equatable {
+    let processIdentifier: Int32
+    let bundleIdentifier: String
+    let windowNumber: UInt32?
+    let displayID: UInt32?
+}
+
+enum CaptureSourceAttestationPolicy {
+    static func accepts(
+        expected: CaptureSourceIdentity,
+        current: CaptureSourceIdentity?
+    ) -> Bool {
+        current == expected
+    }
+
+    /// Exact identity alone cannot detect an A -> B -> A focus round-trip
+    /// while AX or ScreenCaptureKit is suspended. The monotonic focus revision
+    /// makes that ABA transition terminal for the admitted cycle.
+    static func accepts(
+        expected: CaptureSourceIdentity,
+        current: CaptureSourceIdentity?,
+        expectedFocusRevision: UInt64,
+        currentFocusRevision: UInt64
+    ) -> Bool {
+        expectedFocusRevision == currentFocusRevision
+            && accepts(expected: expected, current: current)
+    }
+}
+
 /// A MainActor topology/privacy invalidation may overtake an event already
 /// queued by ScreenCaptureKit. Each stream generation carries the revision it
 /// was admitted under; the MainActor sink accepts only the current revision.
@@ -379,6 +411,128 @@ struct LatestCaptureWorkPolicy: Sendable, Equatable {
     mutating func cancelAll() {
         processing = nil
         waiting = nil
+    }
+}
+
+/// Why Eye asked the already-running screen stream for a fresh frame. Hard
+/// reasons are never delayed by input coalescing; soft reasons contain no key,
+/// text, cursor, or clipboard payload and are rate-limited together.
+enum CaptureTriggerReason: Sendable, Equatable {
+    case startup
+    case applicationSwitch
+    case activeFallback
+    case idleFallback
+    case click
+    case typingPause
+    case scrollStop
+    case recovery
+    case displayChange
+    case contentTopologyChange
+    case sessionResume
+}
+
+/// The only information allowed to leave the listen-only input callback. This
+/// deliberately cannot carry what was typed, a hardware key code, coordinates,
+/// scroll deltas, or clipboard contents.
+enum MeaningfulCaptureInput: Sendable, Equatable {
+    case click
+    case typingActivity
+    case scrollActivity
+}
+
+enum MeaningfulCaptureTriggerDecision: Sendable, Equatable {
+    case capture(CaptureTriggerReason)
+    case schedule(deadlineMs: UInt64)
+    case none
+}
+
+/// Pure latest-event scheduler for click/type/scroll capture. It retains at
+/// most one pending semantic reason. A newer event replaces it, typing and
+/// scrolling debounce from their latest event, and every soft capture shares
+/// one minimum interval.
+struct MeaningfulCaptureTriggerPolicy: Sendable, Equatable {
+    struct Pending: Sendable, Equatable {
+        let reason: CaptureTriggerReason
+        let deadlineMs: UInt64
+    }
+
+    let clickDelayMs: UInt64
+    let typingPauseDelayMs: UInt64
+    let scrollStopDelayMs: UInt64
+    let softFloorMs: UInt64
+
+    private(set) var lastCaptureAtMs: UInt64?
+    private(set) var pending: Pending?
+
+    init(
+        clickDelayMs: UInt64 = 0,
+        typingPauseDelayMs: UInt64 = 700,
+        scrollStopDelayMs: UInt64 = 350,
+        softFloorMs: UInt64 = 1_500
+    ) {
+        self.clickDelayMs = clickDelayMs
+        self.typingPauseDelayMs = typingPauseDelayMs
+        self.scrollStopDelayMs = scrollStopDelayMs
+        self.softFloorMs = softFloorMs
+    }
+
+    mutating func observe(
+        _ input: MeaningfulCaptureInput,
+        at nowMs: UInt64
+    ) -> MeaningfulCaptureTriggerDecision {
+        let reason: CaptureTriggerReason
+        let inputDelayMs: UInt64
+        switch input {
+        case .click:
+            reason = .click
+            inputDelayMs = clickDelayMs
+        case .typingActivity:
+            reason = .typingPause
+            inputDelayMs = typingPauseDelayMs
+        case .scrollActivity:
+            reason = .scrollStop
+            inputDelayMs = scrollStopDelayMs
+        }
+
+        let debouncedDeadline = Self.saturatingAdd(nowMs, inputDelayMs)
+        let floorDeadline = lastCaptureAtMs.map {
+            Self.saturatingAdd($0, softFloorMs)
+        } ?? 0
+        pending = Pending(
+            reason: reason,
+            deadlineMs: max(debouncedDeadline, floorDeadline)
+        )
+        return consumeIfDue(at: nowMs)
+    }
+
+    mutating func timerFired(at nowMs: UInt64) -> MeaningfulCaptureTriggerDecision {
+        consumeIfDue(at: nowMs)
+    }
+
+    mutating func cancelPending() {
+        pending = nil
+    }
+
+    mutating func reset() {
+        pending = nil
+        lastCaptureAtMs = nil
+    }
+
+    private mutating func consumeIfDue(
+        at nowMs: UInt64
+    ) -> MeaningfulCaptureTriggerDecision {
+        guard let pending else { return .none }
+        guard nowMs >= pending.deadlineMs else {
+            return .schedule(deadlineMs: pending.deadlineMs)
+        }
+        self.pending = nil
+        lastCaptureAtMs = nowMs
+        return .capture(pending.reason)
+    }
+
+    private static func saturatingAdd(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
+        let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+        return overflow ? UInt64.max : sum
     }
 }
 

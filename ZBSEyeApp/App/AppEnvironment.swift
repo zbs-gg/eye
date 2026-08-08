@@ -228,6 +228,9 @@ final class AppEnvironment {
     private(set) var callRecovery: CallRecoveryService?
     private(set) var retention: RetentionManager?
     @ObservationIgnored private var automaticRetentionAdmission: AutomaticRetentionAdmission?
+    /// One process-wide decoded-image cache shared by Timeline and Activities.
+    /// It is created against the active relocatable media directory during bootstrap.
+    @ObservationIgnored private(set) var visualFrameImageLoader: VisualFrameImageLoader?
     private(set) var timelineStore: TimelineStore?
     private(set) var ask: AskStore?
     private(set) var cartographer: CartographerStore?
@@ -1257,7 +1260,12 @@ final class AppEnvironment {
                 healthController: captureHealthController,
                 resourceCoordinator: sckResourceCoordinator
             )
-            coordinator.onFrame = { [weak rec = recording] in rec?.noteFrame() }
+            coordinator.onFrame = { [weak self, weak rec = recording] capturedAt in
+                rec?.noteFrame()
+                Task { @MainActor [weak self] in
+                    await self?.timelineStore?.noteFrameAvailable(at: capturedAt)
+                }
+            }
             // The independent disk monitor owns transitions. This cycle gate is
             // only a final admission check while an asynchronous drain settles.
             coordinator.diskOK = { [weak self] in
@@ -1450,11 +1458,16 @@ final class AppEnvironment {
             )
             let timelineSvc = TimelineService(db: db)
             let coverageQuery = CaptureCoverageQuery(database: db)
+            let visualFrameImageLoader = VisualFrameImageLoader(
+                mediaDirectory: storage.mediaDirectory
+            )
+            self.visualFrameImageLoader = visualFrameImageLoader
             self.timelineStore = TimelineStore(
                 search: searchSvc,
                 timeline: timelineSvc,
                 coverage: coverageQuery,
-                mediaDirectory: storage.mediaDirectory
+                mediaDirectory: storage.mediaDirectory,
+                imageLoader: visualFrameImageLoader
             )
 
             // Shared aggregation layer for the day's activity (one scan + segmentation + active time + batch text).
@@ -1813,11 +1826,18 @@ final class AppEnvironment {
         // A privacy cut is terminal for an intersecting active Call Envelope. Flush/close it first;
         // live mutation would let the spool re-persist bytes after the accepted deletion boundary.
         await calls.endAndWait(reason: .privacy)
+        // Release decoded screenshots immediately. Repeat after the storage
+        // mutation so a decode admitted during the delete cannot republish
+        // pixels that crossed this privacy boundary.
+        timelineStore?.discardVisualStateForPrivacyErase()
+        visualFrameImageLoader?.invalidateAllForPrivacyErase()
         // CRITICAL (privacy): an open VAD segment lives in memory — deleteRange doesn't see it.
         // We flush in-flight audio BEFORE the delete, otherwise "said a password → wipe" would survive
         // up to 28s of speech captured before the click (it would close and land in the DB AFTER the delete).
         await audio?.discardInFlight(from: dateFromMs(fromMs), to: lastSeconds == nil ? now : dateFromMs(toMs))
         let report = try? await retention.deleteRange(fromMs: fromMs, toMs: toMs)
+        timelineStore?.discardVisualStateForPrivacyErase()
+        visualFrameImageLoader?.invalidateAllForPrivacyErase()
         if ownsWorkerResume,
            !recording.lowDiskPaused,
            !storageSettings.relocationInProgress {

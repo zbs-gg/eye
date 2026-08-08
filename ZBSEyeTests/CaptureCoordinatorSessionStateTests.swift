@@ -34,7 +34,7 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
         XCTAssertTrue(policySource.contains("CGSessionCopyCurrentDictionary"))
         XCTAssertTrue(source.contains("CaptureSessionPolicy.startupGate"))
         XCTAssertTrue(source.contains("applySessionGate(initialSessionGate)"))
-        XCTAssertTrue(source.contains("if initialSessionGate.isOpen { trigger() }"))
+        XCTAssertTrue(source.contains("if initialSessionGate.isOpen { trigger(.startup) }"))
     }
 
     func testActiveTickReconcilesBeforeItsCaptureGate() throws {
@@ -69,7 +69,7 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
             )
         )
         let trigger = try XCTUnwrap(
-            source.range(of: "trigger()", range: liveRecheck.upperBound..<source.endIndex)
+            source.range(of: "trigger(.sessionResume)", range: liveRecheck.upperBound..<source.endIndex)
         )
 
         XCTAssertLessThan(invalidation.lowerBound, liveRecheck.lowerBound)
@@ -92,6 +92,65 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
         XCTAssertLessThan(frameReady.lowerBound, finalGate.lowerBound)
         XCTAssertLessThan(finalGate.lowerBound, firstWrite.lowerBound)
         XCTAssertTrue(source.contains("sessionLockedNow: Self.currentSessionLocked()"))
+    }
+
+    func testCaptureCycleReattestsTheExactFrontmostSourceBeforeEitherWrite() throws {
+        let source = try coordinatorSource
+        let frameReady = try XCTUnwrap(source.range(of: "guard let frame else { return }"))
+        let finalSourceGate = try XCTUnwrap(
+            source.range(
+                of: "guard reattestCaptureSourceOrQueueLatest(",
+                range: frameReady.upperBound..<source.endIndex
+            )
+        )
+        let duplicateBranch = try XCTUnwrap(
+            source.range(of: "if frame.isDuplicate {", range: finalSourceGate.upperBound..<source.endIndex)
+        )
+        let firstWrite = try XCTUnwrap(
+            source.range(of: "await write(", range: duplicateBranch.upperBound..<source.endIndex)
+        )
+
+        XCTAssertLessThan(frameReady.lowerBound, finalSourceGate.lowerBound)
+        XCTAssertLessThan(finalSourceGate.lowerBound, duplicateBranch.lowerBound)
+        XCTAssertLessThan(finalSourceGate.lowerBound, firstWrite.lowerBound)
+        XCTAssertTrue(source.contains("triggerApplicationSwitch()"))
+    }
+
+    func testApplicationSwitchCancelsPreviousAppsDelayedInputBeforeHardTrigger() throws {
+        let source = try coordinatorSource
+        let method = try XCTUnwrap(source.range(of: "private func triggerApplicationSwitch()"))
+        let bumpRevision = try XCTUnwrap(
+            source.range(of: "frontmostApplicationRevision &+= 1", range: method.upperBound..<source.endIndex)
+        )
+        let cancelTask = try XCTUnwrap(
+            source.range(of: "meaningfulInputTask?.cancel()", range: bumpRevision.upperBound..<source.endIndex)
+        )
+        let cancelPending = try XCTUnwrap(
+            source.range(of: "meaningfulInputPolicy.cancelPending()", range: cancelTask.upperBound..<source.endIndex)
+        )
+        let hardTrigger = try XCTUnwrap(
+            source.range(of: "trigger(.applicationSwitch)", range: cancelPending.upperBound..<source.endIndex)
+        )
+
+        XCTAssertLessThan(bumpRevision.lowerBound, cancelTask.lowerBound)
+        XCTAssertLessThan(cancelTask.lowerBound, cancelPending.lowerBound)
+        XCTAssertLessThan(cancelPending.lowerBound, hardTrigger.lowerBound)
+        XCTAssertTrue(source[method.upperBound..<hardTrigger.lowerBound].contains("cycleTask?.cancel()"))
+        XCTAssertTrue(source.contains("MainActor.assumeIsolated { self?.triggerApplicationSwitch() }"))
+    }
+
+    func testCaptureCycleCarriesMonotonicFocusRevisionAcrossBothSourceChecks() throws {
+        let source = try coordinatorSource
+        XCTAssertTrue(source.contains(
+            "let expectedFrontmostApplicationRevision = frontmostApplicationRevision"
+        ))
+        XCTAssertEqual(
+            source.components(
+                separatedBy: "expectedFrontmostApplicationRevision: expectedFrontmostApplicationRevision"
+            ).count - 1,
+            2
+        )
+        XCTAssertTrue(source.contains("currentFocusRevision: frontmostApplicationRevision"))
     }
 
     func testCaptureCycleReattestsBeforeAXAndBeforeScreenCaptureKit() throws {

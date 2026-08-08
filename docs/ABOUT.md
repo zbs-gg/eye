@@ -34,8 +34,12 @@ enable an external provider, only the text excerpts needed for that action leave
   renderers, canvas, some Electron); frames in HEIC with perceptual-hash dedup (identical screens aren't
   duplicated). Adaptive per-app: AX where the app exposes semantics, OCR where it doesn't; decided at runtime by
   content quality. One low-rate ScreenCaptureKit stream stays alive instead of opening a new native screenshot
-  request for every moment. Heavy processing is latest-wins, with at most one moment processing and one pending,
-  so app switching cannot build an unbounded queue.
+  request for every moment. App switches always request a fresh moment; when macOS already permits listen-only
+  input observation, clicks do too, scrolling waits for 350 ms of quiet, and typing waits for 700 ms. Eye does not
+  request a new permission for these signals. The observer keeps only those opaque activity kinds—not keys, text,
+  coordinates, scrolling contents, or clipboard data. Frequent clicks and keys share a 1.5-second heavy-work
+  floor. The existing three-second fallback stays active, followed by one sparse minute capture after three
+  minutes of inactivity. Heavy processing is latest-wins, with at most one moment processing and one pending.
 - **Native screenshots keep priority.** Eye yields pending heavy work around Shift-Command-3/4/5 and their
   Control variants, and while the native Screenshot helpers are running. Early hotkey observation is best-effort
   and listen-only: Eye uses it only when macOS already permits listening, never consumes the shortcut, never asks
@@ -62,6 +66,8 @@ enable an external provider, only the text excerpts needed for that action leave
 - **Scenes / "Day in activities"** — frames are grouped into **activity scenes**: "VS Code, 14:00–14:25,
   editing AXReader" instead of a thousand separate frames. You see how the day breaks into blocks. Instead of
   a raw OCR dump on the right — a **clean scene summary** (app, window/URL, key topics; LLM enhancement optional).
+  The top-level card lazily shows a 160×90 image from the longest representative episode; when its image has
+  expired or never existed, the familiar app-icon card remains.
 - **Daily Insights** (formerly "Cartographer") — an optional daily AI insight: the model you chose in **Settings → AI**
   looks at the day's activity (top apps, context switches, topics) and gives **2–3 concrete
   observations/tips** (self-improvement). AI is off by default; local and external choices are explicit.
@@ -81,8 +87,12 @@ enable an external provider, only the text excerpts needed for that action leave
 ### Search and navigation
 - **Hybrid search** — full-text (FTS5) + semantic (multilingual-e5, 384-dim) via RRF.
   **Cross-lingual**: search in one language, find another (and vice versa).
-- **Timeline** — scrub through time, activity density, a 1×/2×/4× player, day/hour/10-min zoom, frames served
-  as images. Smooth: frame crossfade, a soft scrubber, micro-animations (respecting Reduce Motion).
+- **Timeline** — scrub through time, activity density, a 1×/2×/4× player, day/hour/10-min zoom, and a clickable
+  seven-image filmstrip (two previous, current, four next). A context-only moment resolves to the nearest real
+  image at or before its time; a future image is never substituted. The shared loader holds at most 128 MB of
+  decoded images and opens at most two files at once. Missing/corrupt files search backward or show a calm
+  placeholder. New live moments do not pull someone away from an older time they are studying. Motion respects
+  Reduce Motion.
 - **"Ask"** — ask your memory a question → hybrid search finds fragments → your **processing model**
   answers with citation links (click → jump on the timeline). A local equivalent of "Ask Rewind".
   The model is picked in **Settings → AI**. One action can download ZBS Eye's verified built-in MLX model;
@@ -181,13 +191,14 @@ scenes/"Day in activities", Ask, Daily Insights, progress/milestones, REST + MCP
 fresh-profile retention with explicit Forever, relocatable storage, iCloud backup, daily summary, and export.
 The Developer ID/notarization pipeline has produced earlier installed builds.
 
-**Implemented and deterministically qualified in the `0.7.0 (21)` candidate:** the persistent latest-wins screen
-stream, shared ScreenCaptureKit lifecycle serialization, best-effort native-screenshot yield, capture
-health/recovery, explicit Call Envelopes/Bookmarks/Calls library and local processing, and microphone-owned
-automatic Calls with relay, exclusion, pause, and 30-second end semantics. This does **not** make build 21 a
-release yet. It still needs a new exact notarized ZIP/manifest and physical qualification of that installed
-artifact: the full capture-coexistence v2 bracket + manual shortcuts + recovery matrix + churn/two-hour soak,
-and the complete automatic-Call checklist including 60- and 120-minute calls.
+The exact Developer ID + notarized `0.7.0 (21)` artifact is the current public stable release. Its previously
+disclosed physical screenshot and long-Call checks remain unqualified and must not be described as passed.
+
+**The `0.8.0 (22)` source candidate adds the live visual Timeline:** meaningful app/input moments, immediate
+Timeline invalidation, past-only visual resolution, the seven-image filmstrip, one bounded shared image loader,
+and representative Activity-card images. It is not a release until the exact installed artifact passes the full
+native-screenshot comparison—including Shift-Command-3/4/5, Control variants, and the open Screenshot UI—with
+zero failed, empty, or stale screenshots, followed by normal-use and Call checks.
 
 **Deferred:** Sparkle auto-updates and deep integration of Cartographer with Pulse/Atlas. Live transcription,
 calendar automation, call maps, and CRM/call intelligence belong in another product, not Eye.

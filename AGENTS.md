@@ -43,12 +43,12 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
 | Folder | What |
 |---|---|
 | `App/` | `ZBSEyeMain` (@main, CLI/GUI dispatch), `ZBSEyeApp` (Scene + AppDelegate), `AppEnvironment` (owns the service graph, `bootstrap()`) |
-| `Capture/` | `CaptureCoordinator`, one persistent low-rate `ScreenCaptureStream`, `FramePipeline` (HEIC+phash+OCR, ONE actor), `SCKResourceCoordinator`, screenshot-priority yield, capture health/recovery, `AXReader` (dedicated thread, per-PID health) |
+| `Capture/` | `CaptureCoordinator`, one persistent low-rate `ScreenCaptureStream`, meaningful-input scheduling, `FramePipeline` (HEIC+phash+OCR, ONE actor), `SCKResourceCoordinator`, screenshot-priority yield, capture health/recovery, `AXReader` (dedicated thread, per-PID health) |
 | `Audio/` | `AudioCoordinator`, mic/system engines, `VADSegmenter`, `TranscriptionService` (SFSpeech on-device); system-audio SCK lifecycle shares `SCKResourceCoordinator` with screen capture |
 | `Meeting/` | `MeetingDetector`, CoreAudio process evidence, native/browser enrichment, exact automatic-Call admission and suppression |
 | `Calls/` | `CallCoordinator`, crash-forward spools/evidence, Whisper and diarization workers, call query/projection and privacy deletion |
 | `Data/` | `ZBSEyeDatabase` (pool + migrations), `StorageManager` (media), **`StorageLocation`** (the single path resolver — see invariants), `StorageRelocation` (move), `BackupManager` (iCloud), `RetentionManager`, `IngestService` (the only writer) |
-| `Search/` | `SearchService` (FTS+vector RRF), `EmbeddingService` (e5), `TimelineService`, `VectorBackfill` |
+| `Search/` | `SearchService` (FTS+vector RRF), `EmbeddingService` (e5), past-only visual Timeline lookup, `VectorBackfill` |
 | `Server/` | `ZBSEyeHTTPServer` (FlyingFox REST, 127.0.0.1, Bearer), `KeychainStore`, DTO |
 | `MCP/` | `ZBSEyeMCPServer` (stdio, proxies into the GUI instance) |
 | `Automations/` | `HistoryImporter` (history import), `DailySummaryService`, `ExportService` |
@@ -75,9 +75,13 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
    shorten retention without an explicit selection and authoritative reconciliation. `Forever` closes automatic
    deletion. Critically low disk pauses capture for every policy and never overrides the selected retention promise.
 6. **One persistent screen stream; bounded latest-wins work.** Normal screen capture uses one low-rate
-   ScreenCaptureKit stream, not a new screenshot request per cycle. Expensive AX/OCR/HEIC work retains at most
-   one processing intent and one pending intent; a newer trigger replaces the pending one. `SCKResourceCoordinator`
-   serializes the complete asynchronous start/update/stop operation across the screen and system-audio streams.
+   ScreenCaptureKit stream, not a new screenshot request per cycle. App switches always request moments; clicks,
+   scroll-stop (350 ms), and typing-pause (700 ms) do so when listen-event access already exists, without a new
+   permission request. The three-second fallback remains. The observer carries only an
+   opaque reason—never keys, text, pointer coordinates, or clipboard contents—and frequent input shares a
+   1.5-second heavy-work floor. Expensive AX/OCR/HEIC work retains at most one processing intent and one pending
+   intent; a newer trigger replaces the pending one. `SCKResourceCoordinator` serializes the complete asynchronous
+   start/update/stop operation across the screen and system-audio streams.
 7. **Native screenshots get a best-effort, permission-neutral yield.** Eye observes Shift-Command-3/4/5 and
    their Control variants through a listen-only event tap only when macOS already permits it, and also watches
    the exact native screenshot helper processes. Either signal drops pending heavy work and opens a short quiet
@@ -149,6 +153,11 @@ It was published by explicit owner decision before capture-coexistence v2 and th
 physical checklist (including 60- and 120-minute calls) were completed. Those checks remain unqualified and must
 not be described as passed; the public release notes disclose that exception, and the normal gate below remains
 the contract for later releases.
+
+The `0.8.0 (22)` source candidate adds meaningful visual moments, immediate Timeline refresh, past-only image
+selection, a bounded seven-image filmstrip/cache, and representative Activity images without changing the database,
+media format, REST, MCP, privacy, or Calls. It is not public until the exact installed notarized artifact completes
+the native-screenshot matrix with zero failures, then the normal-use/Call soak and full deterministic checks.
 
 Deferred: source_id for multi-monitor dedup (~0.15% of frames, documented in `HistoryImporter`).
 
