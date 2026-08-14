@@ -1077,10 +1077,10 @@ private final class CodexFrameQueue: @unchecked Sendable {
                 lock.withLock {
                     if cancelledWaiters.remove(identifier) != nil {
                         immediate = .failure(CancellationError())
-                    } else if let terminalError {
-                        immediate = .failure(terminalError)
                     } else if !frames.isEmpty {
                         immediate = .success(frames.removeFirst())
+                    } else if let terminalError {
+                        immediate = .failure(terminalError)
                     } else {
                         waiters[identifier] = continuation
                     }
@@ -1115,6 +1115,17 @@ private final class CodexFrameQueue: @unchecked Sendable {
             guard terminalError == nil else { return }
             terminalError = error
             frames.removeAll(keepingCapacity: false)
+            pending = Array(waiters.values)
+            waiters.removeAll()
+        }
+        pending.forEach { $0.resume(throwing: error) }
+    }
+
+    func finishAfterQueuedFrames(_ error: CodexAppServerError) {
+        var pending: [CheckedContinuation<CodexProcessFrame, Error>] = []
+        lock.withLock {
+            guard terminalError == nil else { return }
+            terminalError = error
             pending = Array(waiters.values)
             waiters.removeAll()
         }
@@ -1192,8 +1203,12 @@ private final class CodexPipePump: @unchecked Sendable {
                 continue
             }
             if count == 0 {
-                if kind == .stdout, !lineBuffer.isEmpty {
-                    queue.finish(.protocolViolation)
+                if kind == .stdout {
+                    if lineBuffer.isEmpty {
+                        queue.finishAfterQueuedFrames(.transportUnavailable)
+                    } else {
+                        queue.finish(.protocolViolation)
+                    }
                 }
                 source.cancel()
                 return
@@ -1420,7 +1435,10 @@ actor CodexPOSIXConnection: CodexAppServerConnection {
             var result: pid_t
             repeat { result = waitpid(pid, &status, 0) } while result < 0 && errno == EINTR
             guard let self else { return }
-            Task { await self.didExit() }
+            let exitedSuccessfully = result == pid
+                && status & 0x7f == 0
+                && (status >> 8) & 0xff == 0
+            Task { await self.didExit(successfully: exitedSuccessfully) }
         }
     }
 
@@ -1480,12 +1498,14 @@ actor CodexPOSIXConnection: CodexAppServerConnection {
         stderrPump.cancel()
     }
 
-    private func didExit() async {
+    private func didExit(successfully: Bool) async {
         processExited = true
-        frames.finish(.transportUnavailable)
         await writer.close()
-        stdoutPump.cancel()
-        stderrPump.cancel()
+        if !successfully {
+            frames.finish(.transportUnavailable)
+            stdoutPump.cancel()
+            stderrPump.cancel()
+        }
     }
 
     private func signalProcessGroup(_ signal: Int32) {

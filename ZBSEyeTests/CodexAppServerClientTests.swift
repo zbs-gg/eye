@@ -305,6 +305,35 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertEqual(errno, ESRCH)
     }
 
+    func testCleanProcessExitPreservesQueuedStdout() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let specification = CodexLaunchSpecification(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            trustedExecutable: try verifiedExecutable(at: URL(fileURLWithPath: "/bin/sh")),
+            arguments: ["-c", "printf '%s\\n' '{\"ready\":true}'"],
+            environment: ["HOME": root.path, "PATH": "/usr/bin:/bin", "LANG": "C"],
+            workingDirectoryURL: root,
+            createsDedicatedProcessGroup: true,
+            usesLoginShell: false,
+            maximumStdoutBytes: 4_096,
+            maximumStderrBytes: 4_096
+        )
+        let opened = try await CodexPOSIXProcessTransport(
+            executableVerifier: CodexAcceptingExecutableVerifier()
+        ).open(specification)
+        let connection = try XCTUnwrap(opened as? CodexPOSIXConnection)
+
+        try await Task.sleep(for: .milliseconds(100))
+        let frame = try await connection.receive(
+            maximumLineBytes: 1_024,
+            timeout: .seconds(2)
+        )
+
+        XCTAssertEqual(String(data: frame.stdoutLine, encoding: .utf8), "{\"ready\":true}")
+        await connection.terminateProcessGroup(gracePeriod: .zero)
+    }
+
     func testPOSIXTransportRejectsReplacedExecutableAtSpawnBoundary() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
