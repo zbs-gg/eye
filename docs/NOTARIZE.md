@@ -193,6 +193,13 @@ For the `0.7.0 (21)` automatic-Call change, the completed report must also expli
 - detected end saves once after 30 seconds, **End & save** saves once, **This wasn’t a call** erases only that
   automatic Call, and none of those surfaces offers Undo.
 
+For the `0.9.0 (25)` three-mode and Call-video change, the generated report must additionally prove every row
+under **Three-mode Call and Call-video gates**. That section binds the exact reverse-verified ZIP and manifest,
+requires real Audio only and Audio and video Calls plus live mode switching, and treats any unexplained audio
+gap, `telemetryOverflow`, `consumerOverflow`, or native-screenshot latency above the Eye-off baseline by more
+than 250 ms as a release blocker. It also covers fixed-display behavior, display removal, two monitors,
+lock/unlock, low disk, crash/relaunch, deletion, physical trimming, export hashes, and REST/MCP/UI agreement.
+
 Leave `Pending manual execution` in place until all rows are evidenced against this exact candidate. Notarization,
 unit tests, fixture gates, an earlier build's checklist, or one short Call cannot substitute for this physical gate.
 

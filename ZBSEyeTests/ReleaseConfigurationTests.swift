@@ -392,6 +392,33 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertFalse(automation.contains("PATH:-build/DerivedData"))
     }
 
+    func testPhysicalCallQualificationCoversThreeModeVideoReleaseGate() throws {
+        let script = try String(
+            contentsOf: repositoryRoot.appending(path: "scripts/verify-call-recording.sh"),
+            encoding: .utf8
+        )
+
+        for requiredEvidence in [
+            "Don't record",
+            "Audio only",
+            "Audio and video",
+            "Audio → video → audio → video",
+            "1920×1080 and 15 fps",
+            "Eye-off baseline",
+            "+250 ms",
+            "telemetryOverflow",
+            "consumerOverflow",
+            "Disconnecting the selected display",
+            "Trimming physically rebuilds",
+            "call-video-segment:<id>",
+            "Qualified ZIP SHA-256",
+            "Qualified manifest SHA-256",
+        ] {
+            XCTAssertTrue(script.contains(requiredEvidence), "missing physical gate: \(requiredEvidence)")
+        }
+        XCTAssertTrue(script.contains("Pending manual execution on the exact reverse-verified"))
+    }
+
     func testNotarizedBuildDoesNotShareTheGenericDerivedDataCache() throws {
         let script = try String(
             contentsOf: repositoryRoot.appending(path: "scripts/build-notarized.sh"),
