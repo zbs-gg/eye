@@ -47,7 +47,9 @@ jobs:
           if [ "$test_status" -ne 0 ]; then
             xcrun xcresulttool get test-results summary \
               --path "$RUNNER_TEMP/ReleaseConfigurationTests.xcresult" \
-              --compact || true
+              --compact \
+              | python3 -c 'import json, sys; data = json.load(sys.stdin); [print("{}: {}".format(failure["testName"], failure["failureText"])) for failure in data["testFailures"]]' \
+              || true
           fi
           exit "$test_status"
 
@@ -67,7 +69,9 @@ jobs:
           if [ "$test_status" -ne 0 ]; then
             xcrun xcresulttool get test-results summary \
               --path "$RUNNER_TEMP/ZBSEyeUnitTests.xcresult" \
-              --compact || true
+              --compact \
+              | python3 -c 'import json, sys; data = json.load(sys.stdin); [print("{}: {}".format(failure["testName"], failure["failureText"])) for failure in data["testFailures"]]' \
+              || true
           fi
           exit "$test_status"
 
