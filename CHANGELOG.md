@@ -32,6 +32,8 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   installed-binary test remains deterministic when Anthropic's local auto-updater has another version installed.
 - Call fixture verification uses disposable DerivedData by default instead of silently growing the repository's
   `build/` directory; an explicit cache path remains available for intentional reuse.
+- Release preflight can notarize an explicitly named, clean remote PR descendant for the pre-merge physical gate;
+  publication still requires that exact SHA on canonical main with no candidate override.
 
 ## [0.8.0] — 2026-08-08
 

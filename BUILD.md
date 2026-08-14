@@ -111,6 +111,11 @@ Eye fails open and yields through the later screenshot-helper process signal; ma
 a required release check. Automated fixtures do not replace the physical shortcut matrix, lifecycle/recovery
 matrix, 30-minute churn, or two-hour installed soak.
 
+When physical qualification must happen before merge, pass the exact pushed PR branch to the notarized build:
+`ZBSEYE_RELEASE_CANDIDATE_REF=codex/<branch> bash scripts/build-notarized.sh`. This only admits a clean remote
+descendant of canonical `main`; publication still requires the same commit to land on `main` unchanged and a
+normal `scripts/release-preflight.sh --verify-only` with the variable unset.
+
 ### Optional speaker diarization
 
 The app pins FluidAudio `0.15.5` (commit `19600a485baa4998812e4654b70d2bab8f2c9949`) and the

@@ -24,17 +24,22 @@ final class ReleaseConfigurationTests: XCTestCase {
             expectedVersion: String = "0.4.5",
             expectedBuild: String = "10",
             remoteOverride: URL? = nil,
-            verifyOnly: Bool = false
+            verifyOnly: Bool = false,
+            candidateRef: String? = nil
         ) throws -> CommandResult {
-            try Self.run(
+            var environment = [
+                "ZBSEYE_RELEASE_PREFLIGHT_FIXTURE": "1",
+                "ZBSEYE_RELEASE_PREFLIGHT_FIXTURE_REMOTE": (remoteOverride ?? remote).path,
+                "ZBSEYE_PREFLIGHT_EXPECT_VERSION": expectedVersion,
+                "ZBSEYE_PREFLIGHT_EXPECT_BUILD": expectedBuild,
+            ]
+            if let candidateRef {
+                environment["ZBSEYE_RELEASE_CANDIDATE_REF"] = candidateRef
+            }
+            return try Self.run(
                 "/bin/bash",
                 [script.path] + (verifyOnly ? ["--verify-only"] : []) + ["--fixture", worktree.path],
-                environment: [
-                    "ZBSEYE_RELEASE_PREFLIGHT_FIXTURE": "1",
-                    "ZBSEYE_RELEASE_PREFLIGHT_FIXTURE_REMOTE": (remoteOverride ?? remote).path,
-                    "ZBSEYE_PREFLIGHT_EXPECT_VERSION": expectedVersion,
-                    "ZBSEYE_PREFLIGHT_EXPECT_BUILD": expectedBuild,
-                ]
+                environment: environment
             )
         }
 
@@ -77,6 +82,19 @@ final class ReleaseConfigurationTests: XCTestCase {
             _ = try Self.runChecked("/usr/bin/git", ["add", "remote.txt"], directory: updater)
             _ = try Self.runChecked("/usr/bin/git", ["commit", "-m", "advance remote"], directory: updater)
             _ = try Self.runChecked("/usr/bin/git", ["push", "origin", "main"], directory: updater)
+        }
+
+        func publishCurrentCandidate(on ref: String) throws {
+            _ = try ReleaseFixture.runChecked(
+                "/usr/bin/git",
+                ["push", remote.path, "HEAD:refs/heads/\(ref)"],
+                directory: worktree
+            )
+            _ = try ReleaseFixture.runChecked(
+                "/usr/bin/git",
+                ["push", "--force", remote.path, "HEAD^:refs/heads/main"],
+                directory: worktree
+            )
         }
 
         static func make(script: URL, includeBaseline: Bool = true) throws -> ReleaseFixture {
@@ -530,6 +548,57 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertEqual(result.status, 0, result.output)
         XCTAssertTrue(result.output.contains("release preflight passed"), result.output)
         XCTAssertTrue(result.output.contains("ZBSEYE_RELEASE_PREFLIGHT_IDENTITY=0.4.5:10:"), result.output)
+    }
+
+    func testReleasePreflightAcceptsExactRemoteDraftDescendantWithoutAuthorizingPublication() throws {
+        let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+        let ref = "codex/reliable-call-recording-release"
+        try fixture.publishCurrentCandidate(on: ref)
+
+        let result = try fixture.runPreflight(candidateRef: ref)
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("draft candidate origin/\(ref)"), result.output)
+        XCTAssertTrue(result.output.contains("ZBSEYE_RELEASE_PREFLIGHT_IDENTITY=0.4.5:10:"), result.output)
+    }
+
+    func testReleasePreflightRejectsMissingStaleDivergentAndInvalidDraftRefs() throws {
+        do {
+            let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+            let result = try fixture.runPreflight(candidateRef: "codex/missing")
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertTrue(result.output.contains("fetch"), result.output)
+        }
+        do {
+            let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+            let ref = "codex/stale"
+            try fixture.publishCurrentCandidate(on: ref)
+            try "later\n".write(
+                to: fixture.worktree.appending(path: "later.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
+            _ = try fixture.git("add", "later.txt")
+            _ = try fixture.git("commit", "-m", "unpublished candidate change")
+            let result = try fixture.runPreflight(candidateRef: ref)
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertTrue(result.output.contains("does not exactly match"), result.output)
+        }
+        do {
+            let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+            let ref = "codex/divergent"
+            try fixture.publishCurrentCandidate(on: ref)
+            try fixture.advanceRemote()
+            let result = try fixture.runPreflight(candidateRef: ref)
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertTrue(result.output.contains("does not descend"), result.output)
+        }
+        do {
+            let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+            let result = try fixture.runPreflight(candidateRef: "../main")
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertTrue(result.output.contains("valid branch name"), result.output)
+        }
     }
 
     func testReleasePreflightRejectsTrackedStagedAndUntrackedChanges() throws {

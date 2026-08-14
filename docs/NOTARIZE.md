@@ -41,6 +41,18 @@ parentheses: `Developer ID Application: Name (ABCDE12345)`).
 ```bash
 bash scripts/build-notarized.sh
 ```
+
+For the pre-merge artifact that must pass the physical gate, name the exact pushed PR branch explicitly:
+
+```bash
+ZBSEYE_RELEASE_CANDIDATE_REF=codex/reliable-call-recording-release \
+  bash scripts/build-notarized.sh
+```
+
+This is not permission to publish. The preflight freshly fetches both refs, requires `HEAD` to equal that remote
+branch exactly, and requires `origin/main` to be its ancestor. After physical PASS, land that same commit on
+`main` without rewriting its SHA. If the repository cannot fast-forward the exact commit, build a new candidate
+from the resulting `main` and repeat the physical gate; tree equivalence is not accepted as artifact identity.
 The script does it all: builds Release with **Hardened Runtime**, signs with **Developer ID** + a secure
 timestamp, packages the e5 retrieval model, submits to Apple (`notarytool --wait`, ~2–10 min), runs `stapler staple`
 and checks `spctl` (it should be `accepted, source=Notarized Developer ID`). Before `xcodegen` or archive work,
@@ -188,7 +200,8 @@ If the draft fails any step, delete the draft, restore the last known-good insta
 advance both version and build before rebuilding. Do not publish a failed candidate or replace bytes under an
 existing version.
 
-Re-run `bash scripts/release-preflight.sh --verify-only` immediately before the public transition. After
+Unset `ZBSEYE_RELEASE_CANDIDATE_REF`, then re-run `bash scripts/release-preflight.sh --verify-only` immediately
+before the public transition. It must now identify the same source revision as clean canonical `main`. After
 publishing, verify that GitHub reports the expected size and SHA-256 digest for both public assets; a public
 artifact is immutable release history. If post-public verification ever fails, withdraw the release and tag,
 restore the last known-good app, and ship the correction under a higher version/build.
