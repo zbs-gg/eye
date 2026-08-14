@@ -26,8 +26,8 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install build tools
+        run: brew install xcodegen ripgrep
 
       - name: Run release preflight fixture contract
         run: |
