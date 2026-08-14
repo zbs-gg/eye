@@ -44,6 +44,8 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   work skips degradation, ignores already-muxed segments, and retries remaining segments after audio stops.
 - Crash recovery now reconciles the postprocess rollback MP4 against the generation-bound database hash: it
   restores uncommitted silent video, keeps committed muxed video, and preserves unknown evidence for inspection.
+- Pull requests and `main` now run an independent macOS 26 / Xcode 26.5 CI gate for the full unhosted suite,
+  Debug GUI build, Call fixture contract, and capture-coexistence protocol self-test.
 
 ## [0.8.0] — 2026-08-08
 

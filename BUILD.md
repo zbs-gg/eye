@@ -34,6 +34,11 @@ bash scripts/verify-call-automation.sh
 bash scripts/verify-capture-coexistence.sh --self-test
 ```
 
+Pull requests and pushes to `main` repeat the full unhosted suite, Debug GUI build, Call fixture contract, and
+capture-coexistence protocol self-test on GitHub's explicit `macos-26` runner with Xcode 26.5. CI never launches
+Eye, requests TCC, captures media, downloads models, signs, notarizes, installs, or publishes a release. A green
+hosted check is necessary but does not replace installed-app Calls and native-screenshot qualification.
+
 ## Architecture
 ```
 ZBSEyeApp/

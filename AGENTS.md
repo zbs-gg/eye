@@ -148,7 +148,9 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
 
 Check both the build and the unhosted `ZBSEyeUnitTests` target. Pure production policies are shared into
 that target explicitly so verification does not launch an ad-hoc `gg.zbs.eye` app or churn the installed
-app's TCC grants. Distribution and OS-integration changes still require installed-app REST/MCP/SQLite dogfood.
+app's TCC grants. `.github/workflows/macos-ci.yml` repeats the full unhosted suite, GUI build, Call fixture, and
+capture protocol self-test on Xcode 26.5 without app launch or signing. Distribution and OS-integration changes
+still require installed-app REST/MCP/SQLite dogfood; CI is never physical qualification.
 
 ## Status (what works)
 
