@@ -12,6 +12,55 @@ struct CallVideoFrame: @unchecked Sendable {
     let wallMs: Int64
 }
 
+struct CallVideoPendingGap: Sendable, Equatable {
+    let callID: Int64
+    let startMs: Int64
+    let reason: String
+}
+
+struct CallVideoGapInterval: Sendable, Equatable {
+    let callID: Int64
+    let startMs: Int64
+    let endMs: Int64
+    let reason: String
+}
+
+/// Keeps one honest unavailable-video interval open across failed restarts.
+/// Intentional audio-only time closes it; a later successful start closes it
+/// at the physical restart boundary. Repeated failures never move the start forward.
+struct CallVideoPendingGapPolicy: Sendable {
+    private(set) var pending: CallVideoPendingGap?
+
+    mutating func open(callID: Int64, startMs: Int64, reason: String) {
+        if let pending, pending.callID == callID {
+            guard startMs < pending.startMs else { return }
+            self.pending = CallVideoPendingGap(
+                callID: callID,
+                startMs: startMs,
+                reason: pending.reason
+            )
+            return
+        }
+        pending = CallVideoPendingGap(callID: callID, startMs: startMs, reason: reason)
+    }
+
+    mutating func close(callID: Int64? = nil, at endMs: Int64) -> CallVideoGapInterval? {
+        guard let pending,
+              callID == nil || pending.callID == callID else { return nil }
+        self.pending = nil
+        return CallVideoGapInterval(
+            callID: pending.callID,
+            startMs: pending.startMs,
+            endMs: max(pending.startMs + 1, endMs),
+            reason: pending.reason
+        )
+    }
+
+    func contains(callID: Int64) -> Bool {
+        pending?.callID == callID
+    }
+}
+
 /// One in-flight append plus one pending latest frame. Replacing a pending
 /// frame is intentional video degradation; it can never backpressure audio.
 final class CallVideoLatestFrameBridge: @unchecked Sendable {
@@ -408,7 +457,7 @@ final class CallVideoCaptureEngine {
     private var lockedDisplayID: CGDirectDisplayID?
     private var startingCallID: Int64?
     private var startingWriterFailure: String?
-    private var pendingGap: (callID: Int64, startMs: Int64, reason: String)?
+    private var pendingGap = CallVideoPendingGapPolicy()
     var onUnexpectedStateChanged: (@MainActor (CallVideoState) -> Void)?
 
     init(
@@ -464,12 +513,10 @@ final class CallVideoCaptureEngine {
                 lockedDisplayID = display?.displayID
             }
             guard let display else {
-                try? await repository.recordVideoGap(
+                pendingGap.open(
                     callID: callID,
                     startMs: startedAtMs,
-                    endMs: startedAtMs + 1,
-                    reason: "selected_display_unavailable",
-                    nowMs: startedAtMs
+                    reason: "selected_display_unavailable"
                 )
                 return .unavailable
             }
@@ -552,10 +599,13 @@ final class CallVideoCaptureEngine {
                 type: .screen,
                 sampleHandlerQueue: DispatchQueue(label: "gg.zbs.eye.call-video", qos: .utility)
             )
-            var screenshotGapStartMs: Int64?
             while true {
                 if isNativeScreenshotSuppressed() {
-                    screenshotGapStartMs = screenshotGapStartMs ?? Self.nowMs()
+                    pendingGap.open(
+                        callID: callID,
+                        startMs: Self.nowMs(),
+                        reason: "native_screenshot"
+                    )
                     await waitForNativeScreenshotRelease()
                 }
                 do {
@@ -572,30 +622,28 @@ final class CallVideoCaptureEngine {
                         try await stream.startCapture()
                     }
                 } catch StartAdmissionError.nativeScreenshotSuppressed {
-                    screenshotGapStartMs = screenshotGapStartMs ?? Self.nowMs()
+                    pendingGap.open(
+                        callID: callID,
+                        startMs: Self.nowMs(),
+                        reason: "native_screenshot"
+                    )
                     continue
                 }
                 guard isNativeScreenshotSuppressed() else { break }
                 // Suppression opened while ScreenCaptureKit was awaiting its
                 // start callback. Close the just-started stream immediately;
                 // audio remains completely outside this loop.
-                screenshotGapStartMs = screenshotGapStartMs ?? Self.nowMs()
+                pendingGap.open(
+                    callID: callID,
+                    startMs: Self.nowMs(),
+                    reason: "native_screenshot"
+                )
                 try await resourceCoordinator.withExclusiveAccess(
                     owner: .callVideo,
                     operation: .stop
                 ) {
                     try await stream.stopCapture()
                 }
-            }
-            if let screenshotGapStartMs {
-                let releasedAtMs = Self.nowMs()
-                try? await repository.recordVideoGap(
-                    callID: callID,
-                    startMs: screenshotGapStartMs,
-                    endMs: max(screenshotGapStartMs + 1, releasedAtMs),
-                    reason: "native_screenshot",
-                    nowMs: releasedAtMs
-                )
             }
             if let failure = startingWriterFailure, startingCallID == callID {
                 _ = try? await resourceCoordinator.withExclusiveAccess(
@@ -615,13 +663,13 @@ final class CallVideoCaptureEngine {
                     availability: .unavailable,
                     reason: failure
                 )
-                try? await repository.recordVideoGap(
+                await persistImmediateGapIfUncovered(
                     callID: callID,
                     startMs: startedAtMs,
-                    endMs: max(startedAtMs + 1, endedAtMs),
-                    reason: failure,
-                    nowMs: endedAtMs
+                    endMs: endedAtMs,
+                    reason: failure
                 )
+                pendingGap.open(callID: callID, startMs: endedAtMs, reason: failure)
                 startingCallID = nil
                 startingWriterFailure = nil
                 return .unavailable
@@ -636,15 +684,8 @@ final class CallVideoCaptureEngine {
             )
             startingCallID = nil
             startingWriterFailure = nil
-            if let gap = pendingGap, gap.callID == callID {
-                try? await repository.recordVideoGap(
-                    callID: callID,
-                    startMs: gap.startMs,
-                    endMs: max(gap.startMs + 1, startedAtMs),
-                    reason: gap.reason,
-                    nowMs: startedAtMs
-                )
-                pendingGap = nil
+            if let gap = pendingGap.close(callID: callID, at: Self.nowMs()) {
+                await persist(gap)
             }
             return .recording
         } catch {
@@ -659,12 +700,17 @@ final class CallVideoCaptureEngine {
                     reason: "video_start_failed"
                 )
             }
-            try? await repository.recordVideoGap(
+            let failedAtMs = Self.nowMs()
+            await persistImmediateGapIfUncovered(
                 callID: callID,
                 startMs: startedAtMs,
-                endMs: Self.nowMs(),
-                reason: "video_start_failed",
-                nowMs: Self.nowMs()
+                endMs: failedAtMs,
+                reason: "video_start_failed"
+            )
+            pendingGap.open(
+                callID: callID,
+                startMs: failedAtMs,
+                reason: "video_start_failed"
             )
             return .unavailable
         }
@@ -672,18 +718,12 @@ final class CallVideoCaptureEngine {
 
     func stop(reason: String?) async -> CallVideoState {
         guard let active else {
-            if reason == "call_ended" {
-                if let gap = pendingGap {
-                    let end = Self.nowMs()
-                    try? await repository.recordVideoGap(
-                        callID: gap.callID,
-                        startMs: gap.startMs,
-                        endMs: max(gap.startMs + 1, end),
-                        reason: gap.reason,
-                        nowMs: end
-                    )
-                    pendingGap = nil
+            if reason == "call_ended" || reason == "mode_audio_only" {
+                if let gap = pendingGap.close(at: Self.nowMs()) {
+                    await persist(gap)
                 }
+            }
+            if reason == "call_ended" {
                 lockedCallID = nil
                 lockedDisplayID = nil
             }
@@ -708,15 +748,31 @@ final class CallVideoCaptureEngine {
             reason: failure
         )
         if reason == "native_screenshot" {
-            pendingGap = (active.callID, endedAtMs, "native_screenshot")
+            pendingGap.open(
+                callID: active.callID,
+                startMs: endedAtMs,
+                reason: "native_screenshot"
+            )
         } else if let failure {
-            pendingGap = (active.callID, endedAtMs, failure)
+            pendingGap.open(callID: active.callID, startMs: endedAtMs, reason: failure)
+        }
+        if reason == "call_ended" || reason == "mode_audio_only",
+           let gap = pendingGap.close(callID: active.callID, at: endedAtMs) {
+            await persist(gap)
         }
         if reason == "call_ended" {
             lockedCallID = nil
             lockedDisplayID = nil
         }
-        return failure == nil ? .available : .gap
+        if failure != nil { return .gap }
+        switch reason {
+        case "mode_audio_only":
+            return .disabled
+        case "native_screenshot":
+            return .gap
+        default:
+            return .available
+        }
     }
 
     /// Called by the native screenshot observer. Audio is untouched; video
@@ -741,6 +797,36 @@ final class CallVideoCaptureEngine {
         guard active?.callID == callID else { return }
         let state = await stop(reason: reason)
         onUnexpectedStateChanged?(state)
+    }
+
+    private func persist(_ gap: CallVideoGapInterval) async {
+        try? await repository.recordVideoGap(
+            callID: gap.callID,
+            startMs: gap.startMs,
+            endMs: gap.endMs,
+            reason: gap.reason,
+            nowMs: gap.endMs
+        )
+    }
+
+    private func persistImmediateGapIfUncovered(
+        callID: Int64,
+        startMs: Int64,
+        endMs: Int64,
+        reason: String
+    ) async {
+        // A pending interval already covers every unavailable frame through
+        // this failed restart. Publishing another row would make evidence
+        // overlap; the active Call state still exposes the newer failure.
+        guard !pendingGap.contains(callID: callID) else { return }
+        let boundedEnd = max(startMs + 1, endMs)
+        try? await repository.recordVideoGap(
+            callID: callID,
+            startMs: startMs,
+            endMs: boundedEnd,
+            reason: reason,
+            nowMs: boundedEnd
+        )
     }
 
     private static func cappedSize(_ sourceWidth: Int, _ sourceHeight: Int) -> (Int, Int) {

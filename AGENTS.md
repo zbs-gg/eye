@@ -101,7 +101,9 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
 9. **Call mode is explicit and audio always wins.** `off`, `audio`, and `audio_video` are separate from Timeline
    audio settings. Call video is a fixed-display, hardware-only, latest-wins stream capped at 1080p/15 fps; it
    starts only after audio, may drop frames, and yields physically to native screenshots. It never restarts or
-   backpressures microphone/system audio. Upgrades default existing Calls to audio and never enable video silently.
+   backpressures microphone/system audio. Background AAC mux work is lease-cancelled as soon as another Call starts
+   and retries only after physical audio stops; recovery verifies the generation-bound segment hash before deleting
+   a `.silent-backup`. Upgrades default existing Calls to audio and never enable video silently.
 
 ## Gotchas (already stepped on — don't again)
 
@@ -162,7 +164,7 @@ an API-key provider. This source change is not part of the already-published `0.
 must not be described as publicly released. A local Developer ID-signed `0.8.0 (23)` candidate from the current
 dirty source was installed on 2026-08-12 and reported healthy against the existing data root. Its Call-audio
 priority still requires evidence from a real dual-track Call; the candidate is neither notarized nor public.
-Current `0.9.0 (24)` source adds three-mode Calls and first-class Call video. It is not installed or qualified;
+Current `0.9.0 (25)` source adds three-mode Calls and first-class Call video. It is not installed or qualified;
 real audio-only/video Calls and the full coexistence matrix remain mandatory before it may replace installed 23.
 
 The exact Developer ID + notarized `0.8.0 (22)` artifact is public stable/latest as of 2026-08-08. It includes the

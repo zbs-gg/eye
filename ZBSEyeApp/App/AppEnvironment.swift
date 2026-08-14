@@ -1363,16 +1363,22 @@ final class AppEnvironment {
                     await coordinator?.waitForNativeScreenshotRelease()
                 }
             )
+            let callVideoPostprocessGate = CallVideoPostprocessAdmissionGate()
             let callVideoPostProcessor = CallVideoPostProcessor(
                 repository: callRepository,
-                mediaRoot: storage.mediaDirectory
+                mediaRoot: storage.mediaDirectory,
+                admissionGate: callVideoPostprocessGate
             )
-            Task(priority: .utility) { [callRepository, callVideoPostProcessor] in
-                let pending = (try? await callRepository.callIDsNeedingVideoPostprocess()) ?? []
-                for callID in pending where !Task.isCancelled {
-                    await callVideoPostProcessor.process(callID: callID)
+            let processPendingCallVideo: @Sendable () -> Void = {
+                Task(priority: .utility) { [callRepository, callVideoPostProcessor] in
+                    let pending =
+                        (try? await callRepository.callIDsNeedingVideoPostprocess()) ?? []
+                    for callID in pending where !Task.isCancelled {
+                        await callVideoPostProcessor.process(callID: callID)
+                    }
                 }
             }
+            processPendingCallVideo()
             let callVideo = CallVideoControl(
                 lockDisplay: { [callVideoEngine] callID in
                     await callVideoEngine.lockDisplay(callID: callID)
@@ -1394,6 +1400,15 @@ final class AppEnvironment {
                 mediaRoot: storage.mediaDirectory,
                 audio: callAudio,
                 video: callVideo,
+                backgroundWork: CallBackgroundWorkControl(
+                    suspendForAudio: { [callVideoPostprocessGate] in
+                        callVideoPostprocessGate.suspend()
+                    },
+                    resumeAfterAudio: { [callVideoPostprocessGate] in
+                        callVideoPostprocessGate.resume()
+                        processPendingCallVideo()
+                    }
+                ),
                 afterSourceTransition: { [weak callAutomationDispatcher] in
                     await callAutomationDispatcher?.kick()
                 }

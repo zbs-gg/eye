@@ -29,6 +29,67 @@ final class CallRecordingStoreTests: XCTestCase {
         await store.endAndWait(reason: .user)
     }
 
+    func testRapidModeChurnAppliesLatestSelectionWithoutRestartingAudio() async throws {
+        let fixture = try CallRecordingStoreFixture(suspendVideoStart: true)
+        defer { fixture.cleanup() }
+        let store = CallRecordingStore()
+        store.attach(fixture.coordinator)
+        store.requestedSources = { CallSourceSelection(me: true, system: false) }
+
+        let started = await store.startAutomatic(idempotencyKey: "automatic:mode-churn")
+        XCTAssertEqual(started.snapshot?.recordingMode, .audio)
+        let startsBeforeChurn = await fixture.audioStartCount()
+        XCTAssertEqual(startsBeforeChurn, 1)
+
+        store.setRecordingMode(.audioVideo)
+        await fixture.waitUntilVideoStartIsBlocked()
+        store.setRecordingMode(.audio)
+        store.setRecordingMode(.audioVideo)
+        store.setRecordingMode(.audio)
+        await fixture.resumeVideoStart()
+        await store.waitForRecordingModeReconciliation()
+
+        XCTAssertEqual(store.snapshot.recordingMode, .audio)
+        XCTAssertEqual(store.snapshot.video, .disabled)
+        let videoEvents = await fixture.videoEvents()
+        XCTAssertEqual(
+            videoEvents,
+            [.start, .stop("mode_audio_only")]
+        )
+        let startsAfterChurn = await fixture.audioStartCount()
+        let stopsAfterChurn = await fixture.audioStopCount()
+        XCTAssertEqual(startsAfterChurn, 1)
+        XCTAssertEqual(stopsAfterChurn, 0)
+        await store.endAndWait(reason: .user)
+    }
+
+    func testSettingsModeChangeDuringAudioStartReconcilesAfterThatStart() async throws {
+        let fixture = try CallRecordingStoreFixture(suspendAudioStart: true)
+        defer { fixture.cleanup() }
+        let store = CallRecordingStore()
+        store.attach(fixture.coordinator)
+        store.requestedSources = { CallSourceSelection(me: true, system: false) }
+
+        let starting = Task { @MainActor in
+            await store.startAutomatic(idempotencyKey: "automatic:mode-during-start")
+        }
+        await fixture.waitUntilAudioStartIsBlocked()
+        store.setRecordingMode(.audioVideo)
+        await fixture.resumeAudioStart()
+        guard case .started = await starting.value else {
+            return XCTFail("The authoritative audio start must survive a video-mode change")
+        }
+        await store.waitForRecordingModeReconciliation()
+
+        XCTAssertEqual(store.snapshot.recordingMode, .audioVideo)
+        XCTAssertEqual(store.snapshot.video, .recording)
+        let videoEvents = await fixture.videoEvents()
+        XCTAssertEqual(videoEvents, [.start])
+        let audioStarts = await fixture.audioStartCount()
+        XCTAssertEqual(audioStarts, 1)
+        await store.endAndWait(reason: .user)
+    }
+
     func testPrivacyEndJoinsAnInFlightStartAndLeavesNoActiveCall() async throws {
         try await assertTerminalEndJoinsAutomaticStart(reason: .privacy)
     }
@@ -1097,12 +1158,14 @@ private final class CallRecordingStoreFixture {
     let database: ZBSEyeDatabase
     let coordinator: CallCoordinator
     private let audio: StoreCallAudio
+    private let video: StoreCallVideo
     private let transition: StoreCallTransitionGate
 
     init(
         actualSources: CallSourceSelection? = nil,
         suspendAudioStart: Bool = false,
         suspendAudioStop: Bool = false,
+        suspendVideoStart: Bool = false,
         suspendAfterSourceTransition: Bool = false
     ) throws {
         root = FileManager.default.temporaryDirectory
@@ -1114,11 +1177,13 @@ private final class CallRecordingStoreFixture {
             suspendStart: suspendAudioStart,
             suspendStop: suspendAudioStop
         )
+        video = StoreCallVideo(suspendStart: suspendVideoStart)
         transition = StoreCallTransitionGate(suspended: suspendAfterSourceTransition)
         coordinator = CallCoordinator(
             repository: CallRepository(database: database),
             mediaRoot: root.appendingPathComponent("media", isDirectory: true),
             audio: audio.control(),
+            video: video.control(),
             now: { Date(timeIntervalSince1970: 1) },
             afterSourceTransition: { [transition] in
                 await transition.cross()
@@ -1144,6 +1209,22 @@ private final class CallRecordingStoreFixture {
 
     func audioStopCount() async -> Int {
         await audio.stopCount()
+    }
+
+    func audioStartCount() async -> Int {
+        await audio.startCount()
+    }
+
+    func waitUntilVideoStartIsBlocked() async {
+        await video.waitUntilStartIsBlocked()
+    }
+
+    func resumeVideoStart() async {
+        await video.resumeStart()
+    }
+
+    func videoEvents() async -> [StoreCallVideo.Event] {
+        await video.recordedEvents()
     }
 
     func capturedStartAdmissionLease() async -> CallAudioStartAdmissionLease? {
@@ -1255,6 +1336,7 @@ private actor StoreCallAudio {
     private var stopBlockedWaiters: [CheckedContinuation<Void, Never>] = []
     private var stopContinuation: CheckedContinuation<Void, Never>?
     private var stops = 0
+    private var starts = 0
 
     init(
         actual: CallSourceSelection? = nil,
@@ -1313,6 +1395,10 @@ private actor StoreCallAudio {
         stops
     }
 
+    func startCount() -> Int {
+        starts
+    }
+
     func capturedStartAdmissionLease() -> CallAudioStartAdmissionLease? {
         lastStartAdmissionLease
     }
@@ -1327,6 +1413,7 @@ private actor StoreCallAudio {
         sinkLease: CallAudioFrameAdmissionLease,
         startAdmissionLease: CallAudioStartAdmissionLease
     ) async -> CallSourceSelection {
+        starts += 1
         lastStartAdmissionLease = startAdmissionLease
         guard frameAdmission.admit(sinkLease) else { return .none }
         if suspendStart {
@@ -1353,5 +1440,76 @@ private actor StoreCallAudio {
             stopContinuation = continuation
         }
         stopIsBlocked = false
+    }
+}
+
+private actor StoreCallVideo {
+    enum Event: Sendable, Equatable {
+        case start
+        case stop(String?)
+    }
+
+    private var suspendStart: Bool
+    private var startIsBlocked = false
+    private var blockedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var startContinuation: CheckedContinuation<Void, Never>?
+    private var events: [Event] = []
+
+    init(suspendStart: Bool) {
+        self.suspendStart = suspendStart
+    }
+
+    nonisolated func control() -> CallVideoControl {
+        CallVideoControl(
+            lockDisplay: { _ in },
+            start: { [weak self] _ in
+                guard let self else { return .unavailable }
+                return await self.start()
+            },
+            stop: { [weak self] reason in
+                guard let self else { return .unavailable }
+                return await self.stop(reason: reason)
+            },
+            postprocess: { _ in }
+        )
+    }
+
+    func waitUntilStartIsBlocked() async {
+        guard !startIsBlocked else { return }
+        await withCheckedContinuation { continuation in
+            blockedWaiters.append(continuation)
+        }
+    }
+
+    func resumeStart() {
+        suspendStart = false
+        startContinuation?.resume()
+        startContinuation = nil
+    }
+
+    func recordedEvents() -> [Event] { events }
+
+    private func start() async -> CallVideoState {
+        events.append(.start)
+        if suspendStart {
+            startIsBlocked = true
+            let waiters = blockedWaiters
+            blockedWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+            await withCheckedContinuation { continuation in
+                startContinuation = continuation
+            }
+            startIsBlocked = false
+        }
+        return .recording
+    }
+
+    private func stop(reason: String?) -> CallVideoState {
+        events.append(.stop(reason))
+        return switch reason {
+        case "mode_audio_only": .disabled
+        case "native_screenshot": .gap
+        default: .available
+        }
     }
 }

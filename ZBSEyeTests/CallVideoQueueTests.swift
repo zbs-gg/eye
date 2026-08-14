@@ -2,6 +2,97 @@ import CoreVideo
 import XCTest
 
 final class CallVideoQueueTests: XCTestCase {
+    func testPostprocessAdmissionLeaseIsInvalidatedByCallAudioPriority() {
+        let gate = CallVideoPostprocessAdmissionGate()
+        let first = gate.acquire()
+        XCTAssertNotNil(first)
+        XCTAssertTrue(first.map(gate.permits) ?? false)
+
+        gate.suspend()
+        XCTAssertNil(gate.acquire())
+        XCTAssertFalse(first.map(gate.permits) ?? true)
+
+        gate.resume()
+        let second = gate.acquire()
+        XCTAssertNotNil(second)
+        XCTAssertTrue(second.map(gate.permits) ?? false)
+        XCTAssertNotEqual(first, second)
+    }
+
+    func testPendingGapPreservesEarliestFailureAndClosesAtRealBoundary() {
+        var policy = CallVideoPendingGapPolicy()
+
+        policy.open(callID: 7, startMs: 100, reason: "selected_display_unavailable")
+        policy.open(callID: 7, startMs: 180, reason: "video_start_failed")
+        XCTAssertEqual(
+            policy.pending,
+            CallVideoPendingGap(
+                callID: 7,
+                startMs: 100,
+                reason: "selected_display_unavailable"
+            )
+        )
+
+        XCTAssertEqual(
+            policy.close(callID: 7, at: 900),
+            CallVideoGapInterval(
+                callID: 7,
+                startMs: 100,
+                endMs: 900,
+                reason: "selected_display_unavailable"
+            )
+        )
+        XCTAssertNil(policy.pending)
+
+        policy.open(callID: 7, startMs: 1_000, reason: "screen_stream_stopped")
+        XCTAssertNil(policy.close(callID: 8, at: 1_500))
+        XCTAssertEqual(
+            policy.close(at: 1_500),
+            CallVideoGapInterval(
+                callID: 7,
+                startMs: 1_000,
+                endMs: 1_500,
+                reason: "screen_stream_stopped"
+            )
+        )
+    }
+
+    func testScreenshotSuppressionReusesOnePendingGapAcrossResumeEdges() {
+        var policy = CallVideoPendingGapPolicy()
+
+        // The first interval represents video already stopped for a screenshot.
+        policy.open(callID: 9, startMs: 100, reason: "native_screenshot")
+        // A second edge lands while the same video leg is trying to resume.
+        policy.open(callID: 9, startMs: 180, reason: "native_screenshot")
+        policy.open(callID: 9, startMs: 220, reason: "native_screenshot")
+        XCTAssertTrue(policy.contains(callID: 9))
+        XCTAssertFalse(policy.contains(callID: 10))
+
+        XCTAssertEqual(
+            policy.close(callID: 9, at: 400),
+            CallVideoGapInterval(
+                callID: 9,
+                startMs: 100,
+                endMs: 400,
+                reason: "native_screenshot"
+            )
+        )
+        // There is no nested/local interval left to publish over the first one.
+        XCTAssertNil(policy.close(callID: 9, at: 400))
+
+        // First-time video enable inside a screenshot window uses the same policy.
+        policy.open(callID: 10, startMs: 500, reason: "native_screenshot")
+        XCTAssertEqual(
+            policy.close(callID: 10, at: 650),
+            CallVideoGapInterval(
+                callID: 10,
+                startMs: 500,
+                endMs: 650,
+                reason: "native_screenshot"
+            )
+        )
+    }
+
     func testCloseDrainsAcceptedLatestFrameAndKeepsDropBurstsSeparate() async throws {
         let probe = CallVideoBridgeProbe(blockedFrames: [1, 5])
         let bridge = CallVideoLatestFrameBridge(

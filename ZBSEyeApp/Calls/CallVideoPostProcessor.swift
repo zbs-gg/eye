@@ -2,25 +2,103 @@ import AVFoundation
 import CryptoKit
 import Foundation
 
+struct CallVideoPostprocessLease: Sendable, Equatable {
+    fileprivate let generation: UInt64
+}
+
+/// Call audio invalidates this lease synchronously and never waits for video
+/// convenience work to drain. The postprocessor cooperatively abandons its
+/// replaceable AAC/MP4 generation while the authoritative PCM writers continue.
+final class CallVideoPostprocessAdmissionGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var generation: UInt64 = 0
+    private var suspended = false
+
+    func suspend() {
+        lock.lock()
+        generation &+= 1
+        suspended = true
+        lock.unlock()
+    }
+
+    func resume() {
+        lock.lock()
+        generation &+= 1
+        suspended = false
+        lock.unlock()
+    }
+
+    func acquire() -> CallVideoPostprocessLease? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !suspended else { return nil }
+        return CallVideoPostprocessLease(generation: generation)
+    }
+
+    func permits(_ lease: CallVideoPostprocessLease) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !suspended && generation == lease.generation
+    }
+}
+
+private final class SendableCallVideoExporter: @unchecked Sendable {
+    let value: AVAssetExportSession
+
+    init(_ value: AVAssetExportSession) {
+        self.value = value
+    }
+}
+
 /// Adds a convenient mixed AAC track after authoritative PCM has closed.
 /// It never runs on the capture path and never replaces the separate source
 /// tracks as evidence.
 actor CallVideoPostProcessor {
     private let repository: CallRepository
     private let mediaRoot: URL
+    private let admissionGate: CallVideoPostprocessAdmissionGate
+    private var processingCallIDs: Set<Int64> = []
+    private var rerunCallIDs: Set<Int64> = []
 
-    init(repository: CallRepository, mediaRoot: URL) {
+    init(
+        repository: CallRepository,
+        mediaRoot: URL,
+        admissionGate: CallVideoPostprocessAdmissionGate
+    ) {
         self.repository = repository
         self.mediaRoot = mediaRoot
+        self.admissionGate = admissionGate
     }
 
     func process(callID: Int64) async {
+        if processingCallIDs.contains(callID) {
+            rerunCallIDs.insert(callID)
+            return
+        }
+        processingCallIDs.insert(callID)
+        defer {
+            processingCallIDs.remove(callID)
+            rerunCallIDs.remove(callID)
+        }
+        repeat {
+            guard let lease = admissionGate.acquire() else { return }
+            await processOnce(callID: callID, lease: lease)
+        } while rerunCallIDs.remove(callID) != nil
+    }
+
+    private func processOnce(
+        callID: Int64,
+        lease: CallVideoPostprocessLease
+    ) async {
         guard let snapshot = try? await repository.videoPostprocessSnapshot(callID: callID),
               snapshot.call.state != .recording,
               !snapshot.videoSegments.isEmpty else { return }
-        for segment in snapshot.videoSegments where !Task.isCancelled {
+        for segment in snapshot.videoSegments where !Task.isCancelled && !segment.audioMuxed {
             do {
-                try await mux(segment: segment, snapshot: snapshot)
+                try checkAdmission(lease)
+                try await mux(segment: segment, snapshot: snapshot, lease: lease)
+            } catch is CancellationError {
+                return
             } catch {
                 try? await repository.markCallDegraded(
                     callID: callID,
@@ -33,10 +111,12 @@ actor CallVideoPostProcessor {
 
     private func mux(
         segment: CallVideoSegmentRow,
-        snapshot: CallVideoPostprocessSnapshot
+        snapshot: CallVideoPostprocessSnapshot,
+        lease: CallVideoPostprocessLease
     ) async throws {
+        try checkAdmission(lease)
         guard let segmentID = segment.id else { return }
-        let samples = try mixedPCM(segment: segment, snapshot: snapshot)
+        let samples = try mixedPCM(segment: segment, snapshot: snapshot, lease: lease)
         guard !samples.isEmpty else { return }
         let original = try containedURL(segment.relativePath)
         let audioURL = original.appendingPathExtension("mix.m4a")
@@ -51,7 +131,8 @@ actor CallVideoPostProcessor {
         try? fileManager.removeItem(at: audioURL)
         try? fileManager.removeItem(at: muxedURL)
         try? fileManager.removeItem(at: backupURL)
-        try writeAAC(samples, to: audioURL)
+        try writeAAC(samples, to: audioURL, lease: lease)
+        try checkAdmission(lease)
 
         let videoAsset = AVURLAsset(url: original)
         let audioAsset = AVURLAsset(url: audioURL)
@@ -83,21 +164,39 @@ actor CallVideoPostProcessor {
             asset: composition,
             presetName: AVAssetExportPresetPassthrough
         ) else { throw CocoaError(.featureUnsupported) }
-        try await exporter.export(to: muxedURL, as: .mp4)
+        let sendableExporter = SendableCallVideoExporter(exporter)
+        let cancellationWatcher = Task.detached(priority: .userInitiated) { [admissionGate] in
+            while admissionGate.permits(lease), !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            guard !admissionGate.permits(lease) else { return }
+            sendableExporter.value.cancelExport()
+        }
+        defer { cancellationWatcher.cancel() }
+        do {
+            try await exporter.export(to: muxedURL, as: .mp4)
+        } catch {
+            try checkAdmission(lease)
+            throw error
+        }
+        try checkAdmission(lease)
         let muxedAsset = AVURLAsset(url: muxedURL)
         guard !(try await muxedAsset.loadTracks(withMediaType: .video)).isEmpty,
               !(try await muxedAsset.loadTracks(withMediaType: .audio)).isEmpty else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        _ = try fileManager.replaceItemAt(
-            original,
-            withItemAt: muxedURL,
-            backupItemName: backupName,
-            options: []
-        )
-        let data = try Data(contentsOf: original, options: .mappedIfSafe)
-        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         do {
+            try checkAdmission(lease)
+            _ = try fileManager.replaceItemAt(
+                original,
+                withItemAt: muxedURL,
+                backupItemName: backupName,
+                options: []
+            )
+            try checkAdmission(lease)
+            let data = try Data(contentsOf: original, options: .mappedIfSafe)
+            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            try checkAdmission(lease)
             try await repository.markVideoSegmentAudioMuxed(
                 id: segmentID,
                 mediaGeneration: segment.mediaGeneration,
@@ -115,8 +214,10 @@ actor CallVideoPostProcessor {
 
     private func mixedPCM(
         segment: CallVideoSegmentRow,
-        snapshot: CallVideoPostprocessSnapshot
+        snapshot: CallVideoPostprocessSnapshot,
+        lease: CallVideoPostprocessLease
     ) throws -> [Int16] {
+        try checkAdmission(lease)
         let sampleCount = max(1, Int((segment.endMs - segment.startMs) * 16))
         var microphone = [Int16](repeating: 0, count: sampleCount)
         var system = [Int16](repeating: 0, count: sampleCount)
@@ -127,6 +228,7 @@ actor CallVideoPostProcessor {
         )
         let root = try SecureCallSpoolRoot(root: mediaRoot)
         for chunk in snapshot.audioChunks {
+            try checkAdmission(lease)
             guard let span = spans[chunk.sourceSpanId], span.sampleRate == 16_000 else { continue }
             let lowerMs = max(segment.startMs, chunk.startMs)
             let upperMs = min(segment.endMs, chunk.endMs)
@@ -148,9 +250,12 @@ actor CallVideoPostProcessor {
             )
             guard data.count == count * 2 else { throw CocoaError(.fileReadCorruptFile) }
             let outputStart = max(0, Int((lowerMs - segment.startMs) * 16))
-            data.withUnsafeBytes { raw in
+            try data.withUnsafeBytes { raw in
                 let bytes = raw.bindMemory(to: UInt8.self)
                 for index in 0..<min(count, sampleCount - outputStart) {
+                    if index.isMultiple(of: 4_096) {
+                        try checkAdmission(lease)
+                    }
                     let bits = UInt16(bytes[index * 2]) | (UInt16(bytes[index * 2 + 1]) << 8)
                     if chunk.source == .me {
                         microphone[outputStart + index] = Int16(bitPattern: bits)
@@ -162,15 +267,26 @@ actor CallVideoPostProcessor {
             if chunk.source == .me { hasMicrophone = true } else { hasSystem = true }
         }
         guard hasMicrophone || hasSystem else { return [] }
-        return microphone.indices.map { index in
+        var mixed = [Int16](repeating: 0, count: sampleCount)
+        for index in mixed.indices {
+            if index.isMultiple(of: 4_096) { try checkAdmission(lease) }
             if hasMicrophone && hasSystem {
-                return Int16(clamping: (Int32(microphone[index]) + Int32(system[index])) / 2)
+                mixed[index] = Int16(
+                    clamping: (Int32(microphone[index]) + Int32(system[index])) / 2
+                )
+            } else {
+                mixed[index] = hasMicrophone ? microphone[index] : system[index]
             }
-            return hasMicrophone ? microphone[index] : system[index]
         }
+        return mixed
     }
 
-    private func writeAAC(_ samples: [Int16], to url: URL) throws {
+    private func writeAAC(
+        _ samples: [Int16],
+        to url: URL,
+        lease: CallVideoPostprocessLease
+    ) throws {
+        try checkAdmission(lease)
         guard let format = AVAudioFormat(
             commonFormat: .pcmFormatInt16,
             sampleRate: 16_000,
@@ -198,6 +314,13 @@ actor CallVideoPostProcessor {
             interleaved: false
         )
         try file.write(from: buffer)
+        try checkAdmission(lease)
+    }
+
+    private nonisolated func checkAdmission(_ lease: CallVideoPostprocessLease) throws {
+        guard admissionGate.permits(lease), !Task.isCancelled else {
+            throw CancellationError()
+        }
     }
 
     private func containedURL(_ relativePath: String) throws -> URL {

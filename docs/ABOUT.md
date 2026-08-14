@@ -214,7 +214,7 @@ A separate local Developer ID-signed `0.8.0 (23)` candidate was installed on 202
 source after Call-audio priority and native-screenshot yielding changed. It launched against the existing data
 root and reported healthy capture. It is not notarized or public, and uninterrupted dual-track audio during a
 real Call remains the acceptance proof; automated tests do not establish that result.
-Current source is now build `0.9.0 (24)` and adds three-mode Calls plus first-class Call video. It is source-only
+Current source is now build `0.9.0 (25)` and adds three-mode Calls plus first-class Call video. It is source-only
 until its installed real-call matrix passes; it must not be described as installed, notarized, or released.
 The larger native-screenshot matrix, normal-use soak, and long physical Call checks remain unqualified and must not
 be described as passed.

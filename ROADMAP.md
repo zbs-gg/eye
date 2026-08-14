@@ -53,7 +53,7 @@ Previously verified live baseline:
 
 The exact notarized **`0.8.0 (22)`** build is the current public stable release. Its full screenshot-coexistence
 and long-Call matrix was not completed before publication and must not be described as passed. Installed local
-candidate 23 remains unqualified on a real dual-track Call. Current build 24 is source-only.
+candidate 23 remains unqualified on a real dual-track Call. Current build 25 is source-only.
 
 Implemented through the public **`0.8.0 (22)`** baseline:
 
@@ -75,7 +75,7 @@ Implemented through the public **`0.8.0 (22)`** baseline:
 - Past-only image selection, a clickable seven-image filmstrip, one shared 128 MB loader with at most two
   decodes, and lazy representative images in top-level Activity cards.
 
-Implemented in the uninstalled **`0.9.0 (24)` source candidate**:
+Implemented in the uninstalled **`0.9.0 (25)` source candidate**:
 
 - Three-mode Calls independent from Timeline audio: Don't record, Audio only, and Audio and video, with live
   switching that never restarts audio.
@@ -83,7 +83,7 @@ Implemented in the uninstalled **`0.9.0 (24)` source candidate**:
   sequential playback, AAC convenience audio, typed REST/MCP evidence, export, retention, and privacy deletion.
 - Absolute priority: Call audio → native screenshots → Call video → Timeline.
 
-Build 24 cannot replace installed 23 until real audio-only and video Calls prove uninterrupted dual-track audio,
+Build 25 cannot replace installed 23 until real audio-only and video Calls prove uninterrupted dual-track audio,
 video switching, screenshot latency, display/lock/crash handling, deletion, and export. Deterministic tests do not
 replace those installed-app checks.
 

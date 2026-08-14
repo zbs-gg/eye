@@ -20,12 +20,29 @@ final class CallCoordinatorTests: XCTestCase {
         let displayLocks = await fixture.video.lockDisplayCount()
 
         XCTAssertEqual(withVideo.video, .recording)
-        XCTAssertEqual(audioAgain.video, .available)
+        XCTAssertEqual(audioAgain.video, .disabled)
         XCTAssertEqual(audioStarts, 1)
         XCTAssertEqual(audioStops, 0)
         XCTAssertEqual(videoStarts, 1)
         XCTAssertEqual(videoStops, 1)
         XCTAssertEqual(displayLocks, 1)
+    }
+
+    func testCallAudioPrioritySuspendsAndResumesVideoPostprocessAdmission() async throws {
+        let fixture = try CallCoordinatorFixture(actual: .init(me: true, system: false))
+        defer { fixture.cleanup() }
+
+        _ = try await fixture.coordinator.start(
+            request: .init(me: true, system: false),
+            idempotencyKey: "background-priority-start"
+        )
+        XCTAssertEqual(fixture.backgroundWork.counts(), .init(suspends: 1, resumes: 0))
+
+        _ = try await fixture.coordinator.end(
+            idempotencyKey: "background-priority-end",
+            reason: .user
+        )
+        XCTAssertEqual(fixture.backgroundWork.counts(), .init(suspends: 1, resumes: 1))
     }
 
     func testMicOnlyCallWorksWithoutScreenCaptureAndPersistsOneFinalJob() async throws {
@@ -119,6 +136,10 @@ final class CallCoordinatorTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? CallCoordinatorError, .noAvailableSource)
         }
+        XCTAssertEqual(
+            unavailable.backgroundWork.counts(),
+            .init(suspends: 1, resumes: 1)
+        )
         let emptyCount = try await unavailable.database.pool.read {
             try CallRow.fetchCount($0)
         }
@@ -471,6 +492,7 @@ private final class CallCoordinatorFixture {
     let database: ZBSEyeDatabase
     let audio: FakeCallAudio
     let video: FakeCallVideo
+    let backgroundWork: FakeCallBackgroundWork
     let coordinator: CallCoordinator
 
     init(actual: CallSourceSelection) throws {
@@ -480,11 +502,13 @@ private final class CallCoordinatorFixture {
         database = try ZBSEyeDatabase(path: root.appendingPathComponent("eye.sqlite").path)
         audio = FakeCallAudio(actual: actual)
         video = FakeCallVideo()
+        backgroundWork = FakeCallBackgroundWork()
         coordinator = CallCoordinator(
             repository: CallRepository(database: database),
             mediaRoot: root.appendingPathComponent("media", isDirectory: true),
             audio: audio.control(),
             video: video.control(),
+            backgroundWork: backgroundWork.control(),
             now: { Date(timeIntervalSince1970: 10) },
             barrierTimeout: .milliseconds(50)
         )
@@ -505,7 +529,7 @@ private actor FakeCallVideo {
         CallVideoControl(
             lockDisplay: { _ in await self.didLockDisplay() },
             start: { _ in await self.didStart() },
-            stop: { _ in await self.didStop() },
+            stop: { reason in await self.didStop(reason: reason) },
             postprocess: { _ in }
         )
     }
@@ -515,7 +539,50 @@ private actor FakeCallVideo {
     func lockDisplayCount() -> Int { displayLocks }
     private func didLockDisplay() { displayLocks += 1 }
     private func didStart() -> CallVideoState { starts += 1; return .recording }
-    private func didStop() -> CallVideoState { stops += 1; return .available }
+    private func didStop(reason: String?) -> CallVideoState {
+        stops += 1
+        return switch reason {
+        case "mode_audio_only": .disabled
+        case "native_screenshot": .gap
+        default: .available
+        }
+    }
+}
+
+private final class FakeCallBackgroundWork: @unchecked Sendable {
+    struct Counts: Equatable {
+        let suspends: Int
+        let resumes: Int
+    }
+
+    private let lock = NSLock()
+    private var suspends = 0
+    private var resumes = 0
+
+    func control() -> CallBackgroundWorkControl {
+        CallBackgroundWorkControl(
+            suspendForAudio: { [weak self] in self?.recordSuspend() },
+            resumeAfterAudio: { [weak self] in self?.recordResume() }
+        )
+    }
+
+    func counts() -> Counts {
+        lock.lock()
+        defer { lock.unlock() }
+        return Counts(suspends: suspends, resumes: resumes)
+    }
+
+    private func recordSuspend() {
+        lock.lock()
+        suspends += 1
+        lock.unlock()
+    }
+
+    private func recordResume() {
+        lock.lock()
+        resumes += 1
+        lock.unlock()
+    }
 }
 
 private actor FakeCallAudio {

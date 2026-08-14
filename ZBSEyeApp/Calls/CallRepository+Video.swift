@@ -2,6 +2,22 @@ import Foundation
 import GRDB
 
 extension CallRepository {
+    func videoSegmentForPostprocessRecovery(
+        relativePath: String
+    ) async throws -> CallVideoSegmentRow? {
+        try await evidenceStorage.read { db in
+            try CallVideoSegmentRow.fetchOne(
+                db,
+                sql: """
+                    SELECT * FROM call_video_segments
+                    WHERE relativePath = ? AND finalized = 1
+                    LIMIT 1
+                    """,
+                arguments: [relativePath]
+            )
+        }
+    }
+
     func callIDsNeedingVideoPostprocess(limit: Int = 100) async throws -> [Int64] {
         try await evidenceStorage.read { db in
             try Int64.fetchAll(

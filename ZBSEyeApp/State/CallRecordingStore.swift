@@ -55,6 +55,8 @@ final class CallRecordingStore {
     @ObservationIgnored private var endIntentPreparationGeneration: UInt64 = 0
     @ObservationIgnored private var nativeScreenshotGeneration: UInt64 = 0
     @ObservationIgnored private var nativeScreenshotTask: Task<Void, Never>?
+    @ObservationIgnored private var desiredRecordingMode: CallRecordingMode?
+    @ObservationIgnored private var recordingModeTask: Task<Void, Never>?
     @ObservationIgnored var requestedSources: @MainActor () -> CallSourceSelection = { .none }
     /// AppEnvironment uses the explicit one-Call mode here so manual Start can
     /// record while the persisted default remains Don't record.
@@ -298,18 +300,61 @@ final class CallRecordingStore {
     func setRecordingMode(_ mode: CallRecordingMode) {
         guard isActive || starting else { return }
         if mode == .off {
+            desiredRecordingMode = nil
+            recordingModeTask?.cancel()
             end()
             return
         }
         guard let coordinator else { return }
-        Task { @MainActor [weak self] in
+        desiredRecordingMode = mode
+        guard recordingModeTask == nil else { return }
+        recordingModeTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            do {
-                self.snapshot = try await coordinator.setRecordingMode(mode)
-            } catch {
-                self.errorMessage = error.localizedDescription
-                self.snapshot = await coordinator.snapshot()
+            defer { self.recordingModeTask = nil }
+            while !Task.isCancelled,
+                  self.isActive || self.starting,
+                  let desired = self.desiredRecordingMode {
+                if desired == .off { break }
+                if self.starting, let startTask = self.startTask {
+                    // Settings can change while physical audio is still
+                    // starting even though the in-card picker is disabled.
+                    // Join that exact start before queuing a replaceable-video
+                    // command, then reconcile the still-latest selection.
+                    await startTask.value
+                    continue
+                }
+                do {
+                    let applied = try await coordinator.setRecordingMode(desired)
+                    if self.desiredRecordingMode == desired {
+                        self.snapshot = applied
+                        self.desiredRecordingMode = nil
+                        break
+                    }
+                    // A newer selection arrived while the replaceable video
+                    // leg was changing. Publish only authoritative coordinator
+                    // state, then loop so the latest user choice is applied last.
+                    self.snapshot = await coordinator.snapshot()
+                } catch {
+                    self.errorMessage = error.localizedDescription
+                    self.snapshot = await coordinator.snapshot()
+                    if !self.isActive, !self.starting {
+                        self.desiredRecordingMode = nil
+                        break
+                    }
+                    if self.desiredRecordingMode == desired {
+                        self.desiredRecordingMode = nil
+                        break
+                    }
+                }
             }
+        }
+    }
+
+    /// Test/teardown joins only the replaceable video reconciliation. It never
+    /// waits for or changes Call audio.
+    func waitForRecordingModeReconciliation() async {
+        while let task = recordingModeTask {
+            await task.value
         }
     }
 

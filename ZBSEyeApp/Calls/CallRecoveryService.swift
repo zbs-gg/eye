@@ -36,6 +36,7 @@ actor CallRecoveryService {
             fileManager: fileManager
         ).scavenge()
         try await repository.recoverOpenVideoSpans(nowMs: nowMs)
+        try await reconcileVideoPostprocessBackups(nowMs: nowMs)
         removeAbandonedVideoPartials()
         var chunksFinalized = 0
         var chunksDiscarded = 0
@@ -115,6 +116,8 @@ actor CallRecoveryService {
 
     private func removeAbandonedVideoPartials() {
         let callsRoot = mediaRoot.appendingPathComponent("calls", isDirectory: true)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
         guard let enumerator = fileManager.enumerator(
             at: callsRoot,
             includingPropertiesForKeys: [.isRegularFileKey],
@@ -123,12 +126,103 @@ actor CallRecoveryService {
         for case let url as URL in enumerator where
             url.pathExtension == "partial"
                 || url.lastPathComponent.hasSuffix(".partial.mp4")
-                || url.lastPathComponent.hasSuffix(".mix.m4a")
-                || url.lastPathComponent.hasSuffix(".silent-backup") {
-            let resolved = url.standardizedFileURL
-            guard resolved.path.hasPrefix(callsRoot.standardizedFileURL.path + "/") else { continue }
-            try? fileManager.removeItem(at: resolved)
+                || url.lastPathComponent.hasSuffix(".mix.m4a") {
+            let target = url.standardizedFileURL
+            let resolved = target.resolvingSymlinksInPath().standardizedFileURL
+            guard resolved.path.hasPrefix(callsRoot.path + "/") else { continue }
+            // Delete the enumerated scratch entry, not a possible symlink
+            // target that merely happens to live under the same media root.
+            try? fileManager.removeItem(at: target)
         }
+    }
+
+    /// `replaceItemAt` publishes muxed bytes before the generation-bound row
+    /// can commit its new hash. A crash in that narrow window leaves the old,
+    /// still-authoritative bytes in `.silent-backup`. Reconcile against the DB
+    /// instead of treating that rollback copy as disposable scratch.
+    private func reconcileVideoPostprocessBackups(nowMs: Int64) async throws {
+        let callsRoot = mediaRoot.appendingPathComponent("calls", isDirectory: true)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        guard let enumerator = fileManager.enumerator(
+            at: callsRoot,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else { return }
+        let backups = enumerator.compactMap { item -> URL? in
+            guard let url = item as? URL,
+                  url.lastPathComponent.hasSuffix(".silent-backup"),
+                  (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink != true
+            else { return nil }
+            return url
+        }
+        let rootPath = mediaRoot.standardizedFileURL.path + "/"
+        let callsRootPath = callsRoot.path + "/"
+        for unresolvedBackupURL in backups {
+            let backupName = unresolvedBackupURL.lastPathComponent
+            let originalName = String(backupName.dropLast(".silent-backup".count))
+            guard !originalName.isEmpty else { continue }
+            let backupURL = unresolvedBackupURL.resolvingSymlinksInPath()
+                .standardizedFileURL
+            let originalURL = unresolvedBackupURL.deletingLastPathComponent()
+                .appendingPathComponent(originalName)
+                .resolvingSymlinksInPath()
+                .standardizedFileURL
+            guard backupURL.path.hasPrefix(callsRootPath),
+                  originalURL.path.hasPrefix(callsRootPath),
+                  originalURL.path.hasPrefix(rootPath) else { continue }
+            let relativePath = String(originalURL.path.dropFirst(rootPath.count))
+            guard let segment = try await repository.videoSegmentForPostprocessRecovery(
+                relativePath: relativePath
+            ) else {
+                // Unknown bytes can still be the only recovery copy. Preserve
+                // them for explicit reconciliation instead of guessing.
+                continue
+            }
+
+            if fileMatchesSegment(originalURL, segment: segment) {
+                try? fileManager.removeItem(at: backupURL)
+                continue
+            }
+            guard fileMatchesSegment(backupURL, segment: segment) else {
+                try? await repository.markCallDegraded(
+                    callID: segment.callId,
+                    reason: "video_postprocess_recovery_mismatch",
+                    nowMs: nowMs
+                )
+                continue
+            }
+
+            do {
+                if fileManager.fileExists(atPath: originalURL.path) {
+                    _ = try fileManager.replaceItemAt(originalURL, withItemAt: backupURL)
+                } else {
+                    try fileManager.moveItem(at: backupURL, to: originalURL)
+                }
+                guard fileMatchesSegment(originalURL, segment: segment) else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+            } catch {
+                try? await repository.markCallDegraded(
+                    callID: segment.callId,
+                    reason: "video_postprocess_recovery_mismatch",
+                    nowMs: nowMs
+                )
+            }
+        }
+    }
+
+    private func fileMatchesSegment(
+        _ url: URL,
+        segment: CallVideoSegmentRow
+    ) -> Bool {
+        guard fileManager.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+              Int64(data.count) == segment.bytes else { return false }
+        let digest = SHA256.hash(data: data)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return digest == segment.sha256
     }
 
     private func replayMutationJournal(nowMs: Int64) async throws -> (completed: Int, rolledBack: Int) {

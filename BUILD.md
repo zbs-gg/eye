@@ -60,6 +60,9 @@ See [`AGENTS.md`](AGENTS.md) for the architecture map, invariants, and gotchas.
 Calls have an independent persisted mode: `off`, `audio`, or `audio_video`. Video is a separate hardware-only
 ScreenCaptureKit/AVFoundation path capped at 1080p and 15 fps. It never owns or backpressures audio; finalized
 30-second MP4 fragments receive a background mixed AAC convenience track while the PCM sources remain authoritative.
+Starting another Call invalidates that background job without waiting for it; unfinished mux work retries only
+after physical Call audio has stopped. If the app dies between MP4 replacement and database publication, bootstrap
+uses the segment hash to restore the silent rollback copy or retain the already committed muxed bytes.
 The display is locked when authoritative Call audio starts. A native screenshot closes both Timeline and Call-video
 admission immediately; video resumes only after the shared helper-aware quiet gate opens, without restarting audio.
 

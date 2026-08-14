@@ -2,7 +2,7 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
-## Unreleased — 0.9.0 (24) candidate source
+## Unreleased — 0.9.0 (25) candidate source
 
 ### Added
 - Calls now have **Don't record / Audio only / Audio and video** modes globally and on the active Call.
@@ -34,6 +34,16 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   `build/` directory; an explicit cache path remains available for intentional reuse.
 - Release preflight can notarize an explicitly named, clean remote PR descendant for the pre-merge physical gate;
   publication still requires that exact SHA on canonical main with no candidate override.
+- Rapid active-Call mode changes now reconcile to the latest selection in one serial loop, without restarting
+  Call audio. Audio-only and native-screenshot stops expose honest disabled/gap video state instead of available.
+- A failed video start keeps one gap open until a successful restart, an audio-only switch, or Call end, so a
+  missing locked display can no longer collapse minutes of absent video into a one-millisecond gap.
+- Repeated native-screenshot edges during video resume now extend that same pending gap instead of publishing
+  overlapping intervals in Call Detail, REST/MCP, and export evidence.
+- Starting Call audio now invalidates background AAC/MP4 postprocess work without waiting for it. Cancelled mux
+  work skips degradation, ignores already-muxed segments, and retries remaining segments after audio stops.
+- Crash recovery now reconciles the postprocess rollback MP4 against the generation-bound database hash: it
+  restores uncommitted silent video, keeps committed muxed video, and preserves unknown evidence for inspection.
 
 ## [0.8.0] — 2026-08-08
 

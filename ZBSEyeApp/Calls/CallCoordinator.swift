@@ -214,6 +214,16 @@ struct CallVideoControl: Sendable {
     let postprocess: @Sendable (Int64) -> Void
 }
 
+struct CallBackgroundWorkControl: Sendable {
+    let suspendForAudio: @Sendable () -> Void
+    let resumeAfterAudio: @Sendable () -> Void
+
+    static let noop = CallBackgroundWorkControl(
+        suspendForAudio: {},
+        resumeAfterAudio: {}
+    )
+}
+
 actor CallCoordinator {
     private struct ActiveCall: Sendable {
         let id: Int64
@@ -239,6 +249,7 @@ actor CallCoordinator {
     private let mediaRoot: URL
     private let audio: CallAudioControl
     private let video: CallVideoControl
+    private let backgroundWork: CallBackgroundWorkControl
     private let now: @Sendable () -> Date
     private let barrierTimeout: Duration
     private let afterSourceTransition: @Sendable () async -> Void
@@ -257,6 +268,7 @@ actor CallCoordinator {
             stop: { _ in .disabled },
             postprocess: { _ in }
         ),
+        backgroundWork: CallBackgroundWorkControl = .noop,
         now: @escaping @Sendable () -> Date = Date.init,
         barrierTimeout: Duration = .seconds(2),
         afterSourceTransition: @escaping @Sendable () async -> Void = {}
@@ -265,6 +277,7 @@ actor CallCoordinator {
         self.mediaRoot = mediaRoot
         self.audio = audio
         self.video = video
+        self.backgroundWork = backgroundWork
         self.now = now
         self.barrierTimeout = barrierTimeout
         self.afterSourceTransition = afterSourceTransition
@@ -396,6 +409,17 @@ actor CallCoordinator {
         current = .idle
         guard !request.isEmpty else { throw CallCoordinatorError.noRequestedSource }
 
+        // Close replaceable video convenience work synchronously. Audio never
+        // waits for that work to drain; the invalidated lease makes it stop
+        // itself while this start continues to physical capture.
+        backgroundWork.suspendForAudio()
+        var keepsBackgroundWorkSuspended = false
+        defer {
+            if !keepsBackgroundWorkSuspended {
+                backgroundWork.resumeAfterAudio()
+            }
+        }
+
         current = CallCoordinatorSnapshot(
             phase: .starting,
             callID: nil,
@@ -509,6 +533,7 @@ actor CallCoordinator {
             recordingMode: recordingMode,
             video: videoState
         )
+        keepsBackgroundWorkSuspended = true
         return current
     }
 
@@ -678,10 +703,12 @@ actor CallCoordinator {
             await active.spool.closeAdmission()
             finished = try await active.spool.finish()
             await audio.stop()
+            backgroundWork.resumeAfterAudio()
         } catch {
             _ = await audio.installSink(nil)
             await active.spool.closeAdmission()
             await audio.stop()
+            backgroundWork.resumeAfterAudio()
             let failedAtMs = milliseconds(now())
             try? await repository.markCallInterrupted(
                 callID: active.id,
