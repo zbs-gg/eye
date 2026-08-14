@@ -166,6 +166,9 @@ physical_preflight() {
 - Qualified manifest filename: REQUIRED BEFORE CHECKING ANY ROW
 - Qualified manifest SHA-256: REQUIRED BEFORE CHECKING ANY ROW
 - Report location: local build artifact; do not commit personal media or transcripts
+EOF
+
+  cat >> "$report" <<'EOF'
 
 ## Three-mode Call and Call-video gates for 0.9.0 (25)
 

@@ -425,6 +425,10 @@ final class ReleaseConfigurationTests: XCTestCase {
         ] {
             XCTAssertTrue(script.contains(requiredEvidence), "missing physical gate: \(requiredEvidence)")
         }
+        XCTAssertTrue(
+            script.contains(#"cat >> "$report" <<'EOF'"#),
+            "the Markdown checklist must not execute inline code while generating the report"
+        )
         XCTAssertTrue(script.contains("Pending manual execution on the exact reverse-verified"))
     }
 
