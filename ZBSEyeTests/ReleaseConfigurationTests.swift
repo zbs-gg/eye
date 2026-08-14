@@ -179,7 +179,16 @@ final class ReleaseConfigurationTests: XCTestCase {
                 "GIT_CONFIG_GLOBAL": "/dev/null",
                 "GIT_TERMINAL_PROMPT": "0",
             ]
-            process.environment = ProcessInfo.processInfo.environment
+            var processEnvironment = ProcessInfo.processInfo.environment
+            // XCTest injects the launching Xcode's SDK and dynamic-loader paths into
+            // test processes. Hosted runners may have a different Xcode selected for
+            // /usr/bin/git, and forwarding those paths makes Apple's git shim load two
+            // Xcode installations at once. Child command-line tools need a clean tool
+            // environment; keep DEVELOPER_DIR when the workflow selected it explicitly.
+            for key in ["SDKROOT", "DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH"] {
+                processEnvironment.removeValue(forKey: key)
+            }
+            process.environment = processEnvironment
                 .merging(hermeticGitEnvironment) { _, new in new }
                 .merging(environment) { _, new in new }
             try process.run()
