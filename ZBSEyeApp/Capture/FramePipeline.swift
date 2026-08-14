@@ -93,6 +93,7 @@ actor FramePipeline {
     private let eventFence: ScreenStreamEventFence
     private let ciContext: CIContext
     private let streamOutput: ScreenCaptureStreamOutput
+    private let immediateStopController: ScreenStreamImmediateStopController
     private let sampleQueue = DispatchQueue(
         label: "com.zbseye.screen.samples",
         qos: .utility
@@ -123,6 +124,9 @@ actor FramePipeline {
         self.streamOutput = ScreenCaptureStreamOutput(
             livenessTimeoutSeconds: config.streamLivenessTimeoutSec,
             eventSink: eventSink
+        )
+        self.immediateStopController = ScreenStreamImmediateStopController(
+            resourceCoordinator: resourceCoordinator
         )
         // cacheIntermediates:false — the biggest steady-RAM win: a shared CIContext otherwise piles up GPU
         // texture caches across frames (measured: ~550MB of stale IOSurface). We render each frame once and
@@ -168,8 +172,36 @@ actor FramePipeline {
         return await stopPersistentStream(clearHashes: false)
     }
 
-    func discardPendingIntent() {
+    /// The output bridge is independently locked and Sendable, so a native
+    /// screenshot signal can cancel a waiting frame immediately even while the
+    /// pipeline actor is inside synchronous HEIC work.
+    nonisolated func discardPendingIntent() {
         streamOutput.cancelPendingFrame()
+    }
+
+    /// Starts the physical SCK stop before returning to the native screenshot
+    /// callback. Actor-owned state is reconciled by
+    /// `yieldPersistentStreamToNativeScreenshot()` afterwards.
+    @discardableResult
+    nonisolated func requestNativeScreenshotYield() -> Bool {
+        guard let stream = streamOutput.closeAdmissionForNativeScreenshot() else {
+            return false
+        }
+        return immediateStopController.requestStop(stream: stream)
+    }
+
+    /// Native screenshots outrank Eye's visual continuity. Stop only Eye's
+    /// persistent screen stream; system audio and microphone capture continue.
+    /// The next ordinary capture intent recreates one stream after the quiet
+    /// window instead of competing with macOS for the current screenshot.
+    @discardableResult
+    func yieldPersistentStreamToNativeScreenshot() async -> Bool {
+        let hadPhysicalStream = activeStream != nil || startingStream != nil
+        let stopped = await stopPersistentStream(clearHashes: false)
+        if hadPhysicalStream, stopped {
+            Log.capture.info("eye_screen_stream_yielded_for_native_screenshot")
+        }
+        return stopped
     }
 
     private func currentContent(
@@ -706,9 +738,22 @@ actor FramePipeline {
                 ?? .requiresPhysicalStop
             streamOutput.closeAdmission(stream: target.stream)
             if stopDisposition == .confirmedNotStarted {
+                immediateStopController.clear(stream: target.stream)
                 streamOutput.unbind(stream: target.stream)
                 try? target.stream.removeStreamOutput(streamOutput, type: .screen)
                 return finishStop(target, confirmed: true)
+            }
+            if let immediateStop = immediateStopController.task(for: target.stream) {
+                let confirmed = await immediateStop.value
+                    || streamOutput.didStopExternally(stream: target.stream)
+                if confirmed {
+                    streamOutput.unbind(stream: target.stream)
+                    try? target.stream.removeStreamOutput(streamOutput, type: .screen)
+                } else {
+                    Log.capture.error("eye_screen_stream_stop_unconfirmed")
+                }
+                immediateStopController.clear(stream: target.stream)
+                return finishStop(target, confirmed: confirmed)
             }
             // The caller is often the capture task that Stop just cancelled.
             // An unstructured teardown task retains ownership but does not
@@ -722,6 +767,7 @@ actor FramePipeline {
         if streamOutput.didStopExternally(stream: target.stream) {
             streamOutput.unbind(stream: target.stream)
             try? target.stream.removeStreamOutput(streamOutput, type: .screen)
+            immediateStopController.clear(stream: target.stream)
             return finishStop(target, confirmed: true)
         }
         do {
@@ -737,11 +783,13 @@ actor FramePipeline {
             }
             streamOutput.unbind(stream: target.stream)
             try? target.stream.removeStreamOutput(streamOutput, type: .screen)
+            immediateStopController.clear(stream: target.stream)
             return finishStop(target, confirmed: true)
         } catch {
             if streamOutput.didStopExternally(stream: target.stream) {
                 streamOutput.unbind(stream: target.stream)
                 try? target.stream.removeStreamOutput(streamOutput, type: .screen)
+                immediateStopController.clear(stream: target.stream)
                 return finishStop(target, confirmed: true)
             }
             Log.capture.error("eye_screen_stream_stop_unconfirmed")

@@ -35,7 +35,8 @@ Eye records useful evidence and gives it back. It is not a CRM, a calendar manag
 
 - **Timeline** combines screen frames, extracted text, app context, audio density, call spans, and bookmarks
   in one scrubbable view. A seven-image filmstrip makes nearby visual moments immediately reachable.
-- **Calls** keeps meetings out of the all-day activity stream. Microphone and system audio remain separate;
+- **Calls** has three explicit modes, independent from Timeline audio: **Don't record / Audio only / Audio and video**. Microphone and system audio remain separate;
+  optional Call video fixes the starting display at up to 1080p/15 fps while Timeline images stay paused;
   a bookmark schedules a checkpoint transcript without interrupting the recording.
 - **Search** combines FTS5 with local multilingual semantic retrieval, so a query in one language can find
   evidence written in another.
@@ -60,7 +61,9 @@ With listen-event access already available, Eye sees native screenshot shortcuts
 work, and rejects any in-flight result that crosses the screenshot boundary; those shortcuts never create an Eye
 moment. Otherwise the screenshot-helper fallback yields as soon as macOS exposes it. Already-running synchronous
 AX or Vision work may finish in the background, but cannot be saved as an Eye frame. Eye never requests a new
-permission for this and does not stop or rebuild its stream.
+permission for this. The screenshot signal closes visual admission immediately and starts a physical stop of
+Eye's screen stream without waiting for AX, OCR, or HEIC; the next ordinary visual intent creates one fresh
+stream only after the native helper and its quiet tail have ended. Call audio continues throughout.
 
 Timeline resolves every selected time to the nearest real image at or before that time—never a future frame.
 It keeps two earlier, the current, and four later images close at hand, loads at most two files concurrently,
@@ -78,13 +81,16 @@ name, or keep one alive by itself. Eye also excludes its own processes, a narrow
 they never decide whether recording is allowed to start. Detection, recording, and saving do not require
 internet access.
 
-Eye requests separate microphone and system-audio tracks. If one track is unavailable, the Call remains
-recording and reports the missing track instead of silently hiding the gap. `Audio Off`, privacy pause,
+Eye requests separate microphone and system-audio tracks. Settings choose whether automatic Calls are disabled,
+audio-only, or audio plus the starting display. The active Call can switch between audio and video without
+restarting audio; switching to Don't record ends and saves it. If one track is unavailable, the Call remains
+recording and reports the missing track instead of silently hiding the gap. `Don't record`, privacy pause,
 critically low disk, and storage relocation remain hard stops.
 
-The main **Record Timeline / Pause Timeline** control governs ordinary screen and Timeline audio capture; it
-does not disarm microphone-triggered Calls. Choose **Audio Off** or start a privacy pause when no automatic
-Call should begin. Privacy pause remains available from the menu bar even while Timeline capture is paused.
+The main **Record Timeline / Pause Timeline** control and Timeline audio settings govern ordinary history; they
+do not disarm microphone-triggered Calls. Choose **Don't record** or start a privacy pause when no automatic
+Call should begin. **Don't record** disables automatic Calls; a manual Start then asks for one-time audio or
+audio-and-video without changing the default. Privacy pause remains available from the menu bar even while Timeline capture is paused.
 
 Eye itself and a narrow list of macOS system daemons are always excluded. **Settings → Audio → Don’t
 auto-record these apps** adds user-selected bundle identifiers to a separate audio exclusion list; this does
@@ -122,7 +128,10 @@ Recording, indexing, Timeline, Calls, search, REST, and MCP do not require an AI
 On qualified Apple Silicon hardware, one click can download the pinned ZBS Eye Local model. You may instead
 connect a local server, signed-in CLI, or cloud API provider.
 
-That choice changes only generation features such as Ask and Daily Insights. Before any non-local provider
+That choice changes only generation features such as Ask and Daily Insights. Timeline **Review** is narrower:
+it uses an existing Codex or Claude Code subscription login, never an API key, and shows provider-reported
+input/cache/output/reasoning tokens plus Codex credits when the bundled dated rate card knows the model.
+Before any non-local provider
 receives a prompt excerpt, Eye names the recipient and asks for scoped consent. Raw recordings, the database,
 and storage never become provider uploads. API credentials live in the macOS data-protection Keychain.
 
@@ -132,6 +141,8 @@ and storage never become provider uploads. API credentials live in the macOS dat
    move **ZBS Eye.app** to `/Applications`, and launch it.
 2. Grant Screen Recording and Accessibility. Microphone is optional; system audio has its own switch.
 3. Press **Record Timeline**. Open Timeline and change windows once to see the first moments appear.
+4. Press **Review** beside Ask to build a saved day or seven-day recap. Scheduling is optional and has a
+   separate background-consent switch.
 
 ZBS Eye is distributed outside the Mac App Store because cross-app Accessibility and continuous capture are
 incompatible with the App Sandbox. Release artifacts use Developer ID, Hardened Runtime, Apple notarization,

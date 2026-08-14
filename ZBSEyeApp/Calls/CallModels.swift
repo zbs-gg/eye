@@ -14,6 +14,18 @@ enum CallAudioSource: String, Codable, DatabaseValueConvertible, Sendable {
     case system
 }
 
+enum CallVideoCodec: String, Codable, DatabaseValueConvertible, Sendable {
+    case hevc
+    case h264
+}
+
+enum CallVideoAvailability: String, Codable, DatabaseValueConvertible, Sendable {
+    case recording
+    case available
+    case unavailable
+    case gap
+}
+
 enum CallSourceAvailability: String, Codable, DatabaseValueConvertible, Sendable {
     case available
     case unavailable
@@ -108,6 +120,8 @@ struct CallRow: Codable, FetchableRecord, MutablePersistableRecord, Sendable, Eq
     var state: CallLifecycleState
     var interrupted: Bool
     var degradationReason: String?
+    var initialRecordingMode: CallRecordingMode = .audio
+    var recordingMode: CallRecordingMode = .audio
     var mediaGeneration: Int
     var preferredRevisionId: Int64?
     var preferredSpeakerRevisionId: Int64? = nil
@@ -115,6 +129,89 @@ struct CallRow: Codable, FetchableRecord, MutablePersistableRecord, Sendable, Eq
     var updatedAtMs: Int64
 
     mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
+}
+
+struct CallVideoSpanRow: Codable, FetchableRecord, MutablePersistableRecord, Sendable, Equatable {
+    static let databaseTableName = "call_video_spans"
+
+    var id: Int64?
+    var callId: Int64
+    var mediaGeneration: Int
+    var epoch: Int
+    var displayId: String
+    var startedAtMs: Int64
+    var endedAtMs: Int64?
+    var width: Int
+    var height: Int
+    var fps: Int
+    var codec: CallVideoCodec?
+    var availability: CallVideoAvailability
+    var gapReason: String?
+
+    mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
+}
+
+struct CallVideoSegmentRow: Codable, FetchableRecord, MutablePersistableRecord, Sendable, Equatable {
+    static let databaseTableName = "call_video_segments"
+
+    var id: Int64?
+    var callId: Int64
+    var videoSpanId: Int64
+    var mediaGeneration: Int
+    var epoch: Int
+    var sequence: Int
+    var startMs: Int64
+    var endMs: Int64
+    var relativePath: String
+    var bytes: Int64
+    var sha256: String
+    var width: Int
+    var height: Int
+    var fps: Int
+    var codec: CallVideoCodec
+    var finalized: Bool
+    var audioMuxed: Bool = false
+
+    mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
+}
+
+struct CallVideoGapRow: Codable, FetchableRecord, MutablePersistableRecord, Sendable, Equatable {
+    static let databaseTableName = "call_video_gaps"
+
+    var id: Int64?
+    var callId: Int64
+    var mediaGeneration: Int
+    var startMs: Int64
+    var endMs: Int64
+    var reason: String
+    var createdAtMs: Int64
+
+    mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
+}
+
+struct CallVideoSegmentDraft: Sendable, Equatable {
+    let callId: Int64
+    let videoSpanId: Int64
+    let mediaGeneration: Int
+    let epoch: Int
+    let sequence: Int
+    let startMs: Int64
+    let endMs: Int64
+    let relativePath: String
+    let bytes: Int64
+    let sha256: String
+    let width: Int
+    let height: Int
+    let fps: Int
+    let codec: CallVideoCodec
+    let audioMuxed: Bool
+}
+
+struct CallVideoPostprocessSnapshot: Sendable, Equatable {
+    let call: CallRow
+    let audioSpans: [CallSourceSpanRow]
+    let audioChunks: [CallAudioChunkRow]
+    let videoSegments: [CallVideoSegmentRow]
 }
 
 struct CallContextRow: Codable, FetchableRecord, PersistableRecord, Sendable, Equatable {
@@ -411,6 +508,7 @@ struct CallRedactionSourceSnapshot: Sendable, Equatable {
     let call: CallRow
     let spans: [CallSourceSpanRow]
     let chunks: [CallAudioChunkRow]
+    let videoSegments: [CallVideoSegmentRow]
 }
 
 struct CallRedactionReport: Sendable, Equatable {

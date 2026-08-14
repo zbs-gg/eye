@@ -73,6 +73,7 @@ actor RetentionManager {
     private let db: ZBSEyeDatabase
     private let storage: StorageManager
     private let callDeletion: CallEvidenceDeletionService?
+    private let reviewDeletion: IngestService?
     private let maintenanceGate = DatabaseWriterMaintenanceGate()
     private let automaticBatchSize: Int
     private var automaticFailure: AutomaticRetentionFailureLedger?
@@ -81,12 +82,14 @@ actor RetentionManager {
         db: ZBSEyeDatabase,
         storage: StorageManager,
         callDeletion: CallEvidenceDeletionService? = nil,
+        reviewDeletion: IngestService? = nil,
         automaticBatchSize: Int = 500
     ) {
         precondition(automaticBatchSize > 0)
         self.db = db
         self.storage = storage
         self.callDeletion = callDeletion
+        self.reviewDeletion = reviewDeletion
         self.automaticBatchSize = automaticBatchSize
     }
 
@@ -144,6 +147,13 @@ actor RetentionManager {
                 continue
             case .captured(let batch):
                 report.victims.append(contentsOf: batch.victims)
+                if let first = batch.victims.map(\.ts).min(),
+                   let last = batch.victims.map(\.ts).max() {
+                    try await reviewDeletion?.deleteReviewSummaries(
+                        overlappingFromMs: first,
+                        toMs: last == Int64.max ? Int64.max : last + 1
+                    )
+                }
                 for victim in batch.victims {
                     do {
                         try storage.deleteFile(relativePath: victim.relativePath)
@@ -322,6 +332,8 @@ actor RetentionManager {
                 WHERE relativePath <> 'imported'
                 UNION ALL
                 SELECT relativePath, bytes FROM call_audio_chunks
+                UNION ALL
+                SELECT relativePath, bytes FROM call_video_segments
             ) WHERE bytes IS NULL OR bytes <= 0
             """) ?? 0
         guard invalidCount == 0 else {
@@ -337,6 +349,8 @@ actor RetentionManager {
                     WHERE relativePath <> 'imported'
                     UNION ALL
                     SELECT relativePath FROM call_audio_chunks
+                    UNION ALL
+                    SELECT relativePath FROM call_video_segments
                 ) GROUP BY relativePath HAVING COUNT(*) > 1
             )
             """) ?? 0
@@ -353,6 +367,8 @@ actor RetentionManager {
                 WHERE relativePath <> 'imported'
                 UNION ALL
                 SELECT bytes FROM call_audio_chunks
+                UNION ALL
+                SELECT bytes FROM call_video_segments
             )
             """) ?? 0
         guard total > maxBytes else { return .done }
@@ -370,13 +386,13 @@ actor RetentionManager {
                        calls.startTs AS ts,
                        2 AS kind,
                        NULL AS relativePath,
-                       SUM(call_audio_chunks.bytes) AS bytes
+                       COALESCE((SELECT SUM(bytes) FROM call_audio_chunks a WHERE a.callId = calls.id), 0)
+                       + COALESCE((SELECT SUM(bytes) FROM call_video_segments v WHERE v.callId = calls.id), 0) AS bytes
                 FROM calls
-                JOIN call_audio_chunks ON call_audio_chunks.callId = calls.id
                 WHERE calls.state != 'recording'
                   AND (calls.degradationReason IS NULL OR calls.degradationReason != 'erase_pending')
                 GROUP BY calls.id
-                HAVING SUM(call_audio_chunks.bytes) > 0
+                HAVING bytes > 0
             )
             ORDER BY ts ASC, kind ASC, id ASC
             LIMIT ?

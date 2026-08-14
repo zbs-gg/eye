@@ -68,7 +68,11 @@ actor CallRepository {
         evidenceStorage = CallRepositoryEvidenceStorage(database: database)
     }
 
-    func createCall(startedAtMs: Int64, idempotencyKey: String) async throws -> CallRow {
+    func createCall(
+        startedAtMs: Int64,
+        idempotencyKey: String,
+        recordingMode: CallRecordingMode = .audio
+    ) async throws -> CallRow {
         try await database.pool.write { db in
             if let existing = try CallRow
                 .filter(Column("startIdempotencyKey") == idempotencyKey)
@@ -84,6 +88,8 @@ actor CallRepository {
                 state: .recording,
                 interrupted: false,
                 degradationReason: nil,
+                initialRecordingMode: recordingMode,
+                recordingMode: recordingMode,
                 mediaGeneration: 0,
                 preferredRevisionId: nil,
                 createdAtMs: startedAtMs,
@@ -101,9 +107,10 @@ actor CallRepository {
                 sql: """
                     SELECT
                         (SELECT COUNT(*) FROM call_audio_chunks WHERE callId = ?) +
+                        (SELECT COUNT(*) FROM call_video_segments WHERE callId = ?) +
                         (SELECT COUNT(*) FROM call_bookmarks WHERE callId = ?)
                     """,
-                arguments: [id, id]
+                arguments: [id, id, id]
             ) ?? 0
             guard evidenceCount == 0 else { return }
             try db.execute(

@@ -10,6 +10,7 @@ enum CapturedMediaReconciler {
         case frame = 0
         case audio = 1
         case callAudio = 2
+        case callVideo = 3
     }
 
     private struct Reference: Sendable, Equatable {
@@ -147,6 +148,8 @@ enum CapturedMediaReconciler {
                 SELECT id, ts, 1 AS kind, relativePath, bytes FROM audio_captures
                 UNION ALL
                 SELECT id, startMs AS ts, 2 AS kind, relativePath, bytes FROM call_audio_chunks
+                UNION ALL
+                SELECT id, startMs AS ts, 3 AS kind, relativePath, bytes FROM call_video_segments
                 ORDER BY kind, id
                 """)
             return try rows.map { row in
@@ -219,7 +222,7 @@ enum CapturedMediaReconciler {
 
     private static func isCapturedMediaPath(_ path: String) -> Bool {
         if path.hasPrefix("calls/"),
-           URL(fileURLWithPath: path).pathExtension.lowercased() == "pcm" {
+           ["pcm", "mp4"].contains(URL(fileURLWithPath: path).pathExtension.lowercased()) {
             return true
         }
         return switch URL(fileURLWithPath: path).pathExtension.lowercased() {

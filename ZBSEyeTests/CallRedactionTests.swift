@@ -1,9 +1,54 @@
+import AVFoundation
 import CryptoKit
 import Foundation
 import GRDB
 import XCTest
 
 final class CallRedactionTests: XCTestCase {
+    func testVideoRedactionPhysicallyRebuildsOnlyAllowedIntervals() async throws {
+        let fixture = try CallRedactionFixture()
+        let (callID, originalVideoURL) = try await fixture.makeEndedCallWithVideo()
+
+        let report = try await fixture.deletion.redact(
+            callID: callID,
+            fromMs: 1_400,
+            toMs: 1_600,
+            nowMs: 3_000
+        )
+
+        XCTAssertGreaterThanOrEqual(report.bytesRemoved, 4)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: originalVideoURL.path))
+        let snapshot = try await fixture.database.pool.read { db in
+            (
+                segments: try CallVideoSegmentRow.fetchAll(
+                    db,
+                    sql: "SELECT * FROM call_video_segments WHERE callId = ? ORDER BY startMs",
+                    arguments: [callID]
+                ),
+                gaps: try CallVideoGapRow.fetchAll(
+                    db,
+                    sql: "SELECT * FROM call_video_gaps WHERE callId = ? AND reason = 'privacy_redaction'",
+                    arguments: [callID]
+                )
+            )
+        }
+        XCTAssertEqual(snapshot.segments.map(\.startMs), [1_000, 1_600])
+        XCTAssertEqual(snapshot.segments.map(\.endMs), [1_400, 2_000])
+        XCTAssertEqual(snapshot.gaps.map(\.startMs), [1_400])
+        XCTAssertEqual(snapshot.gaps.map(\.endMs), [1_600])
+        for segment in snapshot.segments {
+            let url = fixture.mediaRoot.appendingPathComponent(segment.relativePath)
+            let data = try Data(contentsOf: url)
+            XCTAssertEqual(Int64(data.count), segment.bytes)
+            XCTAssertEqual(
+                SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+                segment.sha256
+            )
+            let videoTracks = try await AVURLAsset(url: url).loadTracks(withMediaType: .video)
+            XCTAssertFalse(videoTracks.isEmpty)
+        }
+    }
+
     func testMiddleRedactionPreservesOutsidePCMAndInvalidatesDerivedEvidence() async throws {
         let fixture = try CallRedactionFixture()
         let callID = try await fixture.makeEndedCall()
@@ -818,6 +863,110 @@ private final class CallRedactionFixture {
             meEndSample: 10
         )
         return callID
+    }
+
+    func makeEndedCallWithVideo() async throws -> (Int64, URL) {
+        let callID = try await makeRecordingCall(key: "redaction-video")
+        let span = try await repository.beginVideoSpan(
+            callID: callID,
+            epoch: 0,
+            displayID: "fixture-display",
+            startedAtMs: 1_000,
+            width: 64,
+            height: 64,
+            fps: 10
+        )
+        let relativePath = "calls/\(callID)/video/epoch-0000/segment-000000.mp4"
+        let url = mediaRoot.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try await writeFixtureVideo(to: url)
+        let data = try Data(contentsOf: url)
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        _ = try await repository.appendVideoSegment(CallVideoSegmentDraft(
+            callId: callID,
+            videoSpanId: try XCTUnwrap(span.id),
+            mediaGeneration: 0,
+            epoch: 0,
+            sequence: 0,
+            startMs: 1_000,
+            endMs: 2_000,
+            relativePath: relativePath,
+            bytes: Int64(data.count),
+            sha256: digest,
+            width: 64,
+            height: 64,
+            fps: 10,
+            codec: .h264,
+            audioMuxed: false
+        ))
+        try await repository.finishVideoSpan(
+            spanID: try XCTUnwrap(span.id),
+            endedAtMs: 2_000,
+            codec: .h264,
+            availability: .available,
+            reason: nil
+        )
+        _ = try await repository.endCall(
+            callID: callID,
+            idempotencyKey: "redaction-video-end",
+            endedAtMs: 2_000,
+            meEndSample: 10
+        )
+        return (callID, url)
+    }
+
+    private func writeFixtureVideo(to url: URL) async throws {
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        let input = AVAssetWriterInput(
+            mediaType: .video,
+            outputSettings: [
+                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoWidthKey: 64,
+                AVVideoHeightKey: 64,
+            ]
+        )
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: 64,
+                kCVPixelBufferHeightKey as String: 64,
+            ]
+        )
+        guard writer.canAdd(input) else { throw CocoaError(.featureUnsupported) }
+        writer.add(input)
+        guard writer.startWriting() else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
+        writer.startSession(atSourceTime: .zero)
+        for frame in 0..<10 {
+            while !input.isReadyForMoreMediaData { await Task.yield() }
+            var pixelBuffer: CVPixelBuffer?
+            guard CVPixelBufferCreate(
+                kCFAllocatorDefault,
+                64,
+                64,
+                kCVPixelFormatType_32BGRA,
+                nil,
+                &pixelBuffer
+            ) == kCVReturnSuccess,
+            let pixelBuffer else { throw CocoaError(.fileWriteUnknown) }
+            CVPixelBufferLockBaseAddress(pixelBuffer, [])
+            if let base = CVPixelBufferGetBaseAddress(pixelBuffer) {
+                memset(base, Int32(frame * 20), CVPixelBufferGetDataSize(pixelBuffer))
+            }
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+            guard adaptor.append(
+                pixelBuffer,
+                withPresentationTime: CMTime(value: Int64(frame), timescale: 10)
+            ) else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
+        }
+        input.markAsFinished()
+        await writer.finishWriting()
+        guard writer.status == .completed else {
+            throw writer.error ?? CocoaError(.fileWriteUnknown)
+        }
     }
 
     func makePreferredSpeakerRevision(callID: Int64) async throws -> CallSpeakerRevisionRow {

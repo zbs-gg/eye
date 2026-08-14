@@ -46,6 +46,7 @@ private struct TimelineBody: View {
     @State private var sceneDetailState = TimelineSceneDetailState()
     /// Keep disclosure state scoped to one visible frame so scrubbing never exposes another frame's text.
     @State private var extractedTextExpandedFrameID: Int64?
+    @State private var reviewPresented = false
 
     private var showResults: Bool { store.isSearching || !store.results.isEmpty }
 
@@ -84,6 +85,11 @@ private struct TimelineBody: View {
                 CallDetailView(callID: callID)
                     .environment(env)
                     .frame(minWidth: 560, minHeight: 520)
+            }
+        }
+        .onChange(of: store.cursor) { _, day in
+            if reviewPresented {
+                env.automations?.selectedDay = Calendar.current.startOfDay(for: day)
             }
         }
     }
@@ -160,6 +166,16 @@ private struct TimelineBody: View {
                 Label("Ask", systemImage: "questionmark.bubble")
             }
             .disabled(!store.hasData)
+
+            Button {
+                reviewPresented.toggle()
+                if reviewPresented {
+                    env.automations?.selectedDay = Calendar.current.startOfDay(for: store.cursor)
+                }
+            } label: {
+                Label("Review", systemImage: "sparkles.rectangle.stack")
+            }
+            .disabled(!store.hasData || env.automations == nil)
 
             Button {
                 env.recording.toggle()
@@ -297,8 +313,18 @@ private struct TimelineBody: View {
                         }
                     }
                         .frame(minWidth: 320)
-                    detailPanel
-                        .frame(minWidth: 260, idealWidth: 320)
+                    Group {
+                        if reviewPresented, let reviewStore = env.automations {
+                            ReviewPanel(
+                                store: reviewStore,
+                                timelineDay: store.cursor,
+                                onClose: { reviewPresented = false }
+                            )
+                        } else {
+                            detailPanel
+                        }
+                    }
+                    .frame(minWidth: 300, idealWidth: 360)
                 }
                 controls
             }

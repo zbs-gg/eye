@@ -2,6 +2,32 @@ import GRDB
 import XCTest
 
 final class CallCoordinatorTests: XCTestCase {
+    func testVideoCanToggleWithoutRestartingAudio() async throws {
+        let fixture = try CallCoordinatorFixture(actual: .init(me: true, system: true))
+        defer { fixture.cleanup() }
+
+        _ = try await fixture.coordinator.start(
+            request: .init(me: true, system: true),
+            recordingMode: .audio,
+            idempotencyKey: "toggle-video"
+        )
+        let withVideo = try await fixture.coordinator.setRecordingMode(.audioVideo)
+        let audioAgain = try await fixture.coordinator.setRecordingMode(.audio)
+        let audioStarts = await fixture.audio.startCount()
+        let audioStops = await fixture.audio.stopCount()
+        let videoStarts = await fixture.video.startCount()
+        let videoStops = await fixture.video.stopCount()
+        let displayLocks = await fixture.video.lockDisplayCount()
+
+        XCTAssertEqual(withVideo.video, .recording)
+        XCTAssertEqual(audioAgain.video, .available)
+        XCTAssertEqual(audioStarts, 1)
+        XCTAssertEqual(audioStops, 0)
+        XCTAssertEqual(videoStarts, 1)
+        XCTAssertEqual(videoStops, 1)
+        XCTAssertEqual(displayLocks, 1)
+    }
+
     func testMicOnlyCallWorksWithoutScreenCaptureAndPersistsOneFinalJob() async throws {
         let fixture = try CallCoordinatorFixture(actual: .init(me: true, system: false))
         defer { fixture.cleanup() }
@@ -444,6 +470,7 @@ private final class CallCoordinatorFixture {
     let root: URL
     let database: ZBSEyeDatabase
     let audio: FakeCallAudio
+    let video: FakeCallVideo
     let coordinator: CallCoordinator
 
     init(actual: CallSourceSelection) throws {
@@ -452,10 +479,12 @@ private final class CallCoordinatorFixture {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         database = try ZBSEyeDatabase(path: root.appendingPathComponent("eye.sqlite").path)
         audio = FakeCallAudio(actual: actual)
+        video = FakeCallVideo()
         coordinator = CallCoordinator(
             repository: CallRepository(database: database),
             mediaRoot: root.appendingPathComponent("media", isDirectory: true),
             audio: audio.control(),
+            video: video.control(),
             now: { Date(timeIntervalSince1970: 10) },
             barrierTimeout: .milliseconds(50)
         )
@@ -465,6 +494,28 @@ private final class CallCoordinatorFixture {
         try? database.pool.close()
         try? FileManager.default.removeItem(at: root)
     }
+}
+
+private actor FakeCallVideo {
+    private var displayLocks = 0
+    private var starts = 0
+    private var stops = 0
+
+    nonisolated func control() -> CallVideoControl {
+        CallVideoControl(
+            lockDisplay: { _ in await self.didLockDisplay() },
+            start: { _ in await self.didStart() },
+            stop: { _ in await self.didStop() },
+            postprocess: { _ in }
+        )
+    }
+
+    func startCount() -> Int { starts }
+    func stopCount() -> Int { stops }
+    func lockDisplayCount() -> Int { displayLocks }
+    private func didLockDisplay() { displayLocks += 1 }
+    private func didStart() -> CallVideoState { starts += 1; return .recording }
+    private func didStop() -> CallVideoState { stops += 1; return .available }
 }
 
 private actor FakeCallAudio {

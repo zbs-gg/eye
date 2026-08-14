@@ -18,6 +18,15 @@ enum CallSourceState: String, Sendable, Equatable {
     case gap
 }
 
+enum CallVideoState: String, Sendable, Equatable {
+    case disabled
+    case starting
+    case recording
+    case available
+    case unavailable
+    case gap
+}
+
 struct CallSourceSelection: Sendable, Equatable {
     let me: Bool
     let system: Bool
@@ -87,6 +96,26 @@ struct PreparedCallEnd: Sendable, Equatable {
     let me: CallSourceState
     let system: CallSourceState
     let bookmarkCount: Int
+    let recordingMode: CallRecordingMode
+    let video: CallVideoState
+
+    init(
+        token: UUID,
+        callID: Int64,
+        me: CallSourceState,
+        system: CallSourceState,
+        bookmarkCount: Int,
+        recordingMode: CallRecordingMode = .audio,
+        video: CallVideoState = .disabled
+    ) {
+        self.token = token
+        self.callID = callID
+        self.me = me
+        self.system = system
+        self.bookmarkCount = bookmarkCount
+        self.recordingMode = recordingMode
+        self.video = video
+    }
 
     func finalizingSnapshot(disposition: SealedCallEndDisposition) -> CallCoordinatorSnapshot {
         CallCoordinatorSnapshot(
@@ -95,7 +124,9 @@ struct PreparedCallEnd: Sendable, Equatable {
             me: me,
             system: system,
             bookmarkCount: bookmarkCount,
-            stopReason: disposition.stopReason
+            stopReason: disposition.stopReason,
+            recordingMode: recordingMode,
+            video: video
         )
     }
 }
@@ -129,6 +160,28 @@ struct CallCoordinatorSnapshot: Sendable, Equatable {
     let system: CallSourceState
     let bookmarkCount: Int
     let stopReason: CallStopReason?
+    let recordingMode: CallRecordingMode
+    let video: CallVideoState
+
+    init(
+        phase: CallCoordinatorPhase,
+        callID: Int64?,
+        me: CallSourceState,
+        system: CallSourceState,
+        bookmarkCount: Int,
+        stopReason: CallStopReason?,
+        recordingMode: CallRecordingMode = .audio,
+        video: CallVideoState = .disabled
+    ) {
+        self.phase = phase
+        self.callID = callID
+        self.me = me
+        self.system = system
+        self.bookmarkCount = bookmarkCount
+        self.stopReason = stopReason
+        self.recordingMode = recordingMode
+        self.video = video
+    }
 
     static let idle = CallCoordinatorSnapshot(
         phase: .idle,
@@ -136,7 +189,9 @@ struct CallCoordinatorSnapshot: Sendable, Equatable {
         me: .disabled,
         system: .disabled,
         bookmarkCount: 0,
-        stopReason: nil
+        stopReason: nil,
+        recordingMode: .audio,
+        video: .disabled
     )
 }
 
@@ -152,6 +207,13 @@ struct CallAudioControl: Sendable {
     let stop: @Sendable () async -> Void
 }
 
+struct CallVideoControl: Sendable {
+    let lockDisplay: @Sendable (Int64) async -> Void
+    let start: @Sendable (Int64) async -> CallVideoState
+    let stop: @Sendable (String?) async -> CallVideoState
+    let postprocess: @Sendable (Int64) -> Void
+}
+
 actor CallCoordinator {
     private struct ActiveCall: Sendable {
         let id: Int64
@@ -161,6 +223,8 @@ actor CallCoordinator {
         var lastBookmarkEndMs: Int64
         var bookmarkCount: Int
         var evidenceDegradationReason: String?
+        var recordingMode: CallRecordingMode
+        var videoState: CallVideoState
     }
 
     private struct PreparedEndState: Sendable {
@@ -174,6 +238,7 @@ actor CallCoordinator {
     private let repository: CallRepository
     private let mediaRoot: URL
     private let audio: CallAudioControl
+    private let video: CallVideoControl
     private let now: @Sendable () -> Date
     private let barrierTimeout: Duration
     private let afterSourceTransition: @Sendable () async -> Void
@@ -186,6 +251,12 @@ actor CallCoordinator {
         repository: CallRepository,
         mediaRoot: URL,
         audio: CallAudioControl,
+        video: CallVideoControl = CallVideoControl(
+            lockDisplay: { _ in },
+            start: { _ in .unavailable },
+            stop: { _ in .disabled },
+            postprocess: { _ in }
+        ),
         now: @escaping @Sendable () -> Date = Date.init,
         barrierTimeout: Duration = .seconds(2),
         afterSourceTransition: @escaping @Sendable () async -> Void = {}
@@ -193,6 +264,7 @@ actor CallCoordinator {
         self.repository = repository
         self.mediaRoot = mediaRoot
         self.audio = audio
+        self.video = video
         self.now = now
         self.barrierTimeout = barrierTimeout
         self.afterSourceTransition = afterSourceTransition
@@ -200,18 +272,54 @@ actor CallCoordinator {
 
     func snapshot() -> CallCoordinatorSnapshot { current }
 
+    func videoStateChangedExternally(_ state: CallVideoState) {
+        guard var active, current.phase == .recording else { return }
+        active.videoState = state
+        self.active = active
+        current = CallCoordinatorSnapshot(
+            phase: .recording,
+            callID: active.id,
+            me: current.me,
+            system: current.system,
+            bookmarkCount: active.bookmarkCount,
+            stopReason: nil,
+            recordingMode: active.recordingMode,
+            video: state
+        )
+    }
+
     func start(
         request: CallSourceSelection,
+        recordingMode: CallRecordingMode = .audio,
         idempotencyKey: String = UUID().uuidString,
         startAdmissionLease: CallAudioStartAdmissionLease = .unscoped
     ) async throws -> CallCoordinatorSnapshot {
         try await enqueue { [self] in
             try await performStart(
                 request: request,
+                recordingMode: recordingMode,
                 idempotencyKey: idempotencyKey,
                 startAdmissionLease: startAdmissionLease
             )
         }
+    }
+
+    func setRecordingMode(_ mode: CallRecordingMode) async throws -> CallCoordinatorSnapshot {
+        try await enqueue { [self] in
+            try await performSetRecordingMode(mode)
+        }
+    }
+
+    func yieldVideoForNativeScreenshot() async -> CallCoordinatorSnapshot {
+        (try? await enqueue { [self] in
+            await performYieldVideoForNativeScreenshot()
+        }) ?? current
+    }
+
+    func resumeVideoAfterNativeScreenshot(callID: Int64) async -> CallCoordinatorSnapshot {
+        (try? await enqueue { [self] in
+            await performResumeVideoAfterNativeScreenshot(callID: callID)
+        }) ?? current
     }
 
     func bookmark(
@@ -279,6 +387,7 @@ actor CallCoordinator {
 
     private func performStart(
         request: CallSourceSelection,
+        recordingMode: CallRecordingMode,
         idempotencyKey: String,
         startAdmissionLease: CallAudioStartAdmissionLease
     ) async throws -> CallCoordinatorSnapshot {
@@ -293,12 +402,15 @@ actor CallCoordinator {
             me: request.me ? .unavailable : .disabled,
             system: request.system ? .unavailable : .disabled,
             bookmarkCount: 0,
-            stopReason: nil
+            stopReason: nil,
+            recordingMode: recordingMode,
+            video: recordingMode.recordsVideo ? .starting : .disabled
         )
         let startedAtMs = milliseconds(now())
         let row = try await repository.createCall(
             startedAtMs: startedAtMs,
-            idempotencyKey: idempotencyKey
+            idempotencyKey: idempotencyKey,
+            recordingMode: recordingMode
         )
         guard let callID = row.id else {
             current = .idle
@@ -334,12 +446,45 @@ actor CallCoordinator {
         // Keep requested transiently unavailable legs eligible for the same
         // Call Envelope when the engine's bounded auto-restart recovers them.
         await spool.setOwnedSources(request)
+        // Lock the Call's display only after authoritative audio is physical.
+        // Enabling video later must not silently follow focus to another screen.
+        await video.lockDisplay(callID)
 
         let partial = (request.me && !actual.me) || (request.system && !actual.system)
         if partial {
-            try await repository.markCallDegraded(
+            do {
+                try await repository.markCallDegraded(
+                    callID: callID,
+                    reason: "source_unavailable",
+                    nowMs: milliseconds(now())
+                )
+            } catch {
+                // Audio already owns the machine at this point. A persistence
+                // failure must still release both physical legs and the Call
+                // screen-priority latch; otherwise Timeline can remain paused
+                // forever behind a Call that was never published.
+                _ = await audio.installSink(nil)
+                await spool.closeAdmission()
+                await audio.stop()
+                let failedAtMs = milliseconds(now())
+                try? await repository.markCallInterrupted(
+                    callID: callID,
+                    endedAtMs: failedAtMs,
+                    reason: "evidence_persistence_failed",
+                    nowMs: failedAtMs
+                )
+                current = .idle
+                throw error
+            }
+        }
+        let videoState = recordingMode.recordsVideo
+            ? await video.start(callID)
+            : .disabled
+        if recordingMode.recordsVideo,
+           videoState == .unavailable || videoState == .gap {
+            try? await repository.markCallDegraded(
                 callID: callID,
-                reason: "source_unavailable",
+                reason: "video_unavailable",
                 nowMs: milliseconds(now())
             )
         }
@@ -350,7 +495,9 @@ actor CallCoordinator {
             spool: spool,
             lastBookmarkEndMs: startedAtMs,
             bookmarkCount: 0,
-            evidenceDegradationReason: partial ? "source_unavailable" : nil
+            evidenceDegradationReason: partial ? "source_unavailable" : nil,
+            recordingMode: recordingMode,
+            videoState: videoState
         )
         current = CallCoordinatorSnapshot(
             phase: .recording,
@@ -358,8 +505,63 @@ actor CallCoordinator {
             me: sourceState(requested: request.me, actual: actual.me),
             system: sourceState(requested: request.system, actual: actual.system),
             bookmarkCount: 0,
-            stopReason: nil
+            stopReason: nil,
+            recordingMode: recordingMode,
+            video: videoState
         )
+        return current
+    }
+
+    private func performSetRecordingMode(
+        _ mode: CallRecordingMode
+    ) async throws -> CallCoordinatorSnapshot {
+        guard var active, current.phase == .recording else {
+            throw CallCoordinatorError.notRecording
+        }
+        guard mode != .off else { return current }
+        if active.recordingMode == mode { return current }
+        let nowMs = milliseconds(now())
+        let videoState: CallVideoState
+        if mode.recordsVideo {
+            videoState = await video.start(active.id)
+            if videoState == .unavailable || videoState == .gap {
+                try? await repository.markCallDegraded(
+                    callID: active.id,
+                    reason: "video_unavailable",
+                    nowMs: nowMs
+                )
+            }
+        } else {
+            videoState = await video.stop("mode_audio_only")
+        }
+        try await repository.setRecordingMode(callID: active.id, mode: mode, nowMs: nowMs)
+        active.recordingMode = mode
+        active.videoState = videoState
+        self.active = active
+        current = snapshotFor(active: active)
+        return current
+    }
+
+    private func performYieldVideoForNativeScreenshot() async -> CallCoordinatorSnapshot {
+        guard var active,
+              current.phase == .recording,
+              active.recordingMode.recordsVideo else { return current }
+        active.videoState = await video.stop("native_screenshot")
+        self.active = active
+        current = snapshotFor(active: active)
+        return current
+    }
+
+    private func performResumeVideoAfterNativeScreenshot(
+        callID: Int64
+    ) async -> CallCoordinatorSnapshot {
+        guard var resumed = self.active,
+              resumed.id == callID,
+              current.phase == .recording,
+              resumed.recordingMode.recordsVideo else { return current }
+        resumed.videoState = await video.start(resumed.id)
+        self.active = resumed
+        current = snapshotFor(active: resumed)
         return current
     }
 
@@ -431,7 +633,9 @@ actor CallCoordinator {
                 gap: coverage.systemGap
             ),
             bookmarkCount: active.bookmarkCount,
-            stopReason: nil
+            stopReason: nil,
+            recordingMode: active.recordingMode,
+            video: active.videoState
         )
         return bookmark
     }
@@ -450,13 +654,19 @@ actor CallCoordinator {
             me: current.me,
             system: current.system,
             bookmarkCount: active.bookmarkCount,
-            stopReason: initialReason
+            stopReason: initialReason,
+            recordingMode: active.recordingMode,
+            video: active.videoState
         )
 
         let finalCoverage: CallSpoolCoverage
         let finished: CallSpoolCoverage
         let endedAtMs: Int64
+        var stoppedVideoState = active.videoState
         do {
+            // Video is replaceable and must release SCK/encoder pressure before
+            // the authoritative audio barrier is frozen.
+            stoppedVideoState = await video.stop("call_ended")
             let targets = await audio.acceptedTargets()
             finalCoverage = try await freezeCoverage(
                 spool: active.spool,
@@ -486,7 +696,9 @@ actor CallCoordinator {
                 me: current.me == .disabled ? .disabled : .gap,
                 system: current.system == .disabled ? .disabled : .gap,
                 bookmarkCount: active.bookmarkCount,
-                stopReason: initialReason
+                stopReason: initialReason,
+                recordingMode: active.recordingMode,
+                video: .gap
             )
             throw error
         }
@@ -506,7 +718,9 @@ actor CallCoordinator {
                 endSample: finished.systemEndSample,
                 gap: finished.systemGap
             ),
-            bookmarkCount: active.bookmarkCount
+            bookmarkCount: active.bookmarkCount,
+            recordingMode: active.recordingMode,
+            video: stoppedVideoState
         )
         preparedEnd = PreparedEndState(
             publicValue: prepared,
@@ -553,6 +767,7 @@ actor CallCoordinator {
                 // The call.ended row is inserted in the same transaction above. Only now may the
                 // dispatcher observe it; no mutable stop-reason reconciliation follows.
                 await afterSourceTransition()
+                video.postprocess(prepared.callID)
             }
         } catch {
             let failedAtMs = milliseconds(now())
@@ -574,7 +789,9 @@ actor CallCoordinator {
                     me: prepared.me == .disabled ? .disabled : .gap,
                     system: prepared.system == .disabled ? .disabled : .gap,
                     bookmarkCount: prepared.bookmarkCount,
-                    stopReason: disposition.stopReason
+                    stopReason: disposition.stopReason,
+                    recordingMode: prepared.recordingMode,
+                    video: prepared.video
                 )
             throw error
         }
@@ -590,10 +807,25 @@ actor CallCoordinator {
                 me: prepared.me,
                 system: prepared.system,
                 bookmarkCount: prepared.bookmarkCount,
-                stopReason: reason
+                stopReason: reason,
+                recordingMode: prepared.recordingMode,
+                video: prepared.video
             )
         }
         return current
+    }
+
+    private func snapshotFor(active: ActiveCall) -> CallCoordinatorSnapshot {
+        CallCoordinatorSnapshot(
+            phase: .recording,
+            callID: active.id,
+            me: current.me,
+            system: current.system,
+            bookmarkCount: active.bookmarkCount,
+            stopReason: nil,
+            recordingMode: active.recordingMode,
+            video: active.videoState
+        )
     }
 
     private func freezeCoverage(

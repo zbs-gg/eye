@@ -1,6 +1,29 @@
 import XCTest
 
 final class CaptureSessionPolicyTests: XCTestCase {
+    func testCallAudioPriorityKeepsScreenClosedUntilCallEnds() {
+        let duringCall = CaptureSessionPolicy.suspendedGate(
+            previous: CaptureSessionGateState(reasons: []),
+            adding: .callAudioPriority
+        )
+        XCTAssertTrue(duringCall.suspended)
+        XCTAssertTrue(duringCall.reasons.contains(.callAudioPriority))
+
+        let unrelatedWake = CaptureSessionPolicy.resumeSignalGate(
+            previous: duringCall,
+            clearing: .displaySleep,
+            sessionLockedNow: false
+        )
+        XCTAssertTrue(unrelatedWake.reasons.contains(.callAudioPriority))
+
+        let afterCall = CaptureSessionPolicy.resumeSignalGate(
+            previous: unrelatedWake,
+            clearing: .callAudioPriority,
+            sessionLockedNow: false
+        )
+        XCTAssertTrue(afterCall.isOpen)
+    }
+
     func testMacOSUnlockedSessionDictionaryOmitsTheLockKey() {
         let validSession: [String: Any] = [
             CaptureSessionPolicy.macOSOnConsoleKey: true,

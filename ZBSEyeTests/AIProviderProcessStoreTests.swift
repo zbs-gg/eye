@@ -567,7 +567,7 @@ final class AIProviderProcessStoreTests: XCTestCase {
     }
 
     func testBackgroundConsumersRequireSeparateNamedConsent() {
-        let provider = AIProvider.anthropic
+        let provider = AIProvider.codex
         let (store, _, defaults) = makeStore()
         defer { clear(defaults) }
         let interactiveConsumers = AISetupOrigin.settings.consentConsumers
@@ -579,8 +579,8 @@ final class AIProviderProcessStoreTests: XCTestCase {
         )
         store.settings = AIProviderSettings(
             active: provider.rawValue,
-            activeModelID: "claude-haiku-4-5-20251001",
-            models: [provider.rawValue: "claude-haiku-4-5-20251001"],
+            activeModelID: "gpt-5.4-mini",
+            models: [provider.rawValue: "gpt-5.4-mini"],
             consentGrants: [provider.rawValue: grant]
         )
 

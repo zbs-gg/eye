@@ -40,16 +40,24 @@ enable an external provider, only the text excerpts needed for that action leave
   coordinates, scrolling contents, or clipboard data. Frequent clicks and keys share a 1.5-second heavy-work
   floor. The existing three-second fallback stays active, followed by one sparse minute capture after three
   minutes of inactivity. Heavy processing is latest-wins, with at most one moment processing and one pending.
-- **Native screenshots keep priority.** Eye yields pending heavy work around Shift-Command-3/4/5 and their
-  Control variants, and while the native Screenshot helpers are running. Early hotkey observation is best-effort
-  and listen-only: Eye uses it only when macOS already permits listening, never consumes the shortcut, never asks
-  for a new permission, and leaves native screenshots untouched when the observer is unavailable.
+- **Native screenshots keep priority.** Eye cancels pending heavy work and temporarily stops only its screen
+  stream around Shift-Command-3/4/5 and their Control variants, and while the native Screenshot helpers are
+  running. Microphone and system-audio capture continue. The next ordinary visual moment recreates one screen
+  stream after the quiet window. Early hotkey observation is best-effort and listen-only: Eye uses it only when
+  macOS already permits listening, never consumes the shortcut or asks for a new permission, and also watches the
+  exact native Screenshot helper processes as the no-prompt fallback.
+- **Calls outrank the Timeline.** As soon as a Call owns audio, Eye stops admitting Timeline screenshots and drains its
+  screen/HEIC/OCR pipeline. Microphone and system audio keep recording into a much deeper ingress reserve. The
+  Timeline resumes only after both Call audio legs have physically stopped. A visual gap during a Call is an
+  intentional trade: losing a Call is not. The explicit Call mode is **Don't record / Audio only / Audio and video**.
+  Video uses a separate 15 fps hardware-only stream fixed to the starting display, so it can stop, gap, or yield
+  to a native screenshot without restarting or blocking either audio source.
 - **Capture health is explicit.** Current compositor progress, not changing pixels, proves that screen capture is
   alive. A real stream or system-audio failure creates a visible coverage gap and bounded Eye-owned recovery;
   repeated failure asks the person to repair Capture instead of showing a false green state. Repair touches only
   Eye's own streams, not macOS permissions, other apps, or global capture services.
 - **Audio** → system audio (calls, meetings, video) and microphone → **on-device** transcription (SFSpeech),
-  with VAD (we don't transcribe silence/music). With the default **Mic in use** mode, an eligible external app
+  with VAD (we don't transcribe silence/music). With the default **Audio only** Calls mode, an eligible external app
   using the microphone starts a local **Call** even when the screen Timeline is paused. Eye keeps microphone and
   system audio as separate durable sources; missing tracks remain honest gaps. Bookmark never stops recording:
   it schedules a local checkpoint transcript, while the preferred whole-call transcript is produced after the
@@ -57,7 +65,7 @@ enable an external provider, only the text excerpts needed for that action leave
 - **Automatic Call boundaries stay understandable.** Krisp may relay an eligible app's audio but cannot start,
   name, or keep a Call alive by itself; the `codex_chronicle` helper is ignored. `Don’t auto-record these apps`
   is an exact audio-only exclusion list: those apps may still appear in screen history. `Pause Timeline` does not
-  disarm Calls; **Audio Off** and privacy pause do. When microphone ownership ends, Eye waits 30 seconds: renewed
+  disarm Calls; **Don't record** and privacy pause do. When microphone ownership ends, Eye waits 30 seconds: renewed
   microphone activity resumes the same Call, while the banner offers **End & save** or destructive
   **This wasn’t a call**. There is no post-end Undo; a saved Call can be deleted from Calls.
   The UI intentionally does not become a live meeting workspace.
@@ -98,6 +106,11 @@ enable an external provider, only the text excerpts needed for that action leave
   The model is picked in **Settings → AI**. One action can download ZBS Eye's verified built-in MLX model;
   external providers and OpenAI-compatible endpoints remain optional. Background summaries and activity
   labels each require their own explicit consent when the active provider is external.
+- **Timeline Review** — the **Review** button replaces the right-hand moment inspector with a saved recap for
+  one day or seven days. Manual reruns replace the same internal period; copy and Markdown/Obsidian export stay
+  optional. Review accepts only authenticated Codex or Claude Code subscription models—never API-key providers—
+  and shows reported token usage plus Codex credits when the dated offline rate card supports the exact model.
+  The schedule supports every day, weekdays, or one weekday; after sleep it runs only the latest missed period.
 
 ### Rewards and progress
 - **Gamification** — day streaks, milestones (1k/5k/10k/… frames), "memory age", progress to the next
@@ -109,7 +122,8 @@ enable an external provider, only the text excerpts needed for that action leave
   by default, uses no bearer token, and sends nothing outside the Mac.
 - Call evidence uses one bounded read model on both surfaces: list/search Call Envelopes, read one envelope,
   paginate bookmarks, and paginate the preferred or bookmark transcript. IDs are typed (`call:…`,
-  `bookmark:…`, `call-audio-chunk:…`); responses expose source health, coverage, revision state, and retryability,
+  `bookmark:…`, `call-audio-chunk:…`, `call-video-segment:…`); responses expose the recording mode, audio source
+  health, video spans/gaps, coverage, revision state, and retryability,
   but never absolute paths or invented speaker identity. REST requires the existing Bearer token. Stdio MCP is
   an owner-launched signed-binary capability, resolves only the configured `StorageLocation`, and opens the
   database in enforced read-only mode; callers cannot provide another database or storage root.
@@ -120,7 +134,7 @@ enable an external provider, only the text excerpts needed for that action leave
 - **Move to an external SSD** in one click (relocatable; the live DB is moved via an online backup, with no frame loss).
 - **iCloud auto-backup** — a compressed snapshot (you must not put a live SQLite into iCloud — corruption).
 - **Import previous history** (e.g. from ~/.screenpipe) — bring what you've accumulated over.
-- **Automations** — daily summary to a file/Obsidian; export a day/everything.
+- **Automations** — Timeline Review scheduling and optional file/Obsidian export; export a day/everything.
 - **Privacy** — pause per app, exclusions, delete by time range; the app does not record itself.
 
 ---
@@ -195,6 +209,13 @@ The exact Developer ID + notarized `0.8.0 (22)` artifact is the current public s
 visual Timeline: meaningful app/input moments, immediate Timeline invalidation, past-only visual resolution, the
 seven-image filmstrip, one bounded shared image loader, and representative Activity-card images. The exact artifact
 was installed locally, reported healthy, wrote a Timeline frame, and coexisted with one successful native screenshot.
+
+A separate local Developer ID-signed `0.8.0 (23)` candidate was installed on 2026-08-12 from the current dirty
+source after Call-audio priority and native-screenshot yielding changed. It launched against the existing data
+root and reported healthy capture. It is not notarized or public, and uninterrupted dual-track audio during a
+real Call remains the acceptance proof; automated tests do not establish that result.
+Current source is now build `0.9.0 (24)` and adds three-mode Calls plus first-class Call video. It is source-only
+until its installed real-call matrix passes; it must not be described as installed, notarized, or released.
 The larger native-screenshot matrix, normal-use soak, and long physical Call checks remain unqualified and must not
 be described as passed.
 

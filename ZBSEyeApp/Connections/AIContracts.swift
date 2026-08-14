@@ -247,10 +247,54 @@ struct AIExecutionProvenance: Codable, Sendable, Equatable {
     let brokerUpstream: String?
 }
 
+/// Provider-reported token accounting for one completed generation. Missing
+/// fields stay unknown rather than being displayed as a fabricated zero.
+struct LLMUsage: Codable, Sendable, Equatable {
+    let inputTokens: Int?
+    let cachedInputTokens: Int?
+    let outputTokens: Int?
+    let reasoningOutputTokens: Int?
+
+    init(
+        inputTokens: Int? = nil,
+        cachedInputTokens: Int? = nil,
+        outputTokens: Int? = nil,
+        reasoningOutputTokens: Int? = nil
+    ) {
+        self.inputTokens = Self.nonnegative(inputTokens)
+        self.cachedInputTokens = Self.nonnegative(cachedInputTokens)
+        self.outputTokens = Self.nonnegative(outputTokens)
+        self.reasoningOutputTokens = Self.nonnegative(reasoningOutputTokens)
+    }
+
+    var hasMeasurement: Bool {
+        inputTokens != nil || cachedInputTokens != nil
+            || outputTokens != nil || reasoningOutputTokens != nil
+    }
+
+    private static func nonnegative(_ value: Int?) -> Int? {
+        guard let value, value >= 0 else { return nil }
+        return value
+    }
+}
+
 struct LLMResponse: Sendable, Equatable {
     let content: String
     let truncated: Bool
     let provenance: AIExecutionProvenance
+    let usage: LLMUsage?
+
+    init(
+        content: String,
+        truncated: Bool,
+        provenance: AIExecutionProvenance,
+        usage: LLMUsage? = nil
+    ) {
+        self.content = content
+        self.truncated = truncated
+        self.provenance = provenance
+        self.usage = usage?.hasMeasurement == true ? usage : nil
+    }
 }
 
 protocol LLMAdapter: Sendable {

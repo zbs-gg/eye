@@ -3,6 +3,32 @@ import XCTest
 
 @MainActor
 final class CallRecordingStoreTests: XCTestCase {
+    func testExplicitOneCallModeStartsWhilePersistedDefaultIsOff() async throws {
+        let fixture = try CallRecordingStoreFixture()
+        defer { fixture.cleanup() }
+        let store = CallRecordingStore()
+        store.attach(fixture.coordinator)
+        store.requestedMode = { .off }
+        store.requestedSources = { .none }
+        var observedMode: CallRecordingMode?
+        store.requestedSourcesForMode = { mode in
+            observedMode = mode
+            return CallSourceSelection(me: true, system: false)
+        }
+
+        store.start(mode: .audioVideo)
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while store.snapshot.phase == .starting, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertEqual(observedMode, .audioVideo)
+        XCTAssertEqual(store.snapshot.phase, .recording)
+        XCTAssertEqual(store.snapshot.recordingMode, .audioVideo)
+        await store.endAndWait(reason: .user)
+    }
+
     func testPrivacyEndJoinsAnInFlightStartAndLeavesNoActiveCall() async throws {
         try await assertTerminalEndJoinsAutomaticStart(reason: .privacy)
     }

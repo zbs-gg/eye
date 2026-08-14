@@ -28,6 +28,8 @@ struct CallExportEnvelope: Codable, Sendable, Equatable {
     let interrupted: Bool
     let degradationReason: String?
     let mediaGeneration: Int
+    let initialRecordingMode: CallRecordingMode
+    let recordingMode: CallRecordingMode
 }
 
 struct CallExportContext: Codable, Sendable, Equatable {
@@ -125,8 +127,21 @@ struct CallExportAudioReference: Codable, Sendable, Equatable {
     let file: String
 }
 
+struct CallExportVideoReference: Codable, Sendable, Equatable {
+    let startMs: Int64
+    let endMs: Int64
+    let width: Int
+    let height: Int
+    let fps: Int
+    let codec: CallVideoCodec
+    let bytes: Int64
+    let sha256: String
+    let file: String
+    let audioMuxed: Bool
+}
+
 struct CallExportManifest: Codable, Sendable, Equatable {
-    static let currentFormatVersion = 1
+    static let currentFormatVersion = 2
 
     let formatVersion: Int
     let call: CallExportEnvelope
@@ -136,11 +151,14 @@ struct CallExportManifest: Codable, Sendable, Equatable {
     let transcript: CallExportTranscript
     let preferredSpeakerRevision: CallExportSpeakerRevision?
     let audio: [CallExportAudioReference]
+    let video: [CallExportVideoReference]
+    let videoGaps: [CallExportGap]
 }
 
 struct CallExportReport: Sendable, Equatable {
     let path: String
     let audioFiles: Int
+    let videoFiles: Int
 }
 
 /// History export (anti-lock-in: "take your memory with you"): Markdown per day (screen sessions +
@@ -236,7 +254,7 @@ actor ExportService {
                     includeAudio: includeMedia
                 )
                 report.calls += 1
-                report.mediaFiles += callReport.audioFiles
+                report.mediaFiles += callReport.audioFiles + callReport.videoFiles
             }
         }
         return report
@@ -265,7 +283,10 @@ actor ExportService {
         let audio = includeAudio
             ? try copyCallAudio(snapshot: snapshot, into: staging)
             : []
-        let manifest = makeManifest(snapshot: snapshot, audio: audio)
+        let video = includeAudio
+            ? try copyCallVideo(snapshot: snapshot, into: staging)
+            : []
+        let manifest = makeManifest(snapshot: snapshot, audio: audio, video: video)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         try encoder.encode(manifest).write(
@@ -284,7 +305,7 @@ actor ExportService {
             try? fileManager.removeItem(at: bundle)
             throw CallExportError.invalidEvidence
         }
-        return CallExportReport(path: bundle.path, audioFiles: audio.count)
+        return CallExportReport(path: bundle.path, audioFiles: audio.count, videoFiles: video.count)
     }
 
     /// Markdown for a day: screen sessions (as in daily-summary, no LLM) + transcripts with speakers.
@@ -349,6 +370,8 @@ actor ExportService {
         let speakerRevision: CallSpeakerRevisionRow?
         let speakerClusters: [CallSpeakerClusterRow]
         let speakerIntervals: [CallSpeakerIntervalRow]
+        let videoSegments: [CallVideoSegmentRow]
+        let videoGaps: [CallVideoGapRow]
     }
 
     private func callSnapshot(id callID: Int64) async throws -> CallExportSnapshot {
@@ -426,6 +449,23 @@ actor ExportService {
                     """,
                 arguments: [callID, call.mediaGeneration]
             )
+            let videoSegments = try CallVideoSegmentRow.fetchAll(
+                dbc,
+                sql: """
+                    SELECT * FROM call_video_segments
+                    WHERE callId = ? AND mediaGeneration = ? AND finalized = 1
+                    ORDER BY startMs, epoch, sequence, id
+                    """,
+                arguments: [callID, call.mediaGeneration]
+            )
+            let videoGaps = try CallVideoGapRow.fetchAll(
+                dbc,
+                sql: """
+                    SELECT * FROM call_video_gaps
+                    WHERE callId = ? AND mediaGeneration = ? ORDER BY startMs, id
+                    """,
+                arguments: [callID, call.mediaGeneration]
+            )
             let speakerRevision = try call.preferredSpeakerRevisionId.flatMap { revisionID in
                 try CallSpeakerRevisionRow.fetchOne(
                     dbc,
@@ -476,7 +516,9 @@ actor ExportService {
                 chunks: chunks,
                 speakerRevision: speakerRevision,
                 speakerClusters: speakerClusters,
-                speakerIntervals: speakerIntervals
+                speakerIntervals: speakerIntervals,
+                videoSegments: videoSegments,
+                videoGaps: videoGaps
             )
         }
     }
@@ -493,7 +535,8 @@ actor ExportService {
 
     private func makeManifest(
         snapshot: CallExportSnapshot,
-        audio: [CallExportAudioReference]
+        audio: [CallExportAudioReference],
+        video: [CallExportVideoReference]
     ) -> CallExportManifest {
         let callEnd = snapshot.call.endTs ?? snapshot.call.updatedAtMs
         let sources = [CallAudioSource.me, .system].map { source in
@@ -562,7 +605,9 @@ actor ExportService {
                 state: snapshot.call.state,
                 interrupted: snapshot.call.interrupted,
                 degradationReason: snapshot.call.degradationReason,
-                mediaGeneration: snapshot.call.mediaGeneration
+                mediaGeneration: snapshot.call.mediaGeneration,
+                initialRecordingMode: snapshot.call.initialRecordingMode,
+                recordingMode: snapshot.call.recordingMode
             ),
             context: context,
             sources: sources,
@@ -599,7 +644,11 @@ actor ExportService {
                 }
             ),
             preferredSpeakerRevision: preferredSpeakerRevision,
-            audio: audio
+            audio: audio,
+            video: video,
+            videoGaps: snapshot.videoGaps.map {
+                CallExportGap(startMs: $0.startMs, endMs: $0.endMs, reason: $0.reason)
+            }
         )
     }
 
@@ -702,6 +751,55 @@ actor ExportService {
                     file: relative
                 )
             )
+        }
+        return result
+    }
+
+    private func copyCallVideo(
+        snapshot: CallExportSnapshot,
+        into bundle: URL
+    ) throws -> [CallExportVideoReference] {
+        guard !snapshot.videoSegments.isEmpty else { return [] }
+        let secureRoot = try SecureCallSpoolRoot(root: mediaDirectory)
+        var result: [CallExportVideoReference] = []
+        for segment in snapshot.videoSegments {
+            guard segment.bytes > 0, segment.bytes <= Int64(Int.max) else {
+                throw CallExportError.invalidEvidence
+            }
+            let data = try secureRoot.readRange(
+                relativePath: segment.relativePath,
+                offset: 0,
+                byteCount: Int(segment.bytes)
+            )
+            guard data.count == Int(segment.bytes) else { throw CallExportError.invalidEvidence }
+            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            guard segment.sha256.isEmpty || segment.sha256 == digest else {
+                throw CallExportError.invalidEvidence
+            }
+            let relative = String(
+                format: "video/segment-%06d-%lld-%lld.mp4",
+                segment.sequence,
+                segment.startMs,
+                segment.endMs
+            )
+            let destination = bundle.appendingPathComponent(relative)
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: destination, options: .atomic)
+            result.append(CallExportVideoReference(
+                startMs: segment.startMs,
+                endMs: segment.endMs,
+                width: segment.width,
+                height: segment.height,
+                fps: segment.fps,
+                codec: segment.codec,
+                bytes: segment.bytes,
+                sha256: digest,
+                file: relative,
+                audioMuxed: segment.audioMuxed
+            ))
         }
         return result
     }

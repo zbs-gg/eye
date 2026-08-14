@@ -15,6 +15,11 @@ enum CapturePipelineInvalidationReason: Sendable, Equatable {
 @MainActor
 final class CaptureHealthController {
     private var reducer: CaptureHealthReducer
+    /// RecordingStore owns the person's ordinary intent. An active Call
+    /// temporarily derives a different effective intent without overwriting
+    /// that preference: screen off, system audio on.
+    private var requestedIntent: CaptureIntent
+    private var callAudioPriority = false
     private var activeScreenStreamGeneration: Int64?
     private var screenRecoveryAdmission: CaptureRecoveryAttempt?
     private var screenLocked = false
@@ -36,6 +41,7 @@ final class CaptureHealthController {
         openIntervals: [CaptureCoverageInterval] = [],
         emit: @escaping @MainActor (CaptureHealthEffect) -> Void = { _ in }
     ) {
+        requestedIntent = intent
         reducer = CaptureHealthReducer(
             nowMs: nowMs,
             intent: intent,
@@ -149,8 +155,25 @@ final class CaptureHealthController {
     }
 
     func setIntent(_ intent: CaptureIntent, nowMs: Int64) {
-        guard snapshot.intent != intent else { return }
-        apply(reducer.reduce(.intentChanged(intent), at: nowMs))
+        requestedIntent = intent
+        let effective = effectiveIntent
+        guard snapshot.intent != effective else { return }
+        apply(reducer.reduce(.intentChanged(effective), at: nowMs))
+    }
+
+    /// Calls keep system-audio health fully live: failures still open durable
+    /// gaps and recovery still runs. Only the replaceable screen leg is paused.
+    func setCallAudioPriority(_ active: Bool, nowMs: Int64) {
+        guard callAudioPriority != active else { return }
+        callAudioPriority = active
+        let effective = effectiveIntent
+        guard snapshot.intent != effective else { return }
+        apply(reducer.reduce(.intentChanged(effective), at: nowMs))
+    }
+
+    private var effectiveIntent: CaptureIntent {
+        guard callAudioPriority else { return requestedIntent }
+        return CaptureIntent(screenEnabled: false, systemAudioEnabled: true)
     }
 
     func setPermission(_ permission: CapturePermissionState, for leg: CaptureLeg, nowMs: Int64) {

@@ -250,7 +250,8 @@ final class CallPresentationStateTests: XCTestCase {
             participants: [],
             sourceApp: nil,
             bookmarkCount: 0,
-            speakerStatus: .unavailable
+            speakerStatus: .unavailable,
+            recordingMode: .audio
         )
     }
 }

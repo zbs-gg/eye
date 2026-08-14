@@ -49,6 +49,9 @@ struct CaptureSuspensionReasons: OptionSet, Sendable, Equatable {
     static let systemSleep = CaptureSuspensionReasons(rawValue: 1 << 1)
     static let displaySleep = CaptureSuspensionReasons(rawValue: 1 << 2)
     static let screenSaver = CaptureSuspensionReasons(rawValue: 1 << 3)
+    /// An active Call owns capture resources. Timeline screen capture is
+    /// intentionally silent until both Call audio legs have stopped.
+    static let callAudioPriority = CaptureSuspensionReasons(rawValue: 1 << 4)
 }
 
 struct CaptureSessionGateState: Sendable, Equatable {

@@ -36,6 +36,81 @@ actor IngestService {
         writeBarrier.resume()
     }
 
+    func saveReviewSummary(_ summary: ReviewSummary) async throws {
+        guard writeBarrier.beginWrite() else {
+            throw DatabaseWriterMaintenanceError.suspendedForRelocation
+        }
+        defer { writeBarrier.finishWrite() }
+        try await db.pool.write { database in
+            try database.execute(
+                sql: """
+                    INSERT INTO review_summaries(
+                        id, period_kind, period_start_ms, period_end_ms, generated_at_ms,
+                        markdown, sessions, total_captures, provider_id, model_id,
+                        executed_locally, broker_upstream, prompt_version, input_tokens,
+                        cached_input_tokens, output_tokens, reasoning_output_tokens,
+                        billing_amount, billing_unit, rate_card_date, source_truncated,
+                        context_truncated, output_truncated, coverage_incomplete, trigger_kind
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(period_kind, period_start_ms, period_end_ms) DO UPDATE SET
+                        id = excluded.id,
+                        generated_at_ms = excluded.generated_at_ms,
+                        markdown = excluded.markdown,
+                        sessions = excluded.sessions,
+                        total_captures = excluded.total_captures,
+                        provider_id = excluded.provider_id,
+                        model_id = excluded.model_id,
+                        executed_locally = excluded.executed_locally,
+                        broker_upstream = excluded.broker_upstream,
+                        prompt_version = excluded.prompt_version,
+                        input_tokens = excluded.input_tokens,
+                        cached_input_tokens = excluded.cached_input_tokens,
+                        output_tokens = excluded.output_tokens,
+                        reasoning_output_tokens = excluded.reasoning_output_tokens,
+                        billing_amount = excluded.billing_amount,
+                        billing_unit = excluded.billing_unit,
+                        rate_card_date = excluded.rate_card_date,
+                        source_truncated = excluded.source_truncated,
+                        context_truncated = excluded.context_truncated,
+                        output_truncated = excluded.output_truncated,
+                        coverage_incomplete = excluded.coverage_incomplete,
+                        trigger_kind = excluded.trigger_kind
+                    """,
+                arguments: [
+                    summary.id, summary.period.kind.rawValue, summary.period.startMs,
+                    summary.period.endMs, msFromDate(summary.generatedAt), summary.markdown,
+                    summary.sessions, summary.totalCaptures, summary.provenance.providerID,
+                    summary.provenance.modelID, summary.provenance.executedLocally,
+                    summary.provenance.brokerUpstream, summary.promptVersion,
+                    summary.usage?.inputTokens, summary.usage?.cachedInputTokens,
+                    summary.usage?.outputTokens, summary.usage?.reasoningOutputTokens,
+                    summary.billing?.amount, summary.billing?.unit.rawValue,
+                    summary.billing?.rateCardDate, summary.sourceTruncated,
+                    summary.contextTruncated,
+                    summary.outputTruncated, summary.coverageIncomplete,
+                    summary.trigger.rawValue,
+                ]
+            )
+        }
+    }
+
+    /// Privacy-first deletion of derived Review text. Overlap is half-open.
+    func deleteReviewSummaries(overlappingFromMs fromMs: Int64, toMs: Int64) async throws {
+        guard writeBarrier.beginWrite() else {
+            throw DatabaseWriterMaintenanceError.suspendedForRelocation
+        }
+        defer { writeBarrier.finishWrite() }
+        try await db.pool.write { database in
+            try database.execute(
+                sql: """
+                    DELETE FROM review_summaries
+                    WHERE period_start_ms < ? AND period_end_ms > ?
+                    """,
+                arguments: [toMs, fromMs]
+            )
+        }
+    }
+
     /// Durably opens an uncertainty interval before recovery is published.
     /// Returns false for an exact replay or when the leg already has an open
     /// episode; callers must stay conservative instead of replacing ownership.

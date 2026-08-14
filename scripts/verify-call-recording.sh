@@ -6,6 +6,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MODE="${1:---fixtures}"
+TEMP_DERIVED_DATA=""
+
+cleanup_temp_derived_data() {
+  if [[ -n "$TEMP_DERIVED_DATA" && -d "$TEMP_DERIVED_DATA" ]]; then
+    rm -rf -- "$TEMP_DERIVED_DATA"
+  fi
+}
+trap cleanup_temp_derived_data EXIT INT TERM
 
 fail() {
   echo "❌ $1"
@@ -18,9 +26,16 @@ fixture_gate() {
   command -v rg >/dev/null || fail "ripgrep is required"
 
   xcodegen generate >/dev/null
-  # An override lets a checkout escape stale absolute SPM artifact links left by an older
-  # worktree without touching that checkout's build cache.
-  local derived="${ZBS_EYE_CALL_DERIVED_DATA_PATH:-build/CallRecordingDerivedData}"
+  # Default verification is disposable and cannot silently refill the project
+  # with gigabytes of rebuildable data. An explicit override opts into a
+  # persistent reusable cache and is never deleted by this script.
+  local derived
+  if [[ -n "${ZBS_EYE_CALL_DERIVED_DATA_PATH:-}" ]]; then
+    derived="$ZBS_EYE_CALL_DERIVED_DATA_PATH"
+  else
+    derived="$(mktemp -d "${TMPDIR:-/tmp}/zbseye-call-tests.XXXXXX")"
+    TEMP_DERIVED_DATA="$derived"
+  fi
   local selected=(
     -only-testing:ZBSEyeTests/AIComputeCoordinatorTests
     -only-testing:ZBSEyeTests/AudioIngressPublisherTests
@@ -36,7 +51,7 @@ fixture_gate() {
     -only-testing:ZBSEyeTests/CallAutomationPayloadTests
     -only-testing:ZBSEyeTests/CallAutomationStoreTests
     -only-testing:ZBSEyeTests/CallAudioProcessEvidenceTests
-    -only-testing:ZBSEyeTests/CallAudioSourcePolicyTests
+    -only-testing:ZBSEyeTests/CallRecordingAdmissionPolicyTests
     -only-testing:ZBSEyeTests/CallAudioWindowAssemblerTests
     -only-testing:ZBSEyeTests/CallCoordinatorTests
     -only-testing:ZBSEyeTests/CallDatabaseTests
@@ -58,6 +73,7 @@ fixture_gate() {
     -only-testing:ZBSEyeTests/CallTimelineTests
     -only-testing:ZBSEyeTests/CallTranscriptProjectionTests
     -only-testing:ZBSEyeTests/CallTranscriptWorkerTests
+    -only-testing:ZBSEyeTests/CallVideoQueueTests
     -only-testing:ZBSEyeTests/CaptureSessionPolicyTests
     -only-testing:ZBSEyeTests/CoreAudioMicListenerLifecycleTests
     -only-testing:ZBSEyeTests/DiarizationHelperCommandTests
@@ -72,6 +88,7 @@ fixture_gate() {
     -only-testing:ZBSEyeTests/RecordingStoreLowDiskTests
     -only-testing:ZBSEyeTests/RetentionManagerTests
     -only-testing:ZBSEyeTests/SettingsPresentationTests
+    -only-testing:ZBSEyeTests/ScreenshotPriorityYieldGateTests
     -only-testing:ZBSEyeTests/SpeakerDiarizationModelManifestTests
     -only-testing:ZBSEyeTests/SpeakerDiarizationWorkerTests
     -only-testing:ZBSEyeTests/LoopbackWebhookTransportTests

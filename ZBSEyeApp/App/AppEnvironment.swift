@@ -122,10 +122,7 @@ final class AppEnvironment {
         audioSettings.onCaptureConfigurationChanged = { [weak self] in
             self?.syncAudioConfiguration()
         }
-        lastAutomaticCallAudioDisabled = CallAudioSourcePolicy.requestedSources(
-            audioMode: audioSettings.audioMode,
-            manualOverride: audioSettings.manualAudioOverride
-        ).isEmpty
+        lastAutomaticCallAudioDisabled = !audioSettings.callRecordingMode.recordsAudio
         lastAutomaticCallPermissionAvailability = AutomaticCallPermissionAvailability(
             permissions.snapshot
         )
@@ -142,38 +139,7 @@ final class AppEnvironment {
     }
 
     func syncAudioConfiguration() {
-        let audioIsDisabled = CallAudioSourcePolicy.requestedSources(
-            audioMode: audioSettings.audioMode,
-            manualOverride: audioSettings.manualAudioOverride
-        ).isEmpty
-        if lastAutomaticCallAudioDisabled != audioIsDisabled {
-            lastAutomaticCallAudioDisabled = audioIsDisabled
-            calls.automaticStartAdmissionChanged(isClosed: audioIsDisabled)
-        }
         recording.syncAudio()
-        if !audioIsDisabled {
-            resumeTemporarilySuspendedAutomaticCall(kind: .audioDisabled)
-        }
-        Task { [weak meetingDetector] in
-            await meetingDetector?.automaticCallAdmissionDidChange()
-        }
-        guard CallAudioSourcePolicy.mustEndActiveCall(
-            audioMode: audioSettings.audioMode,
-            manualOverride: audioSettings.manualAudioOverride,
-            callIsActive: calls.isActive
-        ) else { return }
-        // Off is a privacy hard gate, including explicit Call ownership. Finish and preserve the
-        // local Call exactly once; changing an audio setting never means destructive rejection.
-        audio?.closeCallFrameAdmission()
-        if let fingerprint = automaticCallFingerprint ?? claimedCallDetectorFingerprint {
-            pendingAutomaticCallTemporarySuspension = AutomaticCallTemporarySuspension(
-                kind: .audioDisabled,
-                fingerprint: fingerprint
-            )
-        }
-        Task { @MainActor [weak self] in
-            await self?.calls.endAndWait(reason: .privacy)
-        }
     }
 
     /// The banner state is authoritative. The popup is only a lazily-created mirror and never
@@ -1182,7 +1148,8 @@ final class AppEnvironment {
             let retention = RetentionManager(
                 db: db,
                 storage: storage,
-                callDeletion: callEvidenceDeletionService
+                callDeletion: callEvidenceDeletionService,
+                reviewDeletion: ingestService
             )
             self.retention = retention
 
@@ -1229,9 +1196,8 @@ final class AppEnvironment {
                 if let self,
                    self.lastAutomaticCallPermissionAvailability != availability {
                     self.lastAutomaticCallPermissionAvailability = availability
-                    let isClosed = !CallAudioSourcePolicy.allowsAutomaticCallStart(
-                        audioMode: self.audioSettings.audioMode,
-                        manualOverride: self.audioSettings.manualAudioOverride,
+                    let isClosed = !CallRecordingAdmissionPolicy.allowsAutomaticCallStart(
+                        mode: self.audioSettings.callRecordingMode,
                         microphoneAvailable: availability.microphone,
                         systemAudioAvailable: availability.systemAudio
                     )
@@ -1329,7 +1295,7 @@ final class AppEnvironment {
                         audioCoordinator?.installCallFrameSink(sink)
                     }
                 },
-                start: { [weak self, weak audioCoordinator]
+                start: { [weak self, weak audioCoordinator, weak coordinator]
                     requested, sinkLease, startAdmissionLease in
                     guard let audioCoordinator else { return .none }
                     let permitted = await MainActor.run { [weak self] in
@@ -1356,12 +1322,20 @@ final class AppEnvironment {
                         guard !permitted.isEmpty,
                               audioCoordinator.admitCallFrameSink(sinkLease)
                         else { return .none }
+                        // Audio is irreplaceable; Timeline images are not. Stop
+                        // admitting visual work before the physical Call legs
+                        // start, without making audio wait for the visual drain.
+                        coordinator?.enterCallAudioPriority()
                         return permitted
                     }
-                    return await audioCoordinator.beginExplicitCall(
+                    let actual = await audioCoordinator.beginExplicitCall(
                         permitted,
                         sinkLease: sinkLease
                     )
+                    if actual.isEmpty {
+                        await coordinator?.exitCallAudioPriority()
+                    }
+                    return actual
                 },
                 acceptedTargets: { [weak audioCoordinator] in
                     await audioCoordinator?.acceptedIngressTargets()
@@ -1370,38 +1344,119 @@ final class AppEnvironment {
                 drainGaps: { [weak audioCoordinator] in
                     await audioCoordinator?.drainIngressGaps() ?? []
                 },
-                stop: { [weak audioCoordinator] in
+                stop: { [weak audioCoordinator, weak coordinator] in
                     await audioCoordinator?.endExplicitCall()
+                    await coordinator?.exitCallAudioPriority()
+                }
+            )
+            let callVideoEngine = CallVideoCaptureEngine(
+                repository: callRepository,
+                mediaRoot: storage.mediaDirectory,
+                resourceCoordinator: sckResourceCoordinator,
+                excludedBundleIDs: { @MainActor [weak self] in
+                    Set(self?.privacy.ignoredBundleIds ?? [])
+                },
+                isNativeScreenshotSuppressed: { [weak coordinator] in
+                    coordinator?.isNativeScreenshotSuppressed() ?? false
+                },
+                waitForNativeScreenshotRelease: { [weak coordinator] in
+                    await coordinator?.waitForNativeScreenshotRelease()
+                }
+            )
+            let callVideoPostProcessor = CallVideoPostProcessor(
+                repository: callRepository,
+                mediaRoot: storage.mediaDirectory
+            )
+            Task(priority: .utility) { [callRepository, callVideoPostProcessor] in
+                let pending = (try? await callRepository.callIDsNeedingVideoPostprocess()) ?? []
+                for callID in pending where !Task.isCancelled {
+                    await callVideoPostProcessor.process(callID: callID)
+                }
+            }
+            let callVideo = CallVideoControl(
+                lockDisplay: { [callVideoEngine] callID in
+                    await callVideoEngine.lockDisplay(callID: callID)
+                },
+                start: { [callVideoEngine] callID in
+                    await callVideoEngine.start(callID: callID)
+                },
+                stop: { [callVideoEngine] reason in
+                    await callVideoEngine.stop(reason: reason)
+                },
+                postprocess: { [callVideoPostProcessor] callID in
+                    Task(priority: .utility) {
+                        await callVideoPostProcessor.process(callID: callID)
+                    }
                 }
             )
             let callCoordinator = CallCoordinator(
                 repository: callRepository,
                 mediaRoot: storage.mediaDirectory,
                 audio: callAudio,
+                video: callVideo,
                 afterSourceTransition: { [weak callAutomationDispatcher] in
                     await callAutomationDispatcher?.kick()
                 }
             )
-            calls.requestedSources = { [weak self] in
-                guard let self else { return .none }
+            callVideoEngine.onUnexpectedStateChanged = { [weak calls] state in
+                calls?.videoStateChangedExternally(state)
+            }
+            coordinator.onNativeScreenshotYield = { [weak calls] in
+                calls?.nativeScreenshotRequested()
+            }
+            calls.waitForNativeScreenshotRelease = { [weak coordinator] in
+                await coordinator?.waitForNativeScreenshotRelease()
+            }
+            calls.requestedMode = { [weak self] in
+                self?.audioSettings.callRecordingMode ?? .off
+            }
+            calls.requestedSourcesForMode = { mode in
                 // The background system-audio toggle protects the lightweight Timeline path.
                 // A confirmed/explicit call always requests both attributable legs; otherwise a user
                 // can unknowingly save only their own voice and the call recorder lies by omission.
-                return CallAudioSourcePolicy.requestedSources(
-                    audioMode: self.audioSettings.audioMode,
-                    manualOverride: self.audioSettings.manualAudioOverride
-                )
+                return CallRecordingAdmissionPolicy.requestedSources(mode: mode)
             }
             calls.automaticStartAdmissionAllowed = { [weak self] in
                 guard let self else { return false }
-                return CallAudioSourcePolicy.allowsAutomaticCallStart(
-                    audioMode: self.audioSettings.audioMode,
-                    manualOverride: self.audioSettings.manualAudioOverride,
+                return CallRecordingAdmissionPolicy.allowsAutomaticCallStart(
+                    mode: self.audioSettings.callRecordingMode,
                     microphoneAvailable: self.permissions.snapshot.microphone == .granted,
                     systemAudioAvailable: self.permissions.snapshot.screenRecording == .granted
                 )
             }
             calls.attach(callCoordinator)
+            audioSettings.onCallRecordingModeChanged = { [weak self, weak calls] mode in
+                guard let self else { return }
+                let audioIsDisabled = !mode.recordsAudio
+                if self.lastAutomaticCallAudioDisabled != audioIsDisabled {
+                    self.lastAutomaticCallAudioDisabled = audioIsDisabled
+                    calls?.automaticStartAdmissionChanged(isClosed: audioIsDisabled)
+                }
+                if audioIsDisabled {
+                    self.audio?.closeCallFrameAdmission()
+                    if let fingerprint = self.automaticCallFingerprint
+                        ?? self.claimedCallDetectorFingerprint {
+                        self.pendingAutomaticCallTemporarySuspension =
+                            AutomaticCallTemporarySuspension(
+                                kind: .audioDisabled,
+                                fingerprint: fingerprint
+                            )
+                    }
+                    if calls?.isActive == true || self.calls.snapshot.phase == .starting {
+                        Task { @MainActor [weak calls] in
+                            await calls?.endAndWait(reason: .privacy)
+                        }
+                    }
+                } else {
+                    if calls?.isActive == true || self.calls.snapshot.phase == .starting {
+                        calls?.setRecordingMode(mode)
+                    }
+                    self.resumeTemporarilySuspendedAutomaticCall(kind: .audioDisabled)
+                    Task { [weak detector = self.meetingDetector] in
+                        await detector?.automaticCallAdmissionDidChange()
+                    }
+                }
+            }
             calls.onManualStartWhileActive = { [weak self] callID in
                 self?.claimAutomaticCall(callID: callID)
             }
@@ -1428,7 +1483,7 @@ final class AppEnvironment {
                 else { return }
                 // Freeze the old owner set before audio/spool teardown can overlap a successor
                 // microphone owner. Otherwise a late B could be folded into A and tombstoned when
-                // Call Control, Audio Off, or privacy finishes A.
+                // Call Control, Don't record, or privacy finishes A.
                 self.callDetectionPolicy.reject(fingerprint: fingerprint)
                 _ = await detector?.suppressSession(fingerprint: fingerprint)
             }
@@ -1561,9 +1616,13 @@ final class AppEnvironment {
             )
 
             // Automation v1 "day summary": collect→shared router→write.
+            let reviewRepository = ReviewSummaryRepository(db: db)
             let summarySvc = DailySummaryService(
                 repo: activityRepo,
                 generator: consumerGenerator,
+                reviewRepository: reviewRepository,
+                writer: ingestService,
+                coverage: coverageQuery,
                 auditWriter: automationAuditWriter
             )
             let automationsStore = DaySummaryStore(
@@ -1805,7 +1864,7 @@ final class AppEnvironment {
 
     /// History deletion (privacy): lastSeconds=nil → everything. Returns a report for the UI.
     func deleteHistory(lastSeconds: TimeInterval?) async -> PruneReport? {
-        guard !storageSettings.relocationInProgress, let retention else { return nil }
+        guard !storageSettings.relocationInProgress, let retention, let ingest else { return nil }
         let admissionLease = acquireAutomaticCallAdmissionBarrier(.evidenceDeletion)
         defer { releaseAutomaticCallAdmissionBarrier(admissionLease) }
         // The upper bound is fixed AT THE MOMENT of the click: with recording running, "delete 15 minutes" must not
@@ -1835,6 +1894,15 @@ final class AppEnvironment {
         // We flush in-flight audio BEFORE the delete, otherwise "said a password → wipe" would survive
         // up to 28s of speech captured before the click (it would close and land in the DB AFTER the delete).
         await audio?.discardInFlight(from: dateFromMs(fromMs), to: lastSeconds == nil ? now : dateFromMs(toMs))
+        // Derived Review Markdown can contain the same private facts as the
+        // source interval. Remove it first so even a later source-delete error
+        // cannot leave the more readable derivative behind.
+        do {
+            try await ingest.deleteReviewSummaries(overlappingFromMs: fromMs, toMs: toMs)
+        } catch {
+            Log.retention.error("manual delete stopped: Review cleanup failed")
+            return nil
+        }
         let report = try? await retention.deleteRange(fromMs: fromMs, toMs: toMs)
         timelineStore?.discardVisualStateForPrivacyErase()
         visualFrameImageLoader?.invalidateAllForPrivacyErase()
@@ -2549,9 +2617,8 @@ final class AppEnvironment {
 
     private var isAutomaticCallAdmissionTemporarilyClosed: Bool {
         isCallLifecycleAdmissionClosed
-            || !CallAudioSourcePolicy.allowsAutomaticCallStart(
-                audioMode: audioSettings.audioMode,
-                manualOverride: audioSettings.manualAudioOverride,
+            || !CallRecordingAdmissionPolicy.allowsAutomaticCallStart(
+                mode: audioSettings.callRecordingMode,
                 microphoneAvailable: permissions.snapshot.microphone == .granted,
                 systemAudioAvailable: permissions.snapshot.screenRecording == .granted
             )
@@ -3319,10 +3386,7 @@ final class AppEnvironment {
         }
         if AutomaticCallTemporaryRearmPolicy.allowsRelease(
             kind: suspension.kind,
-            audioIsDisabled: CallAudioSourcePolicy.requestedSources(
-                audioMode: audioSettings.audioMode,
-                manualOverride: audioSettings.manualAudioOverride
-            ).isEmpty,
+            audioIsDisabled: !audioSettings.callRecordingMode.recordsAudio,
             privacyPauseIsActive: recording.pausedUntil != nil,
             sessionLockIsActive: !automaticCallSessionGate.isOpen
         ) {
@@ -3340,10 +3404,7 @@ final class AppEnvironment {
               automaticCallRearmInProgressFingerprint == nil
         else { return }
         _ = kind
-        let audioIsDisabled = CallAudioSourcePolicy.requestedSources(
-            audioMode: audioSettings.audioMode,
-            manualOverride: audioSettings.manualAudioOverride
-        ).isEmpty
+        let audioIsDisabled = !audioSettings.callRecordingMode.recordsAudio
         guard AutomaticCallTemporaryRearmPolicy.allowsRelease(
             kind: suspension.kind,
             audioIsDisabled: audioIsDisabled,
@@ -3364,10 +3425,7 @@ final class AppEnvironment {
             self.automaticCallRearmInProgressFingerprint = nil
             guard self.suspendedAutomaticCall == suspension else { return }
 
-            let audioIsDisabled = CallAudioSourcePolicy.requestedSources(
-                audioMode: self.audioSettings.audioMode,
-                manualOverride: self.audioSettings.manualAudioOverride
-            ).isEmpty
+            let audioIsDisabled = !self.audioSettings.callRecordingMode.recordsAudio
             guard AutomaticCallTemporaryRearmPolicy.allowsRelease(
                 kind: suspension.kind,
                 audioIsDisabled: audioIsDisabled,

@@ -5,18 +5,41 @@ struct CallControlView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.openWindow) private var openWindow
     @State private var evidence: CallEvidencePage?
+    @State private var choosingOneCallMode = false
     var compact = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            status
-                .frame(maxWidth: .infinity, alignment: .leading)
-            controls
+        VStack(alignment: .leading, spacing: 7) {
+            Picker("Call recording", selection: callModeBinding) {
+                ForEach(CallRecordingMode.allCases, id: \.self) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .disabled(env.calls.snapshot.phase == .starting || env.calls.snapshot.phase == .finalizing)
+
+            HStack(spacing: 8) {
+                status
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                controls
+            }
         }
         .padding(compact ? 7 : 9)
         .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 9))
         .accessibilityElement(children: .contain)
         .task(id: refreshKey) { await monitorEvidence() }
+        .confirmationDialog(
+            "Record this Call",
+            isPresented: $choosingOneCallMode,
+            titleVisibility: .visible
+        ) {
+            Button("Audio only") { env.calls.start(mode: .audio) }
+            Button("Audio and video") { env.calls.start(mode: .audioVideo) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This one-time choice does not change the default in Settings.")
+        }
     }
 
     @ViewBuilder
@@ -83,7 +106,7 @@ struct CallControlView: View {
                 Button("Open") { openDetail() }
                     .controlSize(.small)
             }
-            Button { env.calls.start() } label: {
+            Button { startCall() } label: {
                 Image(systemName: "plus")
             }
             .help("Start another call")
@@ -97,9 +120,34 @@ struct CallControlView: View {
                 .help("Open the latest call")
                 .accessibilityLabel("Open the latest call")
             }
-            Button("Start") { env.calls.start() }
+            Button("Start") { startCall() }
                 .controlSize(.small)
                 .disabled(env.storageSettings.relocationInProgress)
+        }
+    }
+
+    private var callModeBinding: Binding<CallRecordingMode> {
+        Binding(
+            get: {
+                env.calls.isActive
+                    ? env.calls.snapshot.recordingMode
+                    : env.audioSettings.callRecordingMode
+            },
+            set: { mode in
+                if env.calls.isActive {
+                    env.calls.setRecordingMode(mode)
+                } else {
+                    env.audioSettings.callRecordingMode = mode
+                }
+            }
+        )
+    }
+
+    private func startCall() {
+        if env.audioSettings.callRecordingMode == .off {
+            choosingOneCallMode = true
+        } else {
+            env.calls.start()
         }
     }
 

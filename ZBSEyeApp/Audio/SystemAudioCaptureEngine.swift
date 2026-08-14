@@ -86,16 +86,15 @@ final class SystemAudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate
             cfg.sampleRate = 48_000
             cfg.channelCount = 2
             cfg.excludesCurrentProcessAudio = true   // do not record ZBS Eye's own audio (echo/loop)
-            // We don't need video — minimize it: tiny frame, rare tick (an audio-only stream still
-            // requires a valid video part in the config).
-            cfg.width = 2
-            cfg.height = 2
-            cfg.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+            // An audio-only SCStream still owns a video leg. Keep it valid but
+            // nearly idle so a Call does not compete with native screenshots.
+            SystemAudioScreenLegPolicy.apply(to: cfg)
 
             epoch += 1
             let sink = SystemAudioIngressSink(
                 epoch: epoch,
-                initialSequence: nextIngressSequence
+                initialSequence: nextIngressSequence,
+                capacity: config.ingressFrameCapacity
             )
             let stream = SCStream(filter: filter, configuration: cfg, delegate: self)
             registerStream(stream)
@@ -473,11 +472,11 @@ private final class SystemAudioIngressSink: @unchecked Sendable {
     private var bestObservedOffsetSeconds: Double?
     private var lastNormalizedNanoseconds: Int64?
 
-    init(epoch: Int, initialSequence: Int64) {
+    init(epoch: Int, initialSequence: Int64, capacity: Int) {
         publisher = AudioIngressPublisher(
             source: .system,
             epoch: epoch,
-            capacity: 64,
+            capacity: capacity,
             initialSequence: initialSequence
         )
     }

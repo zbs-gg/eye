@@ -46,12 +46,15 @@ below the canonical `--data-root`, proves through `lsof` that this exact PID own
 after `curl`, and rejects a missing, stale, shared, or foreign listener. Eye-arm unified logs are queried with
 `processIdentifier == <exact PID>`, never by process name. Every baseline proves that the installed Eye process
 is absent before measurement; because there is no candidate PID in those arms, their Eye log counters are
-recorded as zero only after that absence check. Sanitized per-arm unified-log counts must show zero `SCScreenshotManager`, zero
-`_SCRemoteQueue_Enqueue`, zero `stream output NOT found`, and exactly one `eye_screen_stream_started`. Non-Eye
-arms must contain zero Eye stream starts. The real-call arm cannot proceed until the operator attests both
+recorded as zero only after that absence check. Sanitized per-arm unified-log counts must show zero
+`SCScreenshotManager`, zero `_SCRemoteQueue_Enqueue`, zero `stream output NOT found`, exactly one
+`eye_screen_stream_started`, and at least one `eye_screen_stream_yielded_for_native_screenshot` in every Eye arm.
+The 100 attempts keep the two-second quiet window continuously open, so the stream is stopped once instead of
+churning per attempt. Non-Eye arms must contain zero Eye stream starts and zero Eye yields. The real-call arm
+cannot proceed until the operator attests both
 tracks immediately before and after measurement; the result stores only that boolean, never call content.
-Because baselines require quitting Eye, the full bracket correctly
-contains three independent Eye process lifetimes and one stream start in each.
+Because baselines require quitting Eye, the full bracket correctly contains three independent Eye process
+lifetimes, one initial stream start in each, and no overlapping replacement stream.
 
 The only final classifications are:
 
@@ -116,6 +119,12 @@ Use the same installed candidate and repeat the exact nine-arm process-state bra
   selection for 4; for 5, verify the destination shown by Screenshot UI before capture.
 - Count new permission prompts for Eye, ChatGPT, and Chronicle. Expected: Eye `0`, ChatGPT `0`, Chronicle `0`.
 - Confirm Eye's status agrees in the compact UI, authenticated `/v1/capture/status`, and MCP `get_status`.
+- Confirm the Timeline resumes after the quiet tail while the active Call's microphone and system tracks remain
+  continuous through every native screenshot.
+- In the audio-only arm, confirm the Timeline stream stays stopped. In the audio-and-video arm, confirm only the
+  separate fixed-display Call video stream runs and Timeline images remain paused until both audio legs stop.
+  Toggle audio → video → audio → video without restarting either audio source. Any Call ingress gap or missing audio duration is an immediate
+  no-go even when every native screenshot is fast.
 - Confirm the Timeline and Ask show one coverage warning only for a synthetic/known affected interval; missing
   results inside that interval must never be described as proof of inactivity.
 

@@ -46,14 +46,16 @@ Previously verified live baseline:
 - Local REST + MCP for AI agents.
 - Storage: 5 GB Keep Media on a fresh profile, explicit 10/20/50 GB or Forever, move to external SSD, iCloud
   backup as a compressed snapshot, size tracking.
-- Automations: daily summary (local LLM → file/Obsidian), export.
+- Timeline Review: day/seven-day recaps through a Codex or Claude Code subscription, internal persistence,
+  token/credit accounting, daily/weekday/weekly scheduling, and optional file/Obsidian export.
 - Built-in local generation on qualified hardware, with one global provider/model pair and provider-owned
   model lists; Ollama and LM Studio remain separate alternatives.
 
-The exact notarized **`0.7.0 (21)`** build is the current public stable release. Its screenshot-coexistence and
-long-Call checks were not completed before publication and must not be described as passed.
+The exact notarized **`0.8.0 (22)`** build is the current public stable release. Its full screenshot-coexistence
+and long-Call matrix was not completed before publication and must not be described as passed. Installed local
+candidate 23 remains unqualified on a real dual-track Call. Current build 24 is source-only.
 
-Implemented in the **`0.8.0 (22)` source candidate**:
+Implemented through the public **`0.8.0 (22)`** baseline:
 
 - Explicit Call Envelopes, the Calls library/detail, uninterrupted Bookmarks, optional local Whisper and
   per-call speaker processing, preferred-only search, and bounded read-only agent evidence.
@@ -73,9 +75,17 @@ Implemented in the **`0.8.0 (22)` source candidate**:
 - Past-only image selection, a clickable seven-image filmstrip, one shared 128 MB loader with at most two
   decodes, and lazy representative images in top-level Activity cards.
 
-Build 22 is **not a release yet**. Its exact notarized ZIP/manifest must show zero failed, empty, or stale native
-screenshots across the full screenshot comparison and shortcut matrix, then pass normal-use/Call checks and the
-complete deterministic suite. Deterministic tests do not replace those installed-app checks.
+Implemented in the uninstalled **`0.9.0 (24)` source candidate**:
+
+- Three-mode Calls independent from Timeline audio: Don't record, Audio only, and Audio and video, with live
+  switching that never restarts audio.
+- Fixed-display, hardware-only Call video at up to 1080p/15 fps, crash-forward MP4 fragments, explicit gaps,
+  sequential playback, AAC convenience audio, typed REST/MCP evidence, export, retention, and privacy deletion.
+- Absolute priority: Call audio → native screenshots → Call video → Timeline.
+
+Build 24 cannot replace installed 23 until real audio-only and video Calls prove uninterrupted dual-track audio,
+video switching, screenshot latency, display/lock/crash handling, deletion, and export. Deterministic tests do not
+replace those installed-app checks.
 
 ---
 
@@ -174,7 +184,7 @@ separate authorized agent consume the evidence.
 
 ## v2.0 — ecosystem and polish
 
-- **Scheduled automations** + notifications (currently manual only).
+- **More automation triggers** beyond the implemented Review schedule and after-call hook.
 - **Connectors**: Obsidian / Notion / etc. as full destinations.
 - **Extended export** of a day/everything (markdown + media) — "take your memory with you", against lock-in.
 - **Speech evidence quality/size benchmark** before considering any smaller runtime; no identity claims.

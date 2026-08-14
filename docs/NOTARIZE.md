@@ -176,7 +176,7 @@ For the `0.7.0 (21)` automatic-Call change, the completed report must also expli
 - an exact `codex_chronicle` microphone pulse creates no Call;
 - an exact user audio exclusion prevents automatic Call admission without removing the app from screen history,
   and removing that exclusion re-arms current microphone activity;
-- **Audio Off** and privacy pause finish and disarm the active automatic Call, while ending Pause Timeline does
+- **Don't record** and privacy pause finish and disarm the active automatic Call, while ending Pause Timeline does
   neither; reopening the hard gate re-arms without requiring an app restart;
 - detected end saves once after 30 seconds, **End & save** saves once, **This wasn’t a call** erases only that
   automatic Call, and none of those surfaces offers Undo.

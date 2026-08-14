@@ -46,12 +46,12 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
 | `Capture/` | `CaptureCoordinator`, one persistent low-rate `ScreenCaptureStream`, meaningful-input scheduling, `FramePipeline` (HEIC+phash+OCR, ONE actor), `SCKResourceCoordinator`, screenshot-priority yield, capture health/recovery, `AXReader` (dedicated thread, per-PID health) |
 | `Audio/` | `AudioCoordinator`, mic/system engines, `VADSegmenter`, `TranscriptionService` (SFSpeech on-device); system-audio SCK lifecycle shares `SCKResourceCoordinator` with screen capture |
 | `Meeting/` | `MeetingDetector`, CoreAudio process evidence, native/browser enrichment, exact automatic-Call admission and suppression |
-| `Calls/` | `CallCoordinator`, crash-forward spools/evidence, Whisper and diarization workers, call query/projection and privacy deletion |
+| `Calls/` | `CallCoordinator`, crash-forward audio/video evidence, separate Call video + AAC post-process, Whisper/diarization, query/projection and privacy deletion |
 | `Data/` | `ZBSEyeDatabase` (pool + migrations), `StorageManager` (media), **`StorageLocation`** (the single path resolver — see invariants), `StorageRelocation` (move), `BackupManager` (iCloud), `RetentionManager`, `IngestService` (the only writer) |
 | `Search/` | `SearchService` (FTS+vector RRF), `EmbeddingService` (e5), past-only visual Timeline lookup, `VectorBackfill` |
 | `Server/` | `ZBSEyeHTTPServer` (FlyingFox REST, 127.0.0.1, Bearer), `KeychainStore`, DTO |
 | `MCP/` | `ZBSEyeMCPServer` (stdio, proxies into the GUI instance) |
-| `Automations/` | `HistoryImporter` (history import), `DailySummaryService`, `ExportService` |
+| `Automations/` | `HistoryImporter`, Timeline Review collection/persistence, scheduling audit, `ExportService` |
 | `State/` | `@MainActor @Observable` stores (Recording/Permissions/Storage/Backup/…) |
 | `Views/` | SwiftUI (Timeline, Settings, onboarding) |
 
@@ -74,25 +74,34 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
 5. **Keep Media is the only automatic retention contract.** Fresh empty profiles start at 5 GB; upgrades never
    shorten retention without an explicit selection and authoritative reconciliation. `Forever` closes automatic
    deletion. Critically low disk pauses capture for every policy and never overrides the selected retention promise.
-6. **One persistent screen stream; bounded latest-wins work.** Normal screen capture uses one low-rate
-   ScreenCaptureKit stream, not a new screenshot request per cycle. App switches always request moments; clicks,
+6. **One screen stream at a time; bounded latest-wins work.** Normal screen capture uses one low-rate persistent
+   ScreenCaptureKit stream, not a new screenshot request per cycle. A native screenshot signal is the sole
+   user-priority exception: Eye stops only this screen stream for the quiet window and recreates one on the next
+   ordinary visual intent; microphone and system audio continue. App switches always request moments; clicks,
    scroll-stop (350 ms), and typing-pause (700 ms) do so when listen-event access already exists, without a new
    permission request. The three-second fallback remains. The observer carries only an
    opaque reason—never keys, text, pointer coordinates, or clipboard contents—and frequent input shares a
    1.5-second heavy-work floor. Expensive AX/OCR/HEIC work retains at most one processing intent and one pending
    intent; a newer trigger replaces the pending one. `SCKResourceCoordinator` serializes the complete asynchronous
    start/update/stop operation across the screen and system-audio streams.
-7. **Native screenshots get a best-effort, permission-neutral yield.** Eye observes Shift-Command-3/4/5 and
+7. **Native screenshots get a best-effort, permission-neutral physical yield.** Eye observes Shift-Command-3/4/5 and
    their Control variants through a listen-only event tap only when macOS already permits it, and also watches
-   the exact native screenshot helper processes. Either signal drops pending heavy work and opens a short quiet
-   window. Eye never requests a new Input Monitoring/Accessibility grant for this, never consumes the shortcut,
-   and fails open when early hotkey observation is unavailable; do not describe this as a guaranteed intercept.
+   the exact native screenshot helper processes. Either signal drops pending heavy work, stops Eye's physical
+   screen stream, and opens a short quiet window without stopping Call audio. Eye never requests a new Input
+   Monitoring/Accessibility grant for this, never consumes the shortcut, and fails open when early hotkey
+   observation is unavailable; do not describe this as a guaranteed intercept.
 8. **Automatic Calls are microphone-owned and have a separate privacy list.** Any eligible external microphone
    initiator can open a local Call; exact `Don’t auto-record these apps` bundle IDs affect only this admission and
    do not hide the app from screen history. Krisp is relay-only: it may participate but cannot start, name, or keep
-   a Call alive. The exact `codex_chronicle` helper is ignored before owner folding. `Pause Timeline` does not
-   disarm automatic Calls; `Audio Off` and privacy pause do. A detected end waits 30 seconds, offering `End & save`
-   or destructive `This wasn’t a call`; there is no post-end Undo.
+   a Call alive. The exact `codex_chronicle` helper is ignored before owner folding. Timeline audio and
+   `Pause Timeline` do not disarm automatic Calls; the Calls mode `Don't record` and privacy pause do. A detected end waits 30 seconds, offering `End & save`
+   or destructive `This wasn’t a call`; there is no post-end Undo. While any Call owns physical audio, Call audio
+   has absolute capture priority: Timeline closes visual admission and stops its screen stream/HEIC/OCR work until
+   both Call audio legs have physically stopped. Missing images are acceptable; dropped Call audio is not.
+9. **Call mode is explicit and audio always wins.** `off`, `audio`, and `audio_video` are separate from Timeline
+   audio settings. Call video is a fixed-display, hardware-only, latest-wins stream capped at 1080p/15 fps; it
+   starts only after audio, may drop frames, and yields physically to native screenshots. It never restarts or
+   backpressures microphone/system audio. Upgrades default existing Calls to audio and never enable video silently.
 
 ## Gotchas (already stepped on — don't again)
 
@@ -130,10 +139,10 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
    lookup, the media-directory boundary), no egress.
 4. **Honest state:** the UI doesn't lie (the recording icon, permission statuses, "busy").
 5. **Capture coexistence:** a healthy Eye must not make native screenshots slow, stale, or unavailable under
-   ChatGPT/Chronicle/two-track-call contention; check one stream per process lifetime, best-effort hotkey yield,
-   lifecycle recovery, and durable coverage gaps.
+   ChatGPT/Chronicle/two-track-call contention; check one screen stream at a time, a physical screenshot-priority
+   yield, bounded restart after the quiet window, lifecycle recovery, and durable coverage gaps.
 6. **Automatic-Call privacy:** verify exact mic-owner attribution, relay/excluded-helper behavior, the separate
-   audio exclusion list, hard Audio Off/privacy boundaries, one terminal owner, and crash-forward erase/finalize.
+   audio exclusion list, hard `Don't record`/privacy boundaries, one terminal owner, and crash-forward erase/finalize.
 
 Check both the build and the unhosted `ZBSEyeUnitTests` target. Pure production policies are shared into
 that target explicitly so verification does not launch an ad-hoc `gg.zbs.eye` app or churn the installed
@@ -145,6 +154,16 @@ Previously verified live product baseline: screen capture (HEIC + AX/OCR), audio
 (cross-lingual), Timeline, REST + MCP, history import, 5 GB fresh-profile retention with explicit
 **Forever**, **relocatable storage**, **iCloud backup** (compressed, keep-N, on exit), size tracking, daily summary,
 and export.
+
+Current source after that public baseline adds Timeline Review: a day/seven-day side panel, internal v16
+storage, daily/weekday/weekly scheduling, optional Markdown/Obsidian export, and provider-reported token usage.
+Review is intentionally limited to authenticated Codex or Claude Code subscription models; it never selects
+an API-key provider. This source change is not part of the already-published `0.8.0 (22)` qualification and
+must not be described as publicly released. A local Developer ID-signed `0.8.0 (23)` candidate from the current
+dirty source was installed on 2026-08-12 and reported healthy against the existing data root. Its Call-audio
+priority still requires evidence from a real dual-track Call; the candidate is neither notarized nor public.
+Current `0.9.0 (24)` source adds three-mode Calls and first-class Call video. It is not installed or qualified;
+real audio-only/video Calls and the full coexistence matrix remain mandatory before it may replace installed 23.
 
 The exact Developer ID + notarized `0.8.0 (22)` artifact is public stable/latest as of 2026-08-08. It includes the
 persistent latest-wins screen stream, microphone-owned automatic Calls, meaningful visual moments, immediate

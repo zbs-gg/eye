@@ -11,35 +11,40 @@ private final class PickedApplicationBox {
 
 @MainActor
 final class AudioSettingsStoreTests: XCTestCase {
-    func testAudioOffAndManualForceOffEndAnActiveCall() {
-        XCTAssertTrue(
-            CallAudioSourcePolicy.mustEndActiveCall(
-                audioMode: .off,
-                manualOverride: nil,
-                callIsActive: true
-            )
-        )
-        XCTAssertTrue(
-            CallAudioSourcePolicy.mustEndActiveCall(
-                audioMode: .meetingsOnly,
-                manualOverride: false,
-                callIsActive: true
-            )
-        )
-        XCTAssertFalse(
-            CallAudioSourcePolicy.mustEndActiveCall(
-                audioMode: .meetingsOnly,
-                manualOverride: nil,
-                callIsActive: true
-            )
-        )
-        XCTAssertFalse(
-            CallAudioSourcePolicy.mustEndActiveCall(
-                audioMode: .off,
-                manualOverride: nil,
-                callIsActive: false
-            )
-        )
+    func testExistingProfileDefaultsCallsToAudioAndNeverVideo() throws {
+        let (defaults, suite) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(AudioMode.always.rawValue, forKey: "zbseye.audio.audioMode")
+
+        let store = makeStore(defaults: defaults)
+
+        XCTAssertEqual(store.callRecordingMode, .audio)
+        XCTAssertEqual(defaults.string(forKey: "zbseye.calls.recordingMode"), "audio")
+    }
+
+    func testExistingAudioOffProfileMigratesCallsToOff() throws {
+        let (defaults, suite) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(AudioMode.off.rawValue, forKey: "zbseye.audio.audioMode")
+
+        let store = makeStore(defaults: defaults)
+
+        XCTAssertEqual(store.callRecordingMode, .off)
+        XCTAssertEqual(defaults.string(forKey: "zbseye.calls.recordingMode"), "off")
+    }
+
+    func testCallRecordingModePersistsAndNotifiesExactlyOnce() throws {
+        let (defaults, suite) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = makeStore(defaults: defaults)
+        var changes: [CallRecordingMode] = []
+        store.onCallRecordingModeChanged = { changes.append($0) }
+
+        store.callRecordingMode = .audioVideo
+        store.callRecordingMode = .audioVideo
+
+        XCTAssertEqual(changes, [.audioVideo])
+        XCTAssertEqual(makeStore(defaults: defaults).callRecordingMode, .audioVideo)
     }
 
     func testMicInUseKeepsMeetingsOnlyRawValueForCompatibility() {

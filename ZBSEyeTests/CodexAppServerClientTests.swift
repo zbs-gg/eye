@@ -431,7 +431,15 @@ final class CodexAppServerClientTests: XCTestCase {
 
     func testHappyGenerationUsesLockedTextOnlyProtocolAndReturnsStrictOutput() async throws {
         let fixture = Fixture(selection: selection)
-        await fixture.connection.enqueue(contentsOf: fixture.happyGenerationFrames(content: "hello"))
+        await fixture.connection.enqueue(contentsOf: fixture.happyGenerationFrames(
+            content: "hello",
+            usage: LLMUsage(
+                inputTokens: 1_200,
+                cachedInputTokens: 800,
+                outputTokens: 90,
+                reasoningOutputTokens: 30
+            )
+        ))
         let request = makeRequest(user: "SECRET_USER_PROMPT")
 
         let response = try await fixture.client.generate(
@@ -443,6 +451,15 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertEqual(response.provenance.providerID, selection.providerID)
         XCTAssertEqual(response.provenance.modelID, selection.modelID)
         XCTAssertFalse(response.provenance.executedLocally)
+        XCTAssertEqual(
+            response.usage,
+            LLMUsage(
+                inputTokens: 1_200,
+                cachedInputTokens: 800,
+                outputTokens: 90,
+                reasoningOutputTokens: 30
+            )
+        )
 
         let methods = await fixture.connection.sentMethods()
         XCTAssertEqual(
@@ -1235,8 +1252,28 @@ private struct Fixture {
         )
     }
 
-    func happyGenerationFrames(content: String) -> [CodexProcessFrame] {
-        framesThroughTurnStart() + [Self.turnCompleted(text: jsonText(["content": content]))]
+    func happyGenerationFrames(
+        content: String,
+        usage: LLMUsage? = nil
+    ) -> [CodexProcessFrame] {
+        var frames = framesThroughTurnStart()
+        if let usage {
+            var total: [String: Any] = [:]
+            total["inputTokens"] = usage.inputTokens
+            total["cachedInputTokens"] = usage.cachedInputTokens
+            total["outputTokens"] = usage.outputTokens
+            total["reasoningOutputTokens"] = usage.reasoningOutputTokens
+            frames.append(Self.frame([
+                "method": "thread/tokenUsage/updated",
+                "params": [
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "tokenUsage": ["total": total],
+                ],
+            ]))
+        }
+        frames.append(Self.turnCompleted(text: jsonText(["content": content])))
+        return frames
     }
 
     func framesThroughTurnStart() -> [CodexProcessFrame] {

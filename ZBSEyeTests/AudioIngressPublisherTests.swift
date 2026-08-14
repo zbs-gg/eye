@@ -2,6 +2,10 @@ import Foundation
 import XCTest
 
 final class AudioIngressPublisherTests: XCTestCase {
+    func testProductionIngressBufferAbsorbsVisualTeardownStalls() {
+        XCTAssertGreaterThanOrEqual(AudioConfig().ingressFrameCapacity, 4_096)
+    }
+
     func testBoundedGapBufferCoalescesBoundsAndPrunesCoveredIntervals() {
         var buffer = BoundedAudioIngressGaps(capacity: 2)
         for sequence in [1, 2, 10, 20] {

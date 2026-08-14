@@ -216,6 +216,27 @@ final class ScreenshotPriorityYieldGateTests: XCTestCase {
         }
     }
 
+    func testNativeScreenshotYieldStopsThePhysicalEyeScreenStream() throws {
+        let coordinator = try String(
+            contentsOf: repositoryRoot.appending(path: "ZBSEyeApp/Capture/CaptureCoordinator.swift"),
+            encoding: .utf8
+        )
+        let pipeline = try String(
+            contentsOf: repositoryRoot.appending(path: "ZBSEyeApp/Capture/FramePipeline.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(coordinator.contains("pipeline.discardPendingIntent()"))
+        XCTAssertTrue(coordinator.contains("pipeline.requestNativeScreenshotYield()"))
+        XCTAssertTrue(coordinator.contains("yieldPersistentStreamToNativeScreenshot()"))
+        XCTAssertTrue(pipeline.contains("nonisolated func discardPendingIntent()"))
+        XCTAssertTrue(pipeline.contains("nonisolated func requestNativeScreenshotYield()"))
+        XCTAssertTrue(pipeline.contains("closeAdmissionForNativeScreenshot()"))
+        XCTAssertTrue(pipeline.contains("immediateStopController.requestStop"))
+        XCTAssertTrue(pipeline.contains("await stopPersistentStream(clearHashes: false)"))
+        XCTAssertTrue(pipeline.contains("eye_screen_stream_yielded_for_native_screenshot"))
+    }
+
     private var repositoryRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

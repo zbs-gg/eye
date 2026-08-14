@@ -35,6 +35,8 @@ actor CallRecoveryService {
             dataRoot: mediaRoot.deletingLastPathComponent(),
             fileManager: fileManager
         ).scavenge()
+        try await repository.recoverOpenVideoSpans(nowMs: nowMs)
+        removeAbandonedVideoPartials()
         var chunksFinalized = 0
         var chunksDiscarded = 0
         for chunk in try await repository.unfinalizedChunks() {
@@ -109,6 +111,24 @@ actor CallRecoveryService {
             mutationsCompleted: mutationReport.completed + rejectedErasesCompleted,
             mutationsRolledBack: mutationReport.rolledBack
         )
+    }
+
+    private func removeAbandonedVideoPartials() {
+        let callsRoot = mediaRoot.appendingPathComponent("calls", isDirectory: true)
+        guard let enumerator = fileManager.enumerator(
+            at: callsRoot,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else { return }
+        for case let url as URL in enumerator where
+            url.pathExtension == "partial"
+                || url.lastPathComponent.hasSuffix(".partial.mp4")
+                || url.lastPathComponent.hasSuffix(".mix.m4a")
+                || url.lastPathComponent.hasSuffix(".silent-backup") {
+            let resolved = url.standardizedFileURL
+            guard resolved.path.hasPrefix(callsRoot.standardizedFileURL.path + "/") else { continue }
+            try? fileManager.removeItem(at: resolved)
+        }
     }
 
     private func replayMutationJournal(nowMs: Int64) async throws -> (completed: Int, rolledBack: Int) {

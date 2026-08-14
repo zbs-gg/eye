@@ -105,8 +105,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: "ZBS Eye"
         INFOPLIST_KEY_CFBundleName: "ZBS Eye"
         GENERATE_INFOPLIST_FILE: YES
-        MARKETING_VERSION: "0.8.0"          # CFBundleShortVersionString
-        CURRENT_PROJECT_VERSION: "22"       # CFBundleVersion
+        MARKETING_VERSION: "0.9.0"          # CFBundleShortVersionString
+        CURRENT_PROJECT_VERSION: "24"       # CFBundleVersion
         CODE_SIGN_ENTITLEMENTS: ZBSEyeApp/ZBSEye.entitlements
         # Default — ad-hoc for development. scripts/build-release.sh can use the legacy self-signed
         # "ZBS Eye Dev" identity; distributable releases must use scripts/build-notarized.sh with the
@@ -187,6 +187,8 @@ targets:
       - path: ZBSEyeApp/Capture/BrowserCapturePolicy.swift
       - path: ZBSEyeApp/Capture/ScreenshotPriorityYieldGate.swift
       - path: ZBSEyeApp/Capture/ScreenshotHotkeyMonitor.swift
+      - path: ZBSEyeApp/Audio/AudioConfig.swift
+      - path: ZBSEyeApp/Audio/SystemAudioScreenLegPolicy.swift
       - path: ZBSEyeApp/Browser/BrowserSnapshot.swift
       - path: ZBSEyeApp/State/LowDiskGuard.swift
       - path: ZBSEyeApp/State/RecordingStore.swift
@@ -205,6 +207,8 @@ targets:
       - path: ZBSEyeApp/Server/KeychainStore.swift
       - path: ZBSEyeApp/Server/LocalPeerAuthenticator.swift
       - path: ZBSEyeApp/Automations/AutomationModels.swift
+      - path: ZBSEyeApp/Automations/DailySummaryService.swift
+      - path: ZBSEyeApp/Automations/ReviewSummaryRepository.swift
       - path: ZBSEyeApp/Automations/CallAutomationModels.swift
       - path: ZBSEyeApp/Automations/CallAutomationRepository.swift
       - path: ZBSEyeApp/Automations/CallAutomationDispatcher.swift
@@ -235,6 +239,8 @@ targets:
       - path: ZBSEyeApp/Calls/CallRepository.swift
       - path: ZBSEyeApp/Calls/CallRepository+AutomationTransitions.swift
       - path: ZBSEyeApp/Calls/CallRepository+EvidenceStorage.swift
+      - path: ZBSEyeApp/Calls/CallRepository+Video.swift
+      - path: ZBSEyeApp/Calls/CallVideoCaptureEngine.swift
       - path: ZBSEyeApp/Calls/CallRecoveryService.swift
       - path: ZBSEyeApp/Calls/CallPrivacyIntentJournal.swift
       - path: ZBSEyeApp/Calls/CallMediaMutationJournal.swift
@@ -321,8 +327,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye.tests
-        MARKETING_VERSION: "0.8.0"
-        CURRENT_PROJECT_VERSION: "22"
+        MARKETING_VERSION: "0.9.0"
+        CURRENT_PROJECT_VERSION: "24"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: ZBSEyeTests/Info.plist
         ZBS_EYE_MODEL_DIR: ""

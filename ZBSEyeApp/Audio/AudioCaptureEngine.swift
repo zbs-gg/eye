@@ -57,7 +57,7 @@ final class AudioCaptureEngine: @unchecked Sendable {
         let publisher = AudioIngressPublisher(
             source: .me,
             epoch: epoch,
-            capacity: 64,
+            capacity: config.ingressFrameCapacity,
             initialSequence: nextIngressSequence
         )
         self.publisher = publisher

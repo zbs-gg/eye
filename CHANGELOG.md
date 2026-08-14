@@ -2,7 +2,38 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
-## [0.8.0] — Unreleased
+## Unreleased — 0.9.0 (24) candidate source
+
+### Added
+- Calls now have **Don't record / Audio only / Audio and video** modes globally and on the active Call.
+- Call video records one fixed display at up to 1080p/15 fps in hardware-only 30-second MP4 fragments, with
+  explicit spans/gaps, sequential playback, authenticated typed references, export, retention, and deletion.
+
+### Changed
+- Audio physically starts before video and remains independent during live video toggles, display loss, native
+  screenshot yields, and background AAC muxing. Existing Mic in use/Always profiles migrate to Audio only;
+  an explicit old Off remains Don't record, and video is never enabled silently. Timeline audio stays independent.
+
+### Fixed
+- Call audio has absolute priority over Timeline capture and video work; native screenshots temporarily stop the
+  physical Call video stream without stopping either audio source.
+- Native screenshot teardown no longer waits behind synchronous HEIC/OCR work, and Call video stays stopped until
+  the native helper plus the full quiet tail have ended. A newly enabled Call-video stream joins that same gate
+  instead of starting inside an already-open screenshot window.
+- Call video drains every accepted latest-wins frame before finalizing a span, reports separate frame-drop gaps,
+  and publishes hardware encoder failure without waiting for the Call to end.
+- Failed hardware codec attempts and unpublished final segments remove their own bytes, so HEVC failure cannot
+  block the hardware H.264 fallback or leave unreachable Call video on disk.
+- A Call locks its display when audio starts, even when video is enabled later. The current binary recognizes the
+  v17 schema, and REST/OpenAPI now expose recording modes, video segments, and video gaps.
+- Review schedule migration no longer triggers an immediate catch-up, and changing its selected period cannot
+  leave the panel permanently busy.
+- Timeline Review now pins the independently verified official Claude Code 2.1.232 arm64 artifact, while its
+  installed-binary test remains deterministic when Anthropic's local auto-updater has another version installed.
+- Call fixture verification uses disposable DerivedData by default instead of silently growing the repository's
+  `build/` directory; an explicit cache path remains available for intentional reuse.
+
+## [0.8.0] — 2026-08-08
 
 ### Added
 - Timeline now shows a clickable seven-image filmstrip around the selected visual moment and keeps decoded

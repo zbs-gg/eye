@@ -41,7 +41,7 @@ ZBSEyeApp/
   Capture/    Persistent screen stream, latest-wins FramePipeline, SCKResourceCoordinator, screenshot priority, AXReader
   Audio/      AudioCoordinator, mic/system engines, VADSegmenter, TranscriptionService
   Meeting/    CoreAudio mic-owner listener, initiator/relay resolution, automatic Call detection
-  Calls/      CallCoordinator, lifecycle policy, dual-source spool, Calls projection, Whisper/diarization helpers
+  Calls/      CallCoordinator, dual-source spool, separate Call video, AAC post-process, projection, privacy deletion
   Data/       ZBSEyeDatabase, StorageLocation, StorageManager, BackupManager, RetentionManager, IngestService
   Search/     SearchService (FTS+vector RRF), EmbeddingService (e5), TimelineService, VectorBackfill
   Server/     ZBSEyeHTTPServer (FlyingFox REST, 127.0.0.1, Bearer), KeychainStore
@@ -56,6 +56,12 @@ Swift 6 strict concurrency = `complete`. Deployment target macOS 15.0.
 See [`AGENTS.md`](AGENTS.md) for the architecture map, invariants, and gotchas.
 
 ## Call recorder runtime and model
+
+Calls have an independent persisted mode: `off`, `audio`, or `audio_video`. Video is a separate hardware-only
+ScreenCaptureKit/AVFoundation path capped at 1080p and 15 fps. It never owns or backpressures audio; finalized
+30-second MP4 fragments receive a background mixed AAC convenience track while the PCM sources remain authoritative.
+The display is locked when authoritative Call audio starts. A native screenshot closes both Timeline and Call-video
+admission immediately; video resumes only after the shared helper-aware quiet gate opens, without restarting audio.
 
 The shipping source pins two independent artifacts:
 
@@ -72,7 +78,9 @@ downloaded helper binary. It receives one immutable manifest and writes one boun
 GUI remains the only database writer.
 
 `scripts/verify-call-recording.sh --fixtures` is deterministic and does not launch the app, capture media,
-request TCC permissions, or download weights. Permission-sensitive qualification is deliberately separate:
+request TCC permissions, or download weights. Its DerivedData is temporary and removed on exit; set
+`ZBS_EYE_CALL_DERIVED_DATA_PATH` only when a persistent reusable cache is intentional. Permission-sensitive
+qualification is deliberately separate:
 
 ```bash
 ZBS_EYE_CALL_PHYSICAL_GATE=YES scripts/verify-call-recording.sh --physical-preflight

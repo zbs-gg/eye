@@ -2,6 +2,24 @@ import XCTest
 
 @MainActor
 final class CaptureHealthControllerTests: XCTestCase {
+    func testCallPriorityPausesOnlyScreenAndKeepsSystemAudioObservable() {
+        let controller = CaptureHealthController(
+            nowMs: 1,
+            intent: CaptureIntent(screenEnabled: true, systemAudioEnabled: false)
+        )
+
+        controller.setCallAudioPriority(true, nowMs: 2)
+        XCTAssertFalse(controller.snapshot.intent.screenEnabled)
+        XCTAssertTrue(controller.snapshot.intent.systemAudioEnabled)
+        XCTAssertEqual(controller.snapshot.legs[.screen]?.state, .paused)
+        XCTAssertNotEqual(controller.snapshot.legs[.systemAudio]?.state, .suspended)
+        XCTAssertTrue(controller.permitsSystemAudioStart())
+
+        controller.setCallAudioPriority(false, nowMs: 3)
+        XCTAssertTrue(controller.snapshot.intent.screenEnabled)
+        XCTAssertFalse(controller.snapshot.intent.systemAudioEnabled)
+    }
+
     func testSystemAudioRecoveryExhaustsOnceAndWaitsForExplicitRepair() {
         var effects: [CaptureHealthEffect] = []
         let controller = CaptureHealthController(nowMs: 0) { effects.append($0) }

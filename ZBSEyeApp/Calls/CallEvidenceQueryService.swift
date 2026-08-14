@@ -65,10 +65,12 @@ enum CallEvidenceIdentifier {
     static func speakerRevision(_ id: Int64) -> String { "call-speaker-revision:\(id)" }
     static func segment(_ id: Int64) -> String { "call-transcript-segment:\(id)" }
     static func audioChunk(_ id: Int64) -> String { "call-audio-chunk:\(id)" }
+    static func videoSegment(_ id: Int64) -> String { "call-video-segment:\(id)" }
 
     static func parseCall(_ value: String) -> Int64? { parse(value, prefix: "call:") }
     static func parseBookmark(_ value: String) -> Int64? { parse(value, prefix: "bookmark:") }
     static func parseAudioChunk(_ value: String) -> Int64? { parse(value, prefix: "call-audio-chunk:") }
+    static func parseVideoSegment(_ value: String) -> Int64? { parse(value, prefix: "call-video-segment:") }
 
     private static func parse(_ value: String, prefix: String) -> Int64? {
         guard value.hasPrefix(prefix),
@@ -91,6 +93,7 @@ struct CallEvidenceSummary: Codable, Sendable, Equatable {
     let sourceApp: String?
     let bookmarkCount: Int
     let speakerStatus: CallSpeakerEvidenceStatus
+    let recordingMode: CallRecordingMode
 }
 
 struct CallEvidenceListPage: Codable, Sendable, Equatable {
@@ -135,6 +138,32 @@ struct CallEvidenceReference: Codable, Sendable, Equatable {
     let startMs: Int64
     let endMs: Int64
     let bytes: Int64
+}
+
+struct CallEvidenceVideoSegment: Codable, Sendable, Equatable {
+    let evidenceId: String
+    let startMs: Int64
+    let endMs: Int64
+    let width: Int
+    let height: Int
+    let fps: Int
+    let codec: CallVideoCodec
+    let bytes: Int64
+    let audioMuxed: Bool
+}
+
+struct CallEvidenceVideoGap: Codable, Sendable, Equatable {
+    let startMs: Int64
+    let endMs: Int64
+    let reason: String
+}
+
+struct CallEvidenceVideo: Codable, Sendable, Equatable {
+    let requested: Bool
+    let available: Bool
+    let segments: [CallEvidenceVideoSegment]
+    let gaps: [CallEvidenceVideoGap]
+    let truncated: Bool
 }
 
 struct CallEvidenceContext: Codable, Sendable, Equatable {
@@ -185,6 +214,9 @@ struct CallEvidenceEnvelope: Codable, Sendable, Equatable {
     let bookmarkCount: Int
     let evidence: [CallEvidenceReference]
     let evidenceTruncated: Bool
+    let initialRecordingMode: CallRecordingMode
+    let recordingMode: CallRecordingMode
+    let video: CallEvidenceVideo
 }
 
 struct CallEvidenceBookmark: Codable, Sendable, Equatable {
@@ -233,6 +265,11 @@ struct CallAudioEvidenceFile: Sendable, Equatable {
     let relativePath: String
 }
 
+struct CallVideoEvidenceFile: Sendable, Equatable {
+    let reference: CallEvidenceVideoSegment
+    let relativePath: String
+}
+
 struct CallTranscriptRevisionSummary: Sendable, Equatable, FetchableRecord, Decodable {
     let id: Int64
     let kind: CallTranscriptRevisionKind
@@ -254,6 +291,50 @@ struct CallEvidencePage: Sendable, Equatable {
     let segments: [CallTranscriptSegmentRow]
     let segmentOffset: Int
     let hasMoreSegments: Bool
+    let videoSpans: [CallVideoSpanRow]
+    let videoSegments: [CallVideoSegmentRow]
+    let videoGaps: [CallVideoGapRow]
+    let videoTruncated: Bool
+
+    init(
+        call: CallRow,
+        sourceSpans: [CallSourceSpanRow],
+        sourceSpansTruncated: Bool,
+        sourceGaps: [CallSourceGapRow],
+        sourceGapsTruncated: Bool,
+        bookmarks: [CallBookmarkRow],
+        bookmarksTruncated: Bool,
+        finalJob: CallTranscriptJobRow?,
+        preferredRevision: CallTranscriptRevisionSummary?,
+        projectionGaps: [CallTranscriptProjectionGapRow],
+        projectionGapsTruncated: Bool,
+        segments: [CallTranscriptSegmentRow],
+        segmentOffset: Int,
+        hasMoreSegments: Bool,
+        videoSpans: [CallVideoSpanRow] = [],
+        videoSegments: [CallVideoSegmentRow] = [],
+        videoGaps: [CallVideoGapRow] = [],
+        videoTruncated: Bool = false
+    ) {
+        self.call = call
+        self.sourceSpans = sourceSpans
+        self.sourceSpansTruncated = sourceSpansTruncated
+        self.sourceGaps = sourceGaps
+        self.sourceGapsTruncated = sourceGapsTruncated
+        self.bookmarks = bookmarks
+        self.bookmarksTruncated = bookmarksTruncated
+        self.finalJob = finalJob
+        self.preferredRevision = preferredRevision
+        self.projectionGaps = projectionGaps
+        self.projectionGapsTruncated = projectionGapsTruncated
+        self.segments = segments
+        self.segmentOffset = segmentOffset
+        self.hasMoreSegments = hasMoreSegments
+        self.videoSpans = videoSpans
+        self.videoSegments = videoSegments
+        self.videoGaps = videoGaps
+        self.videoTruncated = videoTruncated
+    }
 }
 
 /// Bounded, read-only projection used by the compact call strip and Call
@@ -266,6 +347,7 @@ actor CallEvidenceQueryService {
     static let maximumBookmarks = 1_000
     static let maximumProjectionGaps = 1_000
     static let maximumSpeakerIntervals = 5_000
+    static let maximumVideoItems = 2_000
 
     private let database: ZBSEyeDatabase
 
@@ -485,6 +567,18 @@ actor CallEvidenceQueryService {
         let hasExplicitGaps = sources.contains { $0.health != .available }
         let status = Self.status(call: page.call, finalJobState: page.finalJob?.state, preferredKind: revisionRow?.kind)
         let evidenceRows = Array(chunkRows.prefix(CallEvidenceContract.maximumEvidenceReferences))
+        let videoSegments = page.videoSegments.compactMap(Self.videoProjection)
+        let video = CallEvidenceVideo(
+            requested: page.call.initialRecordingMode.recordsVideo
+                || page.call.recordingMode.recordsVideo
+                || !page.videoSpans.isEmpty,
+            available: !videoSegments.isEmpty,
+            segments: videoSegments,
+            gaps: page.videoGaps.map {
+                CallEvidenceVideoGap(startMs: $0.startMs, endMs: $0.endMs, reason: $0.reason)
+            },
+            truncated: page.videoTruncated
+        )
         return CallEvidenceEnvelope(
             callId: CallEvidenceIdentifier.call(callID),
             startTs: page.call.startTs,
@@ -513,7 +607,10 @@ actor CallEvidenceQueryService {
             ),
             bookmarkCount: bookmarkCount,
             evidence: evidenceRows.compactMap(Self.evidenceProjection),
-            evidenceTruncated: chunkRows.count > CallEvidenceContract.maximumEvidenceReferences
+            evidenceTruncated: chunkRows.count > CallEvidenceContract.maximumEvidenceReferences,
+            initialRecordingMode: page.call.initialRecordingMode,
+            recordingMode: page.call.recordingMode,
+            video: video
         )
     }
 
@@ -690,6 +787,27 @@ actor CallEvidenceQueryService {
         }
     }
 
+    func videoEvidence(reference: String) async throws -> CallVideoEvidenceFile? {
+        guard let segmentID = CallEvidenceIdentifier.parseVideoSegment(reference) else {
+            throw CallEvidenceRequestError.invalidIdentifier
+        }
+        return try await database.pool.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT segment.* FROM call_video_segments segment
+                    JOIN calls c ON c.id = segment.callId
+                        AND c.mediaGeneration = segment.mediaGeneration
+                    WHERE segment.id = ? AND segment.finalized = 1
+                    """,
+                arguments: [segmentID]
+            ) else { return nil }
+            let segment = try CallVideoSegmentRow(row: row)
+            guard let projected = Self.videoProjection(segment) else { return nil }
+            return CallVideoEvidenceFile(reference: projected, relativePath: segment.relativePath)
+        }
+    }
+
     func latestCall(
         segmentOffset: Int = 0,
         segmentLimit: Int = 80
@@ -801,6 +919,33 @@ actor CallEvidenceQueryService {
                 gapRows = []
                 segmentRows = []
             }
+            let videoSpanRows = try CallVideoSpanRow.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM call_video_spans
+                    WHERE callId = ? AND mediaGeneration = ?
+                    ORDER BY startedAtMs, epoch, id LIMIT ?
+                    """,
+                arguments: [callID, call.mediaGeneration, Self.maximumVideoItems + 1]
+            )
+            let videoSegmentRows = try CallVideoSegmentRow.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM call_video_segments
+                    WHERE callId = ? AND mediaGeneration = ? AND finalized = 1
+                    ORDER BY startMs, epoch, sequence, id LIMIT ?
+                    """,
+                arguments: [callID, call.mediaGeneration, Self.maximumVideoItems + 1]
+            )
+            let videoGapRows = try CallVideoGapRow.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM call_video_gaps
+                    WHERE callId = ? AND mediaGeneration = ?
+                    ORDER BY startMs, id LIMIT ?
+                    """,
+                arguments: [callID, call.mediaGeneration, Self.maximumVideoItems + 1]
+            )
             return CallEvidencePage(
                 call: call,
                 sourceSpans: sourceSpans,
@@ -815,7 +960,13 @@ actor CallEvidenceQueryService {
                 projectionGapsTruncated: gapRows.count > Self.maximumProjectionGaps,
                 segments: Array(segmentRows.prefix(limit)),
                 segmentOffset: offset,
-                hasMoreSegments: segmentRows.count > limit
+                hasMoreSegments: segmentRows.count > limit,
+                videoSpans: Array(videoSpanRows.prefix(Self.maximumVideoItems)),
+                videoSegments: Array(videoSegmentRows.prefix(Self.maximumVideoItems)),
+                videoGaps: Array(videoGapRows.prefix(Self.maximumVideoItems)),
+                videoTruncated: videoSpanRows.count > Self.maximumVideoItems
+                    || videoSegmentRows.count > Self.maximumVideoItems
+                    || videoGapRows.count > Self.maximumVideoItems
             )
         }
     }
@@ -841,7 +992,8 @@ actor CallEvidenceQueryService {
             participants: participants,
             sourceApp: row["sourceAppName"],
             bookmarkCount: row["bookmarkCount"],
-            speakerStatus: speakerStatus(call: call, revisionState: speakerRevisionState)
+            speakerStatus: speakerStatus(call: call, revisionState: speakerRevisionState),
+            recordingMode: call.recordingMode
         )
     }
 
@@ -960,6 +1112,21 @@ actor CallEvidenceQueryService {
             startMs: row.startMs,
             endMs: row.endMs,
             bytes: row.bytes
+        )
+    }
+
+    private static func videoProjection(_ row: CallVideoSegmentRow) -> CallEvidenceVideoSegment? {
+        guard let id = row.id else { return nil }
+        return CallEvidenceVideoSegment(
+            evidenceId: CallEvidenceIdentifier.videoSegment(id),
+            startMs: row.startMs,
+            endMs: row.endMs,
+            width: row.width,
+            height: row.height,
+            fps: row.fps,
+            codec: row.codec,
+            bytes: row.bytes,
+            audioMuxed: row.audioMuxed
         )
     }
 }

@@ -334,9 +334,9 @@ final class AIConsumerGenerationTests: XCTestCase {
         )
         XCTAssertEqual(summary.consumer, .scheduledSummary)
         XCTAssertEqual(summary.priority, .scheduledSummary)
-        XCTAssertEqual(summary.promptVersion, "daily-summary-v4")
+        XCTAssertEqual(summary.promptVersion, "timeline-review-v1")
         XCTAssertEqual(summary.purpose, .summary)
-        XCTAssertTrue(summary.userPostamble.contains("## What I worked on"))
+        XCTAssertTrue(summary.userPostamble.contains("## Projects and activities"))
 
         let label = AIConsumerPromptFactory.generatedLabel(
             serializedBlock: #"{"apps":["Xcode"]}"#,
@@ -363,7 +363,7 @@ final class AIConsumerGenerationTests: XCTestCase {
                 maximumOutputTokens: 800,
                 timeout: .seconds(30)
             )
-            XCTAssertEqual(summary.promptVersion, "daily-summary-v4")
+            XCTAssertEqual(summary.promptVersion, "timeline-review-v1")
             XCTAssertTrue(summary.systemPrompt.contains(
                 language == .ru
                     ? "Дата и числа сессий/кадров — только служебный контекст"
@@ -371,8 +371,8 @@ final class AIConsumerGenerationTests: XCTestCase {
             ))
             XCTAssertTrue(summary.systemPrompt.contains(
                 language == .ru
-                    ? "Любое число в резюме должно дословно присутствовать во включённом фрагменте истории."
-                    : "Every number in the summary must appear verbatim inside an included history fragment."
+                    ? "Любое число в Review должно дословно присутствовать во включённом фрагменте истории."
+                    : "Every number in the Review must appear verbatim inside an included history fragment."
             ))
         }
 

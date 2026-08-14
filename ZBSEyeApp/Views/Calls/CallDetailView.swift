@@ -1,3 +1,4 @@
+import AVKit
 import SwiftUI
 
 struct CallDetailView: View {
@@ -23,6 +24,8 @@ struct CallDetailView: View {
     @State private var playback = CallPlaybackStore()
     @State private var waveform = CallWaveformStore()
     @State private var waveformLoaded = false
+    @State private var videoPlayer: AVQueuePlayer?
+    @State private var loadedVideoSegmentIDs: [Int64] = []
 
     var body: some View {
         ScrollView {
@@ -30,6 +33,7 @@ struct CallDetailView: View {
                 if let evidence {
                     header(evidence)
                     sourceSection(evidence)
+                    videoSection(evidence)
                     bookmarkSection(evidence)
                     speakerSection(evidence)
                     transcriptSection(evidence)
@@ -57,7 +61,10 @@ struct CallDetailView: View {
         )) {
             await monitor()
         }
-        .onDisappear { playback.stop() }
+        .onDisappear {
+            playback.stop()
+            videoPlayer?.pause()
+        }
         .alert("Name this speaker", isPresented: Binding(
             get: { speakerKeyToRename != nil },
             set: { if !$0 { speakerKeyToRename = nil } }
@@ -86,13 +93,13 @@ struct CallDetailView: View {
         } message: {
             Text("Only the selected interval moves. The original microphone/system source stays unchanged.")
         }
-        .alert("Delete the selected audio?", isPresented: $showTrimConfirmation) {
+        .alert("Delete the selected Call range?", isPresented: $showTrimConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Delete permanently", role: .destructive) {
                 if let evidence { Task { await trim(evidence: evidence) } }
             }
         } message: {
-            Text("\(clock(trimStartSeconds))–\(clock(trimEndSeconds)) (\(clock(trimEndSeconds - trimStartSeconds))) will be physically removed, including derived transcript and speaker evidence. This cannot be undone.")
+            Text("\(clock(trimStartSeconds))–\(clock(trimEndSeconds)) (\(clock(trimEndSeconds - trimStartSeconds))) will be physically removed from audio, video, transcript, and speaker evidence. An intersecting video fragment is removed in full. This cannot be undone.")
         }
     }
 
@@ -165,6 +172,61 @@ struct CallDetailView: View {
                 Text("Source history is summarized after \(CallEvidenceQueryService.maximumSourceSpans) changes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func videoSection(_ evidence: CallEvidencePage) -> some View {
+        if evidence.call.initialRecordingMode.recordsVideo
+            || evidence.call.recordingMode.recordsVideo
+            || !evidence.videoSpans.isEmpty
+            || !evidence.videoSegments.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Call video").font(.headline)
+                if let videoPlayer, !evidence.videoSegments.isEmpty {
+                    VideoPlayer(player: videoPlayer)
+                        .aspectRatio(16 / 9, contentMode: .fit)
+                        .frame(maxWidth: 760)
+                        .background(.black)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    let first = evidence.videoSegments[0]
+                    Text("\(first.width)×\(first.height) · \(first.fps) fps · \(first.codec.rawValue.uppercased()) · \(evidence.videoSegments.count) segments")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if evidence.videoSegments.contains(where: { !$0.audioMuxed }) {
+                        Text("The MP4 audio copy is pending or unavailable. Original microphone and system tracks are intact.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                } else {
+                    Label(
+                        (evidence.call.initialRecordingMode.recordsVideo
+                            || evidence.call.recordingMode.recordsVideo
+                            || !evidence.videoSpans.isEmpty)
+                            ? "Audio complete · Video unavailable"
+                            : "Audio only",
+                        systemImage: (evidence.call.initialRecordingMode.recordsVideo
+                            || evidence.call.recordingMode.recordsVideo
+                            || !evidence.videoSpans.isEmpty)
+                            ? "video.slash"
+                            : "waveform"
+                    )
+                    .font(.callout)
+                    .foregroundStyle((evidence.call.initialRecordingMode.recordsVideo
+                        || evidence.call.recordingMode.recordsVideo
+                        || !evidence.videoSpans.isEmpty) ? Color.orange : Color.secondary)
+                }
+                ForEach(evidence.videoGaps, id: \.id) { gap in
+                    Text("Video gap \(offset(gap.startMs, from: evidence.call.startTs))–\(offset(gap.endMs, from: evidence.call.startTs)) · \(gap.reason)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                if evidence.videoTruncated {
+                    Text("Video history is truncated in this view.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -504,7 +566,7 @@ struct CallDetailView: View {
 
                 HStack {
                     Spacer()
-                    Button("Delete selected audio…", role: .destructive) {
+                    Button("Delete selected Call range…", role: .destructive) {
                         playback.stop()
                         showTrimConfirmation = true
                     }
@@ -559,6 +621,7 @@ struct CallDetailView: View {
             }
             let revisionChanged = evidence?.preferredRevision?.id != page.preferredRevision?.id
             evidence = page
+            rebuildVideoPlayerIfNeeded(page)
             if !waveformLoaded,
                let endTs = page.call.endTs,
                let mediaRoot = env.storage?.mediaDirectory {
@@ -582,6 +645,24 @@ struct CallDetailView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func rebuildVideoPlayerIfNeeded(_ page: CallEvidencePage) {
+        let ids = page.videoSegments.compactMap(\.id)
+        guard ids != loadedVideoSegmentIDs else { return }
+        loadedVideoSegmentIDs = ids
+        videoPlayer?.pause()
+        guard let mediaRoot = env.storage?.mediaDirectory else {
+            videoPlayer = nil
+            return
+        }
+        let root = mediaRoot.standardizedFileURL
+        let items = page.videoSegments.compactMap { segment -> AVPlayerItem? in
+            let url = root.appendingPathComponent(segment.relativePath).standardizedFileURL
+            guard url.path.hasPrefix(root.path + "/") else { return nil }
+            return AVPlayerItem(url: url)
+        }
+        videoPlayer = items.isEmpty ? nil : AVQueuePlayer(items: items)
     }
 
     private func renameSpeaker(key: String, name: String) async {

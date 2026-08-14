@@ -11,13 +11,13 @@ final class CallRepositoryEvidenceStorage: Sendable {
         self.database = database
     }
 
-    fileprivate func read<Value: Sendable>(
+    func read<Value: Sendable>(
         _ body: @escaping @Sendable (Database) throws -> Value
     ) async throws -> Value {
         try await database.pool.read(body)
     }
 
-    fileprivate func write<Value: Sendable>(
+    func write<Value: Sendable>(
         _ body: @escaping @Sendable (Database) throws -> Value
     ) async throws -> Value {
         try await database.pool.write(body)
@@ -518,7 +518,13 @@ extension CallRepository {
         try await evidenceStorage.read { db in
             (try Int.fetchOne(
                 db,
-                sql: "SELECT 1 FROM call_audio_chunks WHERE relativePath = ? LIMIT 1",
+                sql: """
+                    SELECT 1 FROM (
+                      SELECT relativePath FROM call_audio_chunks
+                      UNION ALL
+                      SELECT relativePath FROM call_video_segments
+                    ) WHERE relativePath = ? LIMIT 1
+                    """,
                 arguments: [relativePath]
             )) != nil
         }
@@ -537,7 +543,13 @@ extension CallRepository {
         try await evidenceStorage.read { db in
             try Int64.fetchOne(
                 db,
-                sql: "SELECT COALESCE(SUM(bytes), 0) FROM call_audio_chunks"
+                sql: """
+                    SELECT COALESCE(SUM(bytes), 0) FROM (
+                      SELECT bytes FROM call_audio_chunks
+                      UNION ALL
+                      SELECT bytes FROM call_video_segments
+                    )
+                    """
             ) ?? 0
         }
     }
@@ -587,7 +599,17 @@ extension CallRepository {
                 sql: "SELECT * FROM call_audio_chunks WHERE callId = ? ORDER BY source, epoch, sequence",
                 arguments: [callID]
             )
-            return CallRedactionSourceSnapshot(call: call, spans: spans, chunks: chunks)
+            let videoSegments = try CallVideoSegmentRow.fetchAll(
+                db,
+                sql: "SELECT * FROM call_video_segments WHERE callId = ? ORDER BY startMs, id",
+                arguments: [callID]
+            )
+            return CallRedactionSourceSnapshot(
+                call: call,
+                spans: spans,
+                chunks: chunks,
+                videoSegments: videoSegments
+            )
         }
     }
 
@@ -738,7 +760,40 @@ extension CallRepository {
                 sql: "UPDATE call_source_gaps SET mediaGeneration = ? WHERE callId = ?",
                 arguments: [manifest.toGeneration, manifest.callID]
             )
+            try db.execute(
+                sql: "UPDATE call_video_spans SET mediaGeneration = ? WHERE callId = ?",
+                arguments: [manifest.toGeneration, manifest.callID]
+            )
+            try db.execute(
+                sql: "UPDATE call_video_gaps SET mediaGeneration = ? WHERE callId = ?",
+                arguments: [manifest.toGeneration, manifest.callID]
+            )
             return mutation
+    }
+
+    func updateStagedRedactionManifest(
+        mutationID: Int64,
+        manifest: CallRedactionManifestV1,
+        nowMs: Int64
+    ) async throws {
+        try await evidenceStorage.write { db in
+            guard var mutation = try CallMediaMutationRow.fetchOne(db, key: mutationID),
+                  mutation.kind == .redaction,
+                  mutation.state == .staged,
+                  mutation.callId == manifest.callID,
+                  mutation.fromGeneration == manifest.fromGeneration,
+                  mutation.toGeneration == manifest.toGeneration else {
+                throw CallRepositoryError.invalidMediaMutation(mutationID)
+            }
+            mutation.oldRelativePathsJSON = String(
+                decoding: try JSONEncoder().encode(manifest.obsoleteRelativePaths),
+                as: UTF8.self
+            )
+            mutation.newRelativePathsJSON = try manifest.encodedJSON()
+            mutation.updatedAtMs = nowMs
+            mutation.errorCode = nil
+            try mutation.update(db)
+        }
     }
 
     func commitRedactionReferenceSwap(
@@ -788,6 +843,51 @@ extension CallRepository {
                     finalized: true
                 )
                 try chunk.insert(db)
+            }
+
+            try db.execute(
+                sql: "DELETE FROM call_video_segments WHERE callId = ?",
+                arguments: [manifest.callID]
+            )
+            for survivor in manifest.videoSurvivors ?? [] {
+                guard let bytes = survivor.bytes,
+                      bytes > 0,
+                      let sha256 = survivor.sha256,
+                      !sha256.isEmpty else {
+                    throw CallRepositoryError.invalidMediaMutation(mutationID)
+                }
+                var segment = CallVideoSegmentRow(
+                    id: nil,
+                    callId: manifest.callID,
+                    videoSpanId: survivor.videoSpanID,
+                    mediaGeneration: manifest.toGeneration,
+                    epoch: survivor.epoch,
+                    sequence: survivor.sequence,
+                    startMs: survivor.startMs,
+                    endMs: survivor.endMs,
+                    relativePath: survivor.relativePath,
+                    bytes: bytes,
+                    sha256: sha256,
+                    width: survivor.width,
+                    height: survivor.height,
+                    fps: survivor.fps,
+                    codec: survivor.codec,
+                    finalized: true,
+                    audioMuxed: survivor.audioMuxed
+                )
+                try segment.insert(db)
+            }
+            for gap in manifest.videoRedactedGaps ?? [] {
+                var row = CallVideoGapRow(
+                    id: nil,
+                    callId: manifest.callID,
+                    mediaGeneration: manifest.toGeneration,
+                    startMs: gap.startMs,
+                    endMs: gap.endMs,
+                    reason: "privacy_redaction",
+                    createdAtMs: nowMs
+                )
+                try row.insert(db)
             }
 
             for requestedGap in manifest.redactedGaps {
@@ -972,7 +1072,11 @@ extension CallRepository {
 
     func referencedCallMediaPaths() async throws -> Set<String> {
         try await evidenceStorage.read { db in
-            Set(try String.fetchAll(db, sql: "SELECT relativePath FROM call_audio_chunks"))
+            Set(try String.fetchAll(db, sql: """
+                SELECT relativePath FROM call_audio_chunks
+                UNION
+                SELECT relativePath FROM call_video_segments
+                """))
         }
     }
 
@@ -1045,6 +1149,10 @@ extension CallRepository {
                 .filter(Column("callId") == callID)
                 .order(Column("id"))
                 .fetchAll(db)
+            let videoSegments = try CallVideoSegmentRow
+                .filter(Column("callId") == callID)
+                .order(Column("id"))
+                .fetchAll(db)
             let redactionMutations = try CallMediaMutationRow.fetchAll(
                 db,
                 sql: """
@@ -1061,6 +1169,7 @@ extension CallRepository {
                 ]
             )
             var paths = Set(chunks.map(\.relativePath))
+            paths.formUnion(videoSegments.map(\.relativePath))
             paths.formUnion(additionalRelativePaths)
             for redaction in redactionMutations {
                 guard let data = redaction.oldRelativePathsJSON.data(using: .utf8),
@@ -1070,8 +1179,8 @@ extension CallRepository {
                 paths.formUnion(oldPaths)
             }
             let sortedPaths = paths.sorted()
-            let bytes = chunks.reduce(Int64(0)) { partial, chunk in
-                let next = partial.addingReportingOverflow(chunk.bytes)
+            let bytes = (chunks.map(\.bytes) + videoSegments.map(\.bytes)).reduce(Int64(0)) { partial, value in
+                let next = partial.addingReportingOverflow(value)
                 return next.overflow ? Int64.max : next.partialValue
             }
             let pathData = try JSONEncoder().encode(sortedPaths)
@@ -1150,6 +1259,9 @@ extension CallRepository {
                 sql: "DELETE FROM call_audio_chunks WHERE callId = ?",
                 arguments: [callID]
             )
+            try db.execute(sql: "DELETE FROM call_video_segments WHERE callId = ?", arguments: [callID])
+            try db.execute(sql: "DELETE FROM call_video_gaps WHERE callId = ?", arguments: [callID])
+            try db.execute(sql: "DELETE FROM call_video_spans WHERE callId = ?", arguments: [callID])
             try db.execute(
                 sql: "DELETE FROM call_source_spans WHERE callId = ?",
                 arguments: [callID]
@@ -1170,8 +1282,12 @@ extension CallRepository {
                   mutation.state == .cleanupPending || mutation.state == .referenceSwapped,
                   (try Int.fetchOne(
                     db,
-                    sql: "SELECT COUNT(*) FROM call_audio_chunks WHERE callId = ?",
-                    arguments: [mutation.callId]
+                    sql: """
+                        SELECT
+                          (SELECT COUNT(*) FROM call_audio_chunks WHERE callId = ?) +
+                          (SELECT COUNT(*) FROM call_video_segments WHERE callId = ?)
+                        """,
+                    arguments: [mutation.callId, mutation.callId]
                   ) ?? -1) == 0 else {
                 throw CallRepositoryError.invalidMediaMutation(mutationID)
             }

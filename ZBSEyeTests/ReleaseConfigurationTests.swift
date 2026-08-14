@@ -322,13 +322,13 @@ final class ReleaseConfigurationTests: XCTestCase {
         )
 
         XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION:").count - 1, 2)
-        XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION: \"0.8.0\"").count - 1, 2)
+        XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION: \"0.9.0\"").count - 1, 2)
         XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION:").count - 1, 2)
-        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"22\"").count - 1, 2)
-        XCTAssertTrue(notices.contains("Release: 0.8.0 (build 22 candidate)"))
+        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"24\"").count - 1, 2)
+        XCTAssertTrue(notices.contains("Release: 0.9.0 (build 24)"))
     }
 
-    func testUnqualifiedCandidateDocumentationDoesNotClaimAPublicRelease() throws {
+    func testPublishedReleaseDocumentationNamesTheExactPublicArtifact() throws {
         let readme = try String(
             contentsOf: repositoryRoot.appending(path: "README.md"),
             encoding: .utf8
@@ -342,14 +342,12 @@ final class ReleaseConfigurationTests: XCTestCase {
             .filter { !$0.isEmpty }
             .joined(separator: " ")
 
-        XCTAssertTrue(normalizedReadme.contains("public stable release is 0.7.0"))
+        XCTAssertTrue(normalizedReadme.contains("public stable release is 0.8.0"))
         XCTAssertTrue(normalizedReadme.contains("0.8.0 (build 22)"))
-        XCTAssertTrue(normalizedReadme.contains("source candidate"))
-        XCTAssertTrue(changelog.contains("## [0.8.0] — Unreleased"))
-        XCTAssertFalse(changelog.contains("## [0.8.0] — 2026"))
+        XCTAssertTrue(changelog.contains("## [0.8.0] — 2026-08-08"))
     }
 
-    func testCallQualificationScriptsDoNotShareTheGenericDerivedDataCache() throws {
+    func testCallQualificationUsesDisposableCacheUnlessExplicitlyOverridden() throws {
         let recording = try String(
             contentsOf: repositoryRoot.appending(path: "scripts/verify-call-recording.sh"),
             encoding: .utf8
@@ -359,7 +357,11 @@ final class ReleaseConfigurationTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(recording.contains("build/CallRecordingDerivedData"))
+        XCTAssertTrue(recording.contains("ZBS_EYE_CALL_DERIVED_DATA_PATH"))
+        XCTAssertTrue(recording.contains("mktemp -d"))
+        XCTAssertTrue(recording.contains("trap cleanup_temp_derived_data EXIT INT TERM"))
+        XCTAssertTrue(recording.contains("rm -rf -- \"$TEMP_DERIVED_DATA\""))
+        XCTAssertFalse(recording.contains("build/CallRecordingDerivedData"))
         XCTAssertTrue(automation.contains("build/CallAutomationDerivedData"))
         XCTAssertFalse(recording.contains("PATH:-build/DerivedData"))
         XCTAssertFalse(automation.contains("PATH:-build/DerivedData"))
