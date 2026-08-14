@@ -124,7 +124,10 @@ final class ReviewFeatureTests: XCTestCase {
         ))
         XCTAssertEqual(calendar.component(.weekday, from: weekly.end.addingTimeInterval(-1)), 6)
         XCTAssertEqual(weekly.kind, .week)
-        XCTAssertEqual(DailySummaryService.periodKey(weekly), "2026-08-01--2026-08-07-7d")
+        XCTAssertEqual(
+            DailySummaryService.periodKey(weekly, calendar: calendar),
+            "2026-08-01--2026-08-07-7d"
+        )
 
         let weekday = try XCTUnwrap(ReviewSchedulePolicy.latestDuePeriod(
             now: now,
@@ -135,7 +138,32 @@ final class ReviewFeatureTests: XCTestCase {
         ))
         XCTAssertEqual(calendar.component(.weekday, from: weekday.start), 6)
         XCTAssertEqual(weekday.kind, .day)
-        XCTAssertEqual(DailySummaryService.periodKey(weekday), "2026-08-07")
+        XCTAssertEqual(DailySummaryService.periodKey(weekday, calendar: calendar), "2026-08-07")
+    }
+
+    func testPeriodKeysUseTheSchedulingCalendarTimeZone() throws {
+        var bangkok = Calendar(identifier: .gregorian)
+        bangkok.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Bangkok"))
+        let bangkokEnd = try XCTUnwrap(bangkok.date(from: DateComponents(
+            year: 2026, month: 8, day: 7, hour: 18
+        )))
+        let bangkokPeriod = ReviewPeriod.ending(at: bangkokEnd, kind: .week, calendar: bangkok)
+
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let utcEnd = try XCTUnwrap(utc.date(from: DateComponents(
+            year: 2026, month: 8, day: 7, hour: 18
+        )))
+        let utcPeriod = ReviewPeriod.ending(at: utcEnd, kind: .week, calendar: utc)
+
+        XCTAssertEqual(
+            DailySummaryService.periodKey(bangkokPeriod, calendar: bangkok),
+            "2026-08-01--2026-08-07-7d"
+        )
+        XCTAssertEqual(
+            DailySummaryService.periodKey(utcPeriod, calendar: utc),
+            "2026-08-01--2026-08-07-7d"
+        )
     }
 
     func testDailyScheduleUsesCalendarDaysAcrossDST() throws {

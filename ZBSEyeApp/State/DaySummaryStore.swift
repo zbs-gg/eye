@@ -91,7 +91,7 @@ final class DaySummaryStore {
             frequency: scheduleFrequency,
             hour: scheduleHour,
             weeklyWeekday: weeklyWeekday
-        ).map(DailySummaryService.periodKey)
+        ).map { DailySummaryService.periodKey($0) }
         let migration = ReviewSchedulePreferenceMigration.resolve(
             explicitReviewEnabled: defaults.object(forKey: "zbseye.review.scheduleEnabled") == nil
                 ? nil

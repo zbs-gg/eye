@@ -174,7 +174,14 @@ final class ReleaseConfigurationTests: XCTestCase {
             process.currentDirectoryURL = directory
             process.standardOutput = pipe
             process.standardError = pipe
-            process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+            let hermeticGitEnvironment = [
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": "/dev/null",
+                "GIT_TERMINAL_PROMPT": "0",
+            ]
+            process.environment = ProcessInfo.processInfo.environment
+                .merging(hermeticGitEnvironment) { _, new in new }
+                .merging(environment) { _, new in new }
             try process.run()
             process.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()

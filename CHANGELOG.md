@@ -46,6 +46,10 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   restores uncommitted silent video, keeps committed muxed video, and preserves unknown evidence for inspection.
 - Pull requests and `main` now run an independent macOS 26 / Xcode 26.5 CI gate for the full unhosted suite,
   Debug GUI build, Call fixture contract, and capture-coexistence protocol self-test.
+- Review schedule keys now use the same calendar time zone that selected the day or seven-day period, so a
+  runner or Mac time-zone difference cannot move a completed Review cursor to the previous date.
+- CI fixtures no longer inherit machine-wide Git policy, depend on an installed `/Applications/ZBS Eye.app`, or
+  assume a loaded hosted runner will dispatch an expired automation lease within a fixed 120 ms window.
 
 ## [0.8.0] — 2026-08-08
 

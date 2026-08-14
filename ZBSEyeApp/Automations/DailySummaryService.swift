@@ -385,14 +385,15 @@ actor DailySummaryService {
     }
 
     /// Fixed YYYY-MM-DD (POSIX locale) — the file name and the idempotency key.
-    static func ymd(_ d: Date) -> String {
+    static func ymd(_ d: Date, calendar: Calendar = .current) -> String {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = calendar.timeZone
         return f.string(from: d)
     }
 
-    static func periodKey(_ period: ReviewPeriod) -> String {
-        guard period.kind == .week else { return ymd(period.start) }
+    static func periodKey(_ period: ReviewPeriod, calendar: Calendar = .current) -> String {
+        guard period.kind == .week else { return ymd(period.start, calendar: calendar) }
         let inclusiveEnd = period.end.addingTimeInterval(-1)
-        return "\(ymd(period.start))--\(ymd(inclusiveEnd))-7d"
+        return "\(ymd(period.start, calendar: calendar))--\(ymd(inclusiveEnd, calendar: calendar))-7d"
     }
 }
