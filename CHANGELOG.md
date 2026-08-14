@@ -50,6 +50,8 @@ All notable changes to ZBS Eye. The format follows Added / Changed / Fixed secti
   runner or Mac time-zone difference cannot move a completed Review cursor to the previous date.
 - CI fixtures no longer inherit machine-wide Git policy, depend on an installed `/Applications/ZBS Eye.app`, or
   assume a loaded hosted runner will dispatch an expired automation lease within a fixed 120 ms window.
+- Hosted CI now runs release-preflight fixtures as an early contract and prints structured XCTest failure
+  messages before uploading result bundles, so runner-only failures stay diagnosable without a large download.
 - The installed-candidate Call report now makes every three-mode/video, fixed-display, screenshot-latency,
   overflow, recovery, deletion, trimming, and export check explicit instead of reusing the old audio-only gate.
 

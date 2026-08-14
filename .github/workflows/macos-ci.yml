@@ -29,9 +29,31 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Run release preflight fixture contract
+        run: |
+          set +e
+          xcodegen generate
+          xcodebuild -quiet \
+            -project ZBSEye.xcodeproj \
+            -scheme ZBSEyeUnitTests \
+            -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/ZBSEyeDerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/ReleaseConfigurationTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            test \
+            -only-testing:ZBSEyeTests/ReleaseConfigurationTests
+          test_status=$?
+          set -e
+          if [ "$test_status" -ne 0 ]; then
+            xcrun xcresulttool get test-results summary \
+              --path "$RUNNER_TEMP/ReleaseConfigurationTests.xcresult" \
+              --compact || true
+          fi
+          exit "$test_status"
+
       - name: Run full unhosted suite
         run: |
-          xcodegen generate
+          set +e
           xcodebuild -quiet \
             -project ZBSEye.xcodeproj \
             -scheme ZBSEyeUnitTests \
@@ -40,6 +62,14 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/ZBSEyeUnitTests.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
             test
+          test_status=$?
+          set -e
+          if [ "$test_status" -ne 0 ]; then
+            xcrun xcresulttool get test-results summary \
+              --path "$RUNNER_TEMP/ZBSEyeUnitTests.xcresult" \
+              --compact || true
+          fi
+          exit "$test_status"
 
       - name: Build full GUI target
         run: |
@@ -64,6 +94,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ZBSEyeUnitTests-${{ github.run_id }}
-          path: ${{ runner.temp }}/ZBSEyeUnitTests.xcresult
+          path: |
+            ${{ runner.temp }}/ReleaseConfigurationTests.xcresult
+            ${{ runner.temp }}/ZBSEyeUnitTests.xcresult
           if-no-files-found: warn
           retention-days: 7
