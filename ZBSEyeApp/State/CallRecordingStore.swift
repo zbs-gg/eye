@@ -368,6 +368,7 @@ final class CallRecordingStore {
 
     func nativeScreenshotRequested() {
         guard let coordinator, snapshot.recordingMode.recordsVideo else { return }
+        coordinator.requestImmediateVideoYieldForNativeScreenshot()
         nativeScreenshotGeneration &+= 1
         guard nativeScreenshotTask == nil else { return }
         nativeScreenshotTask = Task { @MainActor [weak self] in

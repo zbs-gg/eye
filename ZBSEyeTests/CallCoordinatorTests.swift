@@ -561,6 +561,7 @@ private actor FakeCallVideo {
         CallVideoControl(
             lockDisplay: { _ in await self.didLockDisplay() },
             start: { _ in await self.didStart() },
+            requestNativeScreenshotYield: {},
             stop: { reason in await self.didStop(reason: reason) },
             postprocess: { _ in }
         )

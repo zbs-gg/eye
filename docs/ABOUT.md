@@ -231,9 +231,13 @@ the shared screenshot observer. Installed build 33 kept that observer alive and 
 without any audio gap. Its optional AAC mux still failed: AVAudioFile rejects the explicit 64 kbps encoder property
 at the authoritative 16 kHz sample rate. Installed build 34 removed that property but still failed because the
 temporary movie name did not end in `.mp4`; AVFoundation exported it and then refused to verify it as a movie.
-Current `0.9.0 (36)` keeps that verified MP4 path and moves Call audio into a same-signed launchd process so a GUI
-crash cannot own the recording lifetime. Physical hotkey, real microphone, helper-crash, and GUI-relaunch checks
-still block qualification; this version is not released.
+Installed notarized `0.9.0 (36)` kept that verified MP4 path and proved that a same-signed launchd process preserves
+both Call audio legs across a GUI crash, adopts the same Call after relaunch, and resumes after a helper crash with
+an explicit gap. It still failed the screenshot gate during Call video: three command-line native screenshots took
+1.59–3.12 seconds against a 0.33–0.44-second idle baseline, the next failed, and video then became unavailable.
+Current `0.9.0 (37)` starts physical Call-video teardown directly on the early screenshot signal and uses a
+hardware-native NV12 screen path with a one-frame queue. Physical hotkey and the remaining coexistence checks still
+block qualification; this version is not released.
 The larger native-screenshot matrix, normal-use soak, and long physical Call checks remain unqualified and must not
 be described as passed.
 

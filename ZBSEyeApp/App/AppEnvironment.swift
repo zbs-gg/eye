@@ -1576,6 +1576,9 @@ final class AppEnvironment {
                 start: { [callVideoEngine] callID in
                     await callVideoEngine.start(callID: callID)
                 },
+                requestNativeScreenshotYield: { [callVideoEngine] in
+                    callVideoEngine.requestImmediateNativeScreenshotYield()
+                },
                 stop: { [callVideoEngine] reason in
                     await callVideoEngine.stop(reason: reason)
                 },

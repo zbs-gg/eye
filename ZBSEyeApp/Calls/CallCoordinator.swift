@@ -220,6 +220,7 @@ struct CallAudioSessionControl: Sendable {
 struct CallVideoControl: Sendable {
     let lockDisplay: @Sendable (Int64) async -> Void
     let start: @Sendable (Int64) async -> CallVideoState
+    let requestNativeScreenshotYield: @Sendable () -> Void
     let stop: @Sendable (String?) async -> CallVideoState
     let postprocess: @Sendable (Int64) -> Void
 }
@@ -274,6 +275,7 @@ actor CallCoordinator {
         video: CallVideoControl = CallVideoControl(
             lockDisplay: { _ in },
             start: { _ in .unavailable },
+            requestNativeScreenshotYield: {},
             stop: { _ in .disabled },
             postprocess: { _ in }
         ),
@@ -371,6 +373,14 @@ actor CallCoordinator {
         (try? await enqueue { [self] in
             await performYieldVideoForNativeScreenshot()
         }) ?? current
+    }
+
+    /// Starts the physical ScreenCaptureKit stop at the listen-only hotkey
+    /// edge. The queued actor command below still owns evidence finalization;
+    /// this fast path only gives the system screenshot the screen resource as
+    /// early as possible and never touches either audio leg.
+    nonisolated func requestImmediateVideoYieldForNativeScreenshot() {
+        video.requestNativeScreenshotYield()
     }
 
     func resumeVideoAfterNativeScreenshot(callID: Int64) async -> CallCoordinatorSnapshot {

@@ -1482,6 +1482,7 @@ private actor StoreCallVideo {
                 guard let self else { return .unavailable }
                 return await self.start()
             },
+            requestNativeScreenshotYield: {},
             stop: { [weak self] reason in
                 guard let self else { return .unavailable }
                 return await self.stop(reason: reason)

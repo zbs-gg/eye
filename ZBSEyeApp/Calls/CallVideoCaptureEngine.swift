@@ -182,6 +182,87 @@ private final class CallVideoStreamOutput: NSObject, SCStreamOutput, SCStreamDel
     }
 }
 
+/// A screenshot hotkey cannot wait for CallCoordinator's command queue or for
+/// segment finalization. This controller starts only the physical SCK stop on
+/// a detached user-initiated task; the MainActor engine later joins that exact
+/// task and remains the sole owner of files, spans, gaps, and restart policy.
+private final class CallVideoImmediateStopController: @unchecked Sendable {
+    private struct SendableStream: @unchecked Sendable {
+        let value: SCStream
+    }
+
+    private struct InFlight {
+        let streamID: ObjectIdentifier
+        let task: Task<Bool, Never>
+    }
+
+    private let lock = NSLock()
+    private let resourceCoordinator: SCKResourceCoordinator
+    private var boundStream: SCStream?
+    private var inFlight: InFlight?
+
+    init(resourceCoordinator: SCKResourceCoordinator) {
+        self.resourceCoordinator = resourceCoordinator
+    }
+
+    func bind(_ stream: SCStream) {
+        lock.lock()
+        boundStream = stream
+        lock.unlock()
+    }
+
+    @discardableResult
+    func requestStop() -> Bool {
+        lock.lock()
+        guard let stream = boundStream else {
+            lock.unlock()
+            return false
+        }
+        let streamID = ObjectIdentifier(stream)
+        if inFlight?.streamID == streamID {
+            lock.unlock()
+            return false
+        }
+        guard inFlight == nil else {
+            lock.unlock()
+            return false
+        }
+        let sendableStream = SendableStream(value: stream)
+        let coordinator = resourceCoordinator
+        let task = Task.detached(priority: .userInitiated) {
+            do {
+                try await coordinator.withExclusiveAccess(owner: .callVideo, operation: .stop) {
+                    try await sendableStream.value.stopCapture()
+                }
+                return true
+            } catch {
+                return false
+            }
+        }
+        inFlight = InFlight(streamID: streamID, task: task)
+        lock.unlock()
+        return true
+    }
+
+    func task(for stream: SCStream) -> Task<Bool, Never>? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard inFlight?.streamID == ObjectIdentifier(stream) else { return nil }
+        return inFlight?.task
+    }
+
+    func clear(_ stream: SCStream) {
+        lock.lock()
+        if boundStream.map(ObjectIdentifier.init) == ObjectIdentifier(stream) {
+            boundStream = nil
+        }
+        if inFlight?.streamID == ObjectIdentifier(stream) {
+            inFlight = nil
+        }
+        lock.unlock()
+    }
+}
+
 private actor CallVideoSegmentWriter {
     private struct OpenSegment {
         let writer: AVAssetWriter
@@ -364,7 +445,8 @@ private actor CallVideoSegmentWriter {
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: input,
             sourcePixelBufferAttributes: [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferPixelFormatTypeKey as String:
+                    kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
                 kCVPixelBufferWidthKey as String: width,
                 kCVPixelBufferHeightKey as String: height,
             ]
@@ -448,6 +530,7 @@ final class CallVideoCaptureEngine {
     private let repository: CallRepository
     private let mediaRoot: URL
     private let resourceCoordinator: SCKResourceCoordinator
+    nonisolated private let immediateStopController: CallVideoImmediateStopController
     private let excludedBundleIDs: @MainActor () -> Set<String>
     private let isNativeScreenshotSuppressed: @MainActor () -> Bool
     private let waitForNativeScreenshotRelease: @MainActor () async -> Void
@@ -471,6 +554,9 @@ final class CallVideoCaptureEngine {
         self.repository = repository
         self.mediaRoot = mediaRoot
         self.resourceCoordinator = resourceCoordinator
+        immediateStopController = CallVideoImmediateStopController(
+            resourceCoordinator: resourceCoordinator
+        )
         self.excludedBundleIDs = excludedBundleIDs
         self.isNativeScreenshotSuppressed = isNativeScreenshotSuppressed
         self.waitForNativeScreenshotRelease = waitForNativeScreenshotRelease
@@ -489,6 +575,7 @@ final class CallVideoCaptureEngine {
         if active != nil { _ = await stop(reason: "superseded") }
         let startedAtMs = Self.nowMs()
         var startedSpanID: Int64?
+        var preparedStream: SCStream?
         startingCallID = callID
         startingWriterFailure = nil
         defer {
@@ -589,11 +676,12 @@ final class CallVideoCaptureEngine {
             let configuration = SCStreamConfiguration()
             configuration.width = width
             configuration.height = height
-            configuration.pixelFormat = kCVPixelFormatType_32BGRA
+            configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
             configuration.showsCursor = true
             configuration.minimumFrameInterval = CMTime(value: 1, timescale: 15)
-            configuration.queueDepth = 2
+            configuration.queueDepth = 1
             let stream = SCStream(filter: filter, configuration: configuration, delegate: output)
+            preparedStream = stream
             try stream.addStreamOutput(
                 output,
                 type: .screen,
@@ -629,6 +717,7 @@ final class CallVideoCaptureEngine {
                     )
                     continue
                 }
+                immediateStopController.bind(stream)
                 guard isNativeScreenshotSuppressed() else { break }
                 // Suppression opened while ScreenCaptureKit was awaiting its
                 // start callback. Close the just-started stream immediately;
@@ -638,20 +727,11 @@ final class CallVideoCaptureEngine {
                     startMs: Self.nowMs(),
                     reason: "native_screenshot"
                 )
-                try await resourceCoordinator.withExclusiveAccess(
-                    owner: .callVideo,
-                    operation: .stop
-                ) {
-                    try await stream.stopCapture()
-                }
+                _ = immediateStopController.requestStop()
+                await stopPhysicalCapture(stream)
             }
             if let failure = startingWriterFailure, startingCallID == callID {
-                _ = try? await resourceCoordinator.withExclusiveAccess(
-                    owner: .callVideo,
-                    operation: .stop
-                ) {
-                    try await stream.stopCapture()
-                }
+                await stopPhysicalCapture(stream)
                 try? stream.removeStreamOutput(output, type: .screen)
                 await output.bridge.closeAndDrain()
                 let (codec, _) = await writer.finish()
@@ -689,6 +769,9 @@ final class CallVideoCaptureEngine {
             }
             return .recording
         } catch {
+            if let preparedStream {
+                immediateStopController.clear(preparedStream)
+            }
             startingCallID = nil
             startingWriterFailure = nil
             if let startedSpanID {
@@ -730,9 +813,7 @@ final class CallVideoCaptureEngine {
             return .disabled
         }
         self.active = nil
-        _ = try? await resourceCoordinator.withExclusiveAccess(owner: .callVideo, operation: .stop) {
-            try await active.stream.stopCapture()
-        }
+        await stopPhysicalCapture(active.stream)
         try? active.stream.removeStreamOutput(active.output, type: .screen)
         await active.output.bridge.closeAndDrain()
         let (codec, writerFailure) = await active.writer.finish()
@@ -775,12 +856,31 @@ final class CallVideoCaptureEngine {
         }
     }
 
+    private func stopPhysicalCapture(_ stream: SCStream) async {
+        var stopped = false
+        if let immediateStop = immediateStopController.task(for: stream) {
+            stopped = await immediateStop.value
+        }
+        if !stopped {
+            _ = try? await resourceCoordinator.withExclusiveAccess(owner: .callVideo, operation: .stop) {
+                try await stream.stopCapture()
+            }
+        }
+        immediateStopController.clear(stream)
+    }
+
     /// Called by the native screenshot observer. Audio is untouched; video
     /// becomes one explicit gap and can be restarted by the caller afterwards.
     func yieldForNativeScreenshot() async -> Int64? {
         guard let callID = active?.callID else { return nil }
         _ = await stop(reason: "native_screenshot")
         return callID
+    }
+
+    /// Safe from the listen-only event callback. It starts no file or database
+    /// work and never waits; `stop(reason:)` joins the same physical teardown.
+    nonisolated func requestImmediateNativeScreenshotYield() {
+        _ = immediateStopController.requestStop()
     }
 
     private func unexpectedStop(reason: String) async {

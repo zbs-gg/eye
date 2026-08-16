@@ -173,7 +173,7 @@ an API-key provider. This source change is not part of the already-published `0.
 must not be described as publicly released. A local Developer ID-signed `0.8.0 (23)` candidate from the current
 dirty source was installed on 2026-08-12 and reported healthy against the existing data root. Its Call-audio
 priority still requires evidence from a real dual-track Call; the candidate is neither notarized nor public.
-Current `0.9.0 (36)` source adds three-mode Calls and first-class Call video, then replaces the hidden
+Current `0.9.0 (37)` source adds three-mode Calls and first-class Call video, then replaces the hidden
 ScreenCaptureKit leg used for system audio with a Core Audio process tap. Installed diagnostics 26 through 28
 created continuous but all-zero system PCM. A signed physical probe isolated the remaining cause: on macOS 26.1
 the aggregate device must receive the tap list in its creation dictionary and then have the same list reasserted
@@ -193,8 +193,12 @@ removed that setting but still gave the temporary movie a non-media extension; A
 refused to verify it. Build 35 uses a real temporary MP4 and verifies both tracks before replacement. Build 36
 moves authoritative Call audio into a same-signed launchd process: a GUI crash no longer owns the recording
 lifetime, relaunch adopts the active Call, and a helper crash finalizes the append-only PCM, records an explicit
-gap, and resumes in a new epoch. Real microphone content, physical hotkey latency, crash/relaunch, live mode
-switching, and the remaining coexistence matrix are still mandatory.
+gap, and resumes in a new epoch. Installed notarized build 36 proved both real audio legs, GUI-crash continuity,
+same-Call adoption, and helper-crash recovery. Its Call-video probe still blocked release: command-line native
+screenshots took 1.59–3.12 seconds against a 0.33–0.44-second idle baseline, the next screenshot failed, and the
+video encoder then failed. Build 37 starts the physical Call-video stop directly from the early screenshot edge
+and reduces the live screen path from BGRA to hardware-native NV12 with a one-frame queue. Physical hotkey latency,
+live mode switching, and the remaining coexistence matrix are still mandatory.
 
 The exact Developer ID + notarized `0.8.0 (22)` artifact is public stable/latest as of 2026-08-08. It includes the
 persistent latest-wins screen stream, microphone-owned automatic Calls, meaningful visual moments, immediate
