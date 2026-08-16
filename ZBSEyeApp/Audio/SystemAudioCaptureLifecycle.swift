@@ -32,8 +32,8 @@ private actor SystemAudioTeardownDeadlineResult {
     }
 }
 
-/// A stop can invalidate `startCapture()` before ScreenCaptureKit returns the
-/// physical stream. Keep that unresolved ownership awaitable so callers never
+/// A stop can invalidate capture startup before the audio API returns the
+/// physical session. Keep that unresolved ownership awaitable so callers never
 /// mistake "not published yet" for "confirmed stopped".
 private final class SystemAudioPendingStartTeardownResult: @unchecked Sendable {
     private let lock = NSLock()
@@ -133,7 +133,7 @@ final class SystemAudioFrameAdmission<Session: AnyObject, Sink: Sendable>:
     }
 }
 
-/// Serializes ownership of the ScreenCaptureKit session separately from its
+/// Serializes ownership of the physical system-audio session separately from its
 /// frame consumer. The concrete lifecycle behavior is exercised without TCC
 /// or audio hardware in the unit-test target.
 @MainActor
@@ -221,7 +221,7 @@ final class SystemAudioCaptureLifecycle<Session: AnyObject> {
         return false
     }
 
-    /// Re-attestation immediately before touching ScreenCaptureKit. Stop can
+    /// Re-attestation immediately before touching the capture API. Stop can
     /// invalidate a token while its owner is waiting for a prior teardown or
     /// for the shared SCK control-plane lease.
     func isStartCurrent(_ token: StartToken) -> Bool {

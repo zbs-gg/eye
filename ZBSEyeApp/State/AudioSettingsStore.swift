@@ -64,7 +64,7 @@ enum CallRecordingAdmissionPolicy {
 
 /// Timeline audio/transcription settings. Call capture has its own independent
 /// `callRecordingMode`; changing this tri-state never changes an active Call.
-/// Persisted in UserDefaults; actual capture remains gated by microphone/screen permissions.
+/// Persisted in UserDefaults; actual capture remains gated by the corresponding macOS audio permissions.
 @MainActor
 @Observable
 final class AudioSettingsStore {

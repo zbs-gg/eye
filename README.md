@@ -139,7 +139,8 @@ and storage never become provider uploads. API credentials live in the macOS dat
 
 1. Open the [current stable release](https://github.com/zbs-gg/eye/releases/latest), download the notarized ZIP,
    move **ZBS Eye.app** to `/Applications`, and launch it.
-2. Grant Screen Recording and Accessibility. Microphone is optional; system audio has its own switch.
+2. Grant Screen Recording and Accessibility. Microphone and System Audio Recording are separate permissions;
+   Eye asks for each only when the corresponding recording is enabled.
 3. Press **Record Timeline**. Open Timeline and change windows once to see the first moments appear.
 4. Press **Review** beside Ask to build a saved day or seven-day recap. Scheduling is optional and has a
    separate background-consent switch.

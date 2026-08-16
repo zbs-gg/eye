@@ -102,7 +102,7 @@ final class CallRecordingStore {
     }
 
     /// Latches only closing automatic-admission edges across asynchronous audio startup. A gate
-    /// that closes and reopens while CoreAudio/ScreenCaptureKit is suspended must still release and
+    /// that closes and reopens while physical audio startup is suspended must still release and
     /// re-probe the original detector owner. Opening or unrelated configuration changes must not
     /// fragment a healthy in-flight start.
     func automaticStartAdmissionChanged(isClosed: Bool) {

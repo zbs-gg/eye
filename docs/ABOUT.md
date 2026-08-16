@@ -42,7 +42,7 @@ enable an external provider, only the text excerpts needed for that action leave
   minutes of inactivity. Heavy processing is latest-wins, with at most one moment processing and one pending.
 - **Native screenshots keep priority.** Eye cancels pending heavy work and temporarily stops only its screen
   stream around Shift-Command-3/4/5 and their Control variants, and while the native Screenshot helpers are
-  running. Microphone and system-audio capture continue. The next ordinary visual moment recreates one screen
+  running. Microphone and Core Audio system capture continue; neither owns a hidden display stream. The next ordinary visual moment recreates one screen
   stream after the quiet window. Early hotkey observation is best-effort and listen-only: Eye uses it only when
   macOS already permits listening, never consumes the shortcut or asks for a new permission, and also watches the
   exact native Screenshot helper processes as the no-prompt fallback.
@@ -53,7 +53,7 @@ enable an external provider, only the text excerpts needed for that action leave
   Video uses a separate 15 fps hardware-only stream fixed to the starting display, so it can stop, gap, or yield
   to a native screenshot without restarting or blocking either audio source.
 - **Capture health is explicit.** Current compositor progress, not changing pixels, proves that screen capture is
-  alive. A real stream or system-audio failure creates a visible coverage gap and bounded Eye-owned recovery;
+  alive. A real screen-stream or Core Audio tap failure creates a visible coverage gap and bounded Eye-owned recovery;
   repeated failure asks the person to repair Capture instead of showing a false green state. Repair touches only
   Eye's own streams, not macOS permissions, other apps, or global capture services.
 - **Audio** → system audio (calls, meetings, video) and microphone → **on-device** transcription (SFSpeech),
@@ -214,8 +214,9 @@ A separate local Developer ID-signed `0.8.0 (23)` candidate was installed on 202
 source after Call-audio priority and native-screenshot yielding changed. It launched against the existing data
 root and reported healthy capture. It is not notarized or public, and uninterrupted dual-track audio during a
 real Call remains the acceptance proof; automated tests do not establish that result.
-Current source is now build `0.9.0 (25)` and adds three-mode Calls plus first-class Call video. It is source-only
-until its installed real-call matrix passes; it must not be described as installed, notarized, or released.
+Installed `0.9.0 (25)` adds three-mode Calls plus first-class Call video but retains a hidden screen-capture leg
+for system audio. Current `0.9.0 (26)` source replaces that leg with a Core Audio process tap. Build 26 remains
+source-only until its installed real-call matrix passes; it must not be described as installed, notarized, or released.
 The larger native-screenshot matrix, normal-use soak, and long physical Call checks remain unqualified and must not
 be described as passed.
 

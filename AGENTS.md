@@ -44,7 +44,7 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
 |---|---|
 | `App/` | `ZBSEyeMain` (@main, CLI/GUI dispatch), `ZBSEyeApp` (Scene + AppDelegate), `AppEnvironment` (owns the service graph, `bootstrap()`) |
 | `Capture/` | `CaptureCoordinator`, one persistent low-rate `ScreenCaptureStream`, meaningful-input scheduling, `FramePipeline` (HEIC+phash+OCR, ONE actor), `SCKResourceCoordinator`, screenshot-priority yield, capture health/recovery, `AXReader` (dedicated thread, per-PID health) |
-| `Audio/` | `AudioCoordinator`, mic/system engines, `VADSegmenter`, `TranscriptionService` (SFSpeech on-device); system-audio SCK lifecycle shares `SCKResourceCoordinator` with screen capture |
+| `Audio/` | `AudioCoordinator`, microphone engine, Core Audio process-tap system engine, `VADSegmenter`, `TranscriptionService` (SFSpeech on-device); system audio owns no screen stream |
 | `Meeting/` | `MeetingDetector`, CoreAudio process evidence, native/browser enrichment, exact automatic-Call admission and suppression |
 | `Calls/` | `CallCoordinator`, crash-forward audio/video evidence, separate Call video + AAC post-process, Whisper/diarization, query/projection and privacy deletion |
 | `Data/` | `ZBSEyeDatabase` (pool + migrations), `StorageManager` (media), **`StorageLocation`** (the single path resolver — see invariants), `StorageRelocation` (move), `BackupManager` (iCloud), `RetentionManager`, `IngestService` (the only writer) |
@@ -83,7 +83,8 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
    opaque reason—never keys, text, pointer coordinates, or clipboard contents—and frequent input shares a
    1.5-second heavy-work floor. Expensive AX/OCR/HEIC work retains at most one processing intent and one pending
    intent; a newer trigger replaces the pending one. `SCKResourceCoordinator` serializes the complete asynchronous
-   start/update/stop operation across the screen and system-audio streams.
+   start/update/stop operation across the Timeline screen and Call-video streams. System audio uses a separate
+   Core Audio process tap and must never create a ScreenCaptureKit video leg.
 7. **Native screenshots get a best-effort, permission-neutral physical yield.** Eye observes Shift-Command-3/4/5 and
    their Control variants through a listen-only event tap only when macOS already permits it, and also watches
    the exact native screenshot helper processes. Either signal drops pending heavy work, stops Eye's physical
@@ -101,7 +102,9 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
 9. **Call mode is explicit and audio always wins.** `off`, `audio`, and `audio_video` are separate from Timeline
    audio settings. Call video is a fixed-display, hardware-only, latest-wins stream capped at 1080p/15 fps; it
    starts only after audio, may drop frames, and yields physically to native screenshots. It never restarts or
-   backpressures microphone/system audio. Background AAC mux work is lease-cancelled as soon as another Call starts
+   backpressures microphone/system audio. System audio uses an app-owned private Core Audio process tap, excludes
+   Eye itself, and tears down its exact tap and aggregate-device IDs; it has no ScreenCaptureKit display leg.
+   Background AAC mux work is lease-cancelled as soon as another Call starts
    and retries only after physical audio stops; recovery verifies the generation-bound segment hash before deleting
    a `.silent-backup`. Upgrades default existing Calls to audio and never enable video silently.
 
@@ -166,8 +169,10 @@ an API-key provider. This source change is not part of the already-published `0.
 must not be described as publicly released. A local Developer ID-signed `0.8.0 (23)` candidate from the current
 dirty source was installed on 2026-08-12 and reported healthy against the existing data root. Its Call-audio
 priority still requires evidence from a real dual-track Call; the candidate is neither notarized nor public.
-Current `0.9.0 (25)` source adds three-mode Calls and first-class Call video. It is not installed or qualified;
-real audio-only/video Calls and the full coexistence matrix remain mandatory before it may replace installed 23.
+Current `0.9.0 (26)` source adds three-mode Calls and first-class Call video, then replaces the hidden
+ScreenCaptureKit leg used for system audio with a Core Audio process tap. Installed `0.9.0 (25)` still has the
+hidden screen leg and is not qualified: real audio-only/video Calls, native screenshot latency, the new system-
+audio permission, and the full coexistence matrix remain mandatory before build 26 may replace it.
 
 The exact Developer ID + notarized `0.8.0 (22)` artifact is public stable/latest as of 2026-08-08. It includes the
 persistent latest-wins screen stream, microphone-owned automatic Calls, meaningful visual moments, immediate

@@ -14,7 +14,9 @@ private struct AutomaticCallPermissionAvailability: Equatable {
 
     init(_ snapshot: PermissionSnapshot) {
         microphone = snapshot.microphone == .granted
-        systemAudio = snapshot.screenRecording == .granted
+        // macOS exposes no non-invasive preflight for Core Audio process taps.
+        // The tap start itself requests/validates access and reports failure.
+        systemAudio = true
     }
 }
 
@@ -1177,13 +1179,13 @@ final class AppEnvironment {
                 ),
                 permissions: [
                     .screen: screenPermission,
-                    .systemAudio: screenPermission,
+                    .systemAudio: .granted,
                 ],
                 openIntervals: openCoverage
             )
             self.captureHealthController = captureHealthController
-            // ScreenCaptureKit start/update/stop calls from the persistent
-            // screen stream and the system-audio stream share one FIFO owner.
+            // Timeline and Call-video ScreenCaptureKit operations share one
+            // FIFO owner. System audio is independent Core Audio capture.
             let sckResourceCoordinator = SCKResourceCoordinator()
             captureHealthController.setSnapshotSink { [weak self] snapshot in
                 self?.captureHealth = snapshot
@@ -1207,11 +1209,6 @@ final class AppEnvironment {
                 captureHealthController?.setPermission(
                     permission,
                     for: .screen,
-                    nowMs: Self.epochMs()
-                )
-                captureHealthController?.setPermission(
-                    permission,
-                    for: .systemAudio,
                     nowMs: Self.epochMs()
                 )
                 Task { [weak detector = self?.meetingDetector] in
@@ -1254,14 +1251,13 @@ final class AppEnvironment {
             let audioCoordinator = AudioCoordinator(
                 storage: storage,
                 ingest: ingestService,
-                healthController: captureHealthController,
-                resourceCoordinator: sckResourceCoordinator
+                healthController: captureHealthController
             )
             audioCoordinator.onSegment = { [weak rec = recording] in rec?.noteAudioChunk() }
             recording.audio = audioCoordinator
             // Gates for RECORDING audio (without the speech permission: raw audio is valuable on its own — you'll
             // find it by time and play it back in the timeline; transcription is separate, when speech is available).
-            // The microphone requires mic access; system audio — Screen Recording (already granted for screen) + its own toggle.
+            // The microphone and system audio each require their own macOS permission.
             recording.micEnabled = { [weak self] in
                 guard let self else { return false }
                 return self.audioSettings.audioShouldCapture()   // mode/meeting/override gate
@@ -1273,7 +1269,6 @@ final class AppEnvironment {
                 return self.audioSettings.audioShouldCapture()
                     && self.audioSettings.recordSystemAudio
                     && !self.recording.lowDiskPaused
-                    && self.permissions.snapshot.screenRecording == .granted
             }
             self.audio = audioCoordinator
             captureHealthController.setEffectSink { [weak self] effect in
@@ -1317,7 +1312,6 @@ final class AppEnvironment {
                         let permitted = CallSourceSelection(
                             me: requested.me && self.permissions.snapshot.microphone == .granted,
                             system: requested.system
-                                && self.permissions.snapshot.screenRecording == .granted
                         )
                         guard !permitted.isEmpty,
                               audioCoordinator.admitCallFrameSink(sinkLease)
@@ -1436,7 +1430,7 @@ final class AppEnvironment {
                 return CallRecordingAdmissionPolicy.allowsAutomaticCallStart(
                     mode: self.audioSettings.callRecordingMode,
                     microphoneAvailable: self.permissions.snapshot.microphone == .granted,
-                    systemAudioAvailable: self.permissions.snapshot.screenRecording == .granted
+                    systemAudioAvailable: true
                 )
             }
             calls.attach(callCoordinator)
@@ -2635,7 +2629,7 @@ final class AppEnvironment {
             || !CallRecordingAdmissionPolicy.allowsAutomaticCallStart(
                 mode: audioSettings.callRecordingMode,
                 microphoneAvailable: permissions.snapshot.microphone == .granted,
-                systemAudioAvailable: permissions.snapshot.screenRecording == .granted
+                systemAudioAvailable: true
             )
     }
 

@@ -5,6 +5,10 @@
 - **Area reviewed:** `SystemAudioCaptureEngine`, `AudioCoordinator`, app termination and relocation drains.
 - **Status:** Original root-cause claim disproved. Separate normal-exit lifecycle defects were found and hardened.
 
+> **2026-08-15 update:** build 26 intentionally introduces app-owned private Core Audio tap and aggregate-device
+> IDs to remove ScreenCaptureKit from system-audio capture. The warning below still applies: cleanup may destroy
+> only those exact objects retained by the active session, never objects found by a global sweep.
+
 ## Reported symptom
 
 Music and other system audio crackled after ZBS Eye had stopped. The persisted ZBS Eye audio mode was `off`, and no ZBS Eye process was running.

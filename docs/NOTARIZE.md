@@ -193,7 +193,7 @@ For the `0.7.0 (21)` automatic-Call change, the completed report must also expli
 - detected end saves once after 30 seconds, **End & save** saves once, **This wasn’t a call** erases only that
   automatic Call, and none of those surfaces offers Undo.
 
-For the `0.9.0 (25)` three-mode and Call-video change, the generated report must additionally prove every row
+For the `0.9.0 (26)` three-mode, Call-video, and Core Audio system-capture change, the generated report must additionally prove every row
 under **Three-mode Call and Call-video gates**. That section binds the exact reverse-verified ZIP and manifest,
 requires real Audio only and Audio and video Calls plus live mode switching, and treats any unexplained audio
 gap, `telemetryOverflow`, `consumerOverflow`, or native-screenshot latency above the Eye-off baseline by more
@@ -229,7 +229,7 @@ Use the exact ZIP named by the verified manifest; do not select an artifact by w
 artifact verifier above against the downloaded ZIP, downloaded manifest, and retained qualified manifest,
 then unzip that exact candidate into `/Applications`
 and launch with a **double-click** — Gatekeeper passes it without "Open Anyway"
-(even offline, thanks to the stapled ticket). Screen Recording / Accessibility / Microphone permissions are
+(even offline, thanks to the stapled ticket). Screen Recording / Accessibility / Microphone / System Audio Recording permissions are
 granted once; the signature is stable, rebuilds don't reset them.
 
 ## If notarytool rejected it
