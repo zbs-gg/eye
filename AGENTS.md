@@ -171,7 +171,7 @@ an API-key provider. This source change is not part of the already-published `0.
 must not be described as publicly released. A local Developer ID-signed `0.8.0 (23)` candidate from the current
 dirty source was installed on 2026-08-12 and reported healthy against the existing data root. Its Call-audio
 priority still requires evidence from a real dual-track Call; the candidate is neither notarized nor public.
-Current `0.9.0 (32)` source adds three-mode Calls and first-class Call video, then replaces the hidden
+Current `0.9.0 (33)` source adds three-mode Calls and first-class Call video, then replaces the hidden
 ScreenCaptureKit leg used for system audio with a Core Audio process tap. Installed diagnostics 26 through 28
 created continuous but all-zero system PCM. A signed physical probe isolated the remaining cause: on macOS 26.1
 the aggregate device must receive the tap list in its creation dictionary and then have the same list reasserted
@@ -180,9 +180,12 @@ it held microphone input silently zeroed the global tap; the same signed probe c
 input active and no process exclusion. Installed build 31 proved that the decoded Core Audio callback itself was
 still all-zero. Its exported Info.plist was missing the required system-audio and screen-capture privacy reasons:
 Xcode silently omitted those newer keys from a generated plist even though the build settings named them. Build 32
-uses an explicit plist and makes the notarized-build script reject either missing key. Real audio-only/video Calls,
-native screenshot latency, the new system-audio permission, and the full coexistence matrix remain mandatory before
-it may replace the diagnostics.
+uses an explicit plist and makes the notarized-build script reject either missing key. Installed build 32 then
+captured real system audio without gaps, but a Call-video probe exposed another release blocker: Timeline was paused,
+so its lifecycle had stopped the shared native-screenshot observer; three native captures took 1.79–2.16 seconds
+against a 0.36–0.40-second Eye-off baseline. Build 33 keeps that permission-neutral observer alive for the app
+lifetime so Call video receives the early hotkey edge independently of Timeline. Real microphone content, physical
+hotkey latency, live mode switching, and the remaining coexistence matrix are still mandatory.
 
 The exact Developer ID + notarized `0.8.0 (22)` artifact is public stable/latest as of 2026-08-08. It includes the
 persistent latest-wins screen stream, microphone-owned automatic Calls, meaningful visual moments, immediate

@@ -134,6 +134,14 @@ final class CaptureCoordinator {
         }
     }
 
+    /// Screenshot priority protects both Timeline capture and Call video. Keep
+    /// the permission-neutral observer alive even when Timeline is paused;
+    /// otherwise an audio+video Call has no early hotkey edge and macOS must
+    /// compete with Eye's live ScreenCaptureKit stream for the screenshot.
+    func startNativeScreenshotMonitoring() {
+        _ = screenshotHotkeyMonitor.start()
+    }
+
     /// The capability cache persists (plan: don't re-learn after every restart). ocrOnly verdicts
     /// older than 7 days are reset — the app may have updated and started returning AX (re-probe).
     private func loadCapability() {
@@ -296,7 +304,7 @@ final class CaptureCoordinator {
         tickTimer = Timer.scheduledTimer(withTimeInterval: config.activeTickSeconds, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.tickFired() }
         }
-        _ = screenshotHotkeyMonitor.start()
+        startNativeScreenshotMonitoring()
         if initialSessionGate.isOpen { trigger(.startup) }
     }
 
@@ -413,7 +421,6 @@ final class CaptureCoordinator {
         runningApplicationsObservation = nil
         privacyApplicationInventory = nil
         tickTimer?.invalidate(); tickTimer = nil
-        screenshotHotkeyMonitor.stop()
         meaningfulInputTask?.cancel()
         meaningfulInputTask = nil
         meaningfulInputPolicy.reset()

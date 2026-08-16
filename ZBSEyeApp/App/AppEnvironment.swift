@@ -1413,6 +1413,10 @@ final class AppEnvironment {
             coordinator.onNativeScreenshotYield = { [weak calls] in
                 calls?.nativeScreenshotRequested()
             }
+            // Calls remain armed while Timeline is paused. Screenshot priority
+            // must therefore be observed for the app lifetime, not only while
+            // the Timeline capture loop happens to be running.
+            coordinator.startNativeScreenshotMonitoring()
             calls.waitForNativeScreenshotRelease = { [weak coordinator] in
                 await coordinator?.waitForNativeScreenshotRelease()
             }
