@@ -235,9 +235,13 @@ Installed notarized `0.9.0 (36)` kept that verified MP4 path and proved that a s
 both Call audio legs across a GUI crash, adopts the same Call after relaunch, and resumes after a helper crash with
 an explicit gap. It still failed the screenshot gate during Call video: three command-line native screenshots took
 1.59–3.12 seconds against a 0.33–0.44-second idle baseline, the next failed, and video then became unavailable.
-Current `0.9.0 (37)` starts physical Call-video teardown directly on the early screenshot signal and uses a
-hardware-native NV12 screen path with a one-frame queue. Physical hotkey and the remaining coexistence checks still
-block qualification; this version is not released.
+Installed `0.9.0 (37)` started physical Call-video teardown directly on the early screenshot signal and used a
+hardware-native NV12 screen path with a one-frame queue. Both audio legs remained continuous through a live
+audio to video to audio to video switch, but each video span retained only its first frame despite visible window
+movement. Direct native screenshots still took 1.60–1.84 seconds, and no physical hotkey sample arrived during the
+live observation window. Current `0.9.0 (38)` restores the previously working BGRA input while retaining the
+immediate screenshot yield and one-frame latest-wins queue. Physical hotkey and the remaining coexistence checks
+still block qualification; this version is not released.
 The larger native-screenshot matrix, normal-use soak, and long physical Call checks remain unqualified and must not
 be described as passed.
 

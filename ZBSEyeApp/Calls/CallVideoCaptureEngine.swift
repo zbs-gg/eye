@@ -446,7 +446,7 @@ private actor CallVideoSegmentWriter {
             assetWriterInput: input,
             sourcePixelBufferAttributes: [
                 kCVPixelBufferPixelFormatTypeKey as String:
-                    kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                    kCVPixelFormatType_32BGRA,
                 kCVPixelBufferWidthKey as String: width,
                 kCVPixelBufferHeightKey as String: height,
             ]
@@ -676,7 +676,7 @@ final class CallVideoCaptureEngine {
             let configuration = SCStreamConfiguration()
             configuration.width = width
             configuration.height = height
-            configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            configuration.pixelFormat = kCVPixelFormatType_32BGRA
             configuration.showsCursor = true
             configuration.minimumFrameInterval = CMTime(value: 1, timescale: 15)
             configuration.queueDepth = 1

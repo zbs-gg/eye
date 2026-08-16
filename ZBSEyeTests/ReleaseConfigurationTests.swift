@@ -361,8 +361,8 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION:").count - 1, 2)
         XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION: \"0.9.0\"").count - 1, 2)
         XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION:").count - 1, 2)
-        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"37\"").count - 1, 2)
-        XCTAssertTrue(notices.contains("Release: 0.9.0 (build 37)"))
+        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"38\"").count - 1, 2)
+        XCTAssertTrue(notices.contains("Release: 0.9.0 (build 38)"))
     }
 
     func testCallAudioLaunchAgentIsBundledAndSameSigned() throws {
