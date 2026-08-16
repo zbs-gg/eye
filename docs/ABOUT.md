@@ -214,9 +214,10 @@ A separate local Developer ID-signed `0.8.0 (23)` candidate was installed on 202
 source after Call-audio priority and native-screenshot yielding changed. It launched against the existing data
 root and reported healthy capture. It is not notarized or public, and uninterrupted dual-track audio during a
 real Call remains the acceptance proof; automated tests do not establish that result.
-Installed `0.9.0 (25)` adds three-mode Calls plus first-class Call video but retains a hidden screen-capture leg
-for system audio. Current `0.9.0 (26)` source replaces that leg with a Core Audio process tap. Build 26 remains
-source-only until its installed real-call matrix passes; it must not be described as installed, notarized, or released.
+Installed diagnostic `0.9.0 (26)` replaced the hidden screen-capture leg with a Core Audio process tap but its
+first physical probe produced all-zero system PCM. Current `0.9.0 (27)` source attaches and confirms the tap using
+the aggregate-device property path documented by Apple. Build 27 remains source-only until its installed real-call
+matrix passes; it must not be described as installed, notarized, or released.
 The larger native-screenshot matrix, normal-use soak, and long physical Call checks remain unqualified and must not
 be described as passed.
 

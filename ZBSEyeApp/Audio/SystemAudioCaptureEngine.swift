@@ -326,12 +326,7 @@ private final class SystemAudioTapSession: @unchecked Sendable {
             let aggregateDescription: [String: Any] = [
                 kAudioAggregateDeviceNameKey: "ZBS Eye System Audio",
                 kAudioAggregateDeviceUIDKey: aggregateUID,
-                kAudioAggregateDeviceIsPrivateKey: true,
-                kAudioAggregateDeviceIsStackedKey: false,
-                kAudioAggregateDeviceTapListKey: [[
-                    kAudioSubTapUIDKey: tapUID,
-                    kAudioSubTapDriftCompensationKey: true
-                ]]
+                kAudioAggregateDeviceIsPrivateKey: true
             ]
             try check(
                 AudioHardwareCreateAggregateDevice(
@@ -340,6 +335,7 @@ private final class SystemAudioTapSession: @unchecked Sendable {
                 ),
                 "Create system-audio aggregate device"
             )
+            try attachTap(uid: tapUID, to: aggregateDeviceID)
 
             let format = try streamFormat(for: tapID)
             guard SystemAudioTapPCM.supports(format) else {
@@ -554,6 +550,56 @@ private final class SystemAudioTapSession: @unchecked Sendable {
             "Read system-audio tap format"
         )
         return format
+    }
+
+    /// Apple documents tap attachment as a separate aggregate-device property
+    /// update. Confirm the exact UID is active before starting IO: a callback
+    /// full of zeroes is not evidence that the tap was actually connected.
+    private static func attachTap(
+        uid: String,
+        to aggregateDeviceID: AudioObjectID
+    ) throws {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioAggregateDevicePropertyTapList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var tapList: CFArray = [uid as CFString] as CFArray
+        try check(
+            withUnsafePointer(to: &tapList) { pointer in
+                AudioObjectSetPropertyData(
+                    aggregateDeviceID,
+                    &address,
+                    0,
+                    nil,
+                    UInt32(MemoryLayout<CFArray>.size),
+                    pointer
+                )
+            },
+            "Attach system-audio tap"
+        )
+
+        var confirmedList: CFArray = [] as CFArray
+        var size = UInt32(MemoryLayout<CFArray>.size)
+        try check(
+            withUnsafeMutablePointer(to: &confirmedList) { pointer in
+                AudioObjectGetPropertyData(
+                    aggregateDeviceID,
+                    &address,
+                    0,
+                    nil,
+                    &size,
+                    pointer
+                )
+            },
+            "Confirm system-audio tap"
+        )
+        guard (confirmedList as? [String])?.contains(uid) == true else {
+            throw SystemAudioTapError.operation(
+                "Confirm system-audio tap",
+                kAudioHardwareUnspecifiedError
+            )
+        }
     }
 
     private static func check(_ status: OSStatus, _ operation: String) throws {
