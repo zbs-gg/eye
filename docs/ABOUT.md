@@ -214,10 +214,11 @@ A separate local Developer ID-signed `0.8.0 (23)` candidate was installed on 202
 source after Call-audio priority and native-screenshot yielding changed. It launched against the existing data
 root and reported healthy capture. It is not notarized or public, and uninterrupted dual-track audio during a
 real Call remains the acceptance proof; automated tests do not establish that result.
-Installed diagnostics 26 and 27 replaced the hidden screen-capture leg with a Core Audio process tap but produced
-all-zero system PCM: the current-process lookup passed only one byte of the PID and could exclude the wrong audio
-process. Current `0.9.0 (28)` source passes the complete `pid_t` qualifier and keeps the separately confirmed tap
-attachment. Build 28 remains source-only until its installed real-call matrix passes; it must not be described as
+Installed diagnostics 26 through 28 replaced the hidden screen-capture leg with a Core Audio process tap but
+produced all-zero system PCM. A signed physical probe on macOS 26.1 isolated the remaining cause: the aggregate
+device needs the tap list both in its creation dictionary and reasserted as a confirmed property before IO starts;
+either attachment path alone produced zeroes. Current `0.9.0 (29)` source does both and passes the complete PID
+qualifier. Build 29 remains source-only until its installed real-call matrix passes; it must not be described as
 installed, notarized, or released.
 The larger native-screenshot matrix, normal-use soak, and long physical Call checks remain unqualified and must not
 be described as passed.

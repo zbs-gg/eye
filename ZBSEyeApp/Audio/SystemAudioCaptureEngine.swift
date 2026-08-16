@@ -326,7 +326,12 @@ private final class SystemAudioTapSession: @unchecked Sendable {
             let aggregateDescription: [String: Any] = [
                 kAudioAggregateDeviceNameKey: "ZBS Eye System Audio",
                 kAudioAggregateDeviceUIDKey: aggregateUID,
-                kAudioAggregateDeviceIsPrivateKey: true
+                kAudioAggregateDeviceIsPrivateKey: true,
+                kAudioAggregateDeviceIsStackedKey: false,
+                kAudioAggregateDeviceTapListKey: [[
+                    kAudioSubTapUIDKey: tapUID,
+                    kAudioSubTapDriftCompensationKey: true
+                ]]
             ]
             try check(
                 AudioHardwareCreateAggregateDevice(
@@ -552,9 +557,9 @@ private final class SystemAudioTapSession: @unchecked Sendable {
         return format
     }
 
-    /// Apple documents tap attachment as a separate aggregate-device property
-    /// update. Confirm the exact UID is active before starting IO: a callback
-    /// full of zeroes is not evidence that the tap was actually connected.
+    /// Reassert and confirm the tap list after aggregate creation. Physical
+    /// probes on macOS 26.1 showed that the creation dictionary or this update
+    /// alone can produce callbacks containing only zeroes; both are required.
     private static func attachTap(
         uid: String,
         to aggregateDeviceID: AudioObjectID
