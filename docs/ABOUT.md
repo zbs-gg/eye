@@ -225,8 +225,11 @@ was already silent before downstream processing. The exported app was missing th
 capture privacy reasons because Xcode silently omitted the newer keys from its generated plist. Installed build 32
 used an explicit plist and captured real system audio without source gaps. Its Call-video probe still delayed three
 native captures to 1.79–2.16 seconds versus a 0.36–0.40-second Eye-off baseline: Timeline was paused and had stopped
-the shared screenshot observer. Current `0.9.0 (33)` keeps that permission-neutral observer alive for the app lifetime,
-independently of Timeline. It remains unqualified until physical hotkey and microphone checks pass; it is not released.
+the shared screenshot observer. Installed build 33 kept that observer alive and recorded the expected video gap
+without any audio gap. Its optional AAC mux still failed: AVAudioFile rejects the explicit 64 kbps encoder property
+at the authoritative 16 kHz sample rate. Current `0.9.0 (34)` lets AVFoundation choose a supported AAC rate and
+clears that exact transient failure after all fragments are muxed. Physical hotkey and microphone checks still
+block qualification; this version is not released.
 The larger native-screenshot matrix, normal-use soak, and long physical Call checks remain unqualified and must not
 be described as passed.
 

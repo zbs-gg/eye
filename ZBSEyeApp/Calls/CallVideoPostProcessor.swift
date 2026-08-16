@@ -100,6 +100,9 @@ actor CallVideoPostProcessor {
             } catch is CancellationError {
                 return
             } catch {
+                Log.audio.error(
+                    "call_video_audio_mux_failed: \(error.localizedDescription, privacy: .private)"
+                )
                 try? await repository.markCallDegraded(
                     callID: callID,
                     reason: "video_audio_mux_unavailable",
@@ -308,7 +311,6 @@ actor CallVideoPostProcessor {
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
                 AVSampleRateKey: 16_000,
                 AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: 64_000,
             ],
             commonFormat: .pcmFormatInt16,
             interleaved: false

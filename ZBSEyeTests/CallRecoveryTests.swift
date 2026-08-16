@@ -659,6 +659,50 @@ final class CallRecoveryTests: XCTestCase {
         XCTAssertEqual(row.sha256, videoRecoveryDigest(muxed))
     }
 
+    func testCommittedMuxClearsOnlyItsOwnTransientCallDegradation() async throws {
+        let store = try CallRecoveryTestStore()
+        let repository = CallRepository(database: store.database)
+        let fixture = try await installVideoSegmentForRecovery(
+            repository,
+            store: store,
+            key: "mux-clears-own-failure",
+            data: Data("silent-video".utf8)
+        )
+        try await repository.markCallDegraded(
+            callID: fixture.callID,
+            reason: "video_audio_mux_unavailable",
+            nowMs: 3_000
+        )
+
+        try await repository.markVideoSegmentAudioMuxed(
+            id: fixture.segmentID,
+            mediaGeneration: 0,
+            bytes: 42,
+            sha256: String(repeating: "a", count: 64)
+        )
+
+        let cleared = try await store.database.pool.read { db in
+            try XCTUnwrap(CallRow.fetchOne(db, key: fixture.callID)).degradationReason
+        }
+        XCTAssertNil(cleared)
+
+        try await repository.markCallDegraded(
+            callID: fixture.callID,
+            reason: "source_gap",
+            nowMs: 4_000
+        )
+        try await repository.markVideoSegmentAudioMuxed(
+            id: fixture.segmentID,
+            mediaGeneration: 0,
+            bytes: 43,
+            sha256: String(repeating: "b", count: 64)
+        )
+        let preserved = try await store.database.pool.read { db in
+            try XCTUnwrap(CallRow.fetchOne(db, key: fixture.callID)).degradationReason
+        }
+        XCTAssertEqual(preserved, "source_gap")
+    }
+
     func testRecoveryPreservesUnknownVideoRollbackCopy() async throws {
         let store = try CallRecoveryTestStore()
         let repository = CallRepository(database: store.database)

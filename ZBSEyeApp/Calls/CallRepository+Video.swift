@@ -79,6 +79,22 @@ extension CallRepository {
             guard db.changesCount == 1 else {
                 throw CallRepositoryError.invalidMediaMutation(id)
             }
+            try db.execute(
+                sql: """
+                    UPDATE calls
+                    SET degradationReason = NULL
+                    WHERE id = (SELECT callId FROM call_video_segments WHERE id = ?)
+                      AND degradationReason = 'video_audio_mux_unavailable'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM call_video_segments pending
+                          WHERE pending.callId = calls.id
+                            AND pending.mediaGeneration = calls.mediaGeneration
+                            AND pending.finalized = 1
+                            AND pending.audioMuxed = 0
+                      )
+                    """,
+                arguments: [id]
+            )
         }
     }
 
