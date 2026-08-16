@@ -92,6 +92,9 @@ private struct TimelineBody: View {
                 env.automations?.selectedDay = Calendar.current.startOfDay(for: day)
             }
         }
+        .onChange(of: env.calls.isActive, initial: true) { _, callIsActive in
+            if callIsActive { store.audioPlayer.stop() }
+        }
     }
 
     /// Hotkeys: Space (player), ←/→ (step by frames), Cmd+F (search), Esc (close search).
@@ -429,6 +432,7 @@ private struct TimelineBody: View {
                     Image(systemName: playIcon(a)).font(.title3)
                 }
                 .buttonStyle(.borderless)
+                .disabled(env.calls.isActive)
                 .animation(reduceMotion ? .none : .snappy(duration: 0.15), value: playIcon(a))
                 ProgressView(value: isCurrent(a) ? store.audioPlayer.progress : 0)
                     .progressViewStyle(.linear)

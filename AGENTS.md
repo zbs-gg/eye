@@ -102,8 +102,10 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
 9. **Call mode is explicit and audio always wins.** `off`, `audio`, and `audio_video` are separate from Timeline
    audio settings. Call video is a fixed-display, hardware-only, latest-wins stream capped at 1080p/15 fps; it
    starts only after audio, may drop frames, and yields physically to native screenshots. It never restarts or
-   backpressures microphone/system audio. System audio uses an app-owned private Core Audio process tap, excludes
-   Eye itself, and tears down its exact tap and aggregate-device IDs; it has no ScreenCaptureKit display leg.
+   backpressures microphone/system audio. System audio uses an app-owned private Core Audio process tap and tears
+   down its exact tap and aggregate-device IDs; it has no ScreenCaptureKit display leg. On macOS 26.1, excluding
+   Eye's process while it holds microphone input silently zeroes the global tap, so the tap does not use process
+   exclusion and Eye must not play media while a Call owns audio.
    Background AAC mux work is lease-cancelled as soon as another Call starts
    and retries only after physical audio stops; recovery verifies the generation-bound segment hash before deleting
    a `.silent-backup`. Upgrades default existing Calls to audio and never enable video silently.
@@ -169,13 +171,15 @@ an API-key provider. This source change is not part of the already-published `0.
 must not be described as publicly released. A local Developer ID-signed `0.8.0 (23)` candidate from the current
 dirty source was installed on 2026-08-12 and reported healthy against the existing data root. Its Call-audio
 priority still requires evidence from a real dual-track Call; the candidate is neither notarized nor public.
-Current `0.9.0 (29)` source adds three-mode Calls and first-class Call video, then replaces the hidden
+Current `0.9.0 (30)` source adds three-mode Calls and first-class Call video, then replaces the hidden
 ScreenCaptureKit leg used for system audio with a Core Audio process tap. Installed diagnostics 26 through 28
 created continuous but all-zero system PCM. A signed physical probe isolated the remaining cause: on macOS 26.1
 the aggregate device must receive the tap list in its creation dictionary and then have the same list reasserted
-and confirmed as a property before IO starts. Build 29 does both. Real audio-only/video Calls, native screenshot
-latency, the new system-audio permission, and the full coexistence matrix remain mandatory before it may replace
-the diagnostics.
+and confirmed as a property before IO starts. Installed build 29 still produced zeroes because excluding Eye while
+it held microphone input silently zeroed the global tap; the same signed probe captured real sound with microphone
+input active and no process exclusion. Build 30 keeps both attachment steps and removes that exclusion. Real
+audio-only/video Calls, native screenshot latency, the new system-audio permission, and the full coexistence matrix
+remain mandatory before it may replace the diagnostics.
 
 The exact Developer ID + notarized `0.8.0 (22)` artifact is public stable/latest as of 2026-08-08. It includes the
 persistent latest-wins screen stream, microphone-owned automatic Calls, meaningful visual moments, immediate

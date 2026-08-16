@@ -65,6 +65,11 @@ struct CallDetailView: View {
             playback.stop()
             videoPlayer?.pause()
         }
+        .onChange(of: env.calls.isActive, initial: true) { _, callIsActive in
+            guard callIsActive else { return }
+            playback.stop()
+            videoPlayer?.pause()
+        }
         .alert("Name this speaker", isPresented: Binding(
             get: { speakerKeyToRename != nil },
             set: { if !$0 { speakerKeyToRename = nil } }
@@ -190,6 +195,15 @@ struct CallDetailView: View {
                         .frame(maxWidth: 760)
                         .background(.black)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .allowsHitTesting(!env.calls.isActive)
+                        .overlay {
+                            if env.calls.isActive {
+                                Label("Playback pauses while a Call is recording", systemImage: "mic.fill")
+                                    .font(.callout.weight(.medium))
+                                    .padding(10)
+                                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
                     let first = evidence.videoSegments[0]
                     Text("\(first.width)×\(first.height) · \(first.fps) fps · \(first.codec.rawValue.uppercased()) · \(evidence.videoSegments.count) segments")
                         .font(.caption)
@@ -266,6 +280,7 @@ struct CallDetailView: View {
                     Image(systemName: playback.source == source && playback.isPlaying ? "pause.fill" : "play.fill")
                 }
                 .buttonStyle(.borderless)
+                .disabled(env.calls.isActive)
                 .help(playback.source == source && playback.isPlaying ? "Pause" : "Play this source")
             }
         }

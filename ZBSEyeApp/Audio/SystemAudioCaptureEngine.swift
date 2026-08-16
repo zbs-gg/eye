@@ -1,7 +1,6 @@
 import Foundation
 import CoreAudio
 import AudioToolbox
-import Darwin
 
 struct SystemAudioCaptureStartCancelled: Error, Sendable, Equatable {
     let teardownOutcome: SystemAudioCaptureTeardownOutcome
@@ -301,10 +300,15 @@ private final class SystemAudioTapSession: @unchecked Sendable {
         receiveAudio: @escaping ReceiveAudio,
         becameUnavailable: @escaping BecameUnavailable
     ) throws -> SystemAudioTapSession {
-        let excludedProcess = currentProcessAudioObjectID()
-        let excluded: [AudioObjectID] = excludedProcess.map { [$0] } ?? []
+        // Do not exclude Eye's process here. On macOS 26.1 a global tap that
+        // excludes the same process currently holding microphone input keeps
+        // calling IO but replaces every other process with zeroes. Signed
+        // physical probes reproduced this only while microphone input was
+        // active. Eye does not play media while a Call owns audio, so an empty
+        // exclusion list preserves the authoritative system track without a
+        // normal Call feedback path.
         let tapDescription = CATapDescription(
-            stereoGlobalTapButExcludeProcesses: excluded
+            stereoGlobalTapButExcludeProcesses: []
         )
         tapDescription.name = "ZBS Eye System Audio"
         tapDescription.isPrivate = true
@@ -481,29 +485,6 @@ private final class SystemAudioTapSession: @unchecked Sendable {
         if status != noErr || alive == 0 {
             becameUnavailable(self)
         }
-    }
-
-    private static func currentProcessAudioObjectID() -> AudioObjectID? {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var pid = getpid()
-        var objectID = AudioObjectID(kAudioObjectUnknown)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        let status = withUnsafePointer(to: &pid) { pidPointer in
-            AudioObjectGetPropertyData(
-                AudioObjectID(kAudioObjectSystemObject),
-                &address,
-                UInt32(MemoryLayout<pid_t>.size),
-                pidPointer,
-                &size,
-                &objectID
-            )
-        }
-        guard status == noErr, objectID != kAudioObjectUnknown else { return nil }
-        return objectID
     }
 
     private static func stringProperty(
