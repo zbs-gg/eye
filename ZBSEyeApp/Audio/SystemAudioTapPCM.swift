@@ -16,7 +16,7 @@ enum SystemAudioTapPCM {
     static func decode(
         inputData: UnsafePointer<AudioBufferList>,
         format: AudioStreamBasicDescription
-    ) -> (samples: [Float], rms: Float)? {
+    ) -> (samples: [Float], rms: Float, peak: Float)? {
         guard supports(format) else { return nil }
         let buffers = UnsafeMutableAudioBufferListPointer(
             UnsafeMutablePointer(mutating: inputData)
@@ -53,10 +53,12 @@ enum SystemAudioTapPCM {
         }
         let divisor = Float(totalChannels)
         var squareSum: Float = 0
+        var peak: Float = 0
         for index in mono.indices {
             mono[index] /= divisor
+            peak = max(peak, abs(mono[index]))
             squareSum += mono[index] * mono[index]
         }
-        return (mono, (squareSum / Float(frameCount)).squareRoot())
+        return (mono, (squareSum / Float(frameCount)).squareRoot(), peak)
     }
 }

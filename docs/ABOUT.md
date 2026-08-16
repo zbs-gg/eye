@@ -219,9 +219,10 @@ produced all-zero system PCM. A signed physical probe on macOS 26.1 isolated the
 device needs the tap list both in its creation dictionary and reasserted as a confirmed property before IO starts;
 either attachment path alone produced zeroes. Installed build 29 did both but remained silent: a second signed
 probe proved that excluding Eye while the same process holds microphone input silently zeroes the global tap on
-this OS. Current `0.9.0 (30)` source therefore uses no process exclusion and relies on the Call audio-owner rule
-that Eye does not play media during a Call. Build 30 remains source-only until its installed real-call matrix
-passes; it must not be described as installed, notarized, or released.
+this OS. Installed build 30 therefore used no process exclusion and paused Eye playback during a Call, but still
+produced all-zero system PCM. Current `0.9.0 (31)` adds a bounded stop-time measurement of the decoded Core Audio
+peak to distinguish capture failure from downstream spooling. Build 31 remains source-only until the installed
+probe identifies and fixes the remaining cause; it must not be described as released.
 The larger native-screenshot matrix, normal-use soak, and long physical Call checks remain unqualified and must not
 be described as passed.
 

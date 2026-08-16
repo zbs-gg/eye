@@ -177,6 +177,7 @@ final class SystemAudioCaptureEngine: @unchecked Sendable {
                 inputData: inputData,
                 format: session.format
               ) else { return }
+        session.observeDecodedBuffer(peak: payload.peak, rms: payload.rms)
 
         let timestamp = inputTime.pointee
         let hasHostTime = timestamp.mFlags.contains(.hostTimeValid)
@@ -280,6 +281,9 @@ private final class SystemAudioTapSession: @unchecked Sendable {
     private let stateLock = NSLock()
     private var started = false
     private var destroyed = false
+    private var observedCallbackCount: UInt64 = 0
+    private var observedPeak: Float = 0
+    private var observedRMS: Float = 0
 
     private init(
         tapID: AudioObjectID,
@@ -411,6 +415,12 @@ private final class SystemAudioTapSession: @unchecked Sendable {
         guard shouldDestroy else { return .notNeeded }
 
         removeDeviceAliveListener()
+        let observation = stateLock.withLock {
+            (observedCallbackCount, observedPeak, observedRMS)
+        }
+        Log.audio.info(
+            "system_audio_tap_summary callbacks=\(observation.0, privacy: .public) decoded_peak=\(observation.1, privacy: .public) decoded_rms=\(observation.2, privacy: .public)"
+        )
         var failures: [String] = []
         if stateLock.withLock({ started }) {
             let status = AudioDeviceStop(aggregateDeviceID, ioProcID)
@@ -436,6 +446,14 @@ private final class SystemAudioTapSession: @unchecked Sendable {
             return .failed(failures.joined(separator: ","))
         }
         return .stopped
+    }
+
+    func observeDecodedBuffer(peak: Float, rms: Float) {
+        stateLock.withLock {
+            observedCallbackCount &+= 1
+            observedPeak = max(observedPeak, peak)
+            observedRMS = max(observedRMS, rms)
+        }
     }
 
     private func installDeviceAliveListener() {
