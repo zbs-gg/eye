@@ -220,9 +220,11 @@ device needs the tap list both in its creation dictionary and reasserted as a co
 either attachment path alone produced zeroes. Installed build 29 did both but remained silent: a second signed
 probe proved that excluding Eye while the same process holds microphone input silently zeroes the global tap on
 this OS. Installed build 30 therefore used no process exclusion and paused Eye playback during a Call, but still
-produced all-zero system PCM. Current `0.9.0 (31)` adds a bounded stop-time measurement of the decoded Core Audio
-peak to distinguish capture failure from downstream spooling. Build 31 remains source-only until the installed
-probe identifies and fixes the remaining cause; it must not be described as released.
+produced all-zero system PCM. Installed build 31 measured the decoded Core Audio callback directly and proved it
+was already silent before downstream processing. The exported app was missing the required system-audio and screen-
+capture privacy reasons because Xcode silently omitted the newer keys from its generated plist. Current `0.9.0 (32)`
+uses an explicit plist and rejects release builds missing either key. It remains an unqualified candidate until an
+installed real Call proves both tracks; it must not be described as released.
 The larger native-screenshot matrix, normal-use soak, and long physical Call checks remain unqualified and must not
 be described as passed.
 

@@ -1,5 +1,5 @@
 ZBS Eye — Local AI third-party notices
-Release: 0.9.0 (build 31)
+Release: 0.9.0 (build 32)
 
 Built-in generative model (downloaded after installation; not included in the app)
 -------------------------------------------------------------------------------

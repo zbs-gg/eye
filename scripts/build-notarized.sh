@@ -126,6 +126,12 @@ BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${APP}/Conte
   echo "❌ Exported app bundle identifier ${BUNDLE_ID} differs from ${EXPECTED_BUNDLE_ID}."
   exit 1
 }
+AUDIO_CAPTURE_REASON=$(/usr/libexec/PlistBuddy -c 'Print :NSAudioCaptureUsageDescription' "${APP}/Contents/Info.plist" 2>/dev/null || true)
+SCREEN_CAPTURE_REASON=$(/usr/libexec/PlistBuddy -c 'Print :NSScreenCaptureUsageDescription' "${APP}/Contents/Info.plist" 2>/dev/null || true)
+[ -n "${AUDIO_CAPTURE_REASON}" ] && [ -n "${SCREEN_CAPTURE_REASON}" ] || {
+  echo "❌ Exported app is missing the system-audio or screen-capture privacy explanation."
+  exit 1
+}
 PROFILE="${APP}/Contents/embedded.provisionprofile"
 [ -f "${PROFILE}" ] || {
   echo "❌ Xcode did not embed a Developer ID provisioning profile."

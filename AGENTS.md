@@ -171,16 +171,18 @@ an API-key provider. This source change is not part of the already-published `0.
 must not be described as publicly released. A local Developer ID-signed `0.8.0 (23)` candidate from the current
 dirty source was installed on 2026-08-12 and reported healthy against the existing data root. Its Call-audio
 priority still requires evidence from a real dual-track Call; the candidate is neither notarized nor public.
-Current `0.9.0 (31)` source adds three-mode Calls and first-class Call video, then replaces the hidden
+Current `0.9.0 (32)` source adds three-mode Calls and first-class Call video, then replaces the hidden
 ScreenCaptureKit leg used for system audio with a Core Audio process tap. Installed diagnostics 26 through 28
 created continuous but all-zero system PCM. A signed physical probe isolated the remaining cause: on macOS 26.1
 the aggregate device must receive the tap list in its creation dictionary and then have the same list reasserted
 and confirmed as a property before IO starts. Installed build 29 still produced zeroes because excluding Eye while
 it held microphone input silently zeroed the global tap; the same signed probe captured real sound with microphone
-input active and no process exclusion. Installed build 30 still produced all-zero system PCM, so build 31 adds a
-bounded stop-time measurement of the decoded Core Audio peak to isolate capture from downstream spooling. Real
-audio-only/video Calls, native screenshot latency, the new system-audio permission, and the full coexistence matrix
-remain mandatory before it may replace the diagnostics.
+input active and no process exclusion. Installed build 31 proved that the decoded Core Audio callback itself was
+still all-zero. Its exported Info.plist was missing the required system-audio and screen-capture privacy reasons:
+Xcode silently omitted those newer keys from a generated plist even though the build settings named them. Build 32
+uses an explicit plist and makes the notarized-build script reject either missing key. Real audio-only/video Calls,
+native screenshot latency, the new system-audio permission, and the full coexistence matrix remain mandatory before
+it may replace the diagnostics.
 
 The exact Developer ID + notarized `0.8.0 (22)` artifact is public stable/latest as of 2026-08-08. It includes the
 persistent latest-wins screen stream, microphone-owned automatic Calls, meaningful visual moments, immediate
