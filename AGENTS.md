@@ -169,11 +169,11 @@ an API-key provider. This source change is not part of the already-published `0.
 must not be described as publicly released. A local Developer ID-signed `0.8.0 (23)` candidate from the current
 dirty source was installed on 2026-08-12 and reported healthy against the existing data root. Its Call-audio
 priority still requires evidence from a real dual-track Call; the candidate is neither notarized nor public.
-Current `0.9.0 (27)` source adds three-mode Calls and first-class Call video, then replaces the hidden
-ScreenCaptureKit leg used for system audio with a Core Audio process tap. Installed diagnostic `0.9.0 (26)`
-created continuous but all-zero system PCM on its first physical probe, so it is not qualified. Real audio-only/
-video Calls, native screenshot latency, the new system-audio permission, and the full coexistence matrix remain
-mandatory before build 27 may replace it.
+Current `0.9.0 (28)` source adds three-mode Calls and first-class Call video, then replaces the hidden
+ScreenCaptureKit leg used for system audio with a Core Audio process tap. Installed diagnostics 26 and 27 created
+continuous but all-zero system PCM because the current-process lookup passed a one-byte PID qualifier and could
+exclude the wrong audio process. Real audio-only/video Calls, native screenshot latency, the new system-audio
+permission, and the full coexistence matrix remain mandatory before build 28 may replace them.
 
 The exact Developer ID + notarized `0.8.0 (22)` artifact is public stable/latest as of 2026-08-08. It includes the
 persistent latest-wins screen stream, microphone-owned automatic Calls, meaningful visual moments, immediate

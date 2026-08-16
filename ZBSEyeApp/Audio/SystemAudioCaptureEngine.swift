@@ -491,7 +491,7 @@ private final class SystemAudioTapSession: @unchecked Sendable {
             AudioObjectGetPropertyData(
                 AudioObjectID(kAudioObjectSystemObject),
                 &address,
-                1,
+                UInt32(MemoryLayout<pid_t>.size),
                 pidPointer,
                 &size,
                 &objectID
