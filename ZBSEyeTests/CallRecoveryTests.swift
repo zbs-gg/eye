@@ -3,6 +3,73 @@ import XCTest
 import GRDB
 
 final class CallRecoveryTests: XCTestCase {
+    func testRecoveryLeavesHelperOwnedCallAndOpenChunkUntouchedUntilHelperReattaches() async throws {
+        let store = try CallRecoveryTestStore()
+        let repository = CallRepository(database: store.database)
+        let call = try await repository.createCall(
+            startedAtMs: 1_000,
+            idempotencyKey: "helper-active"
+        )
+        let callID = try XCTUnwrap(call.id)
+        let span = try await repository.recordSourceSpan(
+            CallSourceSpanDraft(
+                callId: callID,
+                source: .me,
+                epoch: 0,
+                sampleRate: 16_000,
+                startedAtMs: 1_000,
+                startSample: 0,
+                startHostTimeNs: 0,
+                availability: .available
+            )
+        )
+        let path = "calls/\(callID)/me/epoch-0000/chunk-000000.pcm"
+        try store.write(Data([1, 2, 3, 4]), relativePath: path)
+        let chunk = try await repository.recordAudioChunk(
+            CallAudioChunkDraft(
+                callId: callID,
+                sourceSpanId: try XCTUnwrap(span.id),
+                source: .me,
+                epoch: 0,
+                sequence: 0,
+                mediaGeneration: 0,
+                startSample: 0,
+                endSample: 0,
+                startMs: 1_000,
+                endMs: 1_000,
+                relativePath: path,
+                bytes: 0,
+                sha256: nil,
+                finalized: false
+            )
+        )
+        let recovery = CallRecoveryService(
+            repository: repository,
+            mediaRoot: store.mediaRoot
+        )
+
+        let report = try await recovery.recover(
+            nowMs: 2_000,
+            excludingActiveCallID: callID
+        )
+        let protected = try await store.database.pool.read { db in
+            (
+                call: try XCTUnwrap(CallRow.fetchOne(db, key: callID)),
+                chunk: try XCTUnwrap(CallAudioChunkRow.fetchOne(db, key: chunk.id))
+            )
+        }
+        XCTAssertEqual(protected.call.state, .recording)
+        XCTAssertFalse(protected.chunk.finalized)
+        XCTAssertEqual(report.callsInterrupted, 0)
+        XCTAssertEqual(report.chunksFinalized, 0)
+
+        try await recovery.recoverAudioChunks(callID: callID, nowMs: 2_100)
+        let resumed = try await repository.audioResumePoint(callID: callID)
+        XCTAssertEqual(resumed.meEndSample, 2)
+        XCTAssertEqual(resumed.meLastEpoch, 0)
+        XCTAssertEqual(resumed.meEndMs, 1_001)
+    }
+
     func testRecoveryDoesNotFreezePreparingBookmarkWithoutIngressCoverageMapping() async throws {
         let store = try CallRecoveryTestStore()
         let repository = CallRepository(database: store.database)

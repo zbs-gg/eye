@@ -97,6 +97,14 @@ final class CallRecordingStore {
         self.coordinator = coordinator
     }
 
+    func publishAdoptedSnapshot(_ snapshot: CallCoordinatorSnapshot) {
+        guard snapshot.phase == .recording, snapshot.callID != nil else { return }
+        self.snapshot = snapshot
+        starting = false
+        ending = false
+        terminationCallID = nil
+    }
+
     func setExternalError(_ message: String?) {
         errorMessage = message
     }

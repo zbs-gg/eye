@@ -168,6 +168,32 @@ final class CallCoordinatorTests: XCTestCase {
         XCTAssertEqual(countAfterEnd, 1)
     }
 
+    func testIndeterminateAudioOwnerFailurePreservesCallForRecovery() async throws {
+        let fixture = try CallCoordinatorFixture(
+            actual: .init(me: true, system: true),
+            startFails: true
+        )
+        defer { fixture.cleanup() }
+
+        do {
+            _ = try await fixture.coordinator.start(
+                request: .init(me: true, system: true),
+                idempotencyKey: "indeterminate-helper-start"
+            )
+            XCTFail("an indeterminate helper start must remain visible as failed")
+        } catch is FakeCallAudio.StartFailure {
+            // Expected: ownership is unknown, so the Call row is preserved.
+        }
+
+        let snapshot = await fixture.coordinator.snapshot()
+        XCTAssertEqual(snapshot.phase, .failed)
+        XCTAssertNotNil(snapshot.callID)
+        XCTAssertEqual(fixture.backgroundWork.counts(), .init(suspends: 1, resumes: 1))
+        let calls = try await fixture.database.pool.read { try CallRow.fetchAll($0) }
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(calls[0].state, .recording)
+    }
+
     func testBookmarkThenImmediateEndKeepsCheckpointAndCreatesExactlyOneFinalJob() async throws {
         let fixture = try CallCoordinatorFixture(actual: .init(me: true, system: true))
         defer { fixture.cleanup() }
@@ -495,16 +521,22 @@ private final class CallCoordinatorFixture {
     let backgroundWork: FakeCallBackgroundWork
     let coordinator: CallCoordinator
 
-    init(actual: CallSourceSelection) throws {
+    init(actual: CallSourceSelection, startFails: Bool = false) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("zbseye-call-coordinator-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         database = try ZBSEyeDatabase(path: root.appendingPathComponent("eye.sqlite").path)
-        audio = FakeCallAudio(actual: actual)
+        let repository = CallRepository(database: database)
+        audio = FakeCallAudio(
+            actual: actual,
+            startFails: startFails,
+            root: root.appendingPathComponent("media", isDirectory: true),
+            repository: repository
+        )
         video = FakeCallVideo()
         backgroundWork = FakeCallBackgroundWork()
         coordinator = CallCoordinator(
-            repository: CallRepository(database: database),
+            repository: repository,
             mediaRoot: root.appendingPathComponent("media", isDirectory: true),
             audio: audio.control(),
             video: video.control(),
@@ -586,7 +618,12 @@ private final class FakeCallBackgroundWork: @unchecked Sendable {
 }
 
 private actor FakeCallAudio {
+    struct StartFailure: Error {}
+
+    private let root: URL
+    private let repository: CallRepository
     private let actual: CallSourceSelection
+    private let startFails: Bool
     private var sink: CallAudioFrameSink?
     private var frameAdmission = CallAudioFrameAdmissionLatch()
     private var sealedBoundary: CallAudioFrameBoundary?
@@ -597,17 +634,62 @@ private actor FakeCallAudio {
     private var starts = 0
     private var stops = 0
 
-    init(actual: CallSourceSelection) {
+    init(
+        actual: CallSourceSelection,
+        startFails: Bool,
+        root: URL,
+        repository: CallRepository
+    ) {
         self.actual = actual
+        self.startFails = startFails
+        self.root = root
+        self.repository = repository
     }
 
     nonisolated func control() -> CallAudioControl {
         CallAudioControl(
-            installSink: { sink in await self.setSink(sink) },
-            start: { _, sinkLease, _ in await self.didStart(sinkLease: sinkLease) },
+            startSession: { request in try await self.startSession(request) }
+        )
+    }
+
+    private func startSession(
+        _ request: CallAudioSessionStartRequest
+    ) async throws -> CallAudioSessionControl? {
+        if startFails { throw StartFailure() }
+        let baselines = currentTargets()
+        let spool = try CallAudioSpoolSession(
+            root: root,
+            callID: request.callID,
+            requested: request.requested,
+            baselines: baselines,
+            startedAtMs: request.startedAtMs,
+            repository: repository,
+            mediaGeneration: request.mediaGeneration
+        )
+        guard let lease = setSink({ frame in await spool.consume(frame) }) else { return nil }
+        let started = didStart(sinkLease: lease)
+        guard !started.isEmpty else { return nil }
+        await spool.setOwnedSources(request.requested)
+        return CallAudioSessionControl(
+            baselines: baselines,
+            actual: started,
             acceptedTargets: { await self.currentTargets() },
-            drainGaps: { await self.takeGaps() },
-            stop: { await self.didStop() }
+            freezeCoverage: { targets in
+                try await spool.record(gaps: await self.takeGaps())
+                return try await spool.flush(targets: targets, baselines: baselines)
+            },
+            finishAndStop: {
+                _ = await self.setSink(nil)
+                await spool.closeAdmission()
+                let coverage = try await spool.finish()
+                await self.didStop()
+                return coverage
+            },
+            abort: {
+                _ = await self.setSink(nil)
+                await spool.closeAdmission()
+                await self.didStop()
+            }
         )
     }
 

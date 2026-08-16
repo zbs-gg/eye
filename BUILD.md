@@ -46,7 +46,7 @@ ZBSEyeApp/
   Capture/    Persistent screen stream, latest-wins FramePipeline, SCKResourceCoordinator, screenshot priority, AXReader
   Audio/      AudioCoordinator, mic/system engines, VADSegmenter, TranscriptionService
   Meeting/    CoreAudio mic-owner listener, initiator/relay resolution, automatic Call detection
-  Calls/      CallCoordinator, dual-source spool, separate Call video, AAC post-process, projection, privacy deletion
+  Calls/      CallCoordinator, launchd audio owner, dual-source spool, Call video, AAC post-process, projection, deletion
   Data/       ZBSEyeDatabase, StorageLocation, StorageManager, BackupManager, RetentionManager, IngestService
   Search/     SearchService (FTS+vector RRF), EmbeddingService (e5), TimelineService, VectorBackfill
   Server/     ZBSEyeHTTPServer (FlyingFox REST, 127.0.0.1, Bearer), KeychainStore
@@ -70,6 +70,12 @@ after physical Call audio has stopped. If the app dies between MP4 replacement a
 uses the segment hash to restore the silent rollback copy or retain the already committed muxed bytes.
 The display is locked when authoritative Call audio starts. A native screenshot closes both Timeline and Call-video
 admission immediately; video resumes only after the shared helper-aware quiet gate opens, without restarting audio.
+The app bundle also contains `Contents/Library/LaunchAgents/gg.zbs.eye.call-audio.plist`. `SMAppService` registers
+that same-signed executable as the authoritative mic/Core Audio owner. Its mutually authenticated local XPC surface
+accepts only bounded Call lifecycle messages. It appends Call PCM/source-gap evidence through `CallRepository`,
+never runs migrations, and never writes Timeline, FTS, vector, or transcript state. A GUI crash leaves it recording;
+relaunch adopts the active Call. A helper restart reconciles its open PCM, records the interruption, and resumes in
+a new epoch. The installed physical gate must prove both failure paths; an unsigned build cannot qualify them.
 
 The shipping source pins two independent artifacts:
 

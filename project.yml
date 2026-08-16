@@ -88,6 +88,14 @@ targets:
       - path: BrowserExtension/Extension
         type: folder
         buildPhase: resources
+    postBuildScripts:
+      - name: Bundle Call Audio LaunchAgent
+        script: |
+          set -euo pipefail
+          agent_dir="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchAgents"
+          /bin/mkdir -p "${agent_dir}"
+          /bin/cp "${SRCROOT}/Support/gg.zbs.eye.call-audio.plist" "${agent_dir}/gg.zbs.eye.call-audio.plist"
+        basedOnDependencyAnalysis: false
     dependencies:
       - package: GRDB
         product: GRDB
@@ -118,7 +126,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: "ZBS Eye"
         INFOPLIST_KEY_CFBundleName: "ZBS Eye"
         MARKETING_VERSION: "0.9.0"          # CFBundleShortVersionString
-        CURRENT_PROJECT_VERSION: "35"       # CFBundleVersion
+        CURRENT_PROJECT_VERSION: "36"       # CFBundleVersion
         CODE_SIGN_ENTITLEMENTS: ZBSEyeApp/ZBSEye.entitlements
         # Default — ad-hoc for development. scripts/build-release.sh can use the legacy self-signed
         # "ZBS Eye Dev" identity; distributable releases must use scripts/build-notarized.sh with the
@@ -336,7 +344,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye.tests
         MARKETING_VERSION: "0.9.0"
-        CURRENT_PROJECT_VERSION: "35"
+        CURRENT_PROJECT_VERSION: "36"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: ZBSEyeTests/Info.plist
         ZBS_EYE_MODEL_DIR: ""

@@ -132,6 +132,25 @@ SCREEN_CAPTURE_REASON=$(/usr/libexec/PlistBuddy -c 'Print :NSScreenCaptureUsageD
   echo "❌ Exported app is missing the system-audio or screen-capture privacy explanation."
   exit 1
 }
+CALL_AUDIO_AGENT="${APP}/Contents/Library/LaunchAgents/gg.zbs.eye.call-audio.plist"
+[ -f "${CALL_AUDIO_AGENT}" ] || {
+  echo "❌ Exported app is missing its resilient Call-audio LaunchAgent."
+  exit 1
+}
+/usr/bin/plutil -lint "${CALL_AUDIO_AGENT}" >/dev/null
+CALL_AUDIO_LABEL=$(/usr/libexec/PlistBuddy -c 'Print :Label' "${CALL_AUDIO_AGENT}" 2>/dev/null || true)
+CALL_AUDIO_PROGRAM=$(/usr/libexec/PlistBuddy -c 'Print :BundleProgram' "${CALL_AUDIO_AGENT}" 2>/dev/null || true)
+CALL_AUDIO_FLAG=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:1' "${CALL_AUDIO_AGENT}" 2>/dev/null || true)
+CALL_AUDIO_MACH=$(/usr/libexec/PlistBuddy -c 'Print :MachServices:gg.zbs.eye.call-audio' "${CALL_AUDIO_AGENT}" 2>/dev/null || true)
+CALL_AUDIO_KEEPALIVE=$(/usr/libexec/PlistBuddy -c 'Print :KeepAlive:SuccessfulExit' "${CALL_AUDIO_AGENT}" 2>/dev/null || true)
+[ "${CALL_AUDIO_LABEL}" = "gg.zbs.eye.call-audio" ] \
+  && [ "${CALL_AUDIO_PROGRAM}" = "Contents/MacOS/ZBS Eye" ] \
+  && [ "${CALL_AUDIO_FLAG}" = "--call-audio-helper" ] \
+  && [ "${CALL_AUDIO_MACH}" = "true" ] \
+  && [ "${CALL_AUDIO_KEEPALIVE}" = "false" ] || {
+  echo "❌ Exported Call-audio LaunchAgent does not match the signed in-bundle helper contract."
+  exit 1
+}
 PROFILE="${APP}/Contents/embedded.provisionprofile"
 [ -f "${PROFILE}" ] || {
   echo "❌ Xcode did not embed a Developer ID provisioning profile."

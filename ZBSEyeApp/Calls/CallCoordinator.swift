@@ -196,15 +196,25 @@ struct CallCoordinatorSnapshot: Sendable, Equatable {
 }
 
 struct CallAudioControl: Sendable {
-    let installSink: @Sendable (CallAudioFrameSink?) async -> CallAudioFrameAdmissionLease?
-    let start: @Sendable (
-        CallSourceSelection,
-        CallAudioFrameAdmissionLease,
-        CallAudioStartAdmissionLease
-    ) async -> CallSourceSelection
+    let startSession: @Sendable (CallAudioSessionStartRequest) async throws -> CallAudioSessionControl?
+}
+
+struct CallAudioSessionStartRequest: Sendable {
+    let callID: Int64
+    let requested: CallSourceSelection
+    let startedAtMs: Int64
+    let mediaGeneration: Int
+    let startAdmissionLease: CallAudioStartAdmissionLease
+    let barrierTimeout: Duration
+}
+
+struct CallAudioSessionControl: Sendable {
+    let baselines: AudioIngressTargets
+    let actual: CallSourceSelection
     let acceptedTargets: @Sendable () async -> AudioIngressTargets
-    let drainGaps: @Sendable () async -> [AudioIngressGap]
-    let stop: @Sendable () async -> Void
+    let freezeCoverage: @Sendable (AudioIngressTargets) async throws -> CallSpoolCoverage
+    let finishAndStop: @Sendable () async throws -> CallSpoolCoverage
+    let abort: @Sendable () async -> Void
 }
 
 struct CallVideoControl: Sendable {
@@ -228,8 +238,7 @@ actor CallCoordinator {
     private struct ActiveCall: Sendable {
         let id: Int64
         let startedAtMs: Int64
-        let baselines: AudioIngressTargets
-        let spool: CallAudioSpoolSession
+        let audioSession: CallAudioSessionControl
         var lastBookmarkEndMs: Int64
         var bookmarkCount: Int
         var evidenceDegradationReason: String?
@@ -284,6 +293,41 @@ actor CallCoordinator {
     }
 
     func snapshot() -> CallCoordinatorSnapshot { current }
+
+    func adopt(
+        _ resumed: CallRepository.ActiveCallResumeState,
+        audioSession: CallAudioSessionControl
+    ) async -> CallCoordinatorSnapshot {
+        guard active == nil, current.phase == .idle else { return current }
+        let row = resumed.call
+        guard let callID = row.id else { return current }
+        backgroundWork.suspendForAudio()
+        await video.lockDisplay(callID)
+        let videoState = row.recordingMode.recordsVideo
+            ? await video.start(callID)
+            : .disabled
+        active = ActiveCall(
+            id: callID,
+            startedAtMs: row.startTs,
+            audioSession: audioSession,
+            lastBookmarkEndMs: resumed.lastBookmarkEndMs,
+            bookmarkCount: resumed.bookmarkCount,
+            evidenceDegradationReason: row.degradationReason,
+            recordingMode: row.recordingMode,
+            videoState: videoState
+        )
+        current = CallCoordinatorSnapshot(
+            phase: .recording,
+            callID: callID,
+            me: audioSession.actual.me ? .recording : .unavailable,
+            system: audioSession.actual.system ? .recording : .unavailable,
+            bookmarkCount: resumed.bookmarkCount,
+            stopReason: nil,
+            recordingMode: row.recordingMode,
+            video: videoState
+        )
+        return current
+    }
 
     func videoStateChangedExternally(_ state: CallVideoState) {
         guard var active, current.phase == .recording else { return }
@@ -440,36 +484,40 @@ actor CallCoordinator {
             current = .idle
             throw CallCoordinatorError.missingIdentity
         }
-        let baselines = await audio.acceptedTargets()
-        let spool = try CallAudioSpoolSession(
-            root: mediaRoot,
-            callID: callID,
-            requested: request,
-            baselines: baselines,
-            startedAtMs: startedAtMs,
-            repository: repository,
-            mediaGeneration: row.mediaGeneration
-        )
-        guard let sinkLease = await audio.installSink({ frame in
-            await spool.consume(frame)
-        }) else {
-            await spool.closeAdmission()
+        let audioSession: CallAudioSessionControl?
+        do {
+            audioSession = try await audio.startSession(
+                CallAudioSessionStartRequest(
+                    callID: callID,
+                    requested: request,
+                    startedAtMs: startedAtMs,
+                    mediaGeneration: row.mediaGeneration,
+                    startAdmissionLease: startAdmissionLease,
+                    barrierTimeout: barrierTimeout
+                )
+            )
+        } catch {
+            // An interrupted XPC reply is ownership-ambiguous: the helper may
+            // already be writing PCM. Preserve the recording row so helper or
+            // bootstrap recovery can reconcile it; never erase uncertain audio.
+            current = CallCoordinatorSnapshot(
+                phase: .failed,
+                callID: callID,
+                me: request.me ? .gap : .disabled,
+                system: request.system ? .gap : .disabled,
+                bookmarkCount: 0,
+                stopReason: nil,
+                recordingMode: recordingMode,
+                video: .disabled
+            )
+            throw error
+        }
+        guard let audioSession, !audioSession.actual.isEmpty else {
             try await repository.discardEmptyCall(id: callID)
             current = .idle
             throw CallCoordinatorError.noAvailableSource
         }
-        let actual = await audio.start(request, sinkLease, startAdmissionLease)
-        guard !actual.isEmpty else {
-            _ = await audio.installSink(nil)
-            await spool.closeAdmission()
-            await audio.stop()
-            try await repository.discardEmptyCall(id: callID)
-            current = .idle
-            throw CallCoordinatorError.noAvailableSource
-        }
-        // Keep requested transiently unavailable legs eligible for the same
-        // Call Envelope when the engine's bounded auto-restart recovers them.
-        await spool.setOwnedSources(request)
+        let actual = audioSession.actual
         // Lock the Call's display only after authoritative audio is physical.
         // Enabling video later must not silently follow focus to another screen.
         await video.lockDisplay(callID)
@@ -487,9 +535,7 @@ actor CallCoordinator {
                 // failure must still release both physical legs and the Call
                 // screen-priority latch; otherwise Timeline can remain paused
                 // forever behind a Call that was never published.
-                _ = await audio.installSink(nil)
-                await spool.closeAdmission()
-                await audio.stop()
+                await audioSession.abort()
                 let failedAtMs = milliseconds(now())
                 try? await repository.markCallInterrupted(
                     callID: callID,
@@ -515,8 +561,7 @@ actor CallCoordinator {
         active = ActiveCall(
             id: callID,
             startedAtMs: startedAtMs,
-            baselines: baselines,
-            spool: spool,
+            audioSession: audioSession,
             lastBookmarkEndMs: startedAtMs,
             bookmarkCount: 0,
             evidenceDegradationReason: partial ? "source_unavailable" : nil,
@@ -603,22 +648,18 @@ actor CallCoordinator {
         guard current.phase == .recording else { throw CallCoordinatorError.bookmarkClosed }
 
         let acceptedAtMs = milliseconds(now())
-        let targets = await audio.acceptedTargets()
+        let targets = await active.audioSession.acceptedTargets()
         let creation = try await repository.createBookmark(
             callID: active.id,
             idempotencyKey: idempotencyKey,
             acceptedAtMs: acceptedAtMs,
-            meIngressTarget: target(targets.me, after: active.baselines.me),
-            systemIngressTarget: target(targets.system, after: active.baselines.system),
+            meIngressTarget: target(targets.me, after: active.audioSession.baselines.me),
+            systemIngressTarget: target(targets.system, after: active.audioSession.baselines.system),
             logicalStartMs: active.lastBookmarkEndMs,
             logicalEndMs: acceptedAtMs,
             contextStartMs: max(active.startedAtMs, active.lastBookmarkEndMs - 45_000)
         )
-        let coverage = try await freezeCoverage(
-            spool: active.spool,
-            targets: targets,
-            baselines: active.baselines
-        )
+        let coverage = try await active.audioSession.freezeCoverage(targets)
         if coverage.degraded {
             try await repository.markCallDegraded(
                 callID: active.id,
@@ -692,22 +733,13 @@ actor CallCoordinator {
             // Video is replaceable and must release SCK/encoder pressure before
             // the authoritative audio barrier is frozen.
             stoppedVideoState = await video.stop("call_ended")
-            let targets = await audio.acceptedTargets()
-            finalCoverage = try await freezeCoverage(
-                spool: active.spool,
-                targets: targets,
-                baselines: active.baselines
-            )
+            let targets = await active.audioSession.acceptedTargets()
+            finalCoverage = try await active.audioSession.freezeCoverage(targets)
             endedAtMs = milliseconds(now())
-            _ = await audio.installSink(nil)
-            await active.spool.closeAdmission()
-            finished = try await active.spool.finish()
-            await audio.stop()
+            finished = try await active.audioSession.finishAndStop()
             backgroundWork.resumeAfterAudio()
         } catch {
-            _ = await audio.installSink(nil)
-            await active.spool.closeAdmission()
-            await audio.stop()
+            await active.audioSession.abort()
             backgroundWork.resumeAfterAudio()
             let failedAtMs = milliseconds(now())
             try? await repository.markCallInterrupted(
@@ -855,26 +887,6 @@ actor CallCoordinator {
         )
     }
 
-    private func freezeCoverage(
-        spool: CallAudioSpoolSession,
-        targets: AudioIngressTargets,
-        baselines: AudioIngressTargets
-    ) async throws -> CallSpoolCoverage {
-        let initialGaps = await audio.drainGaps()
-        try await spool.record(gaps: initialGaps)
-        let deadline = ContinuousClock.now.advanced(by: barrierTimeout)
-        while ContinuousClock.now < deadline,
-              !(await spool.hasCoverage(targets: targets, baselines: baselines)) {
-            try? await Task.sleep(for: .milliseconds(10))
-            try await spool.record(gaps: await audio.drainGaps())
-        }
-        try await spool.record(gaps: await audio.drainGaps())
-        return try await spool.flush(
-            targets: targets,
-            baselines: baselines
-        )
-    }
-
     private func enqueue<T: Sendable>(
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
@@ -929,7 +941,7 @@ struct CallSpoolCoverage: Sendable, Equatable {
     var degraded: Bool { meGap || systemGap }
 }
 
-private actor CallAudioSpoolSession {
+actor CallAudioSpoolSession {
     private let me: CallSpoolLeg?
     private let system: CallSpoolLeg?
     private let baselines: AudioIngressTargets
@@ -945,7 +957,8 @@ private actor CallAudioSpoolSession {
         baselines: AudioIngressTargets,
         startedAtMs: Int64,
         repository: CallRepository,
-        mediaGeneration: Int
+        mediaGeneration: Int,
+        resumePoint: CallRepository.AudioResumePoint? = nil
     ) throws {
         owned = requested
         self.baselines = baselines
@@ -955,14 +968,18 @@ private actor CallAudioSpoolSession {
             callID: callID,
             source: .me,
             repository: repository,
-            mediaGeneration: mediaGeneration
+            mediaGeneration: mediaGeneration,
+            initialEndSample: resumePoint?.meEndSample ?? 0,
+            initialSpoolEpoch: resumePoint?.meLastEpoch ?? -1
         ) : nil
         system = requested.system ? try CallSpoolLeg(
             root: root,
             callID: callID,
             source: .system,
             repository: repository,
-            mediaGeneration: mediaGeneration
+            mediaGeneration: mediaGeneration,
+            initialEndSample: resumePoint?.systemEndSample ?? 0,
+            initialSpoolEpoch: resumePoint?.systemLastEpoch ?? -1
         ) : nil
     }
 
@@ -1108,18 +1125,23 @@ private actor CallSpoolLeg {
     private var gaps = BoundedAudioIngressGaps()
     private var unresolvedDurableGaps: [AudioIngressGap] = []
     private var fatalPersistenceFailure = false
+    private let initialEndSample: Int64
 
     init(
         root: URL,
         callID: Int64,
         source: CallAudioSource,
         repository: CallRepository,
-        mediaGeneration: Int
+        mediaGeneration: Int,
+        initialEndSample: Int64 = 0,
+        initialSpoolEpoch: Int = -1
     ) throws {
         self.source = source
         self.repository = repository
         self.callID = callID
         self.mediaGeneration = mediaGeneration
+        self.initialEndSample = initialEndSample
+        spoolEpoch = initialSpoolEpoch
         spool = try CallSpool(
             root: root,
             callID: callID,
@@ -1146,7 +1168,8 @@ private actor CallSpoolLeg {
                     )
                 }
                 try await finishResamplerTail()
-                let previousEnd = await spool.snapshot().watermark?.endSample ?? 0
+                let previousEnd = await spool.snapshot().watermark?.endSample
+                    ?? initialEndSample
                 spoolEpoch += 1
                 let epochStartMs = Self.startMs(for: frame.timing)
                 try await spool.beginEpoch(

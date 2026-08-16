@@ -68,6 +68,34 @@ actor CallRepository {
         evidenceStorage = CallRepositoryEvidenceStorage(database: database)
     }
 
+    struct ActiveCallResumeState: Sendable {
+        let call: CallRow
+        let lastBookmarkEndMs: Int64
+        let bookmarkCount: Int
+    }
+
+    func activeCallResumeState(id: Int64) async throws -> ActiveCallResumeState? {
+        try await database.pool.read { db in
+            guard let call = try CallRow.fetchOne(db, key: id),
+                  call.state == .recording else { return nil }
+            let bookmarkCount = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM call_bookmarks WHERE callId = ?",
+                arguments: [id]
+            ) ?? 0
+            let lastBookmarkEndMs = try Int64.fetchOne(
+                db,
+                sql: "SELECT MAX(logicalEndMs) FROM call_bookmarks WHERE callId = ?",
+                arguments: [id]
+            ) ?? call.startTs
+            return ActiveCallResumeState(
+                call: call,
+                lastBookmarkEndMs: lastBookmarkEndMs,
+                bookmarkCount: bookmarkCount
+            )
+        }
+    }
+
     func createCall(
         startedAtMs: Int64,
         idempotencyKey: String,

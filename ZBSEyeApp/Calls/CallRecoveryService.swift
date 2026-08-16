@@ -18,7 +18,66 @@ actor CallRecoveryService {
         self.fileManager = fileManager
     }
 
-    func recover(nowMs: Int64 = Int64(Date().timeIntervalSince1970 * 1_000)) async throws -> CallRecoveryReport {
+    /// The launchd audio owner uses this before reopening a crashed capture
+    /// epoch. It reconciles only that Call's append-only PCM and never changes
+    /// the Call lifecycle state.
+    func recoverAudioChunks(
+        callID: Int64,
+        nowMs: Int64 = Int64(Date().timeIntervalSince1970 * 1_000)
+    ) async throws {
+        for chunk in try await repository.unfinalizedChunks()
+            where chunk.callId == callID {
+            guard let chunkID = chunk.id,
+                  let url = containedURL(for: chunk.relativePath),
+                  fileManager.fileExists(atPath: url.path),
+                  let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+                  let fileBytes = (attributes[.size] as? NSNumber)?.int64Value else {
+                if let chunkID = chunk.id {
+                    try await repository.discardRecoveredChunk(id: chunkID)
+                }
+                continue
+            }
+            let alignedBytes = fileBytes - (fileBytes % 2)
+            guard alignedBytes > 0 else {
+                try? fileManager.removeItem(at: url)
+                try await repository.discardRecoveredChunk(id: chunkID)
+                continue
+            }
+            do {
+                if alignedBytes != fileBytes {
+                    let handle = try FileHandle(forWritingTo: url)
+                    try handle.truncate(atOffset: UInt64(alignedBytes))
+                    try handle.synchronize()
+                    try handle.close()
+                }
+                let digest = SHA256.hash(
+                    data: try Data(contentsOf: url, options: .mappedIfSafe)
+                ).map { String(format: "%02x", $0) }.joined()
+                try await repository.finalizeRecoveredChunk(
+                    id: chunkID,
+                    bytes: alignedBytes,
+                    endSample: chunk.startSample + (alignedBytes / 2),
+                    sha256: digest
+                )
+            } catch {
+                try await repository.recordSourceGap(
+                    callID: chunk.callId,
+                    mediaGeneration: chunk.mediaGeneration,
+                    source: chunk.source,
+                    startMs: chunk.startMs,
+                    endMs: max(chunk.startMs + 1, chunk.endMs),
+                    reason: "unreadable_recovered_chunk",
+                    nowMs: nowMs
+                )
+                try await repository.discardRecoveredChunk(id: chunkID)
+            }
+        }
+    }
+
+    func recover(
+        nowMs: Int64 = Int64(Date().timeIntervalSince1970 * 1_000),
+        excludingActiveCallID: Int64? = nil
+    ) async throws -> CallRecoveryReport {
         // File receipts survive the exact failure mode SQLite cannot represent: both runtime
         // rejection writes failed and the process died. Project them before any generic recovery
         // can create final transcript work or webhook outbox rows.
@@ -40,7 +99,9 @@ actor CallRecoveryService {
         removeAbandonedVideoPartials()
         var chunksFinalized = 0
         var chunksDiscarded = 0
-        for chunk in try await repository.unfinalizedChunks() {
+        for chunk in try await repository.unfinalizedChunks(
+            excludingCallID: excludingActiveCallID
+        ) {
             guard let chunkID = chunk.id,
                   let url = containedURL(for: chunk.relativePath),
                   fileManager.fileExists(atPath: url.path),
@@ -93,7 +154,10 @@ actor CallRecoveryService {
         }
 
         let mutationReport = try await replayMutationJournal(nowMs: nowMs)
-        let databaseReport = try await repository.recoverDatabaseState(nowMs: nowMs)
+        let databaseReport = try await repository.recoverDatabaseState(
+            nowMs: nowMs,
+            excludingActiveCallID: excludingActiveCallID
+        )
         let privacyDeletion = CallEvidenceDeletionService(
             repository: repository,
             mediaRoot: mediaRoot

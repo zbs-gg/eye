@@ -900,6 +900,52 @@ final class AppEnvironment {
             self.ingest = ingestService
             let callRepository = CallRepository(database: db)
             self.callRepository = callRepository
+            let callAudioHelperClient = CallAudioHelperClient()
+            let callAudioHelperState = CallAudioHelperStateStore(
+                dataRoot: storage.mediaDirectory.deletingLastPathComponent()
+            )
+            // Do not wake the same-signed agent on every ordinary app launch.
+            // A descriptor means it owns (or must recover) an active Call;
+            // otherwise launchd starts it on the first real start request.
+            let helperDescriptorPresent = callAudioHelperState.hasActiveDescriptor
+            let helperDescriptorCallID = callAudioHelperState.activeCallID
+            let helperSessionBeforeRegistration = helperDescriptorPresent
+                ? await callAudioHelperClient.status()
+                : nil
+            let callAudioHelperAvailable: Bool
+            do {
+                callAudioHelperAvailable = try CallAudioHelperInstaller.ensureRegistered(
+                    activeSession: helperSessionBeforeRegistration != nil
+                )
+            } catch {
+                callAudioHelperAvailable = false
+                Log.audio.error("call audio helper registration failed")
+            }
+            var helperSession: CallAudioHelperSessionDTO?
+            if let helperSessionBeforeRegistration {
+                helperSession = helperSessionBeforeRegistration
+            } else if callAudioHelperAvailable, helperDescriptorPresent {
+                helperSession = await callAudioHelperClient.status()
+            } else {
+                helperSession = nil
+            }
+            if callAudioHelperAvailable,
+               let helperDescriptorCallID,
+               helperSession == nil {
+                for delay in [250, 500, 1_000, 2_000, 4_000] {
+                    try? await Task.sleep(for: .milliseconds(delay))
+                    if let recovered = await callAudioHelperClient.status(),
+                       recovered.callID == helperDescriptorCallID {
+                        helperSession = recovered
+                        break
+                    }
+                }
+            }
+            if helperDescriptorCallID != nil, helperSession == nil {
+                // Never let GUI bootstrap classify an audio-owner Call as a
+                // generic interrupted row or start a competing capture owner.
+                throw CallAudioHelperClientError.unavailable
+            }
             let callEvidenceQueryService = CallEvidenceQueryService(database: db)
             self.callEvidenceQueryService = callEvidenceQueryService
             self.callsLibrary = CallsStore(service: callEvidenceQueryService)
@@ -913,7 +959,9 @@ final class AppEnvironment {
                 mediaRoot: storage.mediaDirectory
             )
             self.callRecovery = callRecovery
-            let callRecoveryReport = try await callRecovery.recover()
+            let callRecoveryReport = try await callRecovery.recover(
+                excludingActiveCallID: helperSession?.callID
+            )
             if callRecoveryReport.callsInterrupted > 0
                 || callRecoveryReport.jobsReset > 0
                 || callRecoveryReport.chunksFinalized > 0
@@ -1263,12 +1311,14 @@ final class AppEnvironment {
                 return self.audioSettings.audioShouldCapture()   // mode/meeting/override gate
                     && !self.recording.lowDiskPaused             // disk-guard gates audio too (not just screen)
                     && self.permissions.snapshot.microphone == .granted
+                    && !self.calls.isActive
             }
             recording.systemEnabled = { [weak self] in
                 guard let self else { return false }
                 return self.audioSettings.audioShouldCapture()
                     && self.audioSettings.recordSystemAudio
                     && !self.recording.lowDiskPaused
+                    && !self.calls.isActive
             }
             self.audio = audioCoordinator
             captureHealthController.setEffectSink { [weak self] effect in
@@ -1284,22 +1334,33 @@ final class AppEnvironment {
             // Assign only after persistence effects are wired: a restored
             // privacy pause may immediately close a hydrated open interval.
             recording.healthController = captureHealthController
-            let callAudio = CallAudioControl(
-                installSink: { [weak audioCoordinator] sink in
-                    await MainActor.run {
-                        audioCoordinator?.installCallFrameSink(sink)
+            let localCallAudio = CallAudioControl(
+                startSession: { [weak self, weak audioCoordinator, weak coordinator]
+                    request in
+                    guard let audioCoordinator else { return nil }
+                    let baselines = await audioCoordinator.acceptedIngressTargets()
+                    let spool = try CallAudioSpoolSession(
+                        root: storage.mediaDirectory,
+                        callID: request.callID,
+                        requested: request.requested,
+                        baselines: baselines,
+                        startedAtMs: request.startedAtMs,
+                        repository: callRepository,
+                        mediaGeneration: request.mediaGeneration
+                    )
+                    guard let sinkLease = await audioCoordinator.installCallFrameSink({ frame in
+                        await spool.consume(frame)
+                    }) else {
+                        await spool.closeAdmission()
+                        return nil
                     }
-                },
-                start: { [weak self, weak audioCoordinator, weak coordinator]
-                    requested, sinkLease, startAdmissionLease in
-                    guard let audioCoordinator else { return .none }
                     let permitted = await MainActor.run { [weak self] in
                         guard let self else { return CallSourceSelection.none }
                         let sessionLockState = CaptureSessionPolicy.currentSessionLocked()
                         if sessionLockState != false {
                             self.latchAutomaticCallSessionBoundary(reason: .session)
                         }
-                        guard self.calls.permitsCallAudioStart(startAdmissionLease),
+                        guard self.calls.permitsCallAudioStart(request.startAdmissionLease),
                               !self.isCallLifecycleAdmissionClosed,
                               sessionLockState == false
                         else {
@@ -1310,8 +1371,9 @@ final class AppEnvironment {
                             return CallSourceSelection.none
                         }
                         let permitted = CallSourceSelection(
-                            me: requested.me && self.permissions.snapshot.microphone == .granted,
-                            system: requested.system
+                            me: request.requested.me
+                                && self.permissions.snapshot.microphone == .granted,
+                            system: request.requested.system
                         )
                         guard !permitted.isEmpty,
                               audioCoordinator.admitCallFrameSink(sinkLease)
@@ -1322,27 +1384,161 @@ final class AppEnvironment {
                         coordinator?.enterCallAudioPriority()
                         return permitted
                     }
+                    guard !permitted.isEmpty else {
+                        _ = await audioCoordinator.installCallFrameSink(nil)
+                        await spool.closeAdmission()
+                        return nil
+                    }
                     let actual = await audioCoordinator.beginExplicitCall(
                         permitted,
                         sinkLease: sinkLease
                     )
                     if actual.isEmpty {
+                        _ = await audioCoordinator.installCallFrameSink(nil)
+                        await spool.closeAdmission()
+                        await audioCoordinator.endExplicitCall()
                         await coordinator?.exitCallAudioPriority()
+                        return nil
                     }
-                    return actual
-                },
-                acceptedTargets: { [weak audioCoordinator] in
-                    await audioCoordinator?.acceptedIngressTargets()
-                        ?? AudioIngressTargets(me: nil, system: nil)
-                },
-                drainGaps: { [weak audioCoordinator] in
-                    await audioCoordinator?.drainIngressGaps() ?? []
-                },
-                stop: { [weak audioCoordinator, weak coordinator] in
-                    await audioCoordinator?.endExplicitCall()
-                    await coordinator?.exitCallAudioPriority()
+                    // Keep requested transiently unavailable legs eligible for
+                    // the same Call when bounded engine recovery revives them.
+                    await spool.setOwnedSources(request.requested)
+
+                    return CallAudioSessionControl(
+                        baselines: baselines,
+                        actual: actual,
+                        acceptedTargets: { [weak audioCoordinator] in
+                            await audioCoordinator?.acceptedIngressTargets()
+                                ?? AudioIngressTargets(me: nil, system: nil)
+                        },
+                        freezeCoverage: { [weak audioCoordinator] targets in
+                            let initialGaps = await audioCoordinator?.drainIngressGaps() ?? []
+                            try await spool.record(gaps: initialGaps)
+                            let deadline = ContinuousClock.now.advanced(
+                                by: request.barrierTimeout
+                            )
+                            while ContinuousClock.now < deadline,
+                                  !(await spool.hasCoverage(
+                                    targets: targets,
+                                    baselines: baselines
+                                  )) {
+                                try? await Task.sleep(for: .milliseconds(10))
+                                try await spool.record(
+                                    gaps: await audioCoordinator?.drainIngressGaps() ?? []
+                                )
+                            }
+                            try await spool.record(
+                                gaps: await audioCoordinator?.drainIngressGaps() ?? []
+                            )
+                            return try await spool.flush(
+                                targets: targets,
+                                baselines: baselines
+                            )
+                        },
+                        finishAndStop: { [weak audioCoordinator, weak coordinator] in
+                            _ = await audioCoordinator?.installCallFrameSink(nil)
+                            await spool.closeAdmission()
+                            do {
+                                let coverage = try await spool.finish()
+                                await audioCoordinator?.endExplicitCall()
+                                await coordinator?.exitCallAudioPriority()
+                                return coverage
+                            } catch {
+                                await audioCoordinator?.endExplicitCall()
+                                await coordinator?.exitCallAudioPriority()
+                                throw error
+                            }
+                        },
+                        abort: { [weak audioCoordinator, weak coordinator] in
+                            _ = await audioCoordinator?.installCallFrameSink(nil)
+                            await spool.closeAdmission()
+                            await audioCoordinator?.endExplicitCall()
+                            await coordinator?.exitCallAudioPriority()
+                        }
+                    )
                 }
             )
+            let callAudio: CallAudioControl
+            if callAudioHelperAvailable {
+                callAudio = CallAudioControl(
+                    startSession: { [weak self, weak audioCoordinator, weak coordinator]
+                        request in
+                        guard let self, let audioCoordinator else { return nil }
+                        let permitted = await MainActor.run {
+                            let sessionLockState = CaptureSessionPolicy.currentSessionLocked()
+                            if sessionLockState != false {
+                                self.latchAutomaticCallSessionBoundary(reason: .session)
+                            }
+                            guard self.calls.permitsCallAudioStart(request.startAdmissionLease),
+                                  !self.isCallLifecycleAdmissionClosed,
+                                  sessionLockState == false else {
+                                self.calls.automaticStartAdmissionChanged(isClosed: true)
+                                return CallSourceSelection.none
+                            }
+                            let selection = CallSourceSelection(
+                                me: request.requested.me
+                                    && self.permissions.snapshot.microphone == .granted,
+                                system: request.requested.system
+                            )
+                            if !selection.isEmpty { coordinator?.enterCallAudioPriority() }
+                            return selection
+                        }
+                        guard !permitted.isEmpty else { return nil }
+                        let forwarded = CallAudioSessionStartRequest(
+                            callID: request.callID,
+                            requested: permitted,
+                            startedAtMs: request.startedAtMs,
+                            mediaGeneration: request.mediaGeneration,
+                            startAdmissionLease: request.startAdmissionLease,
+                            barrierTimeout: request.barrierTimeout
+                        )
+                        let remote: CallAudioSessionControl?
+                        do {
+                            remote = try await callAudioHelperClient.startSession(forwarded)
+                        } catch {
+                            if !callAudioHelperState.hasActiveDescriptor {
+                                await coordinator?.exitCallAudioPriority()
+                            }
+                            throw error
+                        }
+                        guard let remote else {
+                            await coordinator?.exitCallAudioPriority()
+                            return nil
+                        }
+                        // The helper is already physically recording. Closing
+                        // Timeline audio now cannot create a Call audio gap.
+                        _ = await audioCoordinator.stopAndDrain(
+                            waitForTranscription: false,
+                            systemCaptureTimeout: .seconds(5)
+                        )
+                        return CallAudioSessionControl(
+                            baselines: remote.baselines,
+                            actual: remote.actual,
+                            acceptedTargets: remote.acceptedTargets,
+                            freezeCoverage: remote.freezeCoverage,
+                            finishAndStop: { [weak self, weak coordinator] in
+                                do {
+                                    let coverage = try await remote.finishAndStop()
+                                    await coordinator?.exitCallAudioPriority()
+                                    await MainActor.run { self?.recording.syncAudio() }
+                                    return coverage
+                                } catch {
+                                    await coordinator?.exitCallAudioPriority()
+                                    await MainActor.run { self?.recording.syncAudio() }
+                                    throw error
+                                }
+                            },
+                            abort: { [weak self, weak coordinator] in
+                                await remote.abort()
+                                await coordinator?.exitCallAudioPriority()
+                                await MainActor.run { self?.recording.syncAudio() }
+                            }
+                        )
+                    }
+                )
+            } else {
+                callAudio = localCallAudio
+            }
             let callVideoEngine = CallVideoCaptureEngine(
                 repository: callRepository,
                 mediaRoot: storage.mediaDirectory,
@@ -1438,6 +1634,45 @@ final class AppEnvironment {
                 )
             }
             calls.attach(callCoordinator)
+            if let helperSession,
+               let resumed = try await callRepository.activeCallResumeState(
+                id: helperSession.callID
+               ) {
+                coordinator.enterCallAudioPriority()
+                _ = await audioCoordinator.stopAndDrain(
+                    waitForTranscription: false,
+                    systemCaptureTimeout: .seconds(5)
+                )
+                let remote = callAudioHelperClient.attachToActiveSession(helperSession)
+                let adoptedSession = CallAudioSessionControl(
+                    baselines: remote.baselines,
+                    actual: remote.actual,
+                    acceptedTargets: remote.acceptedTargets,
+                    freezeCoverage: remote.freezeCoverage,
+                    finishAndStop: { [weak self, weak coordinator] in
+                        do {
+                            let coverage = try await remote.finishAndStop()
+                            await coordinator?.exitCallAudioPriority()
+                            await MainActor.run { self?.recording.syncAudio() }
+                            return coverage
+                        } catch {
+                            await coordinator?.exitCallAudioPriority()
+                            await MainActor.run { self?.recording.syncAudio() }
+                            throw error
+                        }
+                    },
+                    abort: { [weak self, weak coordinator] in
+                        await remote.abort()
+                        await coordinator?.exitCallAudioPriority()
+                        await MainActor.run { self?.recording.syncAudio() }
+                    }
+                )
+                let adopted = await callCoordinator.adopt(
+                    resumed,
+                    audioSession: adoptedSession
+                )
+                calls.publishAdoptedSnapshot(adopted)
+            }
             audioSettings.onCallRecordingModeChanged = { [weak self, weak calls] mode in
                 guard let self else { return }
                 let audioIsDisabled = !mode.recordsAudio

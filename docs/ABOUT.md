@@ -51,7 +51,9 @@ enable an external provider, only the text excerpts needed for that action leave
   Timeline resumes only after both Call audio legs have physically stopped. A visual gap during a Call is an
   intentional trade: losing a Call is not. The explicit Call mode is **Don't record / Audio only / Audio and video**.
   Video uses a separate 15 fps hardware-only stream fixed to the starting display, so it can stop, gap, or yield
-  to a native screenshot without restarting or blocking either audio source.
+  to a native screenshot without restarting or blocking either audio source. A same-signed background process
+  owns the authoritative audio, so a GUI crash does not end the Call; reopening Eye adopts it. If that process
+  itself restarts, Eye preserves finalized PCM, marks the exact interruption as a gap, and continues in a new span.
 - **Capture health is explicit.** Current compositor progress, not changing pixels, proves that screen capture is
   alive. A real screen-stream or Core Audio tap failure creates a visible coverage gap and bounded Eye-owned recovery;
   repeated failure asks the person to repair Capture instead of showing a false green state. Repair touches only
@@ -229,8 +231,9 @@ the shared screenshot observer. Installed build 33 kept that observer alive and 
 without any audio gap. Its optional AAC mux still failed: AVAudioFile rejects the explicit 64 kbps encoder property
 at the authoritative 16 kHz sample rate. Installed build 34 removed that property but still failed because the
 temporary movie name did not end in `.mp4`; AVFoundation exported it and then refused to verify it as a movie.
-Current `0.9.0 (35)` uses a real temporary MP4, verifies both tracks before replacement, and retains the separate
-PCM evidence unchanged. Physical hotkey and microphone checks still block qualification; this version is not released.
+Current `0.9.0 (36)` keeps that verified MP4 path and moves Call audio into a same-signed launchd process so a GUI
+crash cannot own the recording lifetime. Physical hotkey, real microphone, helper-crash, and GUI-relaunch checks
+still block qualification; this version is not released.
 The larger native-screenshot matrix, normal-use soak, and long physical Call checks remain unqualified and must not
 be described as passed.
 

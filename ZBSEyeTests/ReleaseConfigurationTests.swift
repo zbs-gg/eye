@@ -332,6 +332,9 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertTrue(script.contains("notarySubmissionID"))
         XCTAssertTrue(script.contains("notaryLogSHA256"))
         XCTAssertTrue(script.contains("bundleIdentifier"))
+        XCTAssertTrue(script.contains("resilient Call-audio LaunchAgent"))
+        XCTAssertTrue(script.contains("Contents/MacOS/ZBS Eye"))
+        XCTAssertTrue(script.contains("--call-audio-helper"))
         XCTAssertTrue(script.contains("sourceTreeState"))
         XCTAssertTrue(script.contains("notarized"))
         XCTAssertTrue(script.contains("stapled"))
@@ -358,8 +361,31 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION:").count - 1, 2)
         XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION: \"0.9.0\"").count - 1, 2)
         XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION:").count - 1, 2)
-        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"35\"").count - 1, 2)
-        XCTAssertTrue(notices.contains("Release: 0.9.0 (build 35)"))
+        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"36\"").count - 1, 2)
+        XCTAssertTrue(notices.contains("Release: 0.9.0 (build 36)"))
+    }
+
+    func testCallAudioLaunchAgentIsBundledAndSameSigned() throws {
+        let project = try String(
+            contentsOf: repositoryRoot.appending(path: "project.yml"),
+            encoding: .utf8
+        )
+        let helper = try String(
+            contentsOf: repositoryRoot.appending(path: "ZBSEyeApp/Calls/CallAudioHelper.swift"),
+            encoding: .utf8
+        )
+        let plistURL = repositoryRoot.appending(path: "Support/gg.zbs.eye.call-audio.plist")
+        let plist = try String(contentsOf: plistURL, encoding: .utf8)
+
+        XCTAssertTrue(project.contains("Bundle Call Audio LaunchAgent"))
+        XCTAssertTrue(project.contains("${CONTENTS_FOLDER_PATH}/Library/LaunchAgents"))
+        XCTAssertTrue(plist.contains("<string>--call-audio-helper</string>"))
+        XCTAssertTrue(plist.contains("<key>SuccessfulExit</key>"))
+        XCTAssertTrue(helper.contains("SMAppService.agent(plistName:"))
+        XCTAssertTrue(helper.contains("certificate leaf[subject.OU]"))
+        XCTAssertTrue(helper.contains("44N4NZ86S5"))
+        XCTAssertTrue(helper.contains("setConnectionCodeSigningRequirement"))
+        XCTAssertTrue(helper.contains("setCodeSigningRequirement"))
     }
 
     func testPublishedReleaseDocumentationNamesTheExactPublicArtifact() throws {

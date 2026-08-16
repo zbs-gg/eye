@@ -1350,18 +1350,34 @@ private actor StoreCallAudio {
 
     nonisolated func control() -> CallAudioControl {
         CallAudioControl(
-            installSink: { [weak self] sink in await self?.setSink(sink) },
-            start: { [weak self] requested, sinkLease, startAdmissionLease in
-                guard let self else { return .none }
-                return await self.start(
-                    requested,
-                    sinkLease: sinkLease,
-                    startAdmissionLease: startAdmissionLease
-                )
+            startSession: { [weak self] request in
+                guard let self else { return nil }
+                return await self.startSession(request)
+            }
+        )
+    }
+
+    private func startSession(
+        _ request: CallAudioSessionStartRequest
+    ) async -> CallAudioSessionControl? {
+        guard let sinkLease = setSink({ _ in true }) else { return nil }
+        let started = await start(
+            request.requested,
+            sinkLease: sinkLease,
+            startAdmissionLease: request.startAdmissionLease
+        )
+        guard !started.isEmpty else { return nil }
+        let emptyTargets = AudioIngressTargets(me: nil, system: nil)
+        return CallAudioSessionControl(
+            baselines: emptyTargets,
+            actual: started,
+            acceptedTargets: { emptyTargets },
+            freezeCoverage: { _ in .empty },
+            finishAndStop: { [weak self] in
+                await self?.stop()
+                return .empty
             },
-            acceptedTargets: { AudioIngressTargets(me: nil, system: nil) },
-            drainGaps: { [] },
-            stop: { [weak self] in await self?.stop() }
+            abort: { [weak self] in await self?.stop() }
         )
     }
 

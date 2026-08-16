@@ -183,12 +183,60 @@ extension CallRepository {
         }
     }
 
-    func unfinalizedChunks() async throws -> [CallAudioChunkRow] {
+    func unfinalizedChunks(excludingCallID: Int64? = nil) async throws -> [CallAudioChunkRow] {
         try await evidenceStorage.read { db in
-            try CallAudioChunkRow
+            var request = CallAudioChunkRow
                 .filter(Column("finalized") == false)
+            if let excludingCallID {
+                request = request.filter(Column("callId") != excludingCallID)
+            }
+            return try request
                 .order(Column("callId"), Column("source"), Column("epoch"), Column("sequence"))
                 .fetchAll(db)
+        }
+    }
+
+    struct AudioResumePoint: Sendable {
+        let meEndSample: Int64
+        let meLastEpoch: Int
+        let meEndMs: Int64?
+        let systemEndSample: Int64
+        let systemLastEpoch: Int
+        let systemEndMs: Int64?
+    }
+
+    func audioResumePoint(callID: Int64) async throws -> AudioResumePoint {
+        try await evidenceStorage.read { db in
+            func point(_ source: CallAudioSource) throws -> (Int64, Int, Int64?) {
+                let row = try Row.fetchOne(
+                    db,
+                    sql: """
+                        SELECT COALESCE(MAX(c.endSample), 0) AS endSample,
+                               COALESCE(MAX(s.epoch), -1) AS lastEpoch,
+                               MAX(c.endMs) AS endMs
+                        FROM call_source_spans s
+                        LEFT JOIN call_audio_chunks c
+                          ON c.sourceSpanId = s.id AND c.finalized = 1
+                        WHERE s.callId = ? AND s.source = ?
+                        """,
+                    arguments: [callID, source.rawValue]
+                )
+                return (
+                    row?["endSample"] ?? 0,
+                    row?["lastEpoch"] ?? -1,
+                    row?["endMs"]
+                )
+            }
+            let me = try point(.me)
+            let system = try point(.system)
+            return AudioResumePoint(
+                meEndSample: me.0,
+                meLastEpoch: me.1,
+                meEndMs: me.2,
+                systemEndSample: system.0,
+                systemLastEpoch: system.1,
+                systemEndMs: system.2
+            )
         }
     }
 
@@ -292,12 +340,24 @@ extension CallRepository {
         }
     }
 
-    func recoverDatabaseState(nowMs: Int64) async throws -> CallRecoveryDatabaseReport {
+    func recoverDatabaseState(
+        nowMs: Int64,
+        excludingActiveCallID: Int64? = nil
+    ) async throws -> CallRecoveryDatabaseReport {
         try await evidenceStorage.write { db in
-            let interruptedCallIDs = try Int64.fetchAll(
-                db,
-                sql: "SELECT id FROM calls WHERE state = 'recording' ORDER BY id"
-            )
+            let interruptedCallIDs: [Int64]
+            if let excludingActiveCallID {
+                interruptedCallIDs = try Int64.fetchAll(
+                    db,
+                    sql: "SELECT id FROM calls WHERE state = 'recording' AND id != ? ORDER BY id",
+                    arguments: [excludingActiveCallID]
+                )
+            } else {
+                interruptedCallIDs = try Int64.fetchAll(
+                    db,
+                    sql: "SELECT id FROM calls WHERE state = 'recording' ORDER BY id"
+                )
+            }
             let newlyInterruptedCallIDs = Set(interruptedCallIDs)
             for callID in interruptedCallIDs {
                 let rejected = try Bool.fetchOne(

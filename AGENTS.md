@@ -62,8 +62,10 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
    Do NOT hardcode `Application Support/ZBS Eye`. This is needed so relocate (move to an external SSD) and
    helper processes (`--mcp`, `--backup-now`) see one place. Exceptions: the iCloud backup and user export —
    intentionally separate paths.
-2. **One writer — `IngestService`.** Non-Sendable (`CVPixelBuffer`/`CMSampleBuffer`/`AXUIElement`/`VNRequest`)
-   live and die inside a single actor; only Sendable leaves it.
+2. **One Timeline writer — `IngestService`; one narrow Call-audio exception.** Non-Sendable
+   (`CVPixelBuffer`/`CMSampleBuffer`/`AXUIElement`/`VNRequest`) live and die inside a single actor; only Sendable
+   leaves it. The same-signed launchd Call-audio owner may append only Call source spans, PCM chunks, and explicit
+   source gaps through `CallRepository`; it never migrates the database or writes Timeline/search state.
 3. **FTS5 external-content:** compute `snippet()`/`bm25()` in a subquery PURELY over the FTS table. Add a
    condition over a joined table (`c.ts BETWEEN …`) to the same SELECT and SQLite loses the FTS context
    ("unable to use function snippet"). Pattern: `WITH hits AS (… FROM text_fts WHERE MATCH … LIMIT N)`.
@@ -171,7 +173,7 @@ an API-key provider. This source change is not part of the already-published `0.
 must not be described as publicly released. A local Developer ID-signed `0.8.0 (23)` candidate from the current
 dirty source was installed on 2026-08-12 and reported healthy against the existing data root. Its Call-audio
 priority still requires evidence from a real dual-track Call; the candidate is neither notarized nor public.
-Current `0.9.0 (35)` source adds three-mode Calls and first-class Call video, then replaces the hidden
+Current `0.9.0 (36)` source adds three-mode Calls and first-class Call video, then replaces the hidden
 ScreenCaptureKit leg used for system audio with a Core Audio process tap. Installed diagnostics 26 through 28
 created continuous but all-zero system PCM. A signed physical probe isolated the remaining cause: on macOS 26.1
 the aggregate device must receive the tap list in its creation dictionary and then have the same list reasserted
@@ -188,9 +190,11 @@ lifetime so Call video receives the early hotkey edge independently of Timeline.
 edge and recorded a native-screenshot video gap without an audio gap, but its optional AAC mux failed because
 AVAudioFile rejects an explicit 64 kbps encoder property at the authoritative 16 kHz sample rate (`!dat`). Build 34
 removed that setting but still gave the temporary movie a non-media extension; AVFoundation exported it and then
-refused to verify it. Build 35 uses a real temporary MP4, verifies both tracks before replacement, and clears only
-that transient degradation after every segment is muxed. Real microphone content, physical hotkey latency, live
-mode switching, and the remaining coexistence matrix are still mandatory.
+refused to verify it. Build 35 uses a real temporary MP4 and verifies both tracks before replacement. Build 36
+moves authoritative Call audio into a same-signed launchd process: a GUI crash no longer owns the recording
+lifetime, relaunch adopts the active Call, and a helper crash finalizes the append-only PCM, records an explicit
+gap, and resumes in a new epoch. Real microphone content, physical hotkey latency, crash/relaunch, live mode
+switching, and the remaining coexistence matrix are still mandatory.
 
 The exact Developer ID + notarized `0.8.0 (22)` artifact is public stable/latest as of 2026-08-08. It includes the
 persistent latest-wins screen stream, microphone-owned automatic Calls, meaningful visual moments, immediate
