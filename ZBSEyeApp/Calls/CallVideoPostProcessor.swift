@@ -50,6 +50,24 @@ private final class SendableCallVideoExporter: @unchecked Sendable {
     }
 }
 
+private enum CallVideoMuxStage: String, Sendable {
+    case readPCM = "read_pcm"
+    case resolveVideo = "resolve_video"
+    case writeAAC = "write_aac"
+    case loadTracks = "load_tracks"
+    case compose = "compose"
+    case export = "export"
+    case verify = "verify"
+    case replace = "replace"
+    case hash = "hash"
+    case commit = "commit"
+}
+
+private struct CallVideoMuxFailure: Error {
+    let stage: CallVideoMuxStage
+    let underlying: Error
+}
+
 /// Adds a convenient mixed AAC track after authoritative PCM has closed.
 /// It never runs on the capture path and never replaces the separate source
 /// tracks as evidence.
@@ -100,9 +118,17 @@ actor CallVideoPostProcessor {
             } catch is CancellationError {
                 return
             } catch {
-                Log.audio.error(
-                    "call_video_audio_mux_failed: \(error.localizedDescription, privacy: .private)"
-                )
+                if let failure = error as? CallVideoMuxFailure {
+                    let nsError = failure.underlying as NSError
+                    Log.audio.error(
+                        "call_video_audio_mux_failed stage=\(failure.stage.rawValue, privacy: .public) domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public)"
+                    )
+                } else {
+                    let nsError = error as NSError
+                    Log.audio.error(
+                        "call_video_audio_mux_failed stage=unknown domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public)"
+                    )
+                }
                 try? await repository.markCallDegraded(
                     callID: callID,
                     reason: "video_audio_mux_unavailable",
@@ -117,101 +143,120 @@ actor CallVideoPostProcessor {
         snapshot: CallVideoPostprocessSnapshot,
         lease: CallVideoPostprocessLease
     ) async throws {
-        try checkAdmission(lease)
-        guard let segmentID = segment.id else { return }
-        let samples = try mixedPCM(segment: segment, snapshot: snapshot, lease: lease)
-        guard !samples.isEmpty else { return }
-        let original = try containedURL(segment.relativePath)
-        let audioURL = original.appendingPathExtension("mix.m4a")
-        let muxedURL = original.appendingPathExtension("muxed.partial")
-        let backupName = original.lastPathComponent + ".silent-backup"
-        let backupURL = original.deletingLastPathComponent().appendingPathComponent(backupName)
-        let fileManager = FileManager.default
-        defer {
+        var stage = CallVideoMuxStage.readPCM
+        do {
+            try checkAdmission(lease)
+            guard let segmentID = segment.id else { return }
+            let samples = try mixedPCM(segment: segment, snapshot: snapshot, lease: lease)
+            guard !samples.isEmpty else { return }
+            stage = .resolveVideo
+            let original = try containedURL(segment.relativePath)
+            let audioURL = original.appendingPathExtension("mix.m4a")
+            // AVFoundation may successfully return from export but refuse to
+            // reopen a movie whose final extension is not a media type. Keep
+            // the crash-forward marker while ending the temporary name in mp4.
+            let muxedURL = original.appendingPathExtension("muxed.partial.mp4")
+            let backupName = original.lastPathComponent + ".silent-backup"
+            let backupURL = original.deletingLastPathComponent().appendingPathComponent(backupName)
+            let fileManager = FileManager.default
+            defer {
+                try? fileManager.removeItem(at: audioURL)
+                try? fileManager.removeItem(at: muxedURL)
+            }
             try? fileManager.removeItem(at: audioURL)
             try? fileManager.removeItem(at: muxedURL)
-        }
-        try? fileManager.removeItem(at: audioURL)
-        try? fileManager.removeItem(at: muxedURL)
-        try? fileManager.removeItem(at: backupURL)
-        try writeAAC(samples, to: audioURL, lease: lease)
-        try checkAdmission(lease)
-
-        let videoAsset = AVURLAsset(url: original)
-        let audioAsset = AVURLAsset(url: audioURL)
-        guard let videoTrack = try await videoAsset.loadTracks(withMediaType: .video).first,
-              let audioTrack = try await audioAsset.loadTracks(withMediaType: .audio).first else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        let videoDuration = try await videoAsset.load(.duration)
-        let audioDuration = try await audioAsset.load(.duration)
-        let composition = AVMutableComposition()
-        guard let compositionVideo = composition.addMutableTrack(
-            withMediaType: .video,
-            preferredTrackID: kCMPersistentTrackID_Invalid
-        ), let compositionAudio = composition.addMutableTrack(
-            withMediaType: .audio,
-            preferredTrackID: kCMPersistentTrackID_Invalid
-        ) else { throw CocoaError(.fileWriteUnknown) }
-        try compositionVideo.insertTimeRange(
-            CMTimeRange(start: .zero, duration: videoDuration),
-            of: videoTrack,
-            at: .zero
-        )
-        try compositionAudio.insertTimeRange(
-            CMTimeRange(start: .zero, duration: min(videoDuration, audioDuration)),
-            of: audioTrack,
-            at: .zero
-        )
-        guard let exporter = AVAssetExportSession(
-            asset: composition,
-            presetName: AVAssetExportPresetPassthrough
-        ) else { throw CocoaError(.featureUnsupported) }
-        let sendableExporter = SendableCallVideoExporter(exporter)
-        let cancellationWatcher = Task.detached(priority: .userInitiated) { [admissionGate] in
-            while admissionGate.permits(lease), !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(20))
-            }
-            guard !admissionGate.permits(lease) else { return }
-            sendableExporter.value.cancelExport()
-        }
-        defer { cancellationWatcher.cancel() }
-        do {
-            try await exporter.export(to: muxedURL, as: .mp4)
-        } catch {
-            try checkAdmission(lease)
-            throw error
-        }
-        try checkAdmission(lease)
-        let muxedAsset = AVURLAsset(url: muxedURL)
-        guard !(try await muxedAsset.loadTracks(withMediaType: .video)).isEmpty,
-              !(try await muxedAsset.loadTracks(withMediaType: .audio)).isEmpty else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        do {
-            try checkAdmission(lease)
-            _ = try fileManager.replaceItemAt(
-                original,
-                withItemAt: muxedURL,
-                backupItemName: backupName,
-                options: []
-            )
-            try checkAdmission(lease)
-            let data = try Data(contentsOf: original, options: .mappedIfSafe)
-            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-            try checkAdmission(lease)
-            try await repository.markVideoSegmentAudioMuxed(
-                id: segmentID,
-                mediaGeneration: segment.mediaGeneration,
-                bytes: Int64(data.count),
-                sha256: digest
-            )
             try? fileManager.removeItem(at: backupURL)
-        } catch {
-            if fileManager.fileExists(atPath: backupURL.path) {
-                _ = try? fileManager.replaceItemAt(original, withItemAt: backupURL)
+            stage = .writeAAC
+            try writeAAC(samples, to: audioURL, lease: lease)
+            try checkAdmission(lease)
+
+            stage = .loadTracks
+            let videoAsset = AVURLAsset(url: original)
+            let audioAsset = AVURLAsset(url: audioURL)
+            guard let videoTrack = try await videoAsset.loadTracks(withMediaType: .video).first,
+                  let audioTrack = try await audioAsset.loadTracks(withMediaType: .audio).first else {
+                throw CocoaError(.fileReadCorruptFile)
             }
-            throw error
+            let videoDuration = try await videoAsset.load(.duration)
+            let audioDuration = try await audioAsset.load(.duration)
+            stage = .compose
+            let composition = AVMutableComposition()
+            guard let compositionVideo = composition.addMutableTrack(
+                withMediaType: .video,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+            ), let compositionAudio = composition.addMutableTrack(
+                withMediaType: .audio,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+            ) else { throw CocoaError(.fileWriteUnknown) }
+            try compositionVideo.insertTimeRange(
+                CMTimeRange(start: .zero, duration: videoDuration),
+                of: videoTrack,
+                at: .zero
+            )
+            try compositionAudio.insertTimeRange(
+                CMTimeRange(start: .zero, duration: min(videoDuration, audioDuration)),
+                of: audioTrack,
+                at: .zero
+            )
+            guard let exporter = AVAssetExportSession(
+                asset: composition,
+                presetName: AVAssetExportPresetPassthrough
+            ) else { throw CocoaError(.featureUnsupported) }
+            let sendableExporter = SendableCallVideoExporter(exporter)
+            let cancellationWatcher = Task.detached(priority: .userInitiated) { [admissionGate] in
+                while admissionGate.permits(lease), !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(20))
+                }
+                guard !admissionGate.permits(lease) else { return }
+                sendableExporter.value.cancelExport()
+            }
+            defer { cancellationWatcher.cancel() }
+            stage = .export
+            do {
+                try await exporter.export(to: muxedURL, as: .mp4)
+            } catch {
+                try checkAdmission(lease)
+                throw error
+            }
+            try checkAdmission(lease)
+            stage = .verify
+            let muxedAsset = AVURLAsset(url: muxedURL)
+            guard !(try await muxedAsset.loadTracks(withMediaType: .video)).isEmpty,
+                  !(try await muxedAsset.loadTracks(withMediaType: .audio)).isEmpty else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            do {
+                try checkAdmission(lease)
+                stage = .replace
+                _ = try fileManager.replaceItemAt(
+                    original,
+                    withItemAt: muxedURL,
+                    backupItemName: backupName,
+                    options: []
+                )
+                try checkAdmission(lease)
+                stage = .hash
+                let data = try Data(contentsOf: original, options: .mappedIfSafe)
+                let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                try checkAdmission(lease)
+                stage = .commit
+                try await repository.markVideoSegmentAudioMuxed(
+                    id: segmentID,
+                    mediaGeneration: segment.mediaGeneration,
+                    bytes: Int64(data.count),
+                    sha256: digest
+                )
+                try? fileManager.removeItem(at: backupURL)
+            } catch {
+                if fileManager.fileExists(atPath: backupURL.path) {
+                    _ = try? fileManager.replaceItemAt(original, withItemAt: backupURL)
+                }
+                throw error
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw CallVideoMuxFailure(stage: stage, underlying: error)
         }
     }
 

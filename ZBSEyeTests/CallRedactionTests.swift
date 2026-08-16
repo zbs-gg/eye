@@ -5,6 +5,40 @@ import GRDB
 import XCTest
 
 final class CallRedactionTests: XCTestCase {
+    func testVideoPostprocessorAddsMixedAudioAndKeepsAuthoritativePCM() async throws {
+        let fixture = try CallRedactionFixture()
+        let (callID, videoURL, pcmURL, pcmDigest) = try await fixture.makeEndedMuxableCallWithVideo()
+        let processor = CallVideoPostProcessor(
+            repository: fixture.repository,
+            mediaRoot: fixture.mediaRoot,
+            admissionGate: CallVideoPostprocessAdmissionGate()
+        )
+
+        await processor.process(callID: callID)
+
+        let snapshot = try await fixture.database.pool.read { db in
+            (
+                call: try XCTUnwrap(CallRow.fetchOne(db, key: callID)),
+                segment: try XCTUnwrap(CallVideoSegmentRow.fetchOne(
+                    db,
+                    sql: "SELECT * FROM call_video_segments WHERE callId = ?",
+                    arguments: [callID]
+                ))
+            )
+        }
+        XCTAssertTrue(snapshot.segment.audioMuxed)
+        XCTAssertNil(snapshot.call.degradationReason)
+        let videoTracks = try await AVURLAsset(url: videoURL).loadTracks(withMediaType: .video)
+        let audioTracks = try await AVURLAsset(url: videoURL).loadTracks(withMediaType: .audio)
+        XCTAssertFalse(videoTracks.isEmpty)
+        XCTAssertFalse(audioTracks.isEmpty)
+        let persistedPCM = try Data(contentsOf: pcmURL)
+        XCTAssertEqual(
+            SHA256.hash(data: persistedPCM).map { String(format: "%02x", $0) }.joined(),
+            pcmDigest
+        )
+    }
+
     func testVideoRedactionPhysicallyRebuildsOnlyAllowedIntervals() async throws {
         let fixture = try CallRedactionFixture()
         let (callID, originalVideoURL) = try await fixture.makeEndedCallWithVideo()
@@ -916,6 +950,104 @@ private final class CallRedactionFixture {
             meEndSample: 10
         )
         return (callID, url)
+    }
+
+    func makeEndedMuxableCallWithVideo() async throws -> (Int64, URL, URL, String) {
+        let call = try await repository.createCall(startedAtMs: 1_000, idempotencyKey: "mux-video")
+        let callID = try XCTUnwrap(call.id)
+        let audioSpan = try await repository.recordSourceSpan(
+            .init(
+                callId: callID,
+                source: .me,
+                epoch: 0,
+                sampleRate: 16_000,
+                startedAtMs: 1_000,
+                startSample: 0,
+                startHostTimeNs: 0,
+                availability: .available
+            )
+        )
+        let pcmRelativePath = "calls/\(callID)/me/epoch-0000/chunk-000000.pcm"
+        let pcmURL = mediaRoot.appendingPathComponent(pcmRelativePath)
+        try FileManager.default.createDirectory(
+            at: pcmURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let samples = (0..<16_000).map { index in
+            Int16(sin(Double(index) * 2 * .pi * 440 / 16_000) * 8_000)
+        }
+        let audio = pcm(samples: samples)
+        try audio.write(to: pcmURL)
+        let pcmDigest = SHA256.hash(data: audio).map { String(format: "%02x", $0) }.joined()
+        _ = try await repository.recordAudioChunk(
+            .init(
+                callId: callID,
+                sourceSpanId: try XCTUnwrap(audioSpan.id),
+                source: .me,
+                epoch: 0,
+                sequence: 0,
+                mediaGeneration: 0,
+                startSample: 0,
+                endSample: 16_000,
+                startMs: 1_000,
+                endMs: 2_000,
+                relativePath: pcmRelativePath,
+                bytes: Int64(audio.count),
+                sha256: pcmDigest,
+                finalized: true
+            )
+        )
+        let videoSpan = try await repository.beginVideoSpan(
+            callID: callID,
+            epoch: 0,
+            displayID: "fixture-display",
+            startedAtMs: 1_000,
+            width: 64,
+            height: 64,
+            fps: 10
+        )
+        let videoRelativePath = "calls/\(callID)/video/epoch-0000/segment-000000.mp4"
+        let videoURL = mediaRoot.appendingPathComponent(videoRelativePath)
+        try FileManager.default.createDirectory(
+            at: videoURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try await writeFixtureVideo(to: videoURL)
+        let videoData = try Data(contentsOf: videoURL)
+        let videoDigest = SHA256.hash(data: videoData).map { String(format: "%02x", $0) }.joined()
+        _ = try await repository.appendVideoSegment(
+            .init(
+                callId: callID,
+                videoSpanId: try XCTUnwrap(videoSpan.id),
+                mediaGeneration: 0,
+                epoch: 0,
+                sequence: 0,
+                startMs: 1_000,
+                endMs: 2_000,
+                relativePath: videoRelativePath,
+                bytes: Int64(videoData.count),
+                sha256: videoDigest,
+                width: 64,
+                height: 64,
+                fps: 10,
+                codec: .h264,
+                audioMuxed: false
+            )
+        )
+        try await repository.finishVideoSpan(
+            spanID: try XCTUnwrap(videoSpan.id),
+            endedAtMs: 2_000,
+            codec: .h264,
+            availability: .available,
+            reason: nil
+        )
+        _ = try await repository.endCall(
+            callID: callID,
+            idempotencyKey: "mux-video-end",
+            endedAtMs: 2_000,
+            meEndSample: 16_000
+        )
+        return (callID, videoURL, pcmURL, pcmDigest)
     }
 
     private func writeFixtureVideo(to url: URL) async throws {

@@ -227,9 +227,10 @@ used an explicit plist and captured real system audio without source gaps. Its C
 native captures to 1.79–2.16 seconds versus a 0.36–0.40-second Eye-off baseline: Timeline was paused and had stopped
 the shared screenshot observer. Installed build 33 kept that observer alive and recorded the expected video gap
 without any audio gap. Its optional AAC mux still failed: AVAudioFile rejects the explicit 64 kbps encoder property
-at the authoritative 16 kHz sample rate. Current `0.9.0 (34)` lets AVFoundation choose a supported AAC rate and
-clears that exact transient failure after all fragments are muxed. Physical hotkey and microphone checks still
-block qualification; this version is not released.
+at the authoritative 16 kHz sample rate. Installed build 34 removed that property but still failed because the
+temporary movie name did not end in `.mp4`; AVFoundation exported it and then refused to verify it as a movie.
+Current `0.9.0 (35)` uses a real temporary MP4, verifies both tracks before replacement, and retains the separate
+PCM evidence unchanged. Physical hotkey and microphone checks still block qualification; this version is not released.
 The larger native-screenshot matrix, normal-use soak, and long physical Call checks remain unqualified and must not
 be described as passed.
 
