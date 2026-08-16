@@ -679,7 +679,7 @@ final class CallVideoCaptureEngine {
             configuration.pixelFormat = kCVPixelFormatType_32BGRA
             configuration.showsCursor = true
             configuration.minimumFrameInterval = CMTime(value: 1, timescale: 15)
-            configuration.queueDepth = 1
+            configuration.queueDepth = 2
             let stream = SCStream(filter: filter, configuration: configuration, delegate: output)
             preparedStream = stream
             try stream.addStreamOutput(

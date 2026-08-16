@@ -173,7 +173,7 @@ an API-key provider. This source change is not part of the already-published `0.
 must not be described as publicly released. A local Developer ID-signed `0.8.0 (23)` candidate from the current
 dirty source was installed on 2026-08-12 and reported healthy against the existing data root. Its Call-audio
 priority still requires evidence from a real dual-track Call; the candidate is neither notarized nor public.
-Current `0.9.0 (38)` source adds three-mode Calls and first-class Call video, then replaces the hidden
+Current `0.9.0 (39)` source adds three-mode Calls and first-class Call video, then replaces the hidden
 ScreenCaptureKit leg used for system audio with a Core Audio process tap. Installed diagnostics 26 through 28
 created continuous but all-zero system PCM. A signed physical probe isolated the remaining cause: on macOS 26.1
 the aggregate device must receive the tap list in its creation dictionary and then have the same list reasserted
@@ -201,8 +201,10 @@ and reduced the live screen path to hardware-native NV12 with a one-frame queue.
 audio legs continuous and proved live audio to video to audio to video switching in one audio epoch, but each
 video span retained only its first frame despite visible window movement. Direct native screenshots still took
 1.60–1.84 seconds; no physical hotkey sample arrived during the live observation window. Build 38 restores the
-previously working BGRA input while retaining the immediate screenshot yield and one-frame latest-wins queue.
-Physical hotkey latency and the remaining coexistence matrix are still mandatory.
+previously working BGRA input while retaining the immediate screenshot yield, but its installed live probe still
+retained only the first frame. Build 39 restores the last physically proven two-frame ScreenCaptureKit queue while
+keeping the immediate screenshot yield. Physical hotkey latency and the remaining coexistence matrix are still
+mandatory.
 
 The exact Developer ID + notarized `0.8.0 (22)` artifact is public stable/latest as of 2026-08-08. It includes the
 persistent latest-wins screen stream, microphone-owned automatic Calls, meaningful visual moments, immediate

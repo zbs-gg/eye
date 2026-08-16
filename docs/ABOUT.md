@@ -239,9 +239,10 @@ Installed `0.9.0 (37)` started physical Call-video teardown directly on the earl
 hardware-native NV12 screen path with a one-frame queue. Both audio legs remained continuous through a live
 audio to video to audio to video switch, but each video span retained only its first frame despite visible window
 movement. Direct native screenshots still took 1.60–1.84 seconds, and no physical hotkey sample arrived during the
-live observation window. Current `0.9.0 (38)` restores the previously working BGRA input while retaining the
-immediate screenshot yield and one-frame latest-wins queue. Physical hotkey and the remaining coexistence checks
-still block qualification; this version is not released.
+live observation window. Installed `0.9.0 (38)` restored BGRA but still retained only the first video frame, which
+isolated the remaining cause to the one-frame ScreenCaptureKit queue. Current `0.9.0 (39)` restores the last
+physically proven two-frame queue while retaining the immediate screenshot yield. Physical hotkey and the
+remaining coexistence checks still block qualification; this version is not released.
 The larger native-screenshot matrix, normal-use soak, and long physical Call checks remain unqualified and must not
 be described as passed.
 
