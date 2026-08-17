@@ -240,9 +240,13 @@ hardware-native NV12 screen path with a one-frame queue. Both audio legs remaine
 audio to video to audio to video switch, but each video span retained only its first frame despite visible window
 movement. Direct native screenshots still took 1.60–1.84 seconds, and no physical hotkey sample arrived during the
 live observation window. Installed `0.9.0 (38)` restored BGRA but still retained only the first video frame, which
-isolated the remaining cause to the one-frame ScreenCaptureKit queue. Current `0.9.0 (39)` restores the last
-physically proven two-frame queue while retaining the immediate screenshot yield. Physical hotkey and the
-remaining coexistence checks still block qualification; this version is not released.
+isolated the remaining cause to the one-frame ScreenCaptureKit queue. Installed `0.9.0 (39)` restored the last
+physically proven two-frame queue and recorded continuous video. Its first physical hotkey screenshot still failed:
+macOS began the screenshot 58 ms after Eye started an asynchronous `stopCapture()`, then timed out while that
+teardown was still running. The retry completed only after a long delay. Current `0.9.0 (40)` instead closes frame
+admission immediately, records the screenshot gap, and keeps the physical Call-video stream stable so teardown
+cannot race the system screenshot. Physical hotkey and the remaining coexistence checks still block qualification;
+this version is not released.
 The larger native-screenshot matrix, normal-use soak, and long physical Call checks remain unqualified and must not
 be described as passed.
 

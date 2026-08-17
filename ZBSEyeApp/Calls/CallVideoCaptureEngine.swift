@@ -68,6 +68,7 @@ final class CallVideoLatestFrameBridge: @unchecked Sendable {
     private let consume: @Sendable (CallVideoFrame) async -> Void
     private let recordDroppedRange: @Sendable (Int64, Int64) async -> Void
     private var accepting = true
+    private var paused = false
     private var busy = false
     private var pending: CallVideoFrame?
     private var pendingDropRange: (start: Int64, end: Int64)?
@@ -83,7 +84,7 @@ final class CallVideoLatestFrameBridge: @unchecked Sendable {
 
     func submit(_ frame: CallVideoFrame) {
         lock.lock()
-        guard accepting else {
+        guard accepting, !paused else {
             lock.unlock()
             return
         }
@@ -101,6 +102,20 @@ final class CallVideoLatestFrameBridge: @unchecked Sendable {
         busy = true
         lock.unlock()
         Task { await drain(startingWith: frame) }
+    }
+
+    /// Native screenshots close frame admission synchronously, without asking
+    /// ScreenCaptureKit to tear down while the system screenshot is starting.
+    /// Frames already accepted before this boundary still drain normally.
+    func pauseAdmission() {
+        lock.withLock { paused = true }
+    }
+
+    func resumeAdmission() {
+        lock.withLock {
+            guard accepting else { return }
+            paused = false
+        }
     }
 
     /// Closes callback admission and waits for every frame accepted before the
@@ -182,84 +197,61 @@ private final class CallVideoStreamOutput: NSObject, SCStreamOutput, SCStreamDel
     }
 }
 
-/// A screenshot hotkey cannot wait for CallCoordinator's command queue or for
-/// segment finalization. This controller starts only the physical SCK stop on
-/// a detached user-initiated task; the MainActor engine later joins that exact
-/// task and remains the sole owner of files, spans, gaps, and restart policy.
-private final class CallVideoImmediateStopController: @unchecked Sendable {
-    private struct SendableStream: @unchecked Sendable {
-        let value: SCStream
-    }
-
-    private struct InFlight {
-        let streamID: ObjectIdentifier
-        let task: Task<Bool, Never>
-    }
-
+/// The hotkey callback cannot wait for CallCoordinator or touch the database.
+/// It can, however, close frame admission under a tiny lock. Keeping the SCK
+/// stream stable avoids racing macOS' own screenshot stream while guaranteeing
+/// that no Call-video frame is retained inside the screenshot window.
+private final class CallVideoScreenshotAdmissionController: @unchecked Sendable {
     private let lock = NSLock()
-    private let resourceCoordinator: SCKResourceCoordinator
     private var boundStream: SCStream?
-    private var inFlight: InFlight?
+    private var boundBridge: CallVideoLatestFrameBridge?
+    private var pausedAtMs: Int64?
 
-    init(resourceCoordinator: SCKResourceCoordinator) {
-        self.resourceCoordinator = resourceCoordinator
-    }
-
-    func bind(_ stream: SCStream) {
+    func bind(_ stream: SCStream, bridge: CallVideoLatestFrameBridge) {
         lock.lock()
         boundStream = stream
+        boundBridge = bridge
         lock.unlock()
     }
 
     @discardableResult
-    func requestStop() -> Bool {
+    func requestPause(at nowMs: Int64) -> Bool {
         lock.lock()
-        guard let stream = boundStream else {
+        guard boundStream != nil, let bridge = boundBridge else {
             lock.unlock()
             return false
         }
-        let streamID = ObjectIdentifier(stream)
-        if inFlight?.streamID == streamID {
-            lock.unlock()
-            return false
-        }
-        guard inFlight == nil else {
-            lock.unlock()
-            return false
-        }
-        let sendableStream = SendableStream(value: stream)
-        let coordinator = resourceCoordinator
-        let task = Task.detached(priority: .userInitiated) {
-            do {
-                try await coordinator.withExclusiveAccess(owner: .callVideo, operation: .stop) {
-                    try await sendableStream.value.stopCapture()
-                }
-                return true
-            } catch {
-                return false
-            }
-        }
-        inFlight = InFlight(streamID: streamID, task: task)
+        pausedAtMs = min(pausedAtMs ?? nowMs, nowMs)
+        bridge.pauseAdmission()
         lock.unlock()
         return true
     }
 
-    func task(for stream: SCStream) -> Task<Bool, Never>? {
+    func resume(_ stream: SCStream, at endMs: Int64) -> (startMs: Int64, endMs: Int64)? {
         lock.lock()
-        defer { lock.unlock() }
-        guard inFlight?.streamID == ObjectIdentifier(stream) else { return nil }
-        return inFlight?.task
+        guard boundStream.map(ObjectIdentifier.init) == ObjectIdentifier(stream),
+              let bridge = boundBridge,
+              let startMs = pausedAtMs else {
+            lock.unlock()
+            return nil
+        }
+        pausedAtMs = nil
+        bridge.resumeAdmission()
+        lock.unlock()
+        return (startMs, max(startMs + 1, endMs))
     }
 
-    func clear(_ stream: SCStream) {
+    func clear(_ stream: SCStream, at endMs: Int64) -> (startMs: Int64, endMs: Int64)? {
         lock.lock()
+        defer { lock.unlock() }
+        guard boundStream.map(ObjectIdentifier.init) == ObjectIdentifier(stream) else { return nil }
+        let interval = pausedAtMs.map { ($0, max($0 + 1, endMs)) }
+        pausedAtMs = nil
         if boundStream.map(ObjectIdentifier.init) == ObjectIdentifier(stream) {
             boundStream = nil
+            boundBridge = nil
         }
-        if inFlight?.streamID == ObjectIdentifier(stream) {
-            inFlight = nil
-        }
-        lock.unlock()
+        return interval
     }
 }
 
@@ -530,7 +522,7 @@ final class CallVideoCaptureEngine {
     private let repository: CallRepository
     private let mediaRoot: URL
     private let resourceCoordinator: SCKResourceCoordinator
-    nonisolated private let immediateStopController: CallVideoImmediateStopController
+    nonisolated private let screenshotAdmissionController: CallVideoScreenshotAdmissionController
     private let excludedBundleIDs: @MainActor () -> Set<String>
     private let isNativeScreenshotSuppressed: @MainActor () -> Bool
     private let waitForNativeScreenshotRelease: @MainActor () async -> Void
@@ -554,9 +546,7 @@ final class CallVideoCaptureEngine {
         self.repository = repository
         self.mediaRoot = mediaRoot
         self.resourceCoordinator = resourceCoordinator
-        immediateStopController = CallVideoImmediateStopController(
-            resourceCoordinator: resourceCoordinator
-        )
+        screenshotAdmissionController = CallVideoScreenshotAdmissionController()
         self.excludedBundleIDs = excludedBundleIDs
         self.isNativeScreenshotSuppressed = isNativeScreenshotSuppressed
         self.waitForNativeScreenshotRelease = waitForNativeScreenshotRelease
@@ -571,7 +561,10 @@ final class CallVideoCaptureEngine {
     }
 
     func start(callID: Int64) async -> CallVideoState {
-        if active?.callID == callID { return .recording }
+        if let active, active.callID == callID {
+            await resumeAfterNativeScreenshot(active)
+            return .recording
+        }
         if active != nil { _ = await stop(reason: "superseded") }
         let startedAtMs = Self.nowMs()
         var startedSpanID: Int64?
@@ -687,14 +680,15 @@ final class CallVideoCaptureEngine {
                 type: .screen,
                 sampleHandlerQueue: DispatchQueue(label: "gg.zbs.eye.call-video", qos: .utility)
             )
+            screenshotAdmissionController.bind(stream, bridge: bridge)
             while true {
                 if isNativeScreenshotSuppressed() {
-                    pendingGap.open(
-                        callID: callID,
-                        startMs: Self.nowMs(),
-                        reason: "native_screenshot"
-                    )
+                    _ = screenshotAdmissionController.requestPause(at: Self.nowMs())
                     await waitForNativeScreenshotRelease()
+                    await resumeAfterNativeScreenshot(
+                        callID: callID,
+                        stream: stream
+                    )
                 }
                 do {
                     try await resourceCoordinator.withExclusiveAccess(
@@ -710,25 +704,17 @@ final class CallVideoCaptureEngine {
                         try await stream.startCapture()
                     }
                 } catch StartAdmissionError.nativeScreenshotSuppressed {
-                    pendingGap.open(
-                        callID: callID,
-                        startMs: Self.nowMs(),
-                        reason: "native_screenshot"
-                    )
+                    _ = screenshotAdmissionController.requestPause(at: Self.nowMs())
                     continue
                 }
-                immediateStopController.bind(stream)
                 guard isNativeScreenshotSuppressed() else { break }
                 // Suppression opened while ScreenCaptureKit was awaiting its
-                // start callback. Close the just-started stream immediately;
-                // audio remains completely outside this loop.
-                pendingGap.open(
-                    callID: callID,
-                    startMs: Self.nowMs(),
-                    reason: "native_screenshot"
-                )
-                _ = immediateStopController.requestStop()
-                await stopPhysicalCapture(stream)
+                // start callback. Keep the physical stream stable so macOS can
+                // take its screenshot; only frame admission stays closed.
+                _ = screenshotAdmissionController.requestPause(at: Self.nowMs())
+                await waitForNativeScreenshotRelease()
+                await resumeAfterNativeScreenshot(callID: callID, stream: stream)
+                break
             }
             if let failure = startingWriterFailure, startingCallID == callID {
                 await stopPhysicalCapture(stream)
@@ -736,6 +722,14 @@ final class CallVideoCaptureEngine {
                 await output.bridge.closeAndDrain()
                 let (codec, _) = await writer.finish()
                 let endedAtMs = Self.nowMs()
+                if let interval = screenshotAdmissionController.clear(stream, at: endedAtMs) {
+                    await persist(CallVideoGapInterval(
+                        callID: callID,
+                        startMs: interval.startMs,
+                        endMs: interval.endMs,
+                        reason: "native_screenshot"
+                    ))
+                }
                 try? await repository.finishVideoSpan(
                     spanID: spanID,
                     endedAtMs: max(startedAtMs + 1, endedAtMs),
@@ -769,8 +763,19 @@ final class CallVideoCaptureEngine {
             }
             return .recording
         } catch {
+            let failedAtMs = Self.nowMs()
             if let preparedStream {
-                immediateStopController.clear(preparedStream)
+                if let interval = screenshotAdmissionController.clear(
+                    preparedStream,
+                    at: failedAtMs
+                ) {
+                    await persist(CallVideoGapInterval(
+                        callID: callID,
+                        startMs: interval.startMs,
+                        endMs: interval.endMs,
+                        reason: "native_screenshot"
+                    ))
+                }
             }
             startingCallID = nil
             startingWriterFailure = nil
@@ -783,7 +788,6 @@ final class CallVideoCaptureEngine {
                     reason: "video_start_failed"
                 )
             }
-            let failedAtMs = Self.nowMs()
             await persistImmediateGapIfUncovered(
                 callID: callID,
                 startMs: startedAtMs,
@@ -812,13 +816,25 @@ final class CallVideoCaptureEngine {
             }
             return .disabled
         }
+        if reason == "native_screenshot" {
+            _ = screenshotAdmissionController.requestPause(at: Self.nowMs())
+            return .gap
+        }
         self.active = nil
         await stopPhysicalCapture(active.stream)
         try? active.stream.removeStreamOutput(active.output, type: .screen)
         await active.output.bridge.closeAndDrain()
         let (codec, writerFailure) = await active.writer.finish()
         let endedAtMs = Self.nowMs()
-        let gracefulReasons: Set<String> = ["call_ended", "mode_audio_only", "native_screenshot"]
+        if let interval = screenshotAdmissionController.clear(active.stream, at: endedAtMs) {
+            await persist(CallVideoGapInterval(
+                callID: active.callID,
+                startMs: interval.startMs,
+                endMs: interval.endMs,
+                reason: "native_screenshot"
+            ))
+        }
+        let gracefulReasons: Set<String> = ["call_ended", "mode_audio_only"]
         let failure = writerFailure ?? reason.flatMap { gracefulReasons.contains($0) ? nil : $0 }
         let availability: CallVideoAvailability = failure == nil ? .available : .gap
         try? await repository.finishVideoSpan(
@@ -828,13 +844,7 @@ final class CallVideoCaptureEngine {
             availability: availability,
             reason: failure
         )
-        if reason == "native_screenshot" {
-            pendingGap.open(
-                callID: active.callID,
-                startMs: endedAtMs,
-                reason: "native_screenshot"
-            )
-        } else if let failure {
+        if let failure {
             pendingGap.open(callID: active.callID, startMs: endedAtMs, reason: failure)
         }
         if reason == "call_ended" || reason == "mode_audio_only",
@@ -849,24 +859,15 @@ final class CallVideoCaptureEngine {
         switch reason {
         case "mode_audio_only":
             return .disabled
-        case "native_screenshot":
-            return .gap
         default:
             return .available
         }
     }
 
     private func stopPhysicalCapture(_ stream: SCStream) async {
-        var stopped = false
-        if let immediateStop = immediateStopController.task(for: stream) {
-            stopped = await immediateStop.value
+        _ = try? await resourceCoordinator.withExclusiveAccess(owner: .callVideo, operation: .stop) {
+            try await stream.stopCapture()
         }
-        if !stopped {
-            _ = try? await resourceCoordinator.withExclusiveAccess(owner: .callVideo, operation: .stop) {
-                try await stream.stopCapture()
-            }
-        }
-        immediateStopController.clear(stream)
     }
 
     /// Called by the native screenshot observer. Audio is untouched; video
@@ -877,10 +878,27 @@ final class CallVideoCaptureEngine {
         return callID
     }
 
-    /// Safe from the listen-only event callback. It starts no file or database
-    /// work and never waits; `stop(reason:)` joins the same physical teardown.
+    /// Safe from the listen-only event callback. It closes frame admission
+    /// synchronously but deliberately leaves the physical stream stable while
+    /// macOS starts its own screenshot stream.
     nonisolated func requestImmediateNativeScreenshotYield() {
-        _ = immediateStopController.requestStop()
+        _ = screenshotAdmissionController.requestPause(at: Self.nowMs())
+    }
+
+    private func resumeAfterNativeScreenshot(_ active: Active) async {
+        await resumeAfterNativeScreenshot(callID: active.callID, stream: active.stream)
+    }
+
+    private func resumeAfterNativeScreenshot(callID: Int64, stream: SCStream) async {
+        guard let interval = screenshotAdmissionController.resume(stream, at: Self.nowMs()) else {
+            return
+        }
+        await persist(CallVideoGapInterval(
+            callID: callID,
+            startMs: interval.startMs,
+            endMs: interval.endMs,
+            reason: "native_screenshot"
+        ))
     }
 
     private func unexpectedStop(reason: String) async {
@@ -957,7 +975,7 @@ final class CallVideoCaptureEngine {
         return CGMainDisplayID()
     }
 
-    private static func nowMs() -> Int64 {
+    nonisolated private static func nowMs() -> Int64 {
         Int64(Date().timeIntervalSince1970 * 1_000)
     }
 }

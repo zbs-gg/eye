@@ -134,6 +134,29 @@ final class CallVideoQueueTests: XCTestCase {
         XCTAssertEqual(afterClose, [1, 4, 5, 7])
     }
 
+    func testScreenshotPauseDropsFramesWithoutClosingTheBridge() async throws {
+        let probe = CallVideoBridgeProbe(blockedFrames: [])
+        let bridge = CallVideoLatestFrameBridge(
+            consume: { frame in await probe.consume(frame) },
+            recordDroppedRange: { start, end in
+                await probe.recordGap(start: start, end: end)
+            }
+        )
+
+        bridge.pauseAdmission()
+        bridge.submit(try frame(at: 1))
+        await Task.yield()
+        let duringPause = await probe.consumedFrames()
+        XCTAssertEqual(duringPause, [])
+
+        bridge.resumeAdmission()
+        bridge.submit(try frame(at: 2))
+        await probe.waitUntilStarted(2)
+        let afterResume = await probe.consumedFrames()
+        XCTAssertEqual(afterResume, [2])
+        await bridge.closeAndDrain()
+    }
+
     private func frame(at wallMs: Int64) throws -> CallVideoFrame {
         var buffer: CVPixelBuffer?
         let status = CVPixelBufferCreate(

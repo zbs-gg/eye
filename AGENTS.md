@@ -87,10 +87,12 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
    intent; a newer trigger replaces the pending one. `SCKResourceCoordinator` serializes the complete asynchronous
    start/update/stop operation across the Timeline screen and Call-video streams. System audio uses a separate
    Core Audio process tap and must never create a ScreenCaptureKit video leg.
-7. **Native screenshots get a best-effort, permission-neutral physical yield.** Eye observes Shift-Command-3/4/5 and
+7. **Native screenshots get a best-effort, permission-neutral capture yield.** Eye observes Shift-Command-3/4/5 and
    their Control variants through a listen-only event tap only when macOS already permits it, and also watches
-   the exact native screenshot helper processes. Either signal drops pending heavy work, stops Eye's physical
-   screen stream, and opens a short quiet window without stopping Call audio. Eye never requests a new Input
+   the exact native screenshot helper processes. Either signal drops pending heavy work and opens a short quiet
+   window without stopping Call audio. Timeline stops its physical screen stream. Call video synchronously closes
+   frame admission but keeps its ScreenCaptureKit stream stable: stopping it concurrently with the system screenshot
+   makes macOS fail or delay that screenshot. Eye never requests a new Input
    Monitoring/Accessibility grant for this, never consumes the shortcut, and fails open when early hotkey
    observation is unavailable; do not describe this as a guaranteed intercept.
 8. **Automatic Calls are microphone-owned and have a separate privacy list.** Any eligible external microphone
@@ -103,7 +105,9 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
    both Call audio legs have physically stopped. Missing images are acceptable; dropped Call audio is not.
 9. **Call mode is explicit and audio always wins.** `off`, `audio`, and `audio_video` are separate from Timeline
    audio settings. Call video is a fixed-display, hardware-only, latest-wins stream capped at 1080p/15 fps; it
-   starts only after audio, may drop frames, and yields physically to native screenshots. It never restarts or
+   starts only after audio, may drop frames, and records an explicit gap while native screenshots own frame
+   admission. Its physical stream stays stable during that short window so teardown cannot race the screenshot.
+   It never restarts or
    backpressures microphone/system audio. System audio uses an app-owned private Core Audio process tap and tears
    down its exact tap and aggregate-device IDs; it has no ScreenCaptureKit display leg. On macOS 26.1, excluding
    Eye's process while it holds microphone input silently zeroes the global tap, so the tap does not use process
@@ -173,7 +177,7 @@ an API-key provider. This source change is not part of the already-published `0.
 must not be described as publicly released. A local Developer ID-signed `0.8.0 (23)` candidate from the current
 dirty source was installed on 2026-08-12 and reported healthy against the existing data root. Its Call-audio
 priority still requires evidence from a real dual-track Call; the candidate is neither notarized nor public.
-Current `0.9.0 (39)` source adds three-mode Calls and first-class Call video, then replaces the hidden
+Current `0.9.0 (40)` source adds three-mode Calls and first-class Call video, then replaces the hidden
 ScreenCaptureKit leg used for system audio with a Core Audio process tap. Installed diagnostics 26 through 28
 created continuous but all-zero system PCM. A signed physical probe isolated the remaining cause: on macOS 26.1
 the aggregate device must receive the tap list in its creation dictionary and then have the same list reasserted
@@ -202,9 +206,12 @@ audio legs continuous and proved live audio to video to audio to video switching
 video span retained only its first frame despite visible window movement. Direct native screenshots still took
 1.60–1.84 seconds; no physical hotkey sample arrived during the live observation window. Build 38 restores the
 previously working BGRA input while retaining the immediate screenshot yield, but its installed live probe still
-retained only the first frame. Build 39 restores the last physically proven two-frame ScreenCaptureKit queue while
-keeping the immediate screenshot yield. Physical hotkey latency and the remaining coexistence matrix are still
-mandatory.
+retained only the first frame. Build 39 restored the last physically proven two-frame ScreenCaptureKit queue and
+recorded continuous video. Its physical hotkey probe still failed: the first screenshot began 58 ms after Eye
+started `stopCapture()`, timed out while that teardown was still running, and produced no image; the retry worked
+only after a long delay. Build 40 therefore closes Call-video frame admission immediately, records the exact gap,
+and deliberately keeps the physical stream stable until the screenshot window closes. Physical hotkey latency and
+the remaining coexistence matrix are still mandatory.
 
 The exact Developer ID + notarized `0.8.0 (22)` artifact is public stable/latest as of 2026-08-08. It includes the
 persistent latest-wins screen stream, microphone-owned automatic Calls, meaningful visual moments, immediate
