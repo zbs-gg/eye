@@ -20,6 +20,26 @@ enum AudioMode: String, CaseIterable, Codable, Sendable {
     }
 }
 
+/// The explicit privacy/format contract for first-class Calls. This is
+/// deliberately separate from `AudioMode`, which still owns ordinary Timeline
+/// audio. An upgrade never opts a person into screen video.
+enum CallRecordingMode: String, CaseIterable, Codable, Sendable, Equatable {
+    case off
+    case audio
+    case audioVideo = "audio_video"
+
+    var label: String {
+        switch self {
+        case .off: String(localized: "Don't record")
+        case .audio: String(localized: "Audio only")
+        case .audioVideo: String(localized: "Audio and video")
+        }
+    }
+
+    var recordsAudio: Bool { self != .off }
+    var recordsVideo: Bool { self == .audioVideo }
+}
+
 /// A stable app identity returned by the picker. The bundle identifier, not the filename, is what
 /// persists and participates in automatic-call admission.
 struct AutoCallExcludedApplication: Equatable, Sendable {
@@ -27,42 +47,37 @@ struct AutoCallExcludedApplication: Equatable, Sendable {
     let displayName: String
 }
 
-enum CallAudioSourcePolicy {
-    static func requestedSources(
-        audioMode: AudioMode,
-        manualOverride: Bool?
-    ) -> CallSourceSelection {
-        audioMode == .off || manualOverride == false
-            ? .none
-            : CallSourceSelection(me: true, system: true)
+enum CallRecordingAdmissionPolicy {
+    static func requestedSources(mode: CallRecordingMode) -> CallSourceSelection {
+        mode.recordsAudio ? CallSourceSelection(me: true, system: true) : .none
     }
 
     static func allowsAutomaticCallStart(
-        audioMode: AudioMode,
-        manualOverride: Bool?,
+        mode: CallRecordingMode,
         microphoneAvailable: Bool,
         systemAudioAvailable: Bool
     ) -> Bool {
-        audioMode != .off
-            && manualOverride != false
+        mode.recordsAudio
             && (microphoneAvailable || systemAudioAvailable)
-    }
-
-    static func mustEndActiveCall(
-        audioMode: AudioMode,
-        manualOverride: Bool?,
-        callIsActive: Bool
-    ) -> Bool {
-        callIsActive && (audioMode == .off || manualOverride == false)
     }
 }
 
-/// Audio/transcription settings. Audio capture is a tri-state `audioMode` (default `.meetingsOnly`,
-/// shown as "Mic in use"): the engine runs for automatically detected or explicit Calls, saving disk.
-/// Persisted in UserDefaults; actual capture remains gated by microphone/screen permissions.
+/// Timeline audio/transcription settings. Call capture has its own independent
+/// `callRecordingMode`; changing this tri-state never changes an active Call.
+/// Persisted in UserDefaults; actual capture remains gated by the corresponding macOS audio permissions.
 @MainActor
 @Observable
 final class AudioSettingsStore {
+    /// Persisted default for automatically detected and ordinary manual Calls.
+    /// Runtime changes are routed by AppEnvironment so active audio never
+    /// restarts when only video is toggled.
+    var callRecordingMode: CallRecordingMode {
+        didSet {
+            guard callRecordingMode != oldValue else { return }
+            defaults.set(callRecordingMode.rawValue, forKey: Self.callRecordingModeKey)
+            onCallRecordingModeChanged?(callRecordingMode)
+        }
+    }
     /// The capture mode (persisted). Source of truth for whether audio should be recorded.
     var audioMode: AudioMode {
         didSet {
@@ -130,6 +145,8 @@ final class AudioSettingsStore {
     /// immediately instead of waiting for the polling fallback.
     @ObservationIgnored var onAutoCallExclusionsChanged: (@MainActor (Set<String>) -> Void)?
 
+    @ObservationIgnored var onCallRecordingModeChanged: (@MainActor (CallRecordingMode) -> Void)?
+
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let applicationNameLookup: @MainActor (String) -> String?
     @ObservationIgnored private let applicationPicker: @MainActor () -> AutoCallExcludedApplication?
@@ -139,8 +156,9 @@ final class AudioSettingsStore {
     @ObservationIgnored private static let sysKey = "zbseye.audio.recordSystemAudio"
     @ObservationIgnored private static let nudgeKey = "zbseye.audio.migrationNudgeSeen"
     @ObservationIgnored private static let autoCallExcludedAppsKey = "zbseye.audio.autoCallExcludedApps"
+    @ObservationIgnored private static let callRecordingModeKey = "zbseye.calls.recordingMode"
 
-    /// The single decision point: should audio be captured right now? Manual override wins; otherwise mode.
+    /// The single decision point for ordinary Timeline audio.
     func audioShouldCapture() -> Bool {
         if audioMode == .off { return false }
         if let ov = manualAudioOverride { return ov }
@@ -211,6 +229,18 @@ final class AudioSettingsStore {
         self.applicationPicker = applicationPicker
         recordSystemAudio = (d.object(forKey: Self.sysKey) == nil) ? true : d.bool(forKey: Self.sysKey)
         migrationNudgeSeen = d.bool(forKey: Self.nudgeKey)
+        if let raw = d.string(forKey: Self.callRecordingModeKey),
+           let persisted = CallRecordingMode(rawValue: raw) {
+            callRecordingMode = persisted
+        } else {
+            // Preserve an explicit old Audio Off. Both former recording modes
+            // become audio-only; an upgrade never enables video silently.
+            let oldAudioWasOff = d.string(forKey: Self.modeKey) == AudioMode.off.rawValue
+                || (d.object(forKey: Self.legacyKey) != nil && !d.bool(forKey: Self.legacyKey))
+            let migratedMode: CallRecordingMode = oldAudioWasOff ? .off : .audio
+            callRecordingMode = migratedMode
+            d.set(migratedMode.rawValue, forKey: Self.callRecordingModeKey)
+        }
 
         let persistedExclusions = d.stringArray(forKey: Self.autoCallExcludedAppsKey) ?? []
         let canonicalExclusions = Self.canonicalBundleIDs(persistedExclusions)

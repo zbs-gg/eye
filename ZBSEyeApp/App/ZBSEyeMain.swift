@@ -6,6 +6,17 @@ import Foundation
 @main
 struct ZBSEyeMain {
     static func main() {
+        if CommandLine.arguments.contains(CallAudioHelperSecurity.helperFlag) {
+            Task { @MainActor in
+                let command = CallAudioHelperCommand()
+                await command.run()
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(3_600))
+                }
+                withExtendedLifetime(command) {}
+            }
+            dispatchMain()
+        }
         if CommandLine.arguments.contains(AppRelaunchPlan.helperFlag) {
             guard let plan = AppRelaunchPlan(arguments: CommandLine.arguments) else {
                 FileHandle.standardError.write(Data("Invalid relaunch helper arguments.\n".utf8))

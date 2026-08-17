@@ -218,12 +218,20 @@ final class AIProviderStore {
         codexProvider = codex
         claudeCodeProvider = claudeCode
         processOverlay = overlay
-        guard let active = settings.activeProvider,
-              active.isSubprocess,
-              AIConsumer.allCases.contains(where: {
-                  settings.isAuthorized(providerID: active.rawValue, consumer: $0)
-              }) else { return }
-        Task { [weak self] in await self?.connect(active) }
+        let processProviders = Set(
+            [settings.activeProvider, settings.reviewSelection.flatMap {
+                AIProvider(rawValue: $0.providerID)
+            }]
+            .compactMap { $0 }
+            .filter { provider in
+                provider.isSubprocess && AIConsumer.allCases.contains(where: {
+                    settings.isAuthorized(providerID: provider.rawValue, consumer: $0)
+                })
+            }
+        )
+        for provider in processProviders {
+            Task { [weak self] in await self?.connect(provider) }
+        }
     }
 
     /// Wires the app-lifetime router after bootstrap constructs it. Routing
@@ -245,6 +253,7 @@ final class AIProviderStore {
     var activeProvider: AIProvider? { settings.activeProvider }
     var activeModelID: String? { settings.activeModelID }
     var selectionSnapshot: ProviderSelectionSnapshot? { settings.selectionSnapshot }
+    var reviewSelection: ReviewModelSelection? { settings.reviewSelection }
     /// The revision exists independently of an active pair. In particular, an
     /// explicit "None" selection still owns its advanced revision and must not
     /// be mistaken for a fresh revision zero by delayed provisioning work.
@@ -369,7 +378,7 @@ final class AIProviderStore {
     ) -> Bool {
         guard consumer.isAutomatic,
               provider.isCloud,
-              activeProvider == provider,
+              settings.selectionSnapshot(for: consumer)?.providerID == provider.rawValue,
               var grant = settings.consentGrant(forProviderID: provider.rawValue),
               grant.recipientDisclosure == recipientDisclosure(for: provider) else {
             return false
@@ -385,6 +394,33 @@ final class AIProviderStore {
     }
 
     func isActive(_ p: AIProvider) -> Bool { activeProvider == p }
+
+    /// Timeline Review accepts authenticated subscription runtimes only. This
+    /// deliberately excludes every API-key provider even if it is the main model.
+    @discardableResult
+    func commitReviewSelection(provider: AIProvider, modelID: String) -> Bool {
+        guard provider == .codex || provider == .claudeCode,
+              canActivate(provider, modelID: modelID),
+              let recipient = recipientDisclosure(for: provider) else { return false }
+        var grant = settings.consentGrant(forProviderID: provider.rawValue)
+            ?? ScopedAIConsentGrant(
+                providerID: provider.rawValue,
+                recipientDisclosure: recipient,
+                consumers: [],
+                policyRevision: ScopedAIConsentGrant.currentPolicyRevision
+            )
+        guard grant.recipientDisclosure == recipient else { return false }
+        grant.consumers.insert(.manualSummary)
+        grant.policyRevision = ScopedAIConsentGrant.currentPolicyRevision
+        settings.setConsent(grant)
+        return settings.setReviewSelection(
+            ReviewModelSelection(providerID: provider.rawValue, modelID: modelID)
+        )
+    }
+
+    func inheritMainModelForReview() {
+        _ = settings.setReviewSelection(nil)
+    }
 
     /// Captures an immutable user choice against the current selection revision.
     /// Discovery may change around it, but confirmation can only commit while
@@ -565,7 +601,7 @@ final class AIProviderStore {
     /// Scoped configuration snapshot for a concrete consumer. The committed active model is used here,
     /// never the mutable provider-card preference.
     func activeConfig(for consumer: AIConsumer) -> LLMConfig? {
-        guard let snapshot = settings.selectionSnapshot,
+        guard let snapshot = settings.selectionSnapshot(for: consumer),
               let p = AIProvider(rawValue: snapshot.providerID) else { return nil }
         switch catalogState(p).selectionAvailability(for: snapshot.modelID) {
         case .missingFromAuthoritativeCatalog, .providerUnavailable, .unsupported:

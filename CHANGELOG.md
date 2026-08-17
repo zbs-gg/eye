@@ -2,7 +2,60 @@
 
 All notable changes to ZBS Eye. The format follows Added / Changed / Fixed sections.
 
-## [0.8.0] — Unreleased
+## Unreleased — 0.9.0 (25) candidate source
+
+### Added
+- Calls now have **Don't record / Audio only / Audio and video** modes globally and on the active Call.
+- Call video records one fixed display at up to 1080p/15 fps in hardware-only 30-second MP4 fragments, with
+  explicit spans/gaps, sequential playback, authenticated typed references, export, retention, and deletion.
+
+### Changed
+- Audio physically starts before video and remains independent during live video toggles, display loss, native
+  screenshot yields, and background AAC muxing. Existing Mic in use/Always profiles migrate to Audio only;
+  an explicit old Off remains Don't record, and video is never enabled silently. Timeline audio stays independent.
+
+### Fixed
+- Call audio has absolute priority over Timeline capture and video work; native screenshots temporarily stop the
+  physical Call video stream without stopping either audio source.
+- Native screenshot teardown no longer waits behind synchronous HEIC/OCR work, and Call video stays stopped until
+  the native helper plus the full quiet tail have ended. A newly enabled Call-video stream joins that same gate
+  instead of starting inside an already-open screenshot window.
+- Call video drains every accepted latest-wins frame before finalizing a span, reports separate frame-drop gaps,
+  and publishes hardware encoder failure without waiting for the Call to end.
+- Failed hardware codec attempts and unpublished final segments remove their own bytes, so HEVC failure cannot
+  block the hardware H.264 fallback or leave unreachable Call video on disk.
+- A Call locks its display when audio starts, even when video is enabled later. The current binary recognizes the
+  v17 schema, and REST/OpenAPI now expose recording modes, video segments, and video gaps.
+- Review schedule migration no longer triggers an immediate catch-up, and changing its selected period cannot
+  leave the panel permanently busy.
+- Timeline Review now pins the independently verified official Claude Code 2.1.232 arm64 artifact, while its
+  installed-binary test remains deterministic when Anthropic's local auto-updater has another version installed.
+- Call fixture verification uses disposable DerivedData by default instead of silently growing the repository's
+  `build/` directory; an explicit cache path remains available for intentional reuse.
+- Release preflight can notarize an explicitly named, clean remote PR descendant for the pre-merge physical gate;
+  publication still requires that exact SHA on canonical main with no candidate override.
+- Rapid active-Call mode changes now reconcile to the latest selection in one serial loop, without restarting
+  Call audio. Audio-only and native-screenshot stops expose honest disabled/gap video state instead of available.
+- A failed video start keeps one gap open until a successful restart, an audio-only switch, or Call end, so a
+  missing locked display can no longer collapse minutes of absent video into a one-millisecond gap.
+- Repeated native-screenshot edges during video resume now extend that same pending gap instead of publishing
+  overlapping intervals in Call Detail, REST/MCP, and export evidence.
+- Starting Call audio now invalidates background AAC/MP4 postprocess work without waiting for it. Cancelled mux
+  work skips degradation, ignores already-muxed segments, and retries remaining segments after audio stops.
+- Crash recovery now reconciles the postprocess rollback MP4 against the generation-bound database hash: it
+  restores uncommitted silent video, keeps committed muxed video, and preserves unknown evidence for inspection.
+- Pull requests and `main` now run an independent macOS 26 / Xcode 26.5 CI gate for the full unhosted suite,
+  Debug GUI build, Call fixture contract, and capture-coexistence protocol self-test.
+- Review schedule keys now use the same calendar time zone that selected the day or seven-day period, so a
+  runner or Mac time-zone difference cannot move a completed Review cursor to the previous date.
+- CI fixtures no longer inherit machine-wide Git policy, depend on an installed `/Applications/ZBS Eye.app`, or
+  assume a loaded hosted runner will dispatch an expired automation lease within a fixed 120 ms window.
+- Hosted CI now runs release-preflight fixtures as an early contract and prints structured XCTest failure
+  messages before uploading result bundles, so runner-only failures stay diagnosable without a large download.
+- The installed-candidate Call report now makes every three-mode/video, fixed-display, screenshot-latency,
+  overflow, recovery, deletion, trimming, and export check explicit instead of reusing the old audio-only gate.
+
+## [0.8.0] — 2026-08-08
 
 ### Added
 - Timeline now shows a clickable seven-image filmstrip around the selected visual moment and keeps decoded

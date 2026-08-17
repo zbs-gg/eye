@@ -4,6 +4,10 @@ import Foundation
 /// System audio, 16k downsample, multi-locale auto-detect, MLX Quality mode — follow-up.
 struct AudioConfig: Sendable {
     var tapBufferSize: UInt32 = 4096        // ~85ms at 48k — VAD frame granularity
+    // Audio is the irreplaceable Call artifact. This absorbs transient CPU/disk
+    // stalls while visual capture is being torn down instead of evicting speech
+    // after the old 64-frame (~sub-second for SCK) window.
+    var ingressFrameCapacity = 4_096
     var vadEnergyThreshold: Float = 0.012   // RMS over normalized floats; below this — silence/background
     var minSpeechSec: Double = 0.4          // shorter — not a segment (clicks/noise)
     var silenceHangoverSec: Double = 0.7    // this much silence in a row → close the segment

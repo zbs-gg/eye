@@ -44,14 +44,14 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
 |---|---|
 | `App/` | `ZBSEyeMain` (@main, CLI/GUI dispatch), `ZBSEyeApp` (Scene + AppDelegate), `AppEnvironment` (owns the service graph, `bootstrap()`) |
 | `Capture/` | `CaptureCoordinator`, one persistent low-rate `ScreenCaptureStream`, meaningful-input scheduling, `FramePipeline` (HEIC+phash+OCR, ONE actor), `SCKResourceCoordinator`, screenshot-priority yield, capture health/recovery, `AXReader` (dedicated thread, per-PID health) |
-| `Audio/` | `AudioCoordinator`, mic/system engines, `VADSegmenter`, `TranscriptionService` (SFSpeech on-device); system-audio SCK lifecycle shares `SCKResourceCoordinator` with screen capture |
+| `Audio/` | `AudioCoordinator`, microphone engine, Core Audio process-tap system engine, `VADSegmenter`, `TranscriptionService` (SFSpeech on-device); system audio owns no screen stream |
 | `Meeting/` | `MeetingDetector`, CoreAudio process evidence, native/browser enrichment, exact automatic-Call admission and suppression |
-| `Calls/` | `CallCoordinator`, crash-forward spools/evidence, Whisper and diarization workers, call query/projection and privacy deletion |
+| `Calls/` | `CallCoordinator`, crash-forward audio/video evidence, separate Call video + AAC post-process, Whisper/diarization, query/projection and privacy deletion |
 | `Data/` | `ZBSEyeDatabase` (pool + migrations), `StorageManager` (media), **`StorageLocation`** (the single path resolver — see invariants), `StorageRelocation` (move), `BackupManager` (iCloud), `RetentionManager`, `IngestService` (the only writer) |
 | `Search/` | `SearchService` (FTS+vector RRF), `EmbeddingService` (e5), past-only visual Timeline lookup, `VectorBackfill` |
 | `Server/` | `ZBSEyeHTTPServer` (FlyingFox REST, 127.0.0.1, Bearer), `KeychainStore`, DTO |
 | `MCP/` | `ZBSEyeMCPServer` (stdio, proxies into the GUI instance) |
-| `Automations/` | `HistoryImporter` (history import), `DailySummaryService`, `ExportService` |
+| `Automations/` | `HistoryImporter`, Timeline Review collection/persistence, scheduling audit, `ExportService` |
 | `State/` | `@MainActor @Observable` stores (Recording/Permissions/Storage/Backup/…) |
 | `Views/` | SwiftUI (Timeline, Settings, onboarding) |
 
@@ -62,8 +62,10 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
    Do NOT hardcode `Application Support/ZBS Eye`. This is needed so relocate (move to an external SSD) and
    helper processes (`--mcp`, `--backup-now`) see one place. Exceptions: the iCloud backup and user export —
    intentionally separate paths.
-2. **One writer — `IngestService`.** Non-Sendable (`CVPixelBuffer`/`CMSampleBuffer`/`AXUIElement`/`VNRequest`)
-   live and die inside a single actor; only Sendable leaves it.
+2. **One Timeline writer — `IngestService`; one narrow Call-audio exception.** Non-Sendable
+   (`CVPixelBuffer`/`CMSampleBuffer`/`AXUIElement`/`VNRequest`) live and die inside a single actor; only Sendable
+   leaves it. The same-signed launchd Call-audio owner may append only Call source spans, PCM chunks, and explicit
+   source gaps through `CallRepository`; it never migrates the database or writes Timeline/search state.
 3. **FTS5 external-content:** compute `snippet()`/`bm25()` in a subquery PURELY over the FTS table. Add a
    condition over a joined table (`c.ts BETWEEN …`) to the same SELECT and SQLite loses the FTS context
    ("unable to use function snippet"). Pattern: `WITH hits AS (… FROM text_fts WHERE MATCH … LIMIT N)`.
@@ -74,25 +76,45 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
 5. **Keep Media is the only automatic retention contract.** Fresh empty profiles start at 5 GB; upgrades never
    shorten retention without an explicit selection and authoritative reconciliation. `Forever` closes automatic
    deletion. Critically low disk pauses capture for every policy and never overrides the selected retention promise.
-6. **One persistent screen stream; bounded latest-wins work.** Normal screen capture uses one low-rate
-   ScreenCaptureKit stream, not a new screenshot request per cycle. App switches always request moments; clicks,
+6. **One screen stream at a time; bounded latest-wins work.** Normal screen capture uses one low-rate persistent
+   ScreenCaptureKit stream, not a new screenshot request per cycle. A native screenshot signal is the sole
+   user-priority exception: Eye stops only this screen stream for the quiet window and recreates one on the next
+   ordinary visual intent; microphone and system audio continue. App switches always request moments; clicks,
    scroll-stop (350 ms), and typing-pause (700 ms) do so when listen-event access already exists, without a new
    permission request. The three-second fallback remains. The observer carries only an
    opaque reason—never keys, text, pointer coordinates, or clipboard contents—and frequent input shares a
    1.5-second heavy-work floor. Expensive AX/OCR/HEIC work retains at most one processing intent and one pending
    intent; a newer trigger replaces the pending one. `SCKResourceCoordinator` serializes the complete asynchronous
-   start/update/stop operation across the screen and system-audio streams.
-7. **Native screenshots get a best-effort, permission-neutral yield.** Eye observes Shift-Command-3/4/5 and
+   start/update/stop operation across the Timeline screen and Call-video streams. System audio uses a separate
+   Core Audio process tap and must never create a ScreenCaptureKit video leg.
+7. **Native screenshots get a best-effort, permission-neutral capture yield.** Eye observes Shift-Command-3/4/5 and
    their Control variants through a listen-only event tap only when macOS already permits it, and also watches
    the exact native screenshot helper processes. Either signal drops pending heavy work and opens a short quiet
-   window. Eye never requests a new Input Monitoring/Accessibility grant for this, never consumes the shortcut,
-   and fails open when early hotkey observation is unavailable; do not describe this as a guaranteed intercept.
+   window without stopping Call audio. Timeline stops its physical screen stream. Call video synchronously closes
+   frame admission but keeps its ScreenCaptureKit stream stable: stopping it concurrently with the system screenshot
+   makes macOS fail or delay that screenshot. Eye never requests a new Input
+   Monitoring/Accessibility grant for this, never consumes the shortcut, and fails open when early hotkey
+   observation is unavailable; do not describe this as a guaranteed intercept.
 8. **Automatic Calls are microphone-owned and have a separate privacy list.** Any eligible external microphone
    initiator can open a local Call; exact `Don’t auto-record these apps` bundle IDs affect only this admission and
    do not hide the app from screen history. Krisp is relay-only: it may participate but cannot start, name, or keep
-   a Call alive. The exact `codex_chronicle` helper is ignored before owner folding. `Pause Timeline` does not
-   disarm automatic Calls; `Audio Off` and privacy pause do. A detected end waits 30 seconds, offering `End & save`
-   or destructive `This wasn’t a call`; there is no post-end Undo.
+   a Call alive. The exact `codex_chronicle` helper is ignored before owner folding. Timeline audio and
+   `Pause Timeline` do not disarm automatic Calls; the Calls mode `Don't record` and privacy pause do. A detected end waits 30 seconds, offering `End & save`
+   or destructive `This wasn’t a call`; there is no post-end Undo. While any Call owns physical audio, Call audio
+   has absolute capture priority: Timeline closes visual admission and stops its screen stream/HEIC/OCR work until
+   both Call audio legs have physically stopped. Missing images are acceptable; dropped Call audio is not.
+9. **Call mode is explicit and audio always wins.** `off`, `audio`, and `audio_video` are separate from Timeline
+   audio settings. Call video is a fixed-display, hardware-only, latest-wins stream capped at 1080p/15 fps; it
+   starts only after audio, may drop frames, and records an explicit gap while native screenshots own frame
+   admission. Its physical stream stays stable during that short window so teardown cannot race the screenshot.
+   It never restarts or
+   backpressures microphone/system audio. System audio uses an app-owned private Core Audio process tap and tears
+   down its exact tap and aggregate-device IDs; it has no ScreenCaptureKit display leg. On macOS 26.1, excluding
+   Eye's process while it holds microphone input silently zeroes the global tap, so the tap does not use process
+   exclusion and Eye must not play media while a Call owns audio.
+   Background AAC mux work is lease-cancelled as soon as another Call starts
+   and retries only after physical audio stops; recovery verifies the generation-bound segment hash before deleting
+   a `.silent-backup`. Upgrades default existing Calls to audio and never enable video silently.
 
 ## Gotchas (already stepped on — don't again)
 
@@ -130,14 +152,16 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
    lookup, the media-directory boundary), no egress.
 4. **Honest state:** the UI doesn't lie (the recording icon, permission statuses, "busy").
 5. **Capture coexistence:** a healthy Eye must not make native screenshots slow, stale, or unavailable under
-   ChatGPT/Chronicle/two-track-call contention; check one stream per process lifetime, best-effort hotkey yield,
-   lifecycle recovery, and durable coverage gaps.
+   ChatGPT/Chronicle/two-track-call contention; check one screen stream at a time, a physical screenshot-priority
+   yield, bounded restart after the quiet window, lifecycle recovery, and durable coverage gaps.
 6. **Automatic-Call privacy:** verify exact mic-owner attribution, relay/excluded-helper behavior, the separate
-   audio exclusion list, hard Audio Off/privacy boundaries, one terminal owner, and crash-forward erase/finalize.
+   audio exclusion list, hard `Don't record`/privacy boundaries, one terminal owner, and crash-forward erase/finalize.
 
 Check both the build and the unhosted `ZBSEyeUnitTests` target. Pure production policies are shared into
 that target explicitly so verification does not launch an ad-hoc `gg.zbs.eye` app or churn the installed
-app's TCC grants. Distribution and OS-integration changes still require installed-app REST/MCP/SQLite dogfood.
+app's TCC grants. `.github/workflows/macos-ci.yml` repeats the full unhosted suite, GUI build, Call fixture, and
+capture protocol self-test on Xcode 26.5 without app launch or signing. Distribution and OS-integration changes
+still require installed-app REST/MCP/SQLite dogfood; CI is never physical qualification.
 
 ## Status (what works)
 
@@ -145,6 +169,49 @@ Previously verified live product baseline: screen capture (HEIC + AX/OCR), audio
 (cross-lingual), Timeline, REST + MCP, history import, 5 GB fresh-profile retention with explicit
 **Forever**, **relocatable storage**, **iCloud backup** (compressed, keep-N, on exit), size tracking, daily summary,
 and export.
+
+Current source after that public baseline adds Timeline Review: a day/seven-day side panel, internal v16
+storage, daily/weekday/weekly scheduling, optional Markdown/Obsidian export, and provider-reported token usage.
+Review is intentionally limited to authenticated Codex or Claude Code subscription models; it never selects
+an API-key provider. This source change is not part of the already-published `0.8.0 (22)` qualification and
+must not be described as publicly released. A local Developer ID-signed `0.8.0 (23)` candidate from the current
+dirty source was installed on 2026-08-12 and reported healthy against the existing data root. Its Call-audio
+priority still requires evidence from a real dual-track Call; the candidate is neither notarized nor public.
+Current `0.9.0 (40)` source adds three-mode Calls and first-class Call video, then replaces the hidden
+ScreenCaptureKit leg used for system audio with a Core Audio process tap. Installed diagnostics 26 through 28
+created continuous but all-zero system PCM. A signed physical probe isolated the remaining cause: on macOS 26.1
+the aggregate device must receive the tap list in its creation dictionary and then have the same list reasserted
+and confirmed as a property before IO starts. Installed build 29 still produced zeroes because excluding Eye while
+it held microphone input silently zeroed the global tap; the same signed probe captured real sound with microphone
+input active and no process exclusion. Installed build 31 proved that the decoded Core Audio callback itself was
+still all-zero. Its exported Info.plist was missing the required system-audio and screen-capture privacy reasons:
+Xcode silently omitted those newer keys from a generated plist even though the build settings named them. Build 32
+uses an explicit plist and makes the notarized-build script reject either missing key. Installed build 32 then
+captured real system audio without gaps, but a Call-video probe exposed another release blocker: Timeline was paused,
+so its lifecycle had stopped the shared native-screenshot observer; three native captures took 1.79–2.16 seconds
+against a 0.36–0.40-second Eye-off baseline. Build 33 keeps that permission-neutral observer alive for the app
+lifetime so Call video receives the early hotkey edge independently of Timeline. Installed build 33 proved that
+edge and recorded a native-screenshot video gap without an audio gap, but its optional AAC mux failed because
+AVAudioFile rejects an explicit 64 kbps encoder property at the authoritative 16 kHz sample rate (`!dat`). Build 34
+removed that setting but still gave the temporary movie a non-media extension; AVFoundation exported it and then
+refused to verify it. Build 35 uses a real temporary MP4 and verifies both tracks before replacement. Build 36
+moves authoritative Call audio into a same-signed launchd process: a GUI crash no longer owns the recording
+lifetime, relaunch adopts the active Call, and a helper crash finalizes the append-only PCM, records an explicit
+gap, and resumes in a new epoch. Installed notarized build 36 proved both real audio legs, GUI-crash continuity,
+same-Call adoption, and helper-crash recovery. Its Call-video probe still blocked release: command-line native
+screenshots took 1.59–3.12 seconds against a 0.33–0.44-second idle baseline, the next screenshot failed, and the
+video encoder then failed. Build 37 started the physical Call-video stop directly from the early screenshot edge
+and reduced the live screen path to hardware-native NV12 with a one-frame queue. Installed build 37 kept both
+audio legs continuous and proved live audio to video to audio to video switching in one audio epoch, but each
+video span retained only its first frame despite visible window movement. Direct native screenshots still took
+1.60–1.84 seconds; no physical hotkey sample arrived during the live observation window. Build 38 restores the
+previously working BGRA input while retaining the immediate screenshot yield, but its installed live probe still
+retained only the first frame. Build 39 restored the last physically proven two-frame ScreenCaptureKit queue and
+recorded continuous video. Its physical hotkey probe still failed: the first screenshot began 58 ms after Eye
+started `stopCapture()`, timed out while that teardown was still running, and produced no image; the retry worked
+only after a long delay. Build 40 therefore closes Call-video frame admission immediately, records the exact gap,
+and deliberately keeps the physical stream stable until the screenshot window closes. Physical hotkey latency and
+the remaining coexistence matrix are still mandatory.
 
 The exact Developer ID + notarized `0.8.0 (22)` artifact is public stable/latest as of 2026-08-08. It includes the
 persistent latest-wins screen stream, microphone-owned automatic Calls, meaningful visual moments, immediate

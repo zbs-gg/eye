@@ -10,7 +10,7 @@ struct AudioDrainAcknowledgement: Sendable, Equatable {
 }
 
 /// Audio-recording orchestrator (@MainActor): two independent legs — microphone (AVAudioEngine) and system
-/// audio (ScreenCaptureKit). Different permissions (mic vs screen recording), a shared TranscriptionService.
+/// audio (Core Audio process tap). Different permissions, one shared TranscriptionService.
 /// The gates (what to enable) live outside (RecordingStore/AppEnvironment). @Observable — per-source flags
 /// (micRunning/systemRunning) feed the honest recording indicator in the menubar/sidebar.
 @MainActor
@@ -30,7 +30,7 @@ final class AudioCoordinator {
 
     private(set) var isRunning = false
     private(set) var micStartFailed = false      // the engine did not start (no mic/device) — for health/UI
-    private(set) var systemStartFailed = false   // SCStream did not start (no screen access/display)
+    private(set) var systemStartFailed = false   // the Core Audio process tap did not start
     private(set) var micRunning = false          // per-source indicator: what is actually being recorded
     private(set) var systemRunning = false
     @ObservationIgnored var onSegment: (@MainActor () -> Void)?
@@ -63,8 +63,7 @@ final class AudioCoordinator {
         storage: StorageManager,
         ingest: IngestService,
         config: AudioConfig = AudioConfig(),
-        healthController: CaptureHealthController? = nil,
-        resourceCoordinator: SCKResourceCoordinator
+        healthController: CaptureHealthController? = nil
     ) {
         let backend = SFSpeechBackend()
         let transcription = TranscriptionService(backend: backend, ingest: ingest, config: config)
@@ -74,13 +73,10 @@ final class AudioCoordinator {
         self.systemPipeline = AudioPipeline(storage: storage, ingest: ingest,
                                             transcription: transcription, config: config, channel: "system")
         self.micEngine = AudioCaptureEngine(config: config)
-        self.systemEngine = SystemAudioCaptureEngine(
-            config: config,
-            resourceCoordinator: resourceCoordinator
-        )
+        self.systemEngine = SystemAudioCaptureEngine(config: config)
         self.healthController = healthController
 
-        // 24/7 resilience: an audio-device change (AirPods) / SCStream death → auto-restart the leg
+        // 24/7 resilience: an audio-device change / tap death → auto-restart the leg
         // with a delay and a budget (anti-loop on a permanent breakage). Previously — a silent death.
         micEngine.onConfigurationChange = { [weak self] in
             Task { @MainActor in await self?.restartLeg(mic: true) }
@@ -223,7 +219,7 @@ final class AudioCoordinator {
         systemRunning = false
         micEngine.stop()
         // finish() closes the frame stream so runLeg can flushFinal; the
-        // returned task separately owns SCStream/CoreAudio teardown.
+        // returned task separately owns the physical Core Audio teardown.
         let systemCapture = systemEngine.stop()
         // We do NOT nil out micTask/systemTask: the next start waits for them via previous (serialization of cycles).
         return (micTask, systemTask, systemCapture)
@@ -455,7 +451,7 @@ final class AudioCoordinator {
         return true
     }
 
-    /// System leg: engine.start() is async (SCStream.startCapture), so the whole leg lives inside a Task.
+    /// System leg: creation may wait for the system-audio permission, so the whole leg lives inside a Task.
     private func startSystemLeg() {
         guard !systemRunning, !systemStarting, systemStartIsAdmitted else { return }
         systemStarting = true

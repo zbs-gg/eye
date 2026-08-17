@@ -190,6 +190,7 @@ final class CallDatabaseTests: XCTestCase {
             "call_automation_config", "call_automation_outbox",
             "call_context", "call_speaker_revisions", "call_speaker_clusters",
             "call_speaker_intervals", "capture_coverage_intervals",
+            "review_summaries",
         ].allSatisfy(freshTables.contains))
 
         let upgraded = try CallDatabaseTestStore(runMigrations: false)
@@ -214,7 +215,8 @@ final class CallDatabaseTests: XCTestCase {
             )
         }
         XCTAssertEqual(snapshot.appCount, 1)
-        XCTAssertEqual(snapshot.migrations.last, "v15_capture_coverage")
+        XCTAssertEqual(snapshot.migrations.last, "v17_call_video")
+        XCTAssertTrue(ZBSEyeDatabase.knownMigrations.contains("v17_call_video"))
         XCTAssertGreaterThanOrEqual(snapshot.triggerCount, 6)
     }
 

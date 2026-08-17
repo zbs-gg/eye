@@ -6,6 +6,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MODE="${1:---fixtures}"
+TEMP_DERIVED_DATA=""
+
+cleanup_temp_derived_data() {
+  if [[ -n "$TEMP_DERIVED_DATA" && -d "$TEMP_DERIVED_DATA" ]]; then
+    rm -rf -- "$TEMP_DERIVED_DATA"
+  fi
+}
+trap cleanup_temp_derived_data EXIT INT TERM
 
 fail() {
   echo "❌ $1"
@@ -18,9 +26,16 @@ fixture_gate() {
   command -v rg >/dev/null || fail "ripgrep is required"
 
   xcodegen generate >/dev/null
-  # An override lets a checkout escape stale absolute SPM artifact links left by an older
-  # worktree without touching that checkout's build cache.
-  local derived="${ZBS_EYE_CALL_DERIVED_DATA_PATH:-build/CallRecordingDerivedData}"
+  # Default verification is disposable and cannot silently refill the project
+  # with gigabytes of rebuildable data. An explicit override opts into a
+  # persistent reusable cache and is never deleted by this script.
+  local derived
+  if [[ -n "${ZBS_EYE_CALL_DERIVED_DATA_PATH:-}" ]]; then
+    derived="$ZBS_EYE_CALL_DERIVED_DATA_PATH"
+  else
+    derived="$(mktemp -d "${TMPDIR:-/tmp}/zbseye-call-tests.XXXXXX")"
+    TEMP_DERIVED_DATA="$derived"
+  fi
   local selected=(
     -only-testing:ZBSEyeTests/AIComputeCoordinatorTests
     -only-testing:ZBSEyeTests/AudioIngressPublisherTests
@@ -36,7 +51,7 @@ fixture_gate() {
     -only-testing:ZBSEyeTests/CallAutomationPayloadTests
     -only-testing:ZBSEyeTests/CallAutomationStoreTests
     -only-testing:ZBSEyeTests/CallAudioProcessEvidenceTests
-    -only-testing:ZBSEyeTests/CallAudioSourcePolicyTests
+    -only-testing:ZBSEyeTests/CallRecordingAdmissionPolicyTests
     -only-testing:ZBSEyeTests/CallAudioWindowAssemblerTests
     -only-testing:ZBSEyeTests/CallCoordinatorTests
     -only-testing:ZBSEyeTests/CallDatabaseTests
@@ -58,6 +73,7 @@ fixture_gate() {
     -only-testing:ZBSEyeTests/CallTimelineTests
     -only-testing:ZBSEyeTests/CallTranscriptProjectionTests
     -only-testing:ZBSEyeTests/CallTranscriptWorkerTests
+    -only-testing:ZBSEyeTests/CallVideoQueueTests
     -only-testing:ZBSEyeTests/CaptureSessionPolicyTests
     -only-testing:ZBSEyeTests/CoreAudioMicListenerLifecycleTests
     -only-testing:ZBSEyeTests/DiarizationHelperCommandTests
@@ -72,6 +88,7 @@ fixture_gate() {
     -only-testing:ZBSEyeTests/RecordingStoreLowDiskTests
     -only-testing:ZBSEyeTests/RetentionManagerTests
     -only-testing:ZBSEyeTests/SettingsPresentationTests
+    -only-testing:ZBSEyeTests/ScreenshotPriorityYieldGateTests
     -only-testing:ZBSEyeTests/SpeakerDiarizationModelManifestTests
     -only-testing:ZBSEyeTests/SpeakerDiarizationWorkerTests
     -only-testing:ZBSEyeTests/LoopbackWebhookTransportTests
@@ -144,9 +161,38 @@ physical_preflight() {
 
 - Source revision: $revision
 - Installed candidate CDHash: $cdhash
+- Qualified ZIP filename: REQUIRED BEFORE CHECKING ANY ROW
+- Qualified ZIP SHA-256: REQUIRED BEFORE CHECKING ANY ROW
+- Qualified manifest filename: REQUIRED BEFORE CHECKING ANY ROW
+- Qualified manifest SHA-256: REQUIRED BEFORE CHECKING ANY ROW
 - Report location: local build artifact; do not commit personal media or transcripts
+EOF
 
-## Operator gates
+  cat >> "$report" <<'EOF'
+
+## Three-mode Call and Call-video gates for 0.9.0 (25)
+
+- [ ] **Don't record:** an eligible external microphone owner creates no Call row, audio, or video; manual Start offers Audio only / Audio and video / Cancel without changing the global mode
+- [ ] Switching an active Call to **Don't record** immediately ends and saves it once, then disarms automatic admission until the mode changes again
+- [ ] **Audio only:** a 15-minute real Call has continuous independent microphone and system PCM evidence, no Call video rows or files, and no Timeline screen/AX/OCR/HEIC work
+- [ ] **Audio and video:** a 30-minute real Call has the same continuous independent audio plus hardware-only video at no more than 1920×1080 and 15 fps, with cursor and no camera
+- [ ] Audio physically starts before the first video span; an unavailable hardware encoder leaves audio recording and reports `Audio complete · Video unavailable`
+- [ ] Audio → video → audio → video changes create no audio restart, duplicate Call, unexplained audio gap, or reordered chunk; video spans and disabled intervals match the switch times
+- [ ] Video stays bound to the display selected when authoritative Call audio starts, including when video is enabled later or focus moves to another display
+- [ ] Disconnecting the selected display records an exact video gap and never switches to another display silently; reconnect/re-enable recovery preserves the same Call audio
+- [ ] Repeated native screenshots during Call video physically stop every Eye-owned screen stream for the full quiet window, create disjoint exact video gaps, and never stop or delay either audio leg
+- [ ] Native screenshot p95 and max are measured against an Eye-off baseline; every relevant arm is at most +250 ms and has zero error, empty, stale, or new-permission-prompt attempts
+- [ ] Timeline stays visually silent for every active Call mode; no OCR, AX, or HEIC work appears while Call audio owns capture
+- [ ] Two-monitor start/focus/disconnect cases, lock/unlock, and sleep/wake preserve the selected display contract and record every unavailable interval honestly
+- [ ] Low-disk pressure drops or stops video before audio, never allows software encoding, and preserves explicit gaps/status without `telemetryOverflow` or `consumerOverflow`
+- [ ] Crash/relaunch preserves authoritative PCM, finalized video fragments, pending rollback evidence, exact spans/gaps, and one recoverable Call generation
+- [ ] Deleting a Call or time range removes its audio and video through the journaled operation without touching another Call; Keep Media removes the whole oldest Call
+- [ ] Trimming physically rebuilds affected MP4 fragments, publishes one new generation, and removes the superseded bytes before the new generation is visible
+- [ ] Export contains standard sequential MP4 fragments, original microphone/system tracks, mixed AAC copies where available, and a manifest whose hashes match every exported byte
+- [ ] Call Detail, REST, and MCP agree on recording mode, video state, actual resolution, spans, gaps, and authorized `call-video-segment:<id>` references without absolute paths
+- [ ] The complete Call window contains zero unexplained audio discontinuities, `telemetryOverflow`, or `consumerOverflow`; any occurrence blocks installation, merge, and release
+
+## Existing automatic-Call regression gates
 
 - [ ] ChatGPT through Krisp starts exactly one automatic Call from microphone activity
 - [ ] Wi-Fi disabled before or during that Call does not affect detection, local capture, or saved evidence
@@ -172,7 +218,8 @@ physical_preflight() {
 
 ## Results
 
-Pending manual execution on the installed release candidate.
+Pending manual execution on the exact reverse-verified installed release candidate. Automated tests, a signed
+artifact, or a partially checked section do not change this result.
 EOF
 
   echo "✅ physical preflight green; no recording was started"

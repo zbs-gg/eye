@@ -1077,10 +1077,10 @@ private final class CodexFrameQueue: @unchecked Sendable {
                 lock.withLock {
                     if cancelledWaiters.remove(identifier) != nil {
                         immediate = .failure(CancellationError())
-                    } else if let terminalError {
-                        immediate = .failure(terminalError)
                     } else if !frames.isEmpty {
                         immediate = .success(frames.removeFirst())
+                    } else if let terminalError {
+                        immediate = .failure(terminalError)
                     } else {
                         waiters[identifier] = continuation
                     }
@@ -1115,6 +1115,17 @@ private final class CodexFrameQueue: @unchecked Sendable {
             guard terminalError == nil else { return }
             terminalError = error
             frames.removeAll(keepingCapacity: false)
+            pending = Array(waiters.values)
+            waiters.removeAll()
+        }
+        pending.forEach { $0.resume(throwing: error) }
+    }
+
+    func finishAfterQueuedFrames(_ error: CodexAppServerError) {
+        var pending: [CheckedContinuation<CodexProcessFrame, Error>] = []
+        lock.withLock {
+            guard terminalError == nil else { return }
+            terminalError = error
             pending = Array(waiters.values)
             waiters.removeAll()
         }
@@ -1192,8 +1203,12 @@ private final class CodexPipePump: @unchecked Sendable {
                 continue
             }
             if count == 0 {
-                if kind == .stdout, !lineBuffer.isEmpty {
-                    queue.finish(.protocolViolation)
+                if kind == .stdout {
+                    if lineBuffer.isEmpty {
+                        queue.finishAfterQueuedFrames(.transportUnavailable)
+                    } else {
+                        queue.finish(.protocolViolation)
+                    }
                 }
                 source.cancel()
                 return
@@ -1420,7 +1435,10 @@ actor CodexPOSIXConnection: CodexAppServerConnection {
             var result: pid_t
             repeat { result = waitpid(pid, &status, 0) } while result < 0 && errno == EINTR
             guard let self else { return }
-            Task { await self.didExit() }
+            let exitedSuccessfully = result == pid
+                && status & 0x7f == 0
+                && (status >> 8) & 0xff == 0
+            Task { await self.didExit(successfully: exitedSuccessfully) }
         }
     }
 
@@ -1480,12 +1498,14 @@ actor CodexPOSIXConnection: CodexAppServerConnection {
         stderrPump.cancel()
     }
 
-    private func didExit() async {
+    private func didExit(successfully: Bool) async {
         processExited = true
-        frames.finish(.transportUnavailable)
         await writer.close()
-        stdoutPump.cancel()
-        stderrPump.cancel()
+        if !successfully {
+            frames.finish(.transportUnavailable)
+            stdoutPump.cancel()
+            stderrPump.cancel()
+        }
     }
 
     private func signalProcessGroup(_ signal: Int32) {
@@ -1612,7 +1632,7 @@ actor CodexAppServerClient: LLMAdapter {
                 timeout: request.timeout
             )
             session = opened
-            let content = try await consumeTurn(
+            let completed = try await consumeTurn(
                 request: request,
                 threadID: threadID!,
                 turnID: turnID!,
@@ -1626,7 +1646,7 @@ actor CodexAppServerClient: LLMAdapter {
             try await finish(&opened)
             session = nil
             return LLMResponse(
-                content: content,
+                content: completed.content,
                 truncated: false,
                 provenance: AIExecutionProvenance(
                     providerID: selection.providerID,
@@ -1634,7 +1654,8 @@ actor CodexAppServerClient: LLMAdapter {
                     executedLocally: false,
                     generatedAt: Date(),
                     brokerUpstream: "OpenAI via Codex login"
-                )
+                ),
+                usage: completed.usage
             )
         } catch {
             let mapped = map(error)
@@ -1882,7 +1903,7 @@ actor CodexAppServerClient: LLMAdapter {
     }
 
     private static let suppressedNotificationMethods = [
-        "thread/started", "thread/status/changed", "thread/tokenUsage/updated",
+        "thread/started", "thread/status/changed",
         "turn/started", "account/rateLimits/updated",
         "app/list/updated", "remoteControl/status/changed", "skills/changed",
         "thread/name/updated", "configWarning", "warning", "deprecationNotice",
@@ -2202,8 +2223,9 @@ actor CodexAppServerClient: LLMAdapter {
         turnID: String,
         session: inout Session,
         timeout: Duration
-    ) async throws -> String {
+    ) async throws -> (content: String, usage: LLMUsage?) {
         var accumulatedDeltaBytes = 0
+        var latestUsage: LLMUsage?
         while true {
             let object = try await receiveObject(session: &session, timeout: timeout)
             guard object["id"] == nil,
@@ -2216,6 +2238,18 @@ actor CodexAppServerClient: LLMAdapter {
             }
 
             switch method {
+            case "thread/tokenUsage/updated":
+                guard params["threadId"] as? String == threadID else {
+                    throw CodexAppServerError.protocolViolation
+                }
+                if let eventTurnID = params["turnId"] as? String,
+                   eventTurnID != turnID {
+                    throw CodexAppServerError.protocolViolation
+                }
+                if let usage = Self.parseTokenUsage(params) {
+                    latestUsage = usage
+                }
+
             case "item/agentMessage/delta":
                 try validateIDs(params, threadID: threadID, turnID: turnID)
                 guard let delta = params["delta"] as? String else {
@@ -2251,9 +2285,12 @@ actor CodexAppServerClient: LLMAdapter {
                 guard finalMessages.count == 1 else {
                     throw CodexAppServerError.invalidOutput
                 }
-                return try parseStrictOutput(
-                    finalMessages[0],
-                    maximumOutputTokens: request.maximumOutputTokens
+                return (
+                    try parseStrictOutput(
+                        finalMessages[0],
+                        maximumOutputTokens: request.maximumOutputTokens
+                    ),
+                    latestUsage
                 )
 
             default:
@@ -2263,6 +2300,33 @@ actor CodexAppServerClient: LLMAdapter {
                 throw CodexAppServerError.protocolViolation
             }
         }
+    }
+
+    private static func parseTokenUsage(_ params: [String: Any]) -> LLMUsage? {
+        let envelope = params["tokenUsage"] as? [String: Any] ?? params
+        let totals = envelope["total"] as? [String: Any]
+            ?? envelope["totalUsage"] as? [String: Any]
+            ?? envelope
+
+        func integer(_ keys: [String]) -> Int? {
+            for key in keys {
+                if let value = totals[key] as? Int, value >= 0 { return value }
+                if let number = totals[key] as? NSNumber, number.intValue >= 0 {
+                    return number.intValue
+                }
+            }
+            return nil
+        }
+
+        let usage = LLMUsage(
+            inputTokens: integer(["inputTokens", "input_tokens"]),
+            cachedInputTokens: integer(["cachedInputTokens", "cached_input_tokens"]),
+            outputTokens: integer(["outputTokens", "output_tokens"]),
+            reasoningOutputTokens: integer([
+                "reasoningOutputTokens", "reasoning_output_tokens",
+            ])
+        )
+        return usage.hasMeasurement ? usage : nil
     }
 
     private static let forbiddenMethodFragments = [

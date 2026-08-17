@@ -101,7 +101,7 @@ final class CaptureCoexistenceProtocolTests: XCTestCase {
         XCTAssertTrue(document.contains("Do not change the shipping capture path"))
     }
 
-    func testProtocolChecksOnePersistentEyeStreamAndKnownBadLogs() throws {
+    func testProtocolChecksOneEyeStreamAtATimePhysicalYieldAndKnownBadLogs() throws {
         let script = try contents("scripts/verify-capture-coexistence.sh")
         let document = try contents("docs/CAPTURE_COEXISTENCE.md")
 
@@ -110,6 +110,7 @@ final class CaptureCoexistenceProtocolTests: XCTestCase {
             "_SCRemoteQueue_Enqueue",
             "stream output NOT found",
             "eye_screen_stream_started",
+            "eye_screen_stream_yielded_for_native_screenshot",
         ] {
             XCTAssertTrue(script.contains(marker), marker)
             XCTAssertTrue(document.contains(marker), marker)

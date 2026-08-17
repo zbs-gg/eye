@@ -1,0 +1,105 @@
+name: macOS CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: macos-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and unhosted tests
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: brew install xcodegen ripgrep
+
+      - name: Run release preflight fixture contract
+        run: |
+          set +e
+          xcodegen generate
+          xcodebuild -quiet \
+            -project ZBSEye.xcodeproj \
+            -scheme ZBSEyeUnitTests \
+            -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/ZBSEyeDerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/ReleaseConfigurationTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            test \
+            -only-testing:ZBSEyeTests/ReleaseConfigurationTests
+          test_status=$?
+          set -e
+          if [ "$test_status" -ne 0 ]; then
+            xcrun xcresulttool get test-results summary \
+              --path "$RUNNER_TEMP/ReleaseConfigurationTests.xcresult" \
+              --compact \
+              | python3 -c 'import json, sys; data = json.load(sys.stdin); [print("{}: {}".format(failure["testName"], failure["failureText"])) for failure in data["testFailures"]]' \
+              || true
+          fi
+          exit "$test_status"
+
+      - name: Run full unhosted suite
+        run: |
+          set +e
+          xcodebuild -quiet \
+            -project ZBSEye.xcodeproj \
+            -scheme ZBSEyeUnitTests \
+            -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/ZBSEyeDerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/ZBSEyeUnitTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+          test_status=$?
+          set -e
+          if [ "$test_status" -ne 0 ]; then
+            xcrun xcresulttool get test-results summary \
+              --path "$RUNNER_TEMP/ZBSEyeUnitTests.xcresult" \
+              --compact \
+              | python3 -c 'import json, sys; data = json.load(sys.stdin); [print("{}: {}".format(failure["testName"], failure["failureText"])) for failure in data["testFailures"]]' \
+              || true
+          fi
+          exit "$test_status"
+
+      - name: Build full GUI target
+        run: |
+          xcodebuild -quiet \
+            -project ZBSEye.xcodeproj \
+            -scheme ZBSEye \
+            -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/ZBSEyeDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Run Call fixture contract
+        env:
+          ZBS_EYE_CALL_DERIVED_DATA_PATH: ${{ runner.temp }}/ZBSEyeDerivedData
+        run: bash scripts/verify-call-recording.sh --fixtures
+
+      - name: Validate capture coexistence protocol
+        run: bash scripts/verify-capture-coexistence.sh --self-test
+
+      - name: Upload test result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZBSEyeUnitTests-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/ReleaseConfigurationTests.xcresult
+            ${{ runner.temp }}/ZBSEyeUnitTests.xcresult
+          if-no-files-found: warn
+          retention-days: 7

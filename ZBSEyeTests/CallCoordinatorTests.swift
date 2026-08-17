@@ -2,6 +2,49 @@ import GRDB
 import XCTest
 
 final class CallCoordinatorTests: XCTestCase {
+    func testVideoCanToggleWithoutRestartingAudio() async throws {
+        let fixture = try CallCoordinatorFixture(actual: .init(me: true, system: true))
+        defer { fixture.cleanup() }
+
+        _ = try await fixture.coordinator.start(
+            request: .init(me: true, system: true),
+            recordingMode: .audio,
+            idempotencyKey: "toggle-video"
+        )
+        let withVideo = try await fixture.coordinator.setRecordingMode(.audioVideo)
+        let audioAgain = try await fixture.coordinator.setRecordingMode(.audio)
+        let audioStarts = await fixture.audio.startCount()
+        let audioStops = await fixture.audio.stopCount()
+        let videoStarts = await fixture.video.startCount()
+        let videoStops = await fixture.video.stopCount()
+        let displayLocks = await fixture.video.lockDisplayCount()
+
+        XCTAssertEqual(withVideo.video, .recording)
+        XCTAssertEqual(audioAgain.video, .disabled)
+        XCTAssertEqual(audioStarts, 1)
+        XCTAssertEqual(audioStops, 0)
+        XCTAssertEqual(videoStarts, 1)
+        XCTAssertEqual(videoStops, 1)
+        XCTAssertEqual(displayLocks, 1)
+    }
+
+    func testCallAudioPrioritySuspendsAndResumesVideoPostprocessAdmission() async throws {
+        let fixture = try CallCoordinatorFixture(actual: .init(me: true, system: false))
+        defer { fixture.cleanup() }
+
+        _ = try await fixture.coordinator.start(
+            request: .init(me: true, system: false),
+            idempotencyKey: "background-priority-start"
+        )
+        XCTAssertEqual(fixture.backgroundWork.counts(), .init(suspends: 1, resumes: 0))
+
+        _ = try await fixture.coordinator.end(
+            idempotencyKey: "background-priority-end",
+            reason: .user
+        )
+        XCTAssertEqual(fixture.backgroundWork.counts(), .init(suspends: 1, resumes: 1))
+    }
+
     func testMicOnlyCallWorksWithoutScreenCaptureAndPersistsOneFinalJob() async throws {
         let fixture = try CallCoordinatorFixture(actual: .init(me: true, system: false))
         defer { fixture.cleanup() }
@@ -93,6 +136,10 @@ final class CallCoordinatorTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? CallCoordinatorError, .noAvailableSource)
         }
+        XCTAssertEqual(
+            unavailable.backgroundWork.counts(),
+            .init(suspends: 1, resumes: 1)
+        )
         let emptyCount = try await unavailable.database.pool.read {
             try CallRow.fetchCount($0)
         }
@@ -119,6 +166,32 @@ final class CallCoordinatorTests: XCTestCase {
         XCTAssertEqual(idleEnd.phase, .pendingTranscription)
         let countAfterEnd = try await fixture.database.pool.read { try CallRow.fetchCount($0) }
         XCTAssertEqual(countAfterEnd, 1)
+    }
+
+    func testIndeterminateAudioOwnerFailurePreservesCallForRecovery() async throws {
+        let fixture = try CallCoordinatorFixture(
+            actual: .init(me: true, system: true),
+            startFails: true
+        )
+        defer { fixture.cleanup() }
+
+        do {
+            _ = try await fixture.coordinator.start(
+                request: .init(me: true, system: true),
+                idempotencyKey: "indeterminate-helper-start"
+            )
+            XCTFail("an indeterminate helper start must remain visible as failed")
+        } catch is FakeCallAudio.StartFailure {
+            // Expected: ownership is unknown, so the Call row is preserved.
+        }
+
+        let snapshot = await fixture.coordinator.snapshot()
+        XCTAssertEqual(snapshot.phase, .failed)
+        XCTAssertNotNil(snapshot.callID)
+        XCTAssertEqual(fixture.backgroundWork.counts(), .init(suspends: 1, resumes: 1))
+        let calls = try await fixture.database.pool.read { try CallRow.fetchAll($0) }
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(calls[0].state, .recording)
     }
 
     func testBookmarkThenImmediateEndKeepsCheckpointAndCreatesExactlyOneFinalJob() async throws {
@@ -444,18 +517,30 @@ private final class CallCoordinatorFixture {
     let root: URL
     let database: ZBSEyeDatabase
     let audio: FakeCallAudio
+    let video: FakeCallVideo
+    let backgroundWork: FakeCallBackgroundWork
     let coordinator: CallCoordinator
 
-    init(actual: CallSourceSelection) throws {
+    init(actual: CallSourceSelection, startFails: Bool = false) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("zbseye-call-coordinator-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         database = try ZBSEyeDatabase(path: root.appendingPathComponent("eye.sqlite").path)
-        audio = FakeCallAudio(actual: actual)
+        let repository = CallRepository(database: database)
+        audio = FakeCallAudio(
+            actual: actual,
+            startFails: startFails,
+            root: root.appendingPathComponent("media", isDirectory: true),
+            repository: repository
+        )
+        video = FakeCallVideo()
+        backgroundWork = FakeCallBackgroundWork()
         coordinator = CallCoordinator(
-            repository: CallRepository(database: database),
+            repository: repository,
             mediaRoot: root.appendingPathComponent("media", isDirectory: true),
             audio: audio.control(),
+            video: video.control(),
+            backgroundWork: backgroundWork.control(),
             now: { Date(timeIntervalSince1970: 10) },
             barrierTimeout: .milliseconds(50)
         )
@@ -467,8 +552,79 @@ private final class CallCoordinatorFixture {
     }
 }
 
+private actor FakeCallVideo {
+    private var displayLocks = 0
+    private var starts = 0
+    private var stops = 0
+
+    nonisolated func control() -> CallVideoControl {
+        CallVideoControl(
+            lockDisplay: { _ in await self.didLockDisplay() },
+            start: { _ in await self.didStart() },
+            requestNativeScreenshotYield: {},
+            stop: { reason in await self.didStop(reason: reason) },
+            postprocess: { _ in }
+        )
+    }
+
+    func startCount() -> Int { starts }
+    func stopCount() -> Int { stops }
+    func lockDisplayCount() -> Int { displayLocks }
+    private func didLockDisplay() { displayLocks += 1 }
+    private func didStart() -> CallVideoState { starts += 1; return .recording }
+    private func didStop(reason: String?) -> CallVideoState {
+        stops += 1
+        return switch reason {
+        case "mode_audio_only": .disabled
+        case "native_screenshot": .gap
+        default: .available
+        }
+    }
+}
+
+private final class FakeCallBackgroundWork: @unchecked Sendable {
+    struct Counts: Equatable {
+        let suspends: Int
+        let resumes: Int
+    }
+
+    private let lock = NSLock()
+    private var suspends = 0
+    private var resumes = 0
+
+    func control() -> CallBackgroundWorkControl {
+        CallBackgroundWorkControl(
+            suspendForAudio: { [weak self] in self?.recordSuspend() },
+            resumeAfterAudio: { [weak self] in self?.recordResume() }
+        )
+    }
+
+    func counts() -> Counts {
+        lock.lock()
+        defer { lock.unlock() }
+        return Counts(suspends: suspends, resumes: resumes)
+    }
+
+    private func recordSuspend() {
+        lock.lock()
+        suspends += 1
+        lock.unlock()
+    }
+
+    private func recordResume() {
+        lock.lock()
+        resumes += 1
+        lock.unlock()
+    }
+}
+
 private actor FakeCallAudio {
+    struct StartFailure: Error {}
+
+    private let root: URL
+    private let repository: CallRepository
     private let actual: CallSourceSelection
+    private let startFails: Bool
     private var sink: CallAudioFrameSink?
     private var frameAdmission = CallAudioFrameAdmissionLatch()
     private var sealedBoundary: CallAudioFrameBoundary?
@@ -479,17 +635,62 @@ private actor FakeCallAudio {
     private var starts = 0
     private var stops = 0
 
-    init(actual: CallSourceSelection) {
+    init(
+        actual: CallSourceSelection,
+        startFails: Bool,
+        root: URL,
+        repository: CallRepository
+    ) {
         self.actual = actual
+        self.startFails = startFails
+        self.root = root
+        self.repository = repository
     }
 
     nonisolated func control() -> CallAudioControl {
         CallAudioControl(
-            installSink: { sink in await self.setSink(sink) },
-            start: { _, sinkLease, _ in await self.didStart(sinkLease: sinkLease) },
+            startSession: { request in try await self.startSession(request) }
+        )
+    }
+
+    private func startSession(
+        _ request: CallAudioSessionStartRequest
+    ) async throws -> CallAudioSessionControl? {
+        if startFails { throw StartFailure() }
+        let baselines = currentTargets()
+        let spool = try CallAudioSpoolSession(
+            root: root,
+            callID: request.callID,
+            requested: request.requested,
+            baselines: baselines,
+            startedAtMs: request.startedAtMs,
+            repository: repository,
+            mediaGeneration: request.mediaGeneration
+        )
+        guard let lease = setSink({ frame in await spool.consume(frame) }) else { return nil }
+        let started = didStart(sinkLease: lease)
+        guard !started.isEmpty else { return nil }
+        await spool.setOwnedSources(request.requested)
+        return CallAudioSessionControl(
+            baselines: baselines,
+            actual: started,
             acceptedTargets: { await self.currentTargets() },
-            drainGaps: { await self.takeGaps() },
-            stop: { await self.didStop() }
+            freezeCoverage: { targets in
+                try await spool.record(gaps: await self.takeGaps())
+                return try await spool.flush(targets: targets, baselines: baselines)
+            },
+            finishAndStop: {
+                _ = await self.setSink(nil)
+                await spool.closeAdmission()
+                let coverage = try await spool.finish()
+                await self.didStop()
+                return coverage
+            },
+            abort: {
+                _ = await self.setSink(nil)
+                await spool.closeAdmission()
+                await self.didStop()
+            }
         )
     }
 

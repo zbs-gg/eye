@@ -77,7 +77,7 @@ final class CallExportTests: XCTestCase {
         let mic = try XCTUnwrap(manifest.sources.first { $0.source == .me })
         let system = try XCTUnwrap(manifest.sources.first { $0.source == .system })
 
-        XCTAssertEqual(manifest.formatVersion, 1)
+        XCTAssertEqual(manifest.formatVersion, 2)
         XCTAssertEqual(manifest.call.identifier, "call-\(callID)")
         XCTAssertEqual(manifest.context?.captureOwner, .automatic)
         XCTAssertEqual(manifest.context?.disposition, .confirmed)

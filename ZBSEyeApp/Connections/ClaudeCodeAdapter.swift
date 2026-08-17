@@ -46,8 +46,8 @@ struct ClaudeCodeFileIdentity: Sendable, Equatable {
 }
 
 enum ClaudeCodeSecurityPolicy {
-    static let allowedVersion = "2.1.220"
-    static let allowedSHA256 = "8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081"
+    static let allowedVersion = "2.1.232"
+    static let allowedSHA256 = "7b39c1588df919d001dea3ffd5651adb682f2451b5a0e18d42d4233296b53cc7"
     static let signingIdentifier = "com.anthropic.claude-code"
     static let teamIdentifier = "Q6L2SF6YDW"
     static let maximumInputBytes = 2 * 1_024 * 1_024
@@ -156,8 +156,8 @@ struct SystemClaudeCodeExecutableInspector: ClaudeCodeExecutableInspecting {
     }
 
     /// The official standalone installer uses a version-named executable
-    /// (`.../versions/2.1.220`); packaged layouts may use
-    /// `.../2.1.220/claude`. Identity/hash/signature checks still pin the exact
+    /// (`.../versions/2.1.232`); packaged layouts may use
+    /// `.../2.1.232/claude`. Identity/hash/signature checks still pin the exact
     /// artifact after this layout-only extraction.
     static func releaseVersion(at canonicalURL: URL) -> String {
         canonicalURL.lastPathComponent == "claude"
@@ -745,10 +745,10 @@ actor ClaudeCodeAdapter: LLMAdapter {
             timeout: request.timeout,
             outputLimit: ClaudeCodeSecurityPolicy.maximumOutputBytes
         )
-        let content = try Self.parseGeneration(output)
+        let parsed = try Self.parseGeneration(output)
         try await requireCurrent(selection, consumer: request.consumer)
         return LLMResponse(
-            content: content,
+            content: parsed.content,
             truncated: false,
             provenance: AIExecutionProvenance(
                 providerID: selection.providerID,
@@ -756,7 +756,8 @@ actor ClaudeCodeAdapter: LLMAdapter {
                 executedLocally: false,
                 generatedAt: Date(),
                 brokerUpstream: nil
-            )
+            ),
+            usage: parsed.usage
         )
     }
 
@@ -820,12 +821,15 @@ actor ClaudeCodeAdapter: LLMAdapter {
         }
     }
 
-    private static func parseGeneration(_ data: Data) throws -> String {
+    private static func parseGeneration(
+        _ data: Data
+    ) throws -> (content: String, usage: LLMUsage?) {
         guard data.count <= ClaudeCodeSecurityPolicy.maximumOutputBytes else {
             throw ClaudeCodeAdapterError.outputTooLarge
         }
         var sawSafeInit = false
         var resultText: String?
+        var usage: LLMUsage?
         let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
         guard !lines.isEmpty else { throw ClaudeCodeAdapterError.malformedOutput }
 
@@ -860,6 +864,9 @@ actor ClaudeCodeAdapter: LLMAdapter {
                     throw ClaudeCodeAdapterError.malformedOutput
                 }
                 resultText = result.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let rawUsage = event["usage"] as? [String: Any] {
+                    usage = parseUsage(rawUsage)
+                }
 
             default:
                 throw ClaudeCodeAdapterError.forbiddenEvent
@@ -868,7 +875,26 @@ actor ClaudeCodeAdapter: LLMAdapter {
         guard sawSafeInit, let resultText else {
             throw ClaudeCodeAdapterError.malformedOutput
         }
-        return resultText
+        return (resultText, usage)
+    }
+
+    private static func parseUsage(_ object: [String: Any]) -> LLMUsage? {
+        func integer(_ key: String) -> Int? {
+            if let value = object[key] as? Int, value >= 0 { return value }
+            if let number = object[key] as? NSNumber, number.intValue >= 0 {
+                return number.intValue
+            }
+            return nil
+        }
+        let cached = ["cache_creation_input_tokens", "cache_read_input_tokens"]
+            .compactMap(integer)
+            .reduce(0, +)
+        let usage = LLMUsage(
+            inputTokens: integer("input_tokens"),
+            cachedInputTokens: cached > 0 ? cached : nil,
+            outputTokens: integer("output_tokens")
+        )
+        return usage.hasMeasurement ? usage : nil
     }
 
     private static func stdinPrompt(_ request: LLMRequest) -> Data {

@@ -123,13 +123,13 @@ validate_summary_table() {
 validate_log_table() {
   /usr/bin/awk -F '\t' '
     NR == 1 {
-      if ($0 != "phase\tscreenshot_manager\tremote_queue_enqueue\tstream_output_missing\tstream_started") bad = 1
+      if ($0 != "phase\tscreenshot_manager\tremote_queue_enqueue\tstream_output_missing\tstream_started\tstream_yielded") bad = 1
       next
     }
     $1 !~ /^(baseline-a|eye|baseline-b|chatgpt-chronicle|baseline-c|eye-chronicle|baseline-d|eye-chronicle-call|baseline-e)$/ { bad = 1 }
-    NF != 5 || seen[$1]++ { bad = 1 }
+    NF != 6 || seen[$1]++ { bad = 1 }
     {
-      for (column = 2; column <= 5; column += 1) {
+      for (column = 2; column <= 6; column += 1) {
         if ($column !~ /^[0-9]+$/) bad = 1
       }
     }
@@ -214,7 +214,8 @@ BASELINES
       if [ "$(summary_value "$logs" "$phase" 2)" -ne 0 ] \
         || [ "$(summary_value "$logs" "$phase" 3)" -ne 0 ] \
         || [ "$(summary_value "$logs" "$phase" 4)" -ne 0 ] \
-        || [ "$(summary_value "$logs" "$phase" 5)" -ne 0 ]; then
+        || [ "$(summary_value "$logs" "$phase" 5)" -ne 0 ] \
+        || [ "$(summary_value "$logs" "$phase" 6)" -ne 0 ]; then
         /bin/echo "invalid"
         return
       fi
@@ -222,7 +223,8 @@ BASELINES
       if [ "$(summary_value "$logs" "$phase" 2)" -ne 0 ] \
         || [ "$(summary_value "$logs" "$phase" 3)" -ne 0 ] \
         || [ "$(summary_value "$logs" "$phase" 4)" -ne 0 ] \
-        || [ "$(summary_value "$logs" "$phase" 5)" -ne 1 ]; then
+        || [ "$(summary_value "$logs" "$phase" 5)" -ne 1 ] \
+        || [ "$(summary_value "$logs" "$phase" 6)" -lt 1 ]; then
         /bin/echo "Eye no-go"
         return
       fi
@@ -289,12 +291,13 @@ write_fixture_summary() {
 
 write_fixture_logs() {
   local path="$1"
-  /usr/bin/printf 'phase\tscreenshot_manager\tremote_queue_enqueue\tstream_output_missing\tstream_started\n' > "$path"
-  local phase starts
+  /usr/bin/printf 'phase\tscreenshot_manager\tremote_queue_enqueue\tstream_output_missing\tstream_started\tstream_yielded\n' > "$path"
+  local phase starts yields
   for phase in "${PHASES[@]}"; do
     starts=0
-    case "$phase" in eye|eye-chronicle|eye-chronicle-call) starts=1 ;; esac
-    /usr/bin/printf '%s\t0\t0\t0\t%s\n' "$phase" "$starts" >> "$path"
+    yields=0
+    case "$phase" in eye|eye-chronicle|eye-chronicle-call) starts=1; yields=1 ;; esac
+    /usr/bin/printf '%s\t0\t0\t0\t%s\t%s\n' "$phase" "$starts" "$yields" >> "$path"
   done
 }
 
@@ -362,7 +365,13 @@ run_self_test() {
   mutate_fixture_cell "$logs" eye 5 0
   [ "$(classify_summary "$summary" "$logs")" = "Eye no-go" ] || return 1
   write_fixture_logs "$logs"
+  mutate_fixture_cell "$logs" eye 6 0
+  [ "$(classify_summary "$summary" "$logs")" = "Eye no-go" ] || return 1
+  write_fixture_logs "$logs"
   mutate_fixture_cell "$logs" baseline-a 5 1
+  [ "$(classify_summary "$summary" "$logs")" = "invalid" ] || return 1
+  write_fixture_logs "$logs"
+  mutate_fixture_cell "$logs" baseline-a 6 1
   [ "$(classify_summary "$summary" "$logs")" = "invalid" ] || return 1
 
   write_passing_fixture_summary "$summary"
@@ -788,7 +797,7 @@ collect_phase_log_counts() {
   if [ -z "$eye_pid" ]; then
     # The baseline/control arms have already proved that the exact installed
     # Eye process is absent. There is therefore no candidate PID to query.
-    /usr/bin/printf '%s\t0\t0\t0\t0\n' "$phase" \
+    /usr/bin/printf '%s\t0\t0\t0\t0\t0\n' "$phase" \
       >> "${SESSION}/log-summary.tsv"
     return 0
   fi
@@ -800,14 +809,15 @@ collect_phase_log_counts() {
     /bin/rm -f "$scratch"
     return 1
   fi
-  local screenshot_manager remote_queue missing_output stream_started
+  local screenshot_manager remote_queue missing_output stream_started stream_yielded
   screenshot_manager=$(count_log_token "$scratch" "SCScreenshotManager")
   remote_queue=$(count_log_token "$scratch" "_SCRemoteQueue_Enqueue")
   missing_output=$(count_log_token "$scratch" "stream output NOT found")
   stream_started=$(count_log_token "$scratch" "eye_screen_stream_started")
+  stream_yielded=$(count_log_token "$scratch" "eye_screen_stream_yielded_for_native_screenshot")
   /bin/rm -f "$scratch"
-  /usr/bin/printf '%s\t%s\t%s\t%s\t%s\n' \
-    "$phase" "$screenshot_manager" "$remote_queue" "$missing_output" "$stream_started" \
+  /usr/bin/printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$phase" "$screenshot_manager" "$remote_queue" "$missing_output" "$stream_started" "$stream_yielded" \
     >> "${SESSION}/log-summary.tsv"
 }
 
@@ -865,19 +875,21 @@ write_result() {
   local log_summary="${SESSION}/log-summary.tsv"
   if [ -f "$log_summary" ]; then
     /usr/bin/plutil -insert logChecks -dictionary "$plist"
-    local phase key screenshot_manager remote_queue missing_output stream_started
+    local phase key screenshot_manager remote_queue missing_output stream_started stream_yielded
     for phase in "${PHASES[@]}"; do
       key=$(phase_key "$phase")
       screenshot_manager=$(summary_value "$log_summary" "$phase" 2)
       remote_queue=$(summary_value "$log_summary" "$phase" 3)
       missing_output=$(summary_value "$log_summary" "$phase" 4)
       stream_started=$(summary_value "$log_summary" "$phase" 5)
+      stream_yielded=$(summary_value "$log_summary" "$phase" 6)
       [ -n "$screenshot_manager" ] || continue
       /usr/bin/plutil -insert "logChecks.${key}" -dictionary "$plist"
       /usr/bin/plutil -insert "logChecks.${key}.scScreenshotManager" -integer "$screenshot_manager" "$plist"
       /usr/bin/plutil -insert "logChecks.${key}.remoteQueueEnqueue" -integer "$remote_queue" "$plist"
       /usr/bin/plutil -insert "logChecks.${key}.streamOutputMissing" -integer "$missing_output" "$plist"
       /usr/bin/plutil -insert "logChecks.${key}.screenStreamStarted" -integer "$stream_started" "$plist"
+      /usr/bin/plutil -insert "logChecks.${key}.screenStreamYielded" -integer "$stream_yielded" "$plist"
     done
   fi
   /usr/bin/plutil -convert json -o "$json" "$plist"
@@ -905,7 +917,7 @@ run_physical_gate() {
   chmod 700 "$SESSION"
   umask 077
   /bin/cp "$MANIFEST" "${SESSION}/artifact.manifest.json"
-  /usr/bin/printf 'phase\tscreenshot_manager\tremote_queue_enqueue\tstream_output_missing\tstream_started\n' \
+  /usr/bin/printf 'phase\tscreenshot_manager\tremote_queue_enqueue\tstream_output_missing\tstream_started\tstream_yielded\n' \
     > "${SESSION}/log-summary.tsv"
   /usr/bin/printf 'phase\tcheckpoint\teye_pids\tchatgpt_pids\tchronicle_pids\n' \
     > "${SESSION}/process-state.tsv"

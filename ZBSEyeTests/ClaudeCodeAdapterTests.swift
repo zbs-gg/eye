@@ -11,10 +11,10 @@ final class ClaudeCodeAdapterTests: XCTestCase {
     )
 
     func testQualifiedReleasePinIsExact() {
-        XCTAssertEqual(ClaudeCodeSecurityPolicy.allowedVersion, "2.1.220")
+        XCTAssertEqual(ClaudeCodeSecurityPolicy.allowedVersion, "2.1.232")
         XCTAssertEqual(
             ClaudeCodeSecurityPolicy.allowedSHA256,
-            "8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081"
+            "7b39c1588df919d001dea3ffd5651adb682f2451b5a0e18d42d4233296b53cc7"
         )
     }
 
@@ -22,7 +22,7 @@ final class ClaudeCodeAdapterTests: XCTestCase {
         let accepted = ClaudeCodeExecutableIdentity(
             canonicalURL: URL(fileURLWithPath: "/trusted/claude"),
             fileIdentity: .fixture(),
-            version: "2.1.220",
+            version: "2.1.232",
             sha256: ClaudeCodeSecurityPolicy.allowedSHA256,
             signingIdentifier: ClaudeCodeSecurityPolicy.signingIdentifier,
             teamIdentifier: ClaudeCodeSecurityPolicy.teamIdentifier,
@@ -42,7 +42,7 @@ final class ClaudeCodeAdapterTests: XCTestCase {
             accepted.replacing(permissions: 0o775),
             accepted.replacing(isRegularFile: false),
             accepted.replacing(isArm64MachO: false),
-            accepted.replacing(version: "2.1.221"),
+            accepted.replacing(version: "2.1.233"),
         ]
         for identity in rejected {
             XCTAssertThrowsError(try ClaudeCodeSecurityPolicy.validate(identity))
@@ -52,26 +52,30 @@ final class ClaudeCodeAdapterTests: XCTestCase {
     func testOfficialStandaloneInstallDerivesVersionFromCanonicalExecutableName() {
         XCTAssertEqual(
             SystemClaudeCodeExecutableInspector.releaseVersion(
-                at: URL(fileURLWithPath: "/Users/test/.local/share/claude/versions/2.1.220")
+                at: URL(fileURLWithPath: "/Users/test/.local/share/claude/versions/2.1.232")
             ),
             ClaudeCodeSecurityPolicy.allowedVersion
         )
         XCTAssertEqual(
             SystemClaudeCodeExecutableInspector.releaseVersion(
-                at: URL(fileURLWithPath: "/opt/claude/2.1.220/claude")
+                at: URL(fileURLWithPath: "/opt/claude/2.1.232/claude")
             ),
             ClaudeCodeSecurityPolicy.allowedVersion
         )
     }
 
-    func testInstalledOfficialBinaryMatchesReleasePinWhenPresent() async throws {
+    func testInstalledBinaryCannotSilentlyExpandReleasePin() async throws {
         let launcher = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: ".local/bin/claude")
         guard FileManager.default.fileExists(atPath: launcher.path) else { return }
         let identity = try await SystemClaudeCodeExecutableInspector(
             candidates: [launcher]
         ).inspect()
-        XCTAssertNoThrow(try ClaudeCodeSecurityPolicy.validate(identity))
+        if identity.version == ClaudeCodeSecurityPolicy.allowedVersion {
+            XCTAssertNoThrow(try ClaudeCodeSecurityPolicy.validate(identity))
+        } else {
+            XCTAssertThrowsError(try ClaudeCodeSecurityPolicy.validate(identity))
+        }
     }
 
     func testAuthenticationProbeUsesOnlyEmptyStdinAuthStatusAndReturnsPinnedIdentity() async throws {
@@ -129,6 +133,14 @@ final class ClaudeCodeAdapterTests: XCTestCase {
         XCTAssertEqual(response.provenance.providerID, AIProvider.claudeCode.rawValue)
         XCTAssertEqual(response.provenance.modelID, snapshot.modelID)
         XCTAssertFalse(response.provenance.executedLocally)
+        XCTAssertEqual(
+            response.usage,
+            LLMUsage(
+                inputTokens: 700,
+                cachedInputTokens: 500,
+                outputTokens: 80
+            )
+        )
 
         let calls = await transport.calls()
         XCTAssertEqual(calls.count, 2)
@@ -592,7 +604,7 @@ final class ClaudeCodeAdapterTests: XCTestCase {
         Data(([
             #"{"type":"system","subtype":"init","tools":[]}"#,
             #"{"type":"assistant","message":{"content":[{"type":"text","text":"partial"}]}}"#,
-            "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"\(answer)\"}",
+            "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"\(answer)\",\"usage\":{\"input_tokens\":700,\"cache_creation_input_tokens\":200,\"cache_read_input_tokens\":300,\"output_tokens\":80}}",
         ].joined(separator: "\n") + "\n").utf8)
     }
 
@@ -642,7 +654,7 @@ private struct FixedClaudeInspector: ClaudeCodeExecutableInspecting {
     static let identity = ClaudeCodeExecutableIdentity(
         canonicalURL: URL(fileURLWithPath: "/trusted/claude"),
         fileIdentity: .fixture(),
-        version: "2.1.220",
+        version: "2.1.232",
         sha256: ClaudeCodeSecurityPolicy.allowedSHA256,
         signingIdentifier: ClaudeCodeSecurityPolicy.signingIdentifier,
         teamIdentifier: ClaudeCodeSecurityPolicy.teamIdentifier,

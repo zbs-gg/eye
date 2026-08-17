@@ -1,8 +1,8 @@
 import Foundation
 
-/// Engine for the single v1 automation: "day summary". Three stages — collect (history from the DB → compact
-/// sessions) → summarize (the active optional AI) → write (Markdown into a
-/// folder/Obsidian). Actor: all DB, network, and file work is isolated; only Sendable crosses out.
+/// Timeline Review engine. Three stages — collect (history from the DB → compact sessions), summarize through
+/// the consumer-scoped subscription runtime and save internally, then optionally export Markdown to a
+/// folder/Obsidian. Actor: all DB, provider, and file work is isolated; only Sendable crosses out.
 /// Egress crosses the process-wide LLMRouter with a consumer-scoped authorization snapshot; preview is
 /// mandatory before write (see DaySummaryStore) — protection from prompt injection out of private history.
 /// Delegates day aggregation to the shared DayActivityRepository (one scan + segmentation + batch text).
@@ -12,14 +12,23 @@ actor DailySummaryService {
     private let repo: DayActivityRepository
     private let generator: any AIConsumerGenerating
     private let auditWriter: AutomationAuditWriter
+    private let reviewRepository: ReviewSummaryRepository
+    private let writer: IngestService
+    private let coverage: CaptureCoverageQuery
 
     init(
         repo: DayActivityRepository,
         generator: any AIConsumerGenerating,
+        reviewRepository: ReviewSummaryRepository,
+        writer: IngestService,
+        coverage: CaptureCoverageQuery,
         auditWriter: AutomationAuditWriter = AutomationAuditWriter()
     ) {
         self.repo = repo
         self.generator = generator
+        self.reviewRepository = reviewRepository
+        self.writer = writer
+        self.coverage = coverage
         self.auditWriter = auditWriter
     }
 
@@ -28,9 +37,25 @@ actor DailySummaryService {
     /// Day frames → sessions (consecutive frames of one app/window, 5-min pause tolerance). We pick the
     /// longest maxInputSlices, and for each take the longest text block as a representative sample.
     func collect(day: Date, safety: AutomationSafety) async throws -> CollectedDay {
-        let start = Calendar.current.startOfDay(for: day)
-        let caps = try await repo.captures(forDay: day)
-        guard !caps.isEmpty else { throw AutomationError.noData(day: day) }
+        let collected = try await collect(
+            period: .ending(at: day, kind: .day),
+            safety: safety
+        )
+        return CollectedDay(
+            day: collected.period.start,
+            slices: collected.slices,
+            totalCaptures: collected.totalCaptures,
+            totalSlices: collected.totalSlices
+        )
+    }
+
+    func collect(period: ReviewPeriod, safety: AutomationSafety) async throws -> CollectedReview {
+        let effectiveEndMs = min(period.endMs, msFromDate(Date()))
+        let caps = try await repo.captures(
+            fromMs: period.startMs,
+            toMs: max(period.startMs, effectiveEndMs - 1)
+        )
+        guard !caps.isEmpty else { throw AutomationError.noData(day: period.start) }
 
         // app+window sessions (5-min pause tolerance); top by duration (ties broken by frame count),
         // then back into chronological order for the prompt.
@@ -56,12 +81,23 @@ actor DailySummaryService {
                 app: s.first.appName ?? "—", window: s.first.windowTitle, url: s.first.browserUrl,
                 sample: Self.clean(best, cap: safety.maxSampleChars), captures: s.count)
         }
-        return CollectedDay(day: start, slices: slices, totalCaptures: caps.count, totalSlices: totalSlices)
+        let incomplete: Bool
+        switch try await coverage.overlapping(startMs: period.startMs, endMs: effectiveEndMs) {
+        case .available(let intervals): incomplete = !intervals.isEmpty
+        case .metadataUnavailable: incomplete = true
+        }
+        return CollectedReview(
+            period: period,
+            slices: slices,
+            totalCaptures: caps.count,
+            totalSlices: totalSlices,
+            coverageIncomplete: incomplete
+        )
     }
 
     // MARK: stage 2 — summarize (= preview)
 
-    /// collect + LLM. Does NOT write — this is a preview. Writes audit("preview").
+    /// Collect + LLM + atomic internal save. It does not export a user file.
     func preview(
         day: Date,
         execution: AIConsumerExecutionContext,
@@ -69,7 +105,25 @@ actor DailySummaryService {
         requestID: UUID = UUID(),
         safety: AutomationSafety
     ) async throws -> SummaryPreview {
-        let collected = try await collect(day: day, safety: safety)
+        try await preview(
+            period: .ending(at: day, kind: .day),
+            execution: execution,
+            consumer: consumer,
+            requestID: requestID,
+            safety: safety,
+            trigger: consumer == .scheduledSummary ? .scheduled : .manual
+        )
+    }
+
+    func preview(
+        period: ReviewPeriod,
+        execution: AIConsumerExecutionContext,
+        consumer: AIConsumer,
+        requestID: UUID = UUID(),
+        safety: AutomationSafety,
+        trigger: ReviewTrigger
+    ) async throws -> SummaryPreview {
+        let collected = try await collect(period: period, safety: safety)
         let plan = Self.generationPlan(collected, consumer: consumer, safety: safety)
         do {
             let out = try await generator.generate(
@@ -86,28 +140,56 @@ actor DailySummaryService {
                 allowedSourceIDs: out.includedSourceIDs
             )
             let preview = SummaryPreview(
-                day: collected.day, markdown: trimmed, sessions: collected.slices.count,
+                period: collected.period, markdown: trimmed, sessions: collected.slices.count,
                 totalCaptures: collected.totalCaptures, model: out.provenance.modelID,
                 promptChars: (modelPrompt?.system.count ?? plan.systemPrompt.count)
                     + plan.userPreamble.count
                     + (modelPrompt?.userPostamble.count ?? plan.userPostamble.count)
                     + plan.fragments.reduce(0) { $0 + $1.text.count },
-                truncated: collected.truncated || out.contextTruncated,
+                sourceTruncated: collected.truncated,
                 contextTruncated: out.contextTruncated,
                 outputTruncated: out.outputTruncated,
                 provenance: out.provenance,
-                promptVersion: out.promptVersion)
-            await audit(AuditEntry(at: Date(), automation: "daily-summary", day: Self.ymd(collected.day),
+                promptVersion: out.promptVersion,
+                usage: out.usage,
+                billing: ReviewRateCard.billing(
+                    providerID: out.provenance.providerID,
+                    modelID: out.provenance.modelID,
+                    usage: out.usage
+                ),
+                coverageIncomplete: collected.coverageIncomplete,
+                trigger: trigger)
+            let saved = ReviewSummary(
+                id: UUID().uuidString.lowercased(),
+                period: preview.period,
+                generatedAt: out.provenance.generatedAt,
+                markdown: preview.markdown,
+                sessions: preview.sessions,
+                totalCaptures: preview.totalCaptures,
+                provenance: preview.provenance,
+                promptVersion: preview.promptVersion,
+                usage: preview.usage,
+                billing: preview.billing,
+                sourceTruncated: preview.sourceTruncated,
+                contextTruncated: preview.contextTruncated,
+                outputTruncated: preview.outputTruncated,
+                coverageIncomplete: preview.coverageIncomplete,
+                trigger: preview.trigger
+            )
+            try await writer.saveReviewSummary(saved)
+            await audit(AuditEntry(at: Date(), automation: "review", day: Self.periodKey(collected.period),
                                    action: "preview", model: out.provenance.modelID, sessions: preview.sessions,
                                    captures: preview.totalCaptures, outputChars: trimmed.count,
                                    destPath: nil, ok: true, error: nil,
                                    providerID: out.provenance.providerID,
                                    executedLocally: out.provenance.executedLocally,
                                    promptVersion: out.promptVersion,
-                                   brokerUpstream: out.provenance.brokerUpstream))
+                                   brokerUpstream: out.provenance.brokerUpstream,
+                                   usage: preview.usage,
+                                   billing: preview.billing))
             return preview
         } catch {
-            await audit(AuditEntry(at: Date(), automation: "daily-summary", day: Self.ymd(collected.day),
+            await audit(AuditEntry(at: Date(), automation: "review", day: Self.periodKey(collected.period),
                                    action: "preview", model: execution.selection.modelID,
                                    sessions: collected.slices.count,
                                    captures: collected.totalCaptures, outputChars: 0, destPath: nil,
@@ -117,6 +199,10 @@ actor DailySummaryService {
                                    promptVersion: Self.promptVersion))
             throw error
         }
+    }
+
+    func savedSummary(for period: ReviewPeriod) async -> ReviewSummary? {
+        try? await reviewRepository.summary(for: period)
     }
 
     // MARK: stage 3 — write
@@ -131,7 +217,7 @@ actor DailySummaryService {
         var folder = destinationURL
         for seg in segments { folder.appendPathComponent(seg, isDirectory: true) }
 
-        let name = Self.ymd(preview.day) + ".md"
+        let name = Self.periodKey(preview.period) + ".md"
         let fileURL = folder.appendingPathComponent(name)
 
         // Belt-and-suspenders: the final path must lie INSIDE the chosen folder.
@@ -151,17 +237,19 @@ actor DailySummaryService {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let existed = FileManager.default.fileExists(atPath: fileURL.path)
             try Data(content.utf8).write(to: fileURL, options: .atomic)
-            await audit(AuditEntry(at: Date(), automation: "daily-summary", day: Self.ymd(preview.day),
+            await audit(AuditEntry(at: Date(), automation: "review", day: Self.periodKey(preview.period),
                                    action: "write", model: preview.model, sessions: preview.sessions,
                                    captures: preview.totalCaptures, outputChars: preview.markdown.count,
                                    destPath: fileURL.path, ok: true, error: nil,
                                    providerID: preview.provenance.providerID,
                                    executedLocally: preview.provenance.executedLocally,
                                    promptVersion: preview.promptVersion,
-                                   brokerUpstream: preview.provenance.brokerUpstream))
+                                   brokerUpstream: preview.provenance.brokerUpstream,
+                                   usage: preview.usage,
+                                   billing: preview.billing))
             return WriteResult(path: fileURL.path, bytes: content.utf8.count, overwritten: existed)
         } catch {
-            await audit(AuditEntry(at: Date(), automation: "daily-summary", day: Self.ymd(preview.day),
+            await audit(AuditEntry(at: Date(), automation: "review", day: Self.periodKey(preview.period),
                                    action: "write", model: preview.model, sessions: preview.sessions,
                                    captures: preview.totalCaptures, outputChars: preview.markdown.count,
                                    destPath: fileURL.path, ok: false, error: error.localizedDescription,
@@ -196,28 +284,53 @@ actor DailySummaryService {
         consumer: AIConsumer,
         safety: AutomationSafety
     ) -> AIConsumerGenerationPlan {
+        generationPlan(
+            CollectedReview(
+                period: .ending(at: c.day, kind: .day),
+                slices: c.slices,
+                totalCaptures: c.totalCaptures,
+                totalSlices: c.totalSlices,
+                coverageIncomplete: false
+            ),
+            consumer: consumer,
+            safety: safety
+        )
+    }
+
+    static func generationPlan(
+        _ c: CollectedReview,
+        consumer: AIConsumer,
+        safety: AutomationSafety
+    ) -> AIConsumerGenerationPlan {
         let tf = DateFormatter(); tf.locale = Locale(identifier: "en_US"); tf.dateFormat = "HH:mm"
         let dayF = DateFormatter(); dayF.locale = Locale(identifier: "en_US"); dayF.dateFormat = "EEEE, d MMMM yyyy"
 
         let fragments: [AIConsumerPromptFragment] = c.slices.enumerated().map { index, s in
-            var head = "[\(tf.string(from: s.start))–\(tf.string(from: s.end))] \(s.app)"
+            var head = "[\(tf.string(from: s.start))–\(tf.string(from: s.end))] \(egressText(s.app))"
             // window/url from foreign apps/tabs is a potential injection carrier; inside the fence,
             // but truncated like sample (length cap + collapsing) to limit the payload.
-            if let w = s.window, !w.isEmpty { head += " — \(clean(w, cap: 200))" }
-            if let u = s.url, !u.isEmpty { head += " (\(clean(u, cap: 300)))" }
-            if !s.sample.isEmpty { head += " — \(s.sample)" }
+            if let w = s.window, !w.isEmpty { head += " — \(egressText(clean(w, cap: 200)))" }
+            if let u = s.url, !u.isEmpty, !u.lowercased().hasPrefix("file:") {
+                head += " (\(egressText(clean(u, cap: 300))))"
+            }
+            if !s.sample.isEmpty { head += " — \(egressText(s.sample))" }
             return AIConsumerPromptFragment(sourceID: "slice:\(index)", text: head)
         }
         let language = LocalAIContextPolicy.outputLanguage(for: c.slices.flatMap {
             [$0.app, $0.window ?? "", $0.sample]
         })
         let countLine = c.truncated
-            ? "Sessions: \(c.slices.count) (the longest; total for the day — \(c.totalSlices)), frames: \(c.totalCaptures)"
+            ? "Sessions: \(c.slices.count) (the longest; total for the period — \(c.totalSlices)), frames: \(c.totalCaptures)"
             : "Sessions: \(c.slices.count), frames: \(c.totalCaptures)"
+        let endDisplay = Calendar.current.date(byAdding: .second, value: -1, to: c.period.end)
+            ?? c.period.end
+        let dateLine = c.period.kind == .day
+            ? dayF.string(from: c.period.start)
+            : "\(dayF.string(from: c.period.start)) — \(dayF.string(from: endDisplay))"
         return AIConsumerPromptFactory.dailySummary(
             consumer: consumer,
             language: language,
-            dateLine: dayF.string(from: c.day),
+            dateLine: dateLine,
             countLine: countLine,
             fragments: fragments,
             maximumFragmentCharacters: max(800, safety.maxSampleChars + 600),
@@ -240,7 +353,11 @@ actor DailySummaryService {
         let upstream = p.provenance.brokerUpstream.map {
             " → \(AutomationMarkdownSafety.inlineMetadata($0))"
         } ?? ""
-        return "# ZBS Eye — day summary\n\n> \(dayF.string(from: p.day))  \n> _\(whereText)\(upstream) · \(model) · \(promptVersion) · \(nowF.string(from: Date()))_\n\n"
+        let title = p.period.kind == .day ? "day Review" : "7-day Review"
+        let coverage = p.coverageIncomplete
+            ? "> ⚠️ Capture was incomplete in this period. Missing history does not prove inactivity.\n\n"
+            : ""
+        return "# ZBS Eye — \(title)\n\n> \(dayF.string(from: p.period.start))  \n> _\(whereText)\(upstream) · \(model) · \(promptVersion) · \(nowF.string(from: Date()))_\n\n\(coverage)"
     }
 
     /// Collapses whitespace/newlines into a single space and cuts to cap — a compact sample for the prompt.
@@ -249,9 +366,34 @@ actor DailySummaryService {
         return String(collapsed.prefix(cap))
     }
 
+    /// Removes common macOS and file-URL paths from provider-bound excerpts.
+    /// Stored media paths are never selected in the first place; this also
+    /// catches paths that happened to be visible inside OCR/AX text.
+    static func egressText(_ text: String) -> String {
+        let patterns = [
+            #"(?i)file://[^\s<>]+"#,
+            #"(?:~|/Users|/Volumes|/private|/var|/tmp|/Applications|/System|/Library)(?:/[^\s<>]+)+"#,
+            #"[A-Za-z]:\\(?:[^\s<>\\]+\\)+[^\s<>\\]+"#,
+        ]
+        return patterns.reduce(text) { current, pattern in
+            current.replacingOccurrences(
+                of: pattern,
+                with: "[local path omitted]",
+                options: .regularExpression
+            )
+        }
+    }
+
     /// Fixed YYYY-MM-DD (POSIX locale) — the file name and the idempotency key.
-    static func ymd(_ d: Date) -> String {
+    static func ymd(_ d: Date, calendar: Calendar = .current) -> String {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = calendar.timeZone
         return f.string(from: d)
+    }
+
+    static func periodKey(_ period: ReviewPeriod, calendar: Calendar = .current) -> String {
+        guard period.kind == .week else { return ymd(period.start, calendar: calendar) }
+        let inclusiveEnd = period.end.addingTimeInterval(-1)
+        return "\(ymd(period.start, calendar: calendar))--\(ymd(inclusiveEnd, calendar: calendar))-7d"
     }
 }

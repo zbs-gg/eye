@@ -74,6 +74,8 @@ final class CaptureCoordinator {
     var isIgnoredApp: @MainActor (String) -> Bool = { _ in false }
     /// The full list of excluded ones (for SCContentFilter: cut their windows out of ANY frame, not just the focus one).
     var ignoredBundleIds: @MainActor () -> Set<String> = { [] }
+    /// Call video owns another SCK stream but shares this user-priority edge.
+    var onNativeScreenshotYield: @MainActor () -> Void = {}
 
     init(
         ingest: IngestService,
@@ -132,6 +134,14 @@ final class CaptureCoordinator {
         }
     }
 
+    /// Screenshot priority protects both Timeline capture and Call video. Keep
+    /// the permission-neutral observer alive even when Timeline is paused;
+    /// otherwise an audio+video Call has no early hotkey edge and macOS must
+    /// compete with Eye's live ScreenCaptureKit stream for the screenshot.
+    func startNativeScreenshotMonitoring() {
+        _ = screenshotHotkeyMonitor.start()
+    }
+
     /// The capability cache persists (plan: don't re-learn after every restart). ocrOnly verdicts
     /// older than 7 days are reset — the app may have updated and started returning AX (re-probe).
     private func loadCapability() {
@@ -177,8 +187,15 @@ final class CaptureCoordinator {
         // Notifications only describe transitions and can be missed when ZBS Eye
         // launches under lock. Seed from the current session, failing closed when
         // the query is unavailable; the active tick reconciles it again later.
-        let initialSessionGate = CaptureSessionPolicy.startupGate(
+        let startupSessionGate = CaptureSessionPolicy.startupGate(
             sessionLockedNow: Self.currentSessionLocked()
+        )
+        // Calls may remain armed while Timeline recording is off. Preserve the
+        // audio-priority latch if the user turns Timeline on mid-call.
+        let initialSessionGate = CaptureSessionGateState(
+            reasons: startupSessionGate.reasons.union(
+                sessionGate.reasons.intersection(.callAudioPriority)
+            )
         )
         applySessionGate(initialSessionGate)
         if !initialSessionGate.isOpen {
@@ -287,7 +304,7 @@ final class CaptureCoordinator {
         tickTimer = Timer.scheduledTimer(withTimeInterval: config.activeTickSeconds, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.tickFired() }
         }
-        _ = screenshotHotkeyMonitor.start()
+        startNativeScreenshotMonitoring()
         if initialSessionGate.isOpen { trigger(.startup) }
     }
 
@@ -328,6 +345,22 @@ final class CaptureCoordinator {
             hadInFlightCycle: hadInFlightCycle,
             activeCycles: screenDrained ? 0 : 1
         )
+    }
+
+    /// A Call owns the machine's capture budget. Close Timeline admission
+    /// synchronously before audio startup returns to its caller, then drain the
+    /// screen stream and any HEIC/OCR work in the background. Call audio never
+    /// waits for that visual drain.
+    func enterCallAudioPriority() {
+        healthController.setCallAudioPriority(true, nowMs: Self.epochMs())
+        suspend(for: .callAudioPriority)
+    }
+
+    /// Reopen Timeline only after Call audio has physically stopped. Other
+    /// independent suspension reasons (lock, sleep, privacy) remain closed.
+    func exitCallAudioPriority() async {
+        healthController.setCallAudioPriority(false, nowMs: Self.epochMs())
+        await resumeIfSessionUnlocked(clearing: .callAudioPriority)
     }
 
     /// Executes one controller-admitted Eye-owned recovery attempt. It resets
@@ -388,7 +421,6 @@ final class CaptureCoordinator {
         runningApplicationsObservation = nil
         privacyApplicationInventory = nil
         tickTimer?.invalidate(); tickTimer = nil
-        screenshotHotkeyMonitor.stop()
         meaningfulInputTask?.cancel()
         meaningfulInputTask = nil
         meaningfulInputPolicy.reset()
@@ -471,12 +503,38 @@ final class CaptureCoordinator {
     }
 
     private func yieldToNativeScreenshot() {
+        onNativeScreenshotYield()
         meaningfulInputTask?.cancel()
         meaningfulInputTask = nil
         meaningfulInputPolicy.cancelPending()
         workPolicy.discardWaiting()
         cycleTask?.cancel()
-        Task { [pipeline] in await pipeline.discardPendingIntent() }
+        // This call is nonisolated: cancel a waiter before the listen-only
+        // event callback returns, even if FramePipeline is encoding a frame.
+        pipeline.discardPendingIntent()
+        // Physical SCK teardown starts on its own user-initiated task before
+        // this callback returns; actor cleanup below only joins that teardown.
+        _ = pipeline.requestNativeScreenshotYield()
+        Task(priority: .userInitiated) { @MainActor [weak self, pipeline] in
+            let stopped = await pipeline.yieldPersistentStreamToNativeScreenshot()
+            guard !stopped, let self else { return }
+            self.healthController.recordScreenPipelineFailure(
+                .screenStreamStopped,
+                nowMs: Self.epochMs()
+            )
+        }
+    }
+
+    /// Call video may restart only after the same shared gate confirms that
+    /// both the native screenshot helper and its two-second quiet tail ended.
+    func waitForNativeScreenshotRelease() async {
+        while screenshotPriorityGate.isSuppressed() {
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+    }
+
+    func isNativeScreenshotSuppressed() -> Bool {
+        screenshotPriorityGate.isSuppressed()
     }
 
     /// A hard focus edge owns the next moment. Retire the delayed typing or
@@ -954,6 +1012,10 @@ final class CaptureCoordinator {
             clearing: reason,
             sessionLockedNow: Self.currentSessionLocked()
         )
+        if !isRunning {
+            applySessionGate(gate)
+            return
+        }
         if !previousGate.isOpen, gate.isOpen {
             await openGateAfterSessionBoundary(gate)
             return
@@ -1008,9 +1070,10 @@ final class CaptureCoordinator {
         sessionGate = gate
         gateRevision &+= 1
         let reason: CaptureSuspensionReason?
-        if gate.reasons.contains(.session) {
+        let globalReasons = gate.reasons.subtracting(.callAudioPriority)
+        if globalReasons.contains(.session) {
             reason = .locked
-        } else if gate.suspended {
+        } else if !globalReasons.isEmpty {
             reason = .sleeping
         } else {
             reason = nil

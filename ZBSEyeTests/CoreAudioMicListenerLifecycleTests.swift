@@ -261,7 +261,7 @@ final class CoreAudioMicListenerLifecycleTests: XCTestCase {
         XCTAssertTrue(source.contains(".screenSaver"))
         XCTAssertTrue(source.contains("center.removeObserver(observer)"))
         let startLeaseCheck = try XCTUnwrap(
-            source.range(of: "self.calls.permitsCallAudioStart(startAdmissionLease)")
+            source.range(of: "self.calls.permitsCallAudioStart(request.startAdmissionLease)")
         )
         let sinkAdmission = try XCTUnwrap(
             source.range(

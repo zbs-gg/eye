@@ -586,7 +586,8 @@ actor LocalInferenceService: LLMAdapter {
                     generated,
                     request: request,
                     selection: selection,
-                    now: now()
+                    now: now(),
+                    preparedInputTokens: preparedTokens
                 )
             } catch {
                 await finishGeneration(requestID: requestID)
@@ -1060,7 +1061,8 @@ actor LocalInferenceService: LLMAdapter {
         _ generated: LocalRuntimeGenerationOutput,
         request: LLMRequest,
         selection: ProviderSelectionSnapshot,
-        now: Date
+        now: Date,
+        preparedInputTokens: Int
     ) throws -> LLMResponse {
         guard let contract = request.localOutputContract,
               generated.textChunks.joined()
@@ -1094,6 +1096,10 @@ actor LocalInferenceService: LLMAdapter {
                 executedLocally: true,
                 generatedAt: now,
                 brokerUpstream: nil
+            ),
+            usage: LLMUsage(
+                inputTokens: preparedInputTokens,
+                outputTokens: generated.generatedTokenCount
             )
         )
     }

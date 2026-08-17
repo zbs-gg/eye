@@ -1,58 +1,74 @@
+import AppKit
 import Foundation
 import Observation
-import AppKit
 import UserNotifications
 
-/// UI state for the "day summary" automation. The flow is strictly preview-then-write (plan: firstRunRequiresPreview):
-/// first "Build preview" (collect+LLM, no write) → the user sees the result → "Write".
-/// This way private history and any possible prompt injection never reach a file without explicit confirmation.
+/// Timeline Review state. Generation always saves the successful result inside
+/// Eye; exporting that result to a user folder remains an explicit second step.
 @MainActor
 @Observable
 final class DaySummaryStore {
     enum Phase: Sendable, Equatable { case idle, summarizing, writing, done, failed }
 
     @ObservationIgnored private let service: DailySummaryService
-    @ObservationIgnored let connections: ConnectionStore   // destination folder (the card lives in Automations)
+    @ObservationIgnored let connections: ConnectionStore
     @ObservationIgnored private let readiness: any AIConsumerReadinessProviding
     @ObservationIgnored private let safety: AutomationSafety = .default
     @ObservationIgnored private var previewTask: Task<Void, Never>?
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var activeRequest: AIConsumerRequestOwnership?
+    @ObservationIgnored private var schedulerTask: Task<Void, Never>?
 
-    /// A preview is valid only for the day it was built for. Changing the day in the DatePicker clears the preview and
-    /// the write card — otherwise the "Write" button would promise a new day but write the old preview.
-    // ── schedule: "summary writes itself at the end of the day" (US-33). Auto-write only after ≥1 manual write —
-    //    a first-run preview is mandatory (prompt-injection gate from the automations design). ──
-    var scheduleEnabled: Bool = UserDefaults.standard.bool(forKey: "zbseye.automation.scheduleEnabled") {
+    var scheduleEnabled: Bool = UserDefaults.standard.bool(forKey: "zbseye.review.scheduleEnabled") {
         didSet {
-            UserDefaults.standard.set(scheduleEnabled, forKey: "zbseye.automation.scheduleEnabled")
+            UserDefaults.standard.set(scheduleEnabled, forKey: "zbseye.review.scheduleEnabled")
             if scheduleEnabled {
                 Self.requestNotificationAuth()
-                // baseline = yesterday: enabling the schedule must not immediately generate a catch-up
-                if UserDefaults.standard.string(forKey: "zbseye.automation.lastAutoDone") == nil {
-                    let y = Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
-                    UserDefaults.standard.set(DailySummaryService.ymd(y), forKey: "zbseye.automation.lastAutoDone")
+                if UserDefaults.standard.string(forKey: "zbseye.review.lastAutoDone") == nil,
+                   let due = ReviewSchedulePolicy.latestDuePeriod(
+                       now: Date(), frequency: scheduleFrequency,
+                       hour: scheduleHour, weeklyWeekday: weeklyWeekday
+                   ) {
+                    UserDefaults.standard.set(
+                        DailySummaryService.periodKey(due),
+                        forKey: "zbseye.review.lastAutoDone"
+                    )
                 }
             }
         }
     }
-    var scheduleHour: Int = UserDefaults.standard.object(forKey: "zbseye.automation.scheduleHour") == nil
-        ? 21 : UserDefaults.standard.integer(forKey: "zbseye.automation.scheduleHour") {
-        didSet { UserDefaults.standard.set(scheduleHour, forKey: "zbseye.automation.scheduleHour") }
+    var scheduleFrequency: ReviewScheduleFrequency = ReviewScheduleFrequency(
+        rawValue: UserDefaults.standard.string(forKey: "zbseye.review.scheduleFrequency") ?? ""
+    ) ?? .daily {
+        didSet {
+            UserDefaults.standard.set(scheduleFrequency.rawValue, forKey: "zbseye.review.scheduleFrequency")
+        }
+    }
+    var scheduleHour: Int = UserDefaults.standard.object(forKey: "zbseye.review.scheduleHour") == nil
+        ? (UserDefaults.standard.object(forKey: "zbseye.automation.scheduleHour") == nil
+            ? 18 : UserDefaults.standard.integer(forKey: "zbseye.automation.scheduleHour"))
+        : UserDefaults.standard.integer(forKey: "zbseye.review.scheduleHour") {
+        didSet { UserDefaults.standard.set(scheduleHour, forKey: "zbseye.review.scheduleHour") }
+    }
+    /// Calendar weekday: 1 Sunday … 6 Friday … 7 Saturday.
+    var weeklyWeekday: Int = UserDefaults.standard.object(forKey: "zbseye.review.weeklyWeekday") == nil
+        ? 6 : UserDefaults.standard.integer(forKey: "zbseye.review.weeklyWeekday") {
+        didSet { UserDefaults.standard.set(weeklyWeekday, forKey: "zbseye.review.weeklyWeekday") }
     }
     var autoWriteEnabled: Bool = UserDefaults.standard.bool(forKey: "zbseye.automation.autoWrite") {
         didSet { UserDefaults.standard.set(autoWriteEnabled, forKey: "zbseye.automation.autoWrite") }
     }
-    /// Whether there has been at least one MANUAL write (the user saw and approved the format) — the gate for auto-write.
     private(set) var hasWrittenManually = UserDefaults.standard.bool(forKey: "zbseye.automation.manualWriteDone")
-    @ObservationIgnored private var schedulerTask: Task<Void, Never>?
 
     var selectedDay: Date = Calendar.current.startOfDay(for: Date()) {
         didSet {
-            guard Calendar.current.startOfDay(for: selectedDay) != Calendar.current.startOfDay(for: oldValue)
-            else { return }
-            preview = nil; lastWrite = nil; errorText = nil
-            if phase != .summarizing && phase != .writing { phase = .idle }
+            guard Calendar.current.startOfDay(for: selectedDay)
+                    != Calendar.current.startOfDay(for: oldValue) else { return }
+            selectionChanged()
         }
+    }
+    var selectedPeriodKind: ReviewPeriodKind = .day {
+        didSet { if selectedPeriodKind != oldValue { selectionChanged() } }
     }
     var phase: Phase = .idle
     var preview: SummaryPreview?
@@ -68,19 +84,49 @@ final class DaySummaryStore {
         self.service = service
         self.connections = connections
         self.readiness = readiness
+        // Migrate the shipped on/off preference without creating a catch-up.
+        let defaults = UserDefaults.standard
+        let latestDueKey = ReviewSchedulePolicy.latestDuePeriod(
+            now: Date(),
+            frequency: scheduleFrequency,
+            hour: scheduleHour,
+            weeklyWeekday: weeklyWeekday
+        ).map { DailySummaryService.periodKey($0) }
+        let migration = ReviewSchedulePreferenceMigration.resolve(
+            explicitReviewEnabled: defaults.object(forKey: "zbseye.review.scheduleEnabled") == nil
+                ? nil
+                : defaults.bool(forKey: "zbseye.review.scheduleEnabled"),
+            legacyEnabled: defaults.bool(forKey: "zbseye.automation.scheduleEnabled"),
+            lastAutoDone: defaults.string(forKey: "zbseye.review.lastAutoDone"),
+            latestDueKey: latestDueKey
+        )
+        scheduleEnabled = migration.enabled
+        if migration.shouldPersistEnabled {
+            // Property observers do not run during initialization. Persist the
+            // migration explicitly and seed the cursor so enabling an upgraded
+            // profile never launches an immediate historical catch-up.
+            defaults.set(migration.enabled, forKey: "zbseye.review.scheduleEnabled")
+            if let seeded = migration.seededLastAutoDone {
+                defaults.set(seeded, forKey: "zbseye.review.lastAutoDone")
+            }
+        }
     }
 
     var isBusy: Bool { phase == .summarizing || phase == .writing }
-    /// Optional AI is active.
     var llmReady: Bool { readiness.currentExecutionContext(for: .manualSummary) != nil }
-    /// Ready to run the automation: a processing model AND a destination folder.
-    var isReady: Bool { llmReady && connections.destination.isConfigured }
+    var isReady: Bool { llmReady }
+    var canExport: Bool { connections.destination.isConfigured }
+    var currentPeriod: ReviewPeriod {
+        .ending(at: selectedDay, kind: selectedPeriodKind)
+    }
 
-    /// Start the preview while holding onto the Task — so a long local-model call can be cancelled.
     func startPreview() {
         guard !isBusy else { return }
         previewTask?.cancel()
-        previewTask = Task { [weak self] in await self?.buildPreview(consumer: .manualSummary) }
+        let period = currentPeriod
+        previewTask = Task { [weak self] in
+            await self?.buildPreview(period: period, consumer: .manualSummary)
+        }
     }
 
     func cancelPreview() {
@@ -90,11 +136,23 @@ final class DaySummaryStore {
         if phase == .summarizing { phase = .idle }
     }
 
-    /// Privacy (Pro NO-GO follow-up): clear the collected preview/write — it is an LLM inference over the history
-    /// that was just deleted (deleteHistory). We don't touch the schedule/settings/audit.
+    func loadSavedSummary() async {
+        guard !isBusy else { return }
+        let period = currentPeriod
+        if let saved = await service.savedSummary(for: period), currentPeriod == period {
+            preview = SummaryPreview(saved: saved)
+            phase = .done
+        } else if currentPeriod == period {
+            preview = nil
+            phase = .idle
+        }
+    }
+
     func reset() {
         previewTask?.cancel()
+        loadTask?.cancel()
         previewTask = nil
+        loadTask = nil
         activeRequest = nil
         preview = nil
         lastWrite = nil
@@ -102,16 +160,21 @@ final class DaySummaryStore {
         phase = .idle
     }
 
-    /// The collect+summarize stages. Does NOT write. Call via startPreview (for cancellability).
-    func buildPreview(consumer: AIConsumer = .manualSummary) async {
-        guard !isBusy else { return }
-        guard consumer == .manualSummary || consumer == .scheduledSummary else { return }
-        errorText = nil; lastWrite = nil; preview = nil
+    func buildPreview(
+        period: ReviewPeriod? = nil,
+        consumer: AIConsumer = .manualSummary
+    ) async {
+        guard !isBusy,
+              consumer == .manualSummary || consumer == .scheduledSummary else { return }
+        errorText = nil
+        lastWrite = nil
+        let target = period ?? currentPeriod
         guard let execution = readiness.currentExecutionContext(for: consumer) else {
-            errorText = AutomationError.noLLM.errorDescription; phase = .failed; return
+            errorText = AutomationError.noLLM.errorDescription
+            phase = .failed
+            return
         }
         phase = .summarizing
-        let day = selectedDay
         let requestID = UUID()
         let ownership = AIConsumerRequestOwnership(
             requestID: requestID,
@@ -120,33 +183,16 @@ final class DaySummaryStore {
         )
         activeRequest = ownership
         do {
-            let p = try await service.preview(
-                day: day,
+            let result = try await service.preview(
+                period: target,
                 execution: execution,
                 consumer: consumer,
                 requestID: requestID,
-                safety: safety
+                safety: safety,
+                trigger: consumer == .scheduledSummary ? .scheduled : .manual
             )
             guard !Task.isCancelled,
                   activeRequest == ownership,
-                  ownership.accepts(
-                      requestID: requestID,
-                      consumer: consumer,
-                      execution: readiness.currentExecutionContext(for: consumer)
-                  ),
-                  Calendar.current.startOfDay(for: selectedDay)
-                    == Calendar.current.startOfDay(for: day) else {
-                if activeRequest == ownership { activeRequest = nil; phase = .idle }
-                return
-            }
-            preview = p; phase = .done
-            activeRequest = nil
-        } catch is CancellationError {
-            if activeRequest == ownership { activeRequest = nil; phase = .idle }
-        } catch let urlErr as URLError where urlErr.code == .cancelled {
-            if activeRequest == ownership { activeRequest = nil; phase = .idle }
-        } catch {
-            guard activeRequest == ownership,
                   ownership.accepts(
                       requestID: requestID,
                       consumer: consumer,
@@ -155,6 +201,15 @@ final class DaySummaryStore {
                 if activeRequest == ownership { activeRequest = nil; phase = .idle }
                 return
             }
+            if currentPeriod == target { preview = result }
+            phase = .done
+            activeRequest = nil
+        } catch is CancellationError {
+            if activeRequest == ownership { activeRequest = nil; phase = .idle }
+        } catch let error as URLError where error.code == .cancelled {
+            if activeRequest == ownership { activeRequest = nil; phase = .idle }
+        } catch {
+            guard activeRequest == ownership else { return }
             errorText = (error as? AutomationError)?.errorDescription ?? error.localizedDescription
             phase = .failed
             activeRequest = nil
@@ -162,16 +217,20 @@ final class DaySummaryStore {
         await refreshAudit()
     }
 
-    /// Write the confirmed preview into the selected folder.
     func writeApproved() async {
-        guard let p = preview, !isBusy else { return }
+        guard let preview, !isBusy else { return }
         guard let url = connections.resolveDestinationURL() else {
-            errorText = AutomationError.noDestination.errorDescription; phase = .failed; return
+            errorText = AutomationError.noDestination.errorDescription
+            phase = .failed
+            return
         }
         phase = .writing
         do {
-            lastWrite = try await service.write(preview: p, destinationURL: url,
-                                                subfolder: connections.destination.subfolder)
+            lastWrite = try await service.write(
+                preview: preview,
+                destinationURL: url,
+                subfolder: connections.destination.subfolder
+            )
             phase = .done
             if !hasWrittenManually {
                 hasWrittenManually = true
@@ -186,12 +245,10 @@ final class DaySummaryStore {
 
     func refreshAudit() async { audit = await service.recentAudit() }
 
-    // MARK: schedule
-
-    /// Ticks once every 5 minutes: after scheduleHour, once a day. Started from bootstrap.
     func startScheduler() {
         guard schedulerTask == nil else { return }
         schedulerTask = Task { [weak self] in
+            await self?.scheduledTick()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(300))
                 await self?.scheduledTick()
@@ -201,70 +258,68 @@ final class DaySummaryStore {
 
     private func scheduledTick() async {
         guard scheduleEnabled,
-              connections.destination.isConfigured,
-              readiness.currentExecutionContext(for: .scheduledSummary) != nil,
-              !isBusy else { return }
-        let now = Date()
-        let cal = Calendar.current
-        let todayYmd = DailySummaryService.ymd(now)
-        let yesterday = cal.date(byAdding: .day, value: -1, to: now) ?? now
-        let yesterdayYmd = DailySummaryService.ymd(yesterday)
-        let done = UserDefaults.standard.string(forKey: "zbseye.automation.lastAutoDone") ?? yesterdayYmd
+              let execution = readiness.currentExecutionContext(for: .scheduledSummary),
+              !isBusy,
+              let target = ReviewSchedulePolicy.latestDuePeriod(
+                  now: Date(), frequency: scheduleFrequency,
+                  hour: scheduleHour, weeklyWeekday: weeklyWeekday
+              ) else { return }
+        let key = DailySummaryService.periodKey(target)
+        guard UserDefaults.standard.string(forKey: "zbseye.review.lastAutoDone") != key else { return }
 
-        // Target of the run: a catch-up for YESTERDAY (the Mac was asleep at scheduleHour — the day must not be lost;
-        // yesterday's history is already complete, no hour gate needed), otherwise today after scheduleHour.
-        let targetDay: Date
-        let targetYmd: String
-        if done < yesterdayYmd {
-            targetDay = cal.startOfDay(for: yesterday); targetYmd = yesterdayYmd
-        } else if done < todayYmd && cal.component(.hour, from: now) >= scheduleHour {
-            targetDay = cal.startOfDay(for: now); targetYmd = todayYmd
-        } else {
-            return
-        }
-
-        // Retries: a transient failure (Ollama not yet up at 21:00) must not kill the day — up to 3 attempts
-        // with a ≥15-minute step. A success commits the day for good.
-        let attemptDay = UserDefaults.standard.string(forKey: "zbseye.automation.attemptDay")
-        var attempts = attemptDay == targetYmd ? UserDefaults.standard.integer(forKey: "zbseye.automation.attemptCount") : 0
-        let lastAttempt = UserDefaults.standard.object(forKey: "zbseye.automation.lastAttemptAt") as? Date ?? .distantPast
-        guard attempts < 3, now.timeIntervalSince(lastAttempt) >= 900 || attempts == 0 else { return }
+        let attemptKey = UserDefaults.standard.string(forKey: "zbseye.review.attemptPeriod")
+        var attempts = attemptKey == key
+            ? UserDefaults.standard.integer(forKey: "zbseye.review.attemptCount") : 0
+        let lastAttempt = UserDefaults.standard.object(forKey: "zbseye.review.lastAttemptAt") as? Date
+            ?? .distantPast
+        guard attempts < 3, attempts == 0 || Date().timeIntervalSince(lastAttempt) >= 900 else { return }
         attempts += 1
-        UserDefaults.standard.set(targetYmd, forKey: "zbseye.automation.attemptDay")
-        UserDefaults.standard.set(attempts, forKey: "zbseye.automation.attemptCount")
-        UserDefaults.standard.set(now, forKey: "zbseye.automation.lastAttemptAt")
+        UserDefaults.standard.set(key, forKey: "zbseye.review.attemptPeriod")
+        UserDefaults.standard.set(attempts, forKey: "zbseye.review.attemptCount")
+        UserDefaults.standard.set(Date(), forKey: "zbseye.review.lastAttemptAt")
 
-        // Don't overwrite the user's work: if they're looking at a DIFFERENT day with a built preview — don't touch
-        // their selection (didSet would wipe the preview), just nudge with a notification.
-        if preview != nil && cal.startOfDay(for: selectedDay) != targetDay {
-            UserDefaults.standard.set(targetYmd, forKey: "zbseye.automation.lastAutoDone")
-            Self.notify(title: "ZBS Eye", body: "Time to build the summary (\(targetYmd)) — open Automations.")
-            return
-        }
-
-        selectedDay = targetDay
-        // via previewTask — the "Cancel" button also applies to a scheduled run
-        previewTask?.cancel()
-        previewTask = Task { [weak self] in
-            await self?.buildPreview(consumer: .scheduledSummary)
-        }
-        await previewTask?.value
-        guard preview != nil, phase == .done else {
-            if attempts >= 3 {
-                Self.notify(title: "ZBS Eye", body: "The summary (\(targetYmd)) didn't build after 3 attempts — open Automations (\(errorText ?? "error")).")
-                UserDefaults.standard.set(targetYmd, forKey: "zbseye.automation.lastAutoDone")
+        do {
+            let result = try await service.preview(
+                period: target,
+                execution: execution,
+                consumer: .scheduledSummary,
+                safety: safety,
+                trigger: .scheduled
+            )
+            UserDefaults.standard.set(key, forKey: "zbseye.review.lastAutoDone")
+            if currentPeriod == target {
+                preview = result
+                phase = .done
             }
-            return   // attempts < 3 → next attempt in ≥15 min
+            if autoWriteEnabled, hasWrittenManually,
+               let destination = connections.resolveDestinationURL() {
+                _ = try? await service.write(
+                    preview: result,
+                    destinationURL: destination,
+                    subfolder: connections.destination.subfolder
+                )
+            }
+            Self.notify(title: "ZBS Eye", body: "Review \(key) is ready in Timeline.")
+        } catch {
+            if attempts >= 3 {
+                UserDefaults.standard.set(key, forKey: "zbseye.review.lastAutoDone")
+                Self.notify(
+                    title: "ZBS Eye",
+                    body: "Review \(key) did not build after three attempts."
+                )
+            }
         }
-        UserDefaults.standard.set(targetYmd, forKey: "zbseye.automation.lastAutoDone")
-        if autoWriteEnabled && hasWrittenManually {
-            await writeApproved()
-            Self.notify(title: "ZBS Eye", body: lastWrite != nil
-                ? "The summary (\(targetYmd)) was written to \(connections.destination.subfolder.isEmpty ? "the folder" : connections.destination.subfolder)."
-                : "The summary was built, but the write failed — open Automations.")
-        } else {
-            Self.notify(title: "ZBS Eye", body: "The summary (\(targetYmd)) is ready — open Automations, review it and write.")
-        }
+    }
+
+    private func selectionChanged() {
+        previewTask?.cancel()
+        loadTask?.cancel()
+        activeRequest = nil
+        preview = nil
+        lastWrite = nil
+        errorText = nil
+        phase = .idle
+        loadTask = Task { [weak self] in await self?.loadSavedSummary() }
     }
 
     private static func requestNotificationAuth() {
@@ -275,8 +330,12 @@ final class DaySummaryStore {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(req)
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request)
     }
 
     func revealLastWrite() {

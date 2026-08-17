@@ -1,5 +1,7 @@
+import AVFoundation
 import CryptoKit
 import Foundation
+import VideoToolbox
 
 enum CallRedactionPlanError: Error, Sendable, Equatable {
     case invalidRange
@@ -29,6 +31,31 @@ struct CallRedactionGapManifest: Codable, Sendable, Equatable {
     var endMs: Int64
 }
 
+struct CallRedactionVideoGapManifest: Codable, Sendable, Equatable {
+    var startMs: Int64
+    var endMs: Int64
+}
+
+struct CallRedactionVideoFragmentManifest: Codable, Sendable, Equatable {
+    var videoSpanID: Int64
+    var epoch: Int
+    var sequence: Int
+    var startMs: Int64
+    var endMs: Int64
+    var sourceStartMs: Int64
+    var sourceEndMs: Int64
+    var sourceRelativePath: String
+    var sourceSha256: String? = nil
+    var relativePath: String
+    var bytes: Int64?
+    var sha256: String?
+    var width: Int
+    var height: Int
+    var fps: Int
+    var codec: CallVideoCodec
+    var audioMuxed: Bool
+}
+
 struct CallRedactionManifestV1: Codable, Sendable, Equatable {
     static let formatVersion = 1
 
@@ -42,6 +69,10 @@ struct CallRedactionManifestV1: Codable, Sendable, Equatable {
     var obsoleteRelativePaths: [String]
     var redactedGaps: [CallRedactionGapManifest]
     var survivors: [CallRedactionChunkManifest]
+    /// Optional for crash-forward compatibility with manifests written before
+    /// Call video existed.
+    var videoRedactedGaps: [CallRedactionVideoGapManifest]? = nil
+    var videoSurvivors: [CallRedactionVideoFragmentManifest]? = nil
 
     func encodedJSON() throws -> String {
         String(decoding: try JSONEncoder().encode(self), as: UTF8.self)
@@ -223,6 +254,68 @@ struct CallRedactionPlanner: Sendable {
             ($0.source.rawValue, $0.startMs, $0.endMs)
                 < ($1.source.rawValue, $1.startMs, $1.endMs)
         }
+        var videoRedactedGaps: [CallRedactionVideoGapManifest] = []
+        var videoSurvivors: [CallRedactionVideoFragmentManifest] = []
+        for segment in snapshot.videoSegments.sorted(by: {
+            ($0.epoch, $0.startMs, $0.sequence) < ($1.epoch, $1.startMs, $1.sequence)
+        }) {
+            guard segment.finalized, segment.endMs > segment.startMs else {
+                throw CallRedactionPlanError.invalidChunk
+            }
+            let videoSpanID = segment.videoSpanId
+            guard segment.endMs > fromMs && segment.startMs < toMs else {
+                videoSurvivors.append(Self.videoFragment(
+                    segment: segment,
+                    videoSpanID: videoSpanID,
+                    startMs: segment.startMs,
+                    endMs: segment.endMs,
+                    relativePath: segment.relativePath,
+                    bytes: segment.bytes,
+                    sha256: segment.sha256
+                ))
+                continue
+            }
+            obsoletePaths.append(segment.relativePath)
+            videoRedactedGaps.append(CallRedactionVideoGapManifest(
+                startMs: max(segment.startMs, fromMs),
+                endMs: min(segment.endMs, toMs)
+            ))
+            if segment.startMs < fromMs {
+                videoSurvivors.append(Self.videoFragment(
+                    segment: segment,
+                    videoSpanID: videoSpanID,
+                    startMs: segment.startMs,
+                    endMs: min(fromMs, segment.endMs),
+                    relativePath: Self.videoReplacementPath(
+                        segment: segment,
+                        generation: nextGeneration,
+                        suffix: "prefix"
+                    ),
+                    bytes: nil,
+                    sha256: nil
+                ))
+            }
+            if segment.endMs > toMs {
+                videoSurvivors.append(Self.videoFragment(
+                    segment: segment,
+                    videoSpanID: videoSpanID,
+                    startMs: max(toMs, segment.startMs),
+                    endMs: segment.endMs,
+                    relativePath: Self.videoReplacementPath(
+                        segment: segment,
+                        generation: nextGeneration,
+                        suffix: "suffix"
+                    ),
+                    bytes: nil,
+                    sha256: nil
+                ))
+            }
+        }
+        var nextVideoSequence: [Int: Int] = [:]
+        for index in videoSurvivors.indices {
+            videoSurvivors[index].sequence = nextVideoSequence[videoSurvivors[index].epoch, default: 0]
+            nextVideoSequence[videoSurvivors[index].epoch, default: 0] += 1
+        }
         return CallRedactionManifestV1(
             formatVersion: Self.formatVersion,
             callID: callID,
@@ -233,7 +326,9 @@ struct CallRedactionPlanner: Sendable {
             bytesRemoved: bytesRemoved,
             obsoleteRelativePaths: Array(Set(obsoletePaths)).sorted(),
             redactedGaps: redactedGaps,
-            survivors: survivors
+            survivors: survivors,
+            videoRedactedGaps: videoRedactedGaps,
+            videoSurvivors: videoSurvivors
         )
     }
 
@@ -280,6 +375,44 @@ struct CallRedactionPlanner: Sendable {
         "calls/\(chunk.callId)/\(chunk.source.rawValue)/epoch-\(String(format: "%04d", chunk.epoch))/redacted-g\(String(format: "%04d", generation))-c\(String(format: "%06d", chunk.sequence))-\(suffix).pcm"
     }
 
+    private static func videoFragment(
+        segment: CallVideoSegmentRow,
+        videoSpanID: Int64,
+        startMs: Int64,
+        endMs: Int64,
+        relativePath: String,
+        bytes: Int64?,
+        sha256: String?
+    ) -> CallRedactionVideoFragmentManifest {
+        CallRedactionVideoFragmentManifest(
+            videoSpanID: videoSpanID,
+            epoch: segment.epoch,
+            sequence: 0,
+            startMs: startMs,
+            endMs: endMs,
+            sourceStartMs: segment.startMs,
+            sourceEndMs: segment.endMs,
+            sourceRelativePath: segment.relativePath,
+            sourceSha256: segment.sha256,
+            relativePath: relativePath,
+            bytes: bytes,
+            sha256: sha256,
+            width: segment.width,
+            height: segment.height,
+            fps: segment.fps,
+            codec: segment.codec,
+            audioMuxed: segment.audioMuxed
+        )
+    }
+
+    private static func videoReplacementPath(
+        segment: CallVideoSegmentRow,
+        generation: Int,
+        suffix: String
+    ) -> String {
+        "calls/\(segment.callId)/video/epoch-\(String(format: "%04d", segment.epoch))/redacted-g\(String(format: "%04d", generation))-s\(String(format: "%06d", segment.sequence))-\(suffix).mp4"
+    }
+
     private static func sampleFloor(atMs timeMs: Int64, span: CallSourceSpanRow) -> Int64 {
         guard timeMs > span.startedAtMs else { return span.startSample }
         let delta = timeMs - span.startedAtMs
@@ -317,8 +450,10 @@ struct CallRedactionPlanner: Sendable {
 
 struct CallRedactionFileStore {
     private let secureRoot: SecureCallSpoolRoot
+    private let mediaRoot: URL
 
     init(mediaRoot: URL) throws {
+        self.mediaRoot = mediaRoot.standardizedFileURL
         secureRoot = try SecureCallSpoolRoot(root: mediaRoot)
     }
 
@@ -341,7 +476,8 @@ struct CallRedactionFileStore {
     }
 
     func removeObsolete(_ manifest: CallRedactionManifestV1) throws -> Int {
-        let live = Set(manifest.survivors.map(\.relativePath))
+        var live = Set(manifest.survivors.map(\.relativePath))
+        live.formUnion((manifest.videoSurvivors ?? []).map(\.relativePath))
         var removed = 0
         for path in manifest.obsoleteRelativePaths where !live.contains(path) {
             if try secureRoot.removeFile(relativePath: path) {
@@ -349,6 +485,261 @@ struct CallRedactionFileStore {
             }
         }
         return removed
+    }
+
+    func stageVideoAndVerify(
+        _ input: CallRedactionManifestV1
+    ) async throws -> CallRedactionManifestV1 {
+        var manifest = input
+        var fragments = manifest.videoSurvivors ?? []
+        var retainedVideoBytes: Int64 = 0
+        var originalVideoBytes: Int64 = 0
+        let obsolete = Set(manifest.obsoleteRelativePaths)
+        var countedOriginalVideoPaths: Set<String> = []
+        for index in fragments.indices {
+            var fragment = fragments[index]
+            let source = try containedURL(fragment.sourceRelativePath)
+            if let expectedSourceHash = fragment.sourceSha256, !expectedSourceHash.isEmpty {
+                let sourceData = try Data(contentsOf: source, options: .mappedIfSafe)
+                guard Self.digest(sourceData) == expectedSourceHash else {
+                    throw CallRedactionPlanError.stagedFileMismatch
+                }
+            }
+            if obsolete.contains(fragment.sourceRelativePath),
+               countedOriginalVideoPaths.insert(fragment.sourceRelativePath).inserted {
+                let attributes = try FileManager.default.attributesOfItem(atPath: source.path)
+                originalVideoBytes = Self.saturatingAdd(
+                    originalVideoBytes,
+                    (attributes[.size] as? NSNumber)?.int64Value ?? 0
+                )
+            }
+            let data: Data
+            if fragment.relativePath == fragment.sourceRelativePath {
+                data = try Data(contentsOf: source, options: .mappedIfSafe)
+            } else {
+                let destination = try containedURL(fragment.relativePath)
+                if !FileManager.default.fileExists(atPath: destination.path) {
+                    try FileManager.default.createDirectory(
+                        at: destination.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                    let partial = destination.deletingPathExtension()
+                        .appendingPathExtension("partial.mp4")
+                    try? FileManager.default.removeItem(at: partial)
+                    fragment.codec = try await transcodeVideoFragment(
+                        source: source,
+                        destination: partial,
+                        fragment: fragment
+                    )
+                    let outputAsset = AVURLAsset(url: partial)
+                    guard !(try await outputAsset.loadTracks(withMediaType: .video)).isEmpty else {
+                        throw CallRedactionPlanError.stagedFileMismatch
+                    }
+                    try FileManager.default.moveItem(at: partial, to: destination)
+                }
+                data = try Data(contentsOf: destination, options: .mappedIfSafe)
+            }
+            guard !data.isEmpty else { throw CallRedactionPlanError.stagedFileMismatch }
+            fragment.codec = try await detectedVideoCodec(at: try containedURL(fragment.relativePath))
+            fragment.bytes = Int64(data.count)
+            fragment.sha256 = Self.digest(data)
+            if obsolete.contains(fragment.sourceRelativePath) {
+                retainedVideoBytes = Self.saturatingAdd(retainedVideoBytes, Int64(data.count))
+            }
+            fragments[index] = fragment
+        }
+        manifest.videoSurvivors = fragments
+        let removedVideoBytes = max(0, originalVideoBytes - retainedVideoBytes)
+        manifest.bytesRemoved = Self.saturatingAdd(manifest.bytesRemoved, removedVideoBytes)
+        return manifest
+    }
+
+    private func detectedVideoCodec(at url: URL) async throws -> CallVideoCodec {
+        let asset = AVURLAsset(url: url)
+        guard let track = try await asset.loadTracks(withMediaType: .video).first,
+              let description = try await track.load(.formatDescriptions).first else {
+            throw CallRedactionPlanError.stagedFileMismatch
+        }
+        switch CMFormatDescriptionGetMediaSubType(description) {
+        case kCMVideoCodecType_HEVC:
+            return .hevc
+        case kCMVideoCodecType_H264:
+            return .h264
+        default:
+            throw CallRedactionPlanError.stagedFileMismatch
+        }
+    }
+
+    private func transcodeVideoFragment(
+        source: URL,
+        destination: URL,
+        fragment: CallRedactionVideoFragmentManifest
+    ) async throws -> CallVideoCodec {
+        for codec in [CallVideoCodec.hevc, .h264] {
+            try? FileManager.default.removeItem(at: destination)
+            do {
+                try await transcodeVideoFragment(
+                    source: source,
+                    destination: destination,
+                    fragment: fragment,
+                    codec: codec
+                )
+                return codec
+            } catch {
+                try? FileManager.default.removeItem(at: destination)
+                if codec == .h264 { throw error }
+            }
+        }
+        throw CallRedactionPlanError.stagedFileMismatch
+    }
+
+    private func transcodeVideoFragment(
+        source: URL,
+        destination: URL,
+        fragment: CallRedactionVideoFragmentManifest,
+        codec: CallVideoCodec
+    ) async throws {
+        let asset = AVURLAsset(url: source)
+        guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
+            throw CallRedactionPlanError.stagedFileMismatch
+        }
+        let reader = try AVAssetReader(asset: asset)
+        let videoOutput = AVAssetReaderTrackOutput(
+            track: videoTrack,
+            outputSettings: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            ]
+        )
+        videoOutput.alwaysCopiesSampleData = false
+        guard reader.canAdd(videoOutput) else {
+            throw CallRedactionPlanError.stagedFileMismatch
+        }
+        reader.add(videoOutput)
+
+        let writer = try AVAssetWriter(outputURL: destination, fileType: .mp4)
+        let codecType: AVVideoCodecType = codec == .hevc ? .hevc : .h264
+        let videoSettings: [String: Any] = [
+            AVVideoCodecKey: codecType,
+            AVVideoWidthKey: fragment.width,
+            AVVideoHeightKey: fragment.height,
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: 2_000_000,
+                AVVideoExpectedSourceFrameRateKey: fragment.fps,
+                AVVideoMaxKeyFrameIntervalKey: max(1, fragment.fps * 2),
+                AVVideoAllowFrameReorderingKey: false,
+            ],
+            AVVideoEncoderSpecificationKey: [
+                kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder as String: true,
+            ],
+        ]
+        guard writer.canApply(outputSettings: videoSettings, forMediaType: .video) else {
+            throw CallRedactionPlanError.stagedFileMismatch
+        }
+        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+        guard writer.canAdd(videoInput) else {
+            throw CallRedactionPlanError.stagedFileMismatch
+        }
+        writer.add(videoInput)
+
+        var audioOutput: AVAssetReaderTrackOutput?
+        var audioInput: AVAssetWriterInput?
+        if let audioTrack = try await asset.loadTracks(withMediaType: .audio).first {
+            let audioDescription = try await audioTrack.load(.formatDescriptions).first
+            let basicDescription = audioDescription.flatMap {
+                CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee
+            }
+            let sampleRate = basicDescription?.mSampleRate ?? 16_000
+            let channelCount = max(1, Int(basicDescription?.mChannelsPerFrame ?? 1))
+            let output = AVAssetReaderTrackOutput(
+                track: audioTrack,
+                outputSettings: [
+                    AVFormatIDKey: kAudioFormatLinearPCM,
+                    AVLinearPCMBitDepthKey: 16,
+                    AVLinearPCMIsFloatKey: false,
+                    AVLinearPCMIsBigEndianKey: false,
+                    AVLinearPCMIsNonInterleaved: false,
+                ]
+            )
+            let input = AVAssetWriterInput(
+                mediaType: .audio,
+                outputSettings: [
+                    AVFormatIDKey: kAudioFormatMPEG4AAC,
+                    AVSampleRateKey: sampleRate,
+                    AVNumberOfChannelsKey: channelCount,
+                    AVEncoderBitRateKey: channelCount == 1 ? 64_000 : 128_000,
+                ]
+            )
+            if reader.canAdd(output), writer.canAdd(input) {
+                reader.add(output)
+                writer.add(input)
+                audioOutput = output
+                audioInput = input
+            }
+        }
+
+        let offset = CMTime(
+            seconds: Double(fragment.startMs - fragment.sourceStartMs) / 1_000,
+            preferredTimescale: 600
+        )
+        let duration = CMTime(
+            seconds: Double(fragment.endMs - fragment.startMs) / 1_000,
+            preferredTimescale: 600
+        )
+        guard duration > .zero else { throw CallRedactionPlanError.stagedFileMismatch }
+        reader.timeRange = CMTimeRange(start: offset, duration: duration)
+        guard writer.startWriting(), reader.startReading() else {
+            throw writer.error ?? reader.error ?? CallRedactionPlanError.stagedFileMismatch
+        }
+        writer.startSession(atSourceTime: offset)
+
+        var videoFinished = false
+        var audioFinished = audioOutput == nil
+        while !videoFinished || !audioFinished {
+            var progressed = false
+            if !videoFinished, videoInput.isReadyForMoreMediaData {
+                if let sample = videoOutput.copyNextSampleBuffer() {
+                    guard videoInput.append(sample) else {
+                        reader.cancelReading()
+                        writer.cancelWriting()
+                        throw writer.error ?? CallRedactionPlanError.stagedFileMismatch
+                    }
+                } else {
+                    videoInput.markAsFinished()
+                    videoFinished = true
+                }
+                progressed = true
+            }
+            if !audioFinished,
+               let audioOutput,
+               let audioInput,
+               audioInput.isReadyForMoreMediaData {
+                if let sample = audioOutput.copyNextSampleBuffer() {
+                    guard audioInput.append(sample) else {
+                        reader.cancelReading()
+                        writer.cancelWriting()
+                        throw writer.error ?? CallRedactionPlanError.stagedFileMismatch
+                    }
+                } else {
+                    audioInput.markAsFinished()
+                    audioFinished = true
+                }
+                progressed = true
+            }
+            if !progressed { try await Task.sleep(for: .milliseconds(2)) }
+            guard reader.status != .failed, writer.status != .failed else {
+                reader.cancelReading()
+                writer.cancelWriting()
+                throw writer.error ?? reader.error ?? CallRedactionPlanError.stagedFileMismatch
+            }
+        }
+        guard reader.status == .completed else {
+            writer.cancelWriting()
+            throw reader.error ?? CallRedactionPlanError.stagedFileMismatch
+        }
+        await writer.finishWriting()
+        guard writer.status == .completed else {
+            throw writer.error ?? CallRedactionPlanError.stagedFileMismatch
+        }
     }
 
     private func writeVerified(_ data: Data, survivor: CallRedactionChunkManifest) throws {
@@ -387,6 +778,22 @@ struct CallRedactionFileStore {
 
     private static func digest(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func containedURL(_ relativePath: String) throws -> URL {
+        guard CapturedMediaReconciler.isSafeRelativePath(relativePath) else {
+            throw CallRedactionPlanError.invalidChunk
+        }
+        let url = mediaRoot.appendingPathComponent(relativePath).standardizedFileURL
+        guard url.path.hasPrefix(mediaRoot.path + "/") else {
+            throw CallRedactionPlanError.invalidChunk
+        }
+        return url
+    }
+
+    private static func saturatingAdd(_ lhs: Int64, _ rhs: Int64) -> Int64 {
+        let result = lhs.addingReportingOverflow(rhs)
+        return result.overflow ? Int64.max : result.partialValue
     }
 }
 

@@ -64,6 +64,71 @@ struct ScreenStreamPixelFrame: @unchecked Sendable {
     let stamp: ScreenStreamFrameStamp
 }
 
+/// A native screenshot cannot wait for FramePipeline's actor executor: that
+/// executor may be inside synchronous HEIC/OCR work. This controller owns only
+/// the physical SCK stop task. FramePipeline remains the lifecycle owner and
+/// joins the same task later to publish the confirmed teardown.
+final class ScreenStreamImmediateStopController: @unchecked Sendable {
+    private struct SendableStream: @unchecked Sendable {
+        let value: SCStream
+    }
+
+    private struct InFlight {
+        let streamID: ObjectIdentifier
+        let task: Task<Bool, Never>
+    }
+
+    private let lock = NSLock()
+    private let resourceCoordinator: SCKResourceCoordinator
+    private var inFlight: InFlight?
+
+    init(resourceCoordinator: SCKResourceCoordinator) {
+        self.resourceCoordinator = resourceCoordinator
+    }
+
+    @discardableResult
+    func requestStop(stream: SCStream) -> Bool {
+        let streamID = ObjectIdentifier(stream)
+        lock.lock()
+        if inFlight?.streamID == streamID {
+            lock.unlock()
+            return false
+        }
+        guard inFlight == nil else {
+            lock.unlock()
+            return false
+        }
+        let sendableStream = SendableStream(value: stream)
+        let coordinator = resourceCoordinator
+        let task = Task.detached(priority: .userInitiated) {
+            do {
+                try await coordinator.withExclusiveAccess(owner: .screen, operation: .stop) {
+                    try await sendableStream.value.stopCapture()
+                }
+                return true
+            } catch {
+                return false
+            }
+        }
+        inFlight = InFlight(streamID: streamID, task: task)
+        lock.unlock()
+        return true
+    }
+
+    func task(for stream: SCStream) -> Task<Bool, Never>? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard inFlight?.streamID == ObjectIdentifier(stream) else { return nil }
+        return inFlight?.task
+    }
+
+    func clear(stream: SCStream) {
+        lock.lock()
+        if inFlight?.streamID == ObjectIdentifier(stream) { inFlight = nil }
+        lock.unlock()
+    }
+}
+
 /// ScreenCaptureKit invokes this object on a utility queue. All callback state
 /// is behind one lock, and the only pending work is one latest continuation.
 /// A second intent supersedes the older waiter instead of queuing more work.
@@ -77,6 +142,7 @@ final class ScreenCaptureStreamOutput: NSObject, SCStreamOutput, SCStreamDelegat
     private let lock = NSLock()
     private let livenessTimeoutNs: UInt64
     private let eventDelivery: ScreenStreamEventDelivery
+    private var boundStream: SCStream?
     private var streamID: ObjectIdentifier?
     private var boundGeneration: Int64?
     private var admissionOpen = false
@@ -107,6 +173,7 @@ final class ScreenCaptureStreamOutput: NSObject, SCStreamOutput, SCStreamDelegat
         oldWaiter = waiter
         waiter = nil
         latestPixelBuffer = nil
+        boundStream = stream
         streamID = ObjectIdentifier(stream)
         boundGeneration = generation
         admissionOpen = true
@@ -209,6 +276,7 @@ final class ScreenCaptureStreamOutput: NSObject, SCStreamOutput, SCStreamDelegat
             return
         }
         streamID = nil
+        boundStream = nil
         boundGeneration = nil
         admissionOpen = false
         publication.end()
@@ -246,6 +314,33 @@ final class ScreenCaptureStreamOutput: NSObject, SCStreamOutput, SCStreamDelegat
         waiter = nil
         lock.unlock()
         stoppedWaiter?.continuation.resume(throwing: ScreenCaptureStreamError.stopped)
+    }
+
+    /// Synchronously closes visual admission and returns the exact physical
+    /// stream. Safe from the listen-only hotkey callback even while the
+    /// FramePipeline actor is busy with image processing.
+    func closeAdmissionForNativeScreenshot() -> SCStream? {
+        let stoppedWaiter: Waiter?
+        let stream: SCStream?
+        lock.lock()
+        guard admissionOpen, let current = boundStream else {
+            lock.unlock()
+            return nil
+        }
+        admissionOpen = false
+        publication.end()
+        policy.endGeneration()
+        liveness.stopped()
+        watchdog?.cancel()
+        watchdog = nil
+        latestPixelBuffer = nil
+        missingPixels.reset()
+        stoppedWaiter = waiter
+        waiter = nil
+        stream = current
+        lock.unlock()
+        stoppedWaiter?.continuation.resume(throwing: ScreenCaptureStreamError.stopped)
+        return stream
     }
 
     func nextFrame(generation: Int64) async throws -> ScreenStreamPixelFrame {
@@ -409,6 +504,7 @@ final class ScreenCaptureStreamOutput: NSObject, SCStreamOutput, SCStreamDelegat
             : nil
         externallyStoppedStreamID = ObjectIdentifier(stream)
         streamID = nil
+        boundStream = nil
         boundGeneration = nil
         admissionOpen = false
         publication.end()

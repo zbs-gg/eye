@@ -53,7 +53,16 @@ final class CallRecordingStore {
     @ObservationIgnored private var endCompletionRequested = false
     @ObservationIgnored private var endIntentPreparationTask: Task<Void, Never>?
     @ObservationIgnored private var endIntentPreparationGeneration: UInt64 = 0
+    @ObservationIgnored private var nativeScreenshotGeneration: UInt64 = 0
+    @ObservationIgnored private var nativeScreenshotTask: Task<Void, Never>?
+    @ObservationIgnored private var desiredRecordingMode: CallRecordingMode?
+    @ObservationIgnored private var recordingModeTask: Task<Void, Never>?
     @ObservationIgnored var requestedSources: @MainActor () -> CallSourceSelection = { .none }
+    /// AppEnvironment uses the explicit one-Call mode here so manual Start can
+    /// record while the persisted default remains Don't record.
+    @ObservationIgnored var requestedSourcesForMode:
+        (@MainActor (CallRecordingMode) -> CallSourceSelection)?
+    @ObservationIgnored var requestedMode: @MainActor () -> CallRecordingMode = { .audio }
     @ObservationIgnored var admissionAllowed: @MainActor () -> Bool = { true }
     @ObservationIgnored var automaticStartAdmissionAllowed: @MainActor () -> Bool = { true }
     @ObservationIgnored var onManualStartWhileActive: @MainActor (Int64) -> Void = { _ in }
@@ -61,6 +70,8 @@ final class CallRecordingStore {
     @ObservationIgnored var onEndWillPrepare:
         @MainActor @Sendable (CallStopReason) async -> Void = { _ in }
     @ObservationIgnored var onEndCompleted: @MainActor (CallStopReason, Bool) -> Void = { _, _ in }
+    @ObservationIgnored var waitForNativeScreenshotRelease:
+        @MainActor @Sendable () async -> Void = {}
 
     var isActive: Bool {
         switch snapshot.phase {
@@ -86,12 +97,20 @@ final class CallRecordingStore {
         self.coordinator = coordinator
     }
 
+    func publishAdoptedSnapshot(_ snapshot: CallCoordinatorSnapshot) {
+        guard snapshot.phase == .recording, snapshot.callID != nil else { return }
+        self.snapshot = snapshot
+        starting = false
+        ending = false
+        terminationCallID = nil
+    }
+
     func setExternalError(_ message: String?) {
         errorMessage = message
     }
 
     /// Latches only closing automatic-admission edges across asynchronous audio startup. A gate
-    /// that closes and reopens while CoreAudio/ScreenCaptureKit is suspended must still release and
+    /// that closes and reopens while physical audio startup is suspended must still release and
     /// re-probe the original detector owner. Opening or unrelated configuration changes must not
     /// fragment a healthy in-flight start.
     func automaticStartAdmissionChanged(isClosed: Bool) {
@@ -124,7 +143,7 @@ final class CallRecordingStore {
         canPublishAutomaticStart(callID: callID)
     }
 
-    func start() {
+    func start(mode explicitMode: CallRecordingMode? = nil) {
         guard let coordinator else { return }
         if isActive, let callID = snapshot.callID {
             onManualStartWhileActive(callID)
@@ -136,7 +155,12 @@ final class CallRecordingStore {
             return
         }
         errorMessage = nil
-        let requested = requestedSources()
+        let mode = explicitMode ?? requestedMode()
+        guard mode != .off else {
+            errorMessage = "Choose Audio only or Audio and video for this Call."
+            return
+        }
+        let requested = requestedSourcesForMode?(mode) ?? requestedSources()
         starting = true
         snapshot = CallCoordinatorSnapshot(
             phase: .starting,
@@ -144,7 +168,9 @@ final class CallRecordingStore {
             me: requested.me ? .unavailable : .disabled,
             system: requested.system ? .unavailable : .disabled,
             bookmarkCount: 0,
-            stopReason: nil
+            stopReason: nil,
+            recordingMode: mode,
+            video: mode.recordsVideo ? .starting : .disabled
         )
         startGeneration &+= 1
         let generation = startGeneration
@@ -168,6 +194,7 @@ final class CallRecordingStore {
                 }
                 self.snapshot = try await coordinator.start(
                     request: requested,
+                    recordingMode: mode,
                     startAdmissionLease: startAdmissionLease
                 )
             } catch {
@@ -186,7 +213,9 @@ final class CallRecordingStore {
         guard admissionAllowed(), automaticStartAdmissionAllowed() else {
             return .admissionClosed
         }
-        let requested = requestedSources()
+        let mode = requestedMode()
+        guard mode != .off else { return .failed }
+        let requested = requestedSourcesForMode?(mode) ?? requestedSources()
         guard !requested.isEmpty else {
             return automaticStartAdmissionAllowed() ? .failed : .admissionClosed
         }
@@ -198,7 +227,9 @@ final class CallRecordingStore {
             me: requested.me ? .unavailable : .disabled,
             system: requested.system ? .unavailable : .disabled,
             bookmarkCount: 0,
-            stopReason: nil
+            stopReason: nil,
+            recordingMode: mode,
+            video: mode.recordsVideo ? .starting : .disabled
         )
         startGeneration &+= 1
         let generation = startGeneration
@@ -227,6 +258,7 @@ final class CallRecordingStore {
                 }
                 self.snapshot = try await coordinator.start(
                     request: requested,
+                    recordingMode: mode,
                     idempotencyKey: idempotencyKey,
                     startAdmissionLease: startAdmissionLease
                 )
@@ -269,6 +301,106 @@ final class CallRecordingStore {
             return .failed
         }
         return .started(snapshot)
+    }
+
+    /// Changes only the replaceable video leg. Audio remains owned by the
+    /// existing Call. `off` is a terminal user save, not a silent discard.
+    func setRecordingMode(_ mode: CallRecordingMode) {
+        guard isActive || starting else { return }
+        if mode == .off {
+            desiredRecordingMode = nil
+            recordingModeTask?.cancel()
+            end()
+            return
+        }
+        guard let coordinator else { return }
+        desiredRecordingMode = mode
+        guard recordingModeTask == nil else { return }
+        recordingModeTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.recordingModeTask = nil }
+            while !Task.isCancelled,
+                  self.isActive || self.starting,
+                  let desired = self.desiredRecordingMode {
+                if desired == .off { break }
+                if self.starting, let startTask = self.startTask {
+                    // Settings can change while physical audio is still
+                    // starting even though the in-card picker is disabled.
+                    // Join that exact start before queuing a replaceable-video
+                    // command, then reconcile the still-latest selection.
+                    await startTask.value
+                    continue
+                }
+                do {
+                    let applied = try await coordinator.setRecordingMode(desired)
+                    if self.desiredRecordingMode == desired {
+                        self.snapshot = applied
+                        self.desiredRecordingMode = nil
+                        break
+                    }
+                    // A newer selection arrived while the replaceable video
+                    // leg was changing. Publish only authoritative coordinator
+                    // state, then loop so the latest user choice is applied last.
+                    self.snapshot = await coordinator.snapshot()
+                } catch {
+                    self.errorMessage = error.localizedDescription
+                    self.snapshot = await coordinator.snapshot()
+                    if !self.isActive, !self.starting {
+                        self.desiredRecordingMode = nil
+                        break
+                    }
+                    if self.desiredRecordingMode == desired {
+                        self.desiredRecordingMode = nil
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    /// Test/teardown joins only the replaceable video reconciliation. It never
+    /// waits for or changes Call audio.
+    func waitForRecordingModeReconciliation() async {
+        while let task = recordingModeTask {
+            await task.value
+        }
+    }
+
+    func nativeScreenshotRequested() {
+        guard let coordinator, snapshot.recordingMode.recordsVideo else { return }
+        coordinator.requestImmediateVideoYieldForNativeScreenshot()
+        nativeScreenshotGeneration &+= 1
+        guard nativeScreenshotTask == nil else { return }
+        nativeScreenshotTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                let generation = self.nativeScreenshotGeneration
+                let callID = self.snapshot.callID
+                self.snapshot = await coordinator.yieldVideoForNativeScreenshot()
+                await self.waitForNativeScreenshotRelease()
+                guard !Task.isCancelled else { break }
+                // A later hotkey/process edge extended the physical quiet
+                // window. Join it before video is allowed to restart.
+                guard generation == self.nativeScreenshotGeneration else { continue }
+                if let callID {
+                    self.snapshot = await coordinator.resumeVideoAfterNativeScreenshot(
+                        callID: callID
+                    )
+                }
+                guard generation == self.nativeScreenshotGeneration else { continue }
+                break
+            }
+            self.nativeScreenshotTask = nil
+        }
+    }
+
+    func videoStateChangedExternally(_ state: CallVideoState) {
+        guard let coordinator else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await coordinator.videoStateChangedExternally(state)
+            self.snapshot = await coordinator.snapshot()
+        }
     }
 
     func bookmark() {

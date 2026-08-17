@@ -3,7 +3,10 @@ import XCTest
 
 final class AppRelaunchPlanTests: XCTestCase {
     func testReplacementOpenIsPlannedOnlyAfterOldProcessExit() throws {
-        let bundle = URL(fileURLWithPath: "/Applications/ZBS Eye.app")
+        let bundle = URL(
+            fileURLWithPath: "/Applications/ZBS Eye.app",
+            isDirectory: true
+        ).standardizedFileURL
         let plan = AppRelaunchPlan(parentProcessID: 42, bundleURL: bundle)
         var events: [String] = []
 

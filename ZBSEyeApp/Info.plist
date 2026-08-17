@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>ZBS Eye</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>ZBS Eye</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>LSUIElement</key>
+	<false/>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>ZBS Eye records system audio locally during enabled Calls and Timeline audio capture, so conversations can be searched.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>ZBS Eye records and transcribes audio locally, to make conversations searchable.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>ZBS Eye reads the screen for your activity history, timeline, and optional Call video. Everything stays on your device.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>ZBS Eye recognizes speech on-device to make audio searchable.</string>
+</dict>
+</plist>

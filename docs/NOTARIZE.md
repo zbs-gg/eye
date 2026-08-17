@@ -41,6 +41,18 @@ parentheses: `Developer ID Application: Name (ABCDE12345)`).
 ```bash
 bash scripts/build-notarized.sh
 ```
+
+For the pre-merge artifact that must pass the physical gate, name the exact pushed PR branch explicitly:
+
+```bash
+ZBSEYE_RELEASE_CANDIDATE_REF=codex/reliable-call-recording-release \
+  bash scripts/build-notarized.sh
+```
+
+This is not permission to publish. The preflight freshly fetches both refs, requires `HEAD` to equal that remote
+branch exactly, and requires `origin/main` to be its ancestor. After physical PASS, land that same commit on
+`main` without rewriting its SHA. If the repository cannot fast-forward the exact commit, build a new candidate
+from the resulting `main` and repeat the physical gate; tree equivalence is not accepted as artifact identity.
 The script does it all: builds Release with **Hardened Runtime**, signs with **Developer ID** + a secure
 timestamp, packages the e5 retrieval model, submits to Apple (`notarytool --wait`, ~2–10 min), runs `stapler staple`
 and checks `spctl` (it should be `accepted, source=Notarized Developer ID`). Before `xcodegen` or archive work,
@@ -176,10 +188,20 @@ For the `0.7.0 (21)` automatic-Call change, the completed report must also expli
 - an exact `codex_chronicle` microphone pulse creates no Call;
 - an exact user audio exclusion prevents automatic Call admission without removing the app from screen history,
   and removing that exclusion re-arms current microphone activity;
-- **Audio Off** and privacy pause finish and disarm the active automatic Call, while ending Pause Timeline does
+- **Don't record** and privacy pause finish and disarm the active automatic Call, while ending Pause Timeline does
   neither; reopening the hard gate re-arms without requiring an app restart;
 - detected end saves once after 30 seconds, **End & save** saves once, **This wasn’t a call** erases only that
   automatic Call, and none of those surfaces offers Undo.
+
+For the `0.9.0 (40)` three-mode, Call-video, resilient Call-audio helper, and Core Audio system-capture change, the generated report must additionally prove every row
+under **Three-mode Call and Call-video gates**. That section binds the exact reverse-verified ZIP and manifest,
+requires real Audio only and Audio and video Calls plus live mode switching, and treats any unexplained audio
+gap, `telemetryOverflow`, `consumerOverflow`, or native-screenshot latency above the Eye-off baseline by more
+than 250 ms as a release blocker. It also covers fixed-display behavior, display removal, two monitors,
+lock/unlock, low disk, crash/relaunch, deletion, physical trimming, export hashes, and REST/MCP/UI agreement.
+The crash rows must prove that force-terminating only the GUI leaves both authoritative PCM files advancing,
+relaunch adopts the same Call, and force-terminating the audio helper produces an explicit bounded gap followed by
+a new epoch rather than silently ending the Call.
 
 Leave `Pending manual execution` in place until all rows are evidenced against this exact candidate. Notarization,
 unit tests, fixture gates, an earlier build's checklist, or one short Call cannot substitute for this physical gate.
@@ -188,7 +210,8 @@ If the draft fails any step, delete the draft, restore the last known-good insta
 advance both version and build before rebuilding. Do not publish a failed candidate or replace bytes under an
 existing version.
 
-Re-run `bash scripts/release-preflight.sh --verify-only` immediately before the public transition. After
+Unset `ZBSEYE_RELEASE_CANDIDATE_REF`, then re-run `bash scripts/release-preflight.sh --verify-only` immediately
+before the public transition. It must now identify the same source revision as clean canonical `main`. After
 publishing, verify that GitHub reports the expected size and SHA-256 digest for both public assets; a public
 artifact is immutable release history. If post-public verification ever fails, withdraw the release and tag,
 restore the last known-good app, and ship the correction under a higher version/build.
@@ -209,7 +232,7 @@ Use the exact ZIP named by the verified manifest; do not select an artifact by w
 artifact verifier above against the downloaded ZIP, downloaded manifest, and retained qualified manifest,
 then unzip that exact candidate into `/Applications`
 and launch with a **double-click** — Gatekeeper passes it without "Open Anyway"
-(even offline, thanks to the stapled ticket). Screen Recording / Accessibility / Microphone permissions are
+(even offline, thanks to the stapled ticket). Screen Recording / Accessibility / Microphone / System Audio Recording permissions are
 granted once; the signature is stable, rebuilds don't reset them.
 
 ## If notarytool rejected it

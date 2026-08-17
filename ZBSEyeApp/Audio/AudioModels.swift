@@ -6,6 +6,7 @@ import Foundation
 enum AudioFrameTimingProvenance: String, Codable, Sendable, Equatable {
     case microphone
     case screenCaptureKit
+    case coreAudioTap
     case callbackFallback
 }
 

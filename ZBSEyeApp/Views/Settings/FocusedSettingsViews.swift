@@ -98,7 +98,18 @@ struct PermissionsSettingsView: View {
     private var audioGroup: some View {
         @Bindable var audio = env.audioSettings
         return SettingsGroup("Audio") {
-            Picker("Record audio", selection: $audio.audioMode) {
+            Picker("Calls", selection: $audio.callRecordingMode) {
+                ForEach(CallRecordingMode.allCases, id: \.self) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            Text(callRecordingModeSummary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Divider()
+            Picker("Timeline audio", selection: $audio.audioMode) {
                 ForEach(AudioMode.allCases, id: \.self) { mode in
                     Text(mode.label).tag(mode)
                 }
@@ -110,7 +121,7 @@ struct PermissionsSettingsView: View {
 
             Divider()
             Toggle("System audio outside calls", isOn: $audio.recordSystemAudio)
-            Text("Turn this off to keep ordinary playback out of Timeline. An automatically detected or manually started Call still records separate microphone and system tracks; Audio Off disables both.")
+            Text("These Timeline settings do not change Calls. Every recorded Call keeps separate microphone and system tracks.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -122,10 +133,18 @@ struct PermissionsSettingsView: View {
         }
     }
 
+    private var callRecordingModeSummary: String {
+        switch env.audioSettings.callRecordingMode {
+        case .off: String(localized: "Automatic Calls are off. Manual Start asks what to record once.")
+        case .audio: String(localized: "Calls keep separate microphone and system-audio tracks. Timeline screen capture pauses.")
+        case .audioVideo: String(localized: "Calls also record the starting display at up to 1080p and 15 fps. Audio always has priority.")
+        }
+    }
+
     private var audioModeSummary: String {
         switch env.audioSettings.audioMode {
         case .off: String(localized: "Audio is off. Screen capture continues.")
-        case .meetingsOnly: String(localized: "Eligible microphone use starts a Call even while screen recording is stopped. Audio Off or privacy pause disables it.")
+        case .meetingsOnly: String(localized: "Timeline audio runs only while Eye has detected an active conversation.")
         case .always: String(localized: "Audio follows recording continuously.")
         }
     }

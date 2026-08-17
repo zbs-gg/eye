@@ -24,17 +24,22 @@ final class ReleaseConfigurationTests: XCTestCase {
             expectedVersion: String = "0.4.5",
             expectedBuild: String = "10",
             remoteOverride: URL? = nil,
-            verifyOnly: Bool = false
+            verifyOnly: Bool = false,
+            candidateRef: String? = nil
         ) throws -> CommandResult {
-            try Self.run(
+            var environment = [
+                "ZBSEYE_RELEASE_PREFLIGHT_FIXTURE": "1",
+                "ZBSEYE_RELEASE_PREFLIGHT_FIXTURE_REMOTE": (remoteOverride ?? remote).path,
+                "ZBSEYE_PREFLIGHT_EXPECT_VERSION": expectedVersion,
+                "ZBSEYE_PREFLIGHT_EXPECT_BUILD": expectedBuild,
+            ]
+            if let candidateRef {
+                environment["ZBSEYE_RELEASE_CANDIDATE_REF"] = candidateRef
+            }
+            return try Self.run(
                 "/bin/bash",
                 [script.path] + (verifyOnly ? ["--verify-only"] : []) + ["--fixture", worktree.path],
-                environment: [
-                    "ZBSEYE_RELEASE_PREFLIGHT_FIXTURE": "1",
-                    "ZBSEYE_RELEASE_PREFLIGHT_FIXTURE_REMOTE": (remoteOverride ?? remote).path,
-                    "ZBSEYE_PREFLIGHT_EXPECT_VERSION": expectedVersion,
-                    "ZBSEYE_PREFLIGHT_EXPECT_BUILD": expectedBuild,
-                ]
+                environment: environment
             )
         }
 
@@ -77,6 +82,19 @@ final class ReleaseConfigurationTests: XCTestCase {
             _ = try Self.runChecked("/usr/bin/git", ["add", "remote.txt"], directory: updater)
             _ = try Self.runChecked("/usr/bin/git", ["commit", "-m", "advance remote"], directory: updater)
             _ = try Self.runChecked("/usr/bin/git", ["push", "origin", "main"], directory: updater)
+        }
+
+        func publishCurrentCandidate(on ref: String) throws {
+            _ = try ReleaseFixture.runChecked(
+                "/usr/bin/git",
+                ["push", remote.path, "HEAD:refs/heads/\(ref)"],
+                directory: worktree
+            )
+            _ = try ReleaseFixture.runChecked(
+                "/usr/bin/git",
+                ["push", "--force", remote.path, "HEAD^:refs/heads/main"],
+                directory: worktree
+            )
         }
 
         static func make(script: URL, includeBaseline: Bool = true) throws -> ReleaseFixture {
@@ -156,7 +174,23 @@ final class ReleaseConfigurationTests: XCTestCase {
             process.currentDirectoryURL = directory
             process.standardOutput = pipe
             process.standardError = pipe
-            process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+            let hermeticGitEnvironment = [
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": "/dev/null",
+                "GIT_TERMINAL_PROMPT": "0",
+            ]
+            var processEnvironment = ProcessInfo.processInfo.environment
+            // XCTest injects the launching Xcode's SDK and dynamic-loader paths into
+            // test processes. Hosted runners may have a different Xcode selected for
+            // /usr/bin/git, and forwarding those paths makes Apple's git shim load two
+            // Xcode installations at once. Child command-line tools need a clean tool
+            // environment; keep DEVELOPER_DIR when the workflow selected it explicitly.
+            for key in ["SDKROOT", "DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH"] {
+                processEnvironment.removeValue(forKey: key)
+            }
+            process.environment = processEnvironment
+                .merging(hermeticGitEnvironment) { _, new in new }
+                .merging(environment) { _, new in new }
             try process.run()
             process.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
@@ -298,6 +332,9 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertTrue(script.contains("notarySubmissionID"))
         XCTAssertTrue(script.contains("notaryLogSHA256"))
         XCTAssertTrue(script.contains("bundleIdentifier"))
+        XCTAssertTrue(script.contains("resilient Call-audio LaunchAgent"))
+        XCTAssertTrue(script.contains("Contents/MacOS/ZBS Eye"))
+        XCTAssertTrue(script.contains("--call-audio-helper"))
         XCTAssertTrue(script.contains("sourceTreeState"))
         XCTAssertTrue(script.contains("notarized"))
         XCTAssertTrue(script.contains("stapled"))
@@ -322,13 +359,36 @@ final class ReleaseConfigurationTests: XCTestCase {
         )
 
         XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION:").count - 1, 2)
-        XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION: \"0.8.0\"").count - 1, 2)
+        XCTAssertEqual(project.components(separatedBy: "MARKETING_VERSION: \"0.9.0\"").count - 1, 2)
         XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION:").count - 1, 2)
-        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"22\"").count - 1, 2)
-        XCTAssertTrue(notices.contains("Release: 0.8.0 (build 22 candidate)"))
+        XCTAssertEqual(project.components(separatedBy: "CURRENT_PROJECT_VERSION: \"40\"").count - 1, 2)
+        XCTAssertTrue(notices.contains("Release: 0.9.0 (build 40)"))
     }
 
-    func testUnqualifiedCandidateDocumentationDoesNotClaimAPublicRelease() throws {
+    func testCallAudioLaunchAgentIsBundledAndSameSigned() throws {
+        let project = try String(
+            contentsOf: repositoryRoot.appending(path: "project.yml"),
+            encoding: .utf8
+        )
+        let helper = try String(
+            contentsOf: repositoryRoot.appending(path: "ZBSEyeApp/Calls/CallAudioHelper.swift"),
+            encoding: .utf8
+        )
+        let plistURL = repositoryRoot.appending(path: "Support/gg.zbs.eye.call-audio.plist")
+        let plist = try String(contentsOf: plistURL, encoding: .utf8)
+
+        XCTAssertTrue(project.contains("Bundle Call Audio LaunchAgent"))
+        XCTAssertTrue(project.contains("${CONTENTS_FOLDER_PATH}/Library/LaunchAgents"))
+        XCTAssertTrue(plist.contains("<string>--call-audio-helper</string>"))
+        XCTAssertTrue(plist.contains("<key>SuccessfulExit</key>"))
+        XCTAssertTrue(helper.contains("SMAppService.agent(plistName:"))
+        XCTAssertTrue(helper.contains("certificate leaf[subject.OU]"))
+        XCTAssertTrue(helper.contains("44N4NZ86S5"))
+        XCTAssertTrue(helper.contains("setConnectionCodeSigningRequirement"))
+        XCTAssertTrue(helper.contains("setCodeSigningRequirement"))
+    }
+
+    func testPublishedReleaseDocumentationNamesTheExactPublicArtifact() throws {
         let readme = try String(
             contentsOf: repositoryRoot.appending(path: "README.md"),
             encoding: .utf8
@@ -342,14 +402,12 @@ final class ReleaseConfigurationTests: XCTestCase {
             .filter { !$0.isEmpty }
             .joined(separator: " ")
 
-        XCTAssertTrue(normalizedReadme.contains("public stable release is 0.7.0"))
+        XCTAssertTrue(normalizedReadme.contains("public stable release is 0.8.0"))
         XCTAssertTrue(normalizedReadme.contains("0.8.0 (build 22)"))
-        XCTAssertTrue(normalizedReadme.contains("source candidate"))
-        XCTAssertTrue(changelog.contains("## [0.8.0] — Unreleased"))
-        XCTAssertFalse(changelog.contains("## [0.8.0] — 2026"))
+        XCTAssertTrue(changelog.contains("## [0.8.0] — 2026-08-08"))
     }
 
-    func testCallQualificationScriptsDoNotShareTheGenericDerivedDataCache() throws {
+    func testCallQualificationUsesDisposableCacheUnlessExplicitlyOverridden() throws {
         let recording = try String(
             contentsOf: repositoryRoot.appending(path: "scripts/verify-call-recording.sh"),
             encoding: .utf8
@@ -359,10 +417,45 @@ final class ReleaseConfigurationTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(recording.contains("build/CallRecordingDerivedData"))
+        XCTAssertTrue(recording.contains("ZBS_EYE_CALL_DERIVED_DATA_PATH"))
+        XCTAssertTrue(recording.contains("mktemp -d"))
+        XCTAssertTrue(recording.contains("trap cleanup_temp_derived_data EXIT INT TERM"))
+        XCTAssertTrue(recording.contains("rm -rf -- \"$TEMP_DERIVED_DATA\""))
+        XCTAssertFalse(recording.contains("build/CallRecordingDerivedData"))
         XCTAssertTrue(automation.contains("build/CallAutomationDerivedData"))
         XCTAssertFalse(recording.contains("PATH:-build/DerivedData"))
         XCTAssertFalse(automation.contains("PATH:-build/DerivedData"))
+    }
+
+    func testPhysicalCallQualificationCoversThreeModeVideoReleaseGate() throws {
+        let script = try String(
+            contentsOf: repositoryRoot.appending(path: "scripts/verify-call-recording.sh"),
+            encoding: .utf8
+        )
+
+        for requiredEvidence in [
+            "Don't record",
+            "Audio only",
+            "Audio and video",
+            "Audio → video → audio → video",
+            "1920×1080 and 15 fps",
+            "Eye-off baseline",
+            "+250 ms",
+            "telemetryOverflow",
+            "consumerOverflow",
+            "Disconnecting the selected display",
+            "Trimming physically rebuilds",
+            "call-video-segment:<id>",
+            "Qualified ZIP SHA-256",
+            "Qualified manifest SHA-256",
+        ] {
+            XCTAssertTrue(script.contains(requiredEvidence), "missing physical gate: \(requiredEvidence)")
+        }
+        XCTAssertTrue(
+            script.contains(#"cat >> "$report" <<'EOF'"#),
+            "the Markdown checklist must not execute inline code while generating the report"
+        )
+        XCTAssertTrue(script.contains("Pending manual execution on the exact reverse-verified"))
     }
 
     func testNotarizedBuildDoesNotShareTheGenericDerivedDataCache() throws {
@@ -528,6 +621,57 @@ final class ReleaseConfigurationTests: XCTestCase {
         XCTAssertEqual(result.status, 0, result.output)
         XCTAssertTrue(result.output.contains("release preflight passed"), result.output)
         XCTAssertTrue(result.output.contains("ZBSEYE_RELEASE_PREFLIGHT_IDENTITY=0.4.5:10:"), result.output)
+    }
+
+    func testReleasePreflightAcceptsExactRemoteDraftDescendantWithoutAuthorizingPublication() throws {
+        let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+        let ref = "codex/reliable-call-recording-release"
+        try fixture.publishCurrentCandidate(on: ref)
+
+        let result = try fixture.runPreflight(candidateRef: ref)
+
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("draft candidate origin/\(ref)"), result.output)
+        XCTAssertTrue(result.output.contains("ZBSEYE_RELEASE_PREFLIGHT_IDENTITY=0.4.5:10:"), result.output)
+    }
+
+    func testReleasePreflightRejectsMissingStaleDivergentAndInvalidDraftRefs() throws {
+        do {
+            let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+            let result = try fixture.runPreflight(candidateRef: "codex/missing")
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertTrue(result.output.contains("fetch"), result.output)
+        }
+        do {
+            let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+            let ref = "codex/stale"
+            try fixture.publishCurrentCandidate(on: ref)
+            try "later\n".write(
+                to: fixture.worktree.appending(path: "later.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
+            _ = try fixture.git("add", "later.txt")
+            _ = try fixture.git("commit", "-m", "unpublished candidate change")
+            let result = try fixture.runPreflight(candidateRef: ref)
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertTrue(result.output.contains("does not exactly match"), result.output)
+        }
+        do {
+            let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+            let ref = "codex/divergent"
+            try fixture.publishCurrentCandidate(on: ref)
+            try fixture.advanceRemote()
+            let result = try fixture.runPreflight(candidateRef: ref)
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertTrue(result.output.contains("does not descend"), result.output)
+        }
+        do {
+            let fixture = try ReleaseFixture.make(script: releasePreflightScript)
+            let result = try fixture.runPreflight(candidateRef: "../main")
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertTrue(result.output.contains("valid branch name"), result.output)
+        }
     }
 
     func testReleasePreflightRejectsTrackedStagedAndUntrackedChanges() throws {

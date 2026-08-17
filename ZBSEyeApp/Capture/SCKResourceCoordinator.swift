@@ -8,6 +8,7 @@ actor SCKResourceCoordinator {
     enum Owner: String, Sendable {
         case screen
         case systemAudio
+        case callVideo
     }
 
     enum Operation: String, Sendable {

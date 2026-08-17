@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-final class CallAudioSourcePolicyTests: XCTestCase {
+final class CallRecordingAdmissionPolicyTests: XCTestCase {
     private var audioCoordinatorSource: String {
         get throws {
             let projectRoot = URL(fileURLWithPath: #filePath)
@@ -14,40 +14,26 @@ final class CallAudioSourcePolicyTests: XCTestCase {
         }
     }
 
-    func testConfirmedCallRequestsBothLegsWhenAudioEnabled() {
-        for mode in [AudioMode.meetingsOnly, .always] {
+    func testRecordedCallRequestsBothLegsIndependentlyFromTimelineSettings() {
+        for mode in [CallRecordingMode.audio, .audioVideo] {
             XCTAssertEqual(
-                CallAudioSourcePolicy.requestedSources(
-                    audioMode: mode,
-                    manualOverride: nil
-                ),
+                CallRecordingAdmissionPolicy.requestedSources(mode: mode),
                 CallSourceSelection(me: true, system: true)
             )
         }
     }
 
-    func testAudioOffRemainsHardPrivacyStop() {
+    func testDontRecordClosesCallAudio() {
         XCTAssertEqual(
-            CallAudioSourcePolicy.requestedSources(
-                audioMode: .off,
-                manualOverride: true
-            ),
+            CallRecordingAdmissionPolicy.requestedSources(mode: .off),
             .none
         )
     }
 
-    func testForcedOffBlocksCurrentAndFutureAutomaticCalls() {
-        XCTAssertEqual(
-            CallAudioSourcePolicy.requestedSources(
-                audioMode: .meetingsOnly,
-                manualOverride: false
-            ),
-            .none
-        )
+    func testDontRecordBlocksAutomaticCalls() {
         XCTAssertFalse(
-            CallAudioSourcePolicy.allowsAutomaticCallStart(
-                audioMode: .meetingsOnly,
-                manualOverride: false,
+            CallRecordingAdmissionPolicy.allowsAutomaticCallStart(
+                mode: .off,
                 microphoneAvailable: true,
                 systemAudioAvailable: true
             )
@@ -56,25 +42,22 @@ final class CallAudioSourcePolicyTests: XCTestCase {
 
     func testAutomaticAdmissionNeedsAtLeastOneAvailableTrackAndReopensWhenGranted() {
         XCTAssertFalse(
-            CallAudioSourcePolicy.allowsAutomaticCallStart(
-                audioMode: .meetingsOnly,
-                manualOverride: nil,
+            CallRecordingAdmissionPolicy.allowsAutomaticCallStart(
+                mode: .audio,
                 microphoneAvailable: false,
                 systemAudioAvailable: false
             )
         )
         XCTAssertTrue(
-            CallAudioSourcePolicy.allowsAutomaticCallStart(
-                audioMode: .meetingsOnly,
-                manualOverride: nil,
+            CallRecordingAdmissionPolicy.allowsAutomaticCallStart(
+                mode: .audio,
                 microphoneAvailable: true,
                 systemAudioAvailable: false
             )
         )
         XCTAssertTrue(
-            CallAudioSourcePolicy.allowsAutomaticCallStart(
-                audioMode: .meetingsOnly,
-                manualOverride: nil,
+            CallRecordingAdmissionPolicy.allowsAutomaticCallStart(
+                mode: .audioVideo,
                 microphoneAvailable: false,
                 systemAudioAvailable: true
             )

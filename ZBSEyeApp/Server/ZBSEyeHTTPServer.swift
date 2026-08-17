@@ -561,15 +561,22 @@ actor ZBSEyeHTTPServer {
             return Self.badRequest("typed evidence_id required")
         }
         do {
-            guard let evidence = try await deps.calls.audioEvidence(reference: reference),
-                  let url = ManagedMediaResolver.url(
-                    relativePath: evidence.relativePath,
-                    mediaRoot: deps.mediaDir
-                  ),
+            let resolved: (String, String)?
+            if reference.hasPrefix("call-video-segment:") {
+                resolved = try await deps.calls.videoEvidence(reference: reference).map {
+                    ($0.relativePath, "video/mp4")
+                }
+            } else {
+                resolved = try await deps.calls.audioEvidence(reference: reference).map {
+                    ($0.relativePath, "application/octet-stream")
+                }
+            }
+            guard let resolved,
+                  let url = ManagedMediaResolver.url(relativePath: resolved.0, mediaRoot: deps.mediaDir),
                   let data = try? Data(contentsOf: url) else { return Self.notFound("call evidence") }
             return HTTPResponse(
                 statusCode: .ok,
-                headers: [HTTPHeader.contentType: "application/octet-stream"],
+                headers: [HTTPHeader.contentType: resolved.1],
                 body: data
             )
         } catch let error as CallEvidenceRequestError {
@@ -829,9 +836,9 @@ actor ZBSEyeHTTPServer {
           {"$ref":"#/components/parameters/Limit"},{"$ref":"#/components/parameters/Offset"}],
         "responses":{"200":{"description":"timed source-labelled segments","content":{"application/json":{"schema":{"$ref":"#/components/schemas/TranscriptPage"}}}},
           "400":{"$ref":"#/components/responses/BadRequest"},"404":{"$ref":"#/components/responses/NotFound"},"500":{"$ref":"#/components/responses/Failure"}}}},
-      "/v1/call/evidence":{"get":{"summary":"Resolve one typed managed audio evidence ref","parameters":[
+      "/v1/call/evidence":{"get":{"summary":"Resolve one typed managed Call media ref","parameters":[
           {"$ref":"#/components/parameters/EvidenceId"}],
-        "responses":{"200":{"description":"bounded local PCM evidence","content":{"application/octet-stream":{"schema":{"type":"string","format":"binary"}}}},
+        "responses":{"200":{"description":"bounded local PCM or MP4 evidence","content":{"application/octet-stream":{"schema":{"type":"string","format":"binary"}},"video/mp4":{"schema":{"type":"string","format":"binary"}}}},
           "400":{"$ref":"#/components/responses/BadRequest"},"404":{"$ref":"#/components/responses/NotFound"},"500":{"$ref":"#/components/responses/Failure"}}}},
       "/v1/timeline":{"get":{"summary":"Activity density by buckets","parameters":[
           {"name":"from","in":"query","required":true,"schema":{"type":"integer"}},
@@ -844,7 +851,7 @@ actor ZBSEyeHTTPServer {
      "components":{
       "parameters":{
        "CallId":{"name":"call_id","in":"query","required":true,"schema":{"type":"string","pattern":"^call:[1-9][0-9]*$"}},
-       "EvidenceId":{"name":"evidence_id","in":"query","required":true,"schema":{"type":"string","pattern":"^call-audio-chunk:[1-9][0-9]*$"}},
+       "EvidenceId":{"name":"evidence_id","in":"query","required":true,"schema":{"type":"string","pattern":"^call-(audio-chunk|video-segment):[1-9][0-9]*$"}},
        "Limit":{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100}},
        "Offset":{"name":"offset","in":"query","schema":{"type":"integer","minimum":0,"maximum":1000000}}},
       "responses":{
@@ -858,7 +865,7 @@ actor ZBSEyeHTTPServer {
        "CaptureCoverage":{"type":"object","required":["availability","intervals"],"properties":{"availability":{"type":"string","enum":["available","metadataUnavailable"]},"intervals":{"type":"array","items":{"$ref":"#/components/schemas/CaptureCoverageInterval"}}}},
        "CaptureLegStatus":{"type":"object","required":["leg","state","reason","generation","attempt","stateSinceMs"],"properties":{"leg":{"type":"string","enum":["screen","systemAudio"]},"state":{"type":"string","enum":["healthy","recovering","repairRequired","permissionBlocked","suspended","paused"]},"reason":{"type":"string"},"generation":{"type":"integer","format":"int64"},"attempt":{"type":"integer"},"stateSinceMs":{"type":"integer","format":"int64"},"lastCycleAtMs":{"type":"integer","format":"int64","nullable":true},"lastVerifiedProgressAtMs":{"type":"integer","format":"int64","nullable":true}}},
        "CaptureStatus":{"type":"object","required":["state","screenEnabled","systemAudioEnabled","legs","coverage"],"properties":{"state":{"type":"string","enum":["healthy","recovering","repairRequired","permissionBlocked","suspended","paused"]},"suspension":{"type":"string","nullable":true},"screenEnabled":{"type":"boolean"},"systemAudioEnabled":{"type":"boolean"},"legs":{"type":"array","items":{"$ref":"#/components/schemas/CaptureLegStatus"}},"coverage":{"$ref":"#/components/schemas/CaptureCoverage"}}},
-       "CallSummary":{"type":"object","required":["callId","startTs","state","status","retryable","participants","bookmarkCount","speakerStatus"],"properties":{"callId":{"type":"string"},"startTs":{"type":"integer","format":"int64"},"endTs":{"type":"integer","format":"int64","nullable":true},"state":{"type":"string"},"status":{"type":"string","enum":["recording","processing","retryable","ready","degraded"]},"retryable":{"type":"boolean"},"preferredRevisionKind":{"type":"string","nullable":true},"title":{"type":"string","nullable":true},"participants":{"type":"array","items":{"type":"string"}},"sourceApp":{"type":"string","nullable":true},"bookmarkCount":{"type":"integer","minimum":0},"speakerStatus":{"type":"string","enum":["unavailable","processing","ready","degraded"]}}},
+       "CallSummary":{"type":"object","required":["callId","startTs","state","status","retryable","participants","bookmarkCount","speakerStatus","recordingMode"],"properties":{"callId":{"type":"string"},"startTs":{"type":"integer","format":"int64"},"endTs":{"type":"integer","format":"int64","nullable":true},"state":{"type":"string"},"status":{"type":"string","enum":["recording","processing","retryable","ready","degraded"]},"retryable":{"type":"boolean"},"preferredRevisionKind":{"type":"string","nullable":true},"title":{"type":"string","nullable":true},"participants":{"type":"array","items":{"type":"string"}},"sourceApp":{"type":"string","nullable":true},"bookmarkCount":{"type":"integer","minimum":0},"speakerStatus":{"type":"string","enum":["unavailable","processing","ready","degraded"]},"recordingMode":{"type":"string","enum":["off","audio","audio_video"]}}},
        "CallListPage":{"type":"object","required":["limit","offset","hasMore","calls"],"properties":{"query":{"type":"string","nullable":true},"limit":{"type":"integer"},"offset":{"type":"integer"},"hasMore":{"type":"boolean"},"nextOffset":{"type":"integer","nullable":true},"calls":{"type":"array","items":{"$ref":"#/components/schemas/CallSummary"}}}},
        "CallCoverage":{"type":"object","required":["logicalStartMs","complete","hasExplicitGaps"],"properties":{"logicalStartMs":{"type":"integer","format":"int64"},"logicalEndMs":{"type":"integer","format":"int64","nullable":true},"complete":{"type":"boolean"},"hasExplicitGaps":{"type":"boolean"}}},
        "CallSource":{"type":"object","required":["source","health","spanCount","gapCount"],"properties":{"source":{"type":"string","enum":["me","system"]},"health":{"type":"string","enum":["available","gapped","missing"]},"spanCount":{"type":"integer"},"gapCount":{"type":"integer"},"coveredFromMs":{"type":"integer","format":"int64","nullable":true},"coveredToMs":{"type":"integer","format":"int64","nullable":true}}},
@@ -868,7 +875,10 @@ actor ZBSEyeHTTPServer {
        "Speaker":{"type":"object","required":["clusterKey","label","namingProvenance","intervals"],"properties":{"clusterKey":{"type":"string"},"label":{"type":"string"},"namingProvenance":{"type":"string","enum":["anonymous","accessibility","manual"]},"intervals":{"type":"array","items":{"$ref":"#/components/schemas/SpeakerInterval"}}}},
        "SpeakerRevision":{"type":"object","required":["revisionId","state","engine","modelRevision","speakers","intervalsTruncated"],"properties":{"revisionId":{"type":"string"},"state":{"type":"string"},"engine":{"type":"string"},"modelRevision":{"type":"string"},"speakers":{"type":"array","items":{"$ref":"#/components/schemas/Speaker"}},"intervalsTruncated":{"type":"boolean"}}},
        "EvidenceReference":{"type":"object","required":["evidenceId","source","startMs","endMs","bytes"],"properties":{"evidenceId":{"type":"string"},"source":{"type":"string","enum":["me","system"]},"startMs":{"type":"integer","format":"int64"},"endMs":{"type":"integer","format":"int64"},"bytes":{"type":"integer","format":"int64"}}},
-       "CallEnvelope":{"type":"object","required":["callId","startTs","state","status","retryable","coverage","sources","speakerStatus","bookmarkCount","evidence","evidenceTruncated"],"properties":{"callId":{"type":"string"},"startTs":{"type":"integer","format":"int64"},"endTs":{"type":"integer","format":"int64","nullable":true},"state":{"type":"string"},"status":{"type":"string"},"retryable":{"type":"boolean"},"degradationCode":{"type":"string","nullable":true},"coverage":{"$ref":"#/components/schemas/CallCoverage"},"sources":{"type":"array","items":{"$ref":"#/components/schemas/CallSource"}},"context":{"allOf":[{"$ref":"#/components/schemas/CallContext"}],"nullable":true},"preferredRevision":{"allOf":[{"$ref":"#/components/schemas/CallRevision"}],"nullable":true},"preferredSpeakerRevision":{"allOf":[{"$ref":"#/components/schemas/SpeakerRevision"}],"nullable":true},"speakerStatus":{"type":"string","enum":["unavailable","processing","ready","degraded"]},"bookmarkCount":{"type":"integer"},"evidence":{"type":"array","items":{"$ref":"#/components/schemas/EvidenceReference"}},"evidenceTruncated":{"type":"boolean"}}},
+       "CallVideoSegment":{"type":"object","required":["evidenceId","startMs","endMs","width","height","fps","codec","bytes","audioMuxed"],"properties":{"evidenceId":{"type":"string","pattern":"^call-video-segment:[1-9][0-9]*$"},"startMs":{"type":"integer","format":"int64"},"endMs":{"type":"integer","format":"int64"},"width":{"type":"integer"},"height":{"type":"integer"},"fps":{"type":"integer"},"codec":{"type":"string","enum":["hevc","h264"]},"bytes":{"type":"integer","format":"int64"},"audioMuxed":{"type":"boolean"}}},
+       "CallVideoGap":{"type":"object","required":["startMs","endMs","reason"],"properties":{"startMs":{"type":"integer","format":"int64"},"endMs":{"type":"integer","format":"int64"},"reason":{"type":"string"}}},
+       "CallVideo":{"type":"object","required":["requested","available","segments","gaps","truncated"],"properties":{"requested":{"type":"boolean"},"available":{"type":"boolean"},"segments":{"type":"array","items":{"$ref":"#/components/schemas/CallVideoSegment"}},"gaps":{"type":"array","items":{"$ref":"#/components/schemas/CallVideoGap"}},"truncated":{"type":"boolean"}}},
+       "CallEnvelope":{"type":"object","required":["callId","startTs","state","status","retryable","coverage","sources","speakerStatus","bookmarkCount","evidence","evidenceTruncated","initialRecordingMode","recordingMode","video"],"properties":{"callId":{"type":"string"},"startTs":{"type":"integer","format":"int64"},"endTs":{"type":"integer","format":"int64","nullable":true},"state":{"type":"string"},"status":{"type":"string"},"retryable":{"type":"boolean"},"degradationCode":{"type":"string","nullable":true},"coverage":{"$ref":"#/components/schemas/CallCoverage"},"sources":{"type":"array","items":{"$ref":"#/components/schemas/CallSource"}},"context":{"allOf":[{"$ref":"#/components/schemas/CallContext"}],"nullable":true},"preferredRevision":{"allOf":[{"$ref":"#/components/schemas/CallRevision"}],"nullable":true},"preferredSpeakerRevision":{"allOf":[{"$ref":"#/components/schemas/SpeakerRevision"}],"nullable":true},"speakerStatus":{"type":"string","enum":["unavailable","processing","ready","degraded"]},"bookmarkCount":{"type":"integer"},"evidence":{"type":"array","items":{"$ref":"#/components/schemas/EvidenceReference"}},"evidenceTruncated":{"type":"boolean"},"initialRecordingMode":{"type":"string","enum":["off","audio","audio_video"]},"recordingMode":{"type":"string","enum":["off","audio","audio_video"]},"video":{"$ref":"#/components/schemas/CallVideo"}}},
        "Bookmark":{"type":"object","required":["bookmarkId","callId","ordinal","acceptedAtMs","logicalStartMs","logicalEndMs","state","retryable"],"properties":{"bookmarkId":{"type":"string"},"callId":{"type":"string"},"ordinal":{"type":"integer"},"acceptedAtMs":{"type":"integer","format":"int64"},"logicalStartMs":{"type":"integer","format":"int64"},"logicalEndMs":{"type":"integer","format":"int64"},"state":{"type":"string"},"retryable":{"type":"boolean"}}},
        "BookmarkPage":{"type":"object","required":["callId","limit","offset","hasMore","bookmarks"],"properties":{"callId":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"},"hasMore":{"type":"boolean"},"nextOffset":{"type":"integer","nullable":true},"bookmarks":{"type":"array","items":{"$ref":"#/components/schemas/Bookmark"}}}},
        "TranscriptSegment":{"type":"object","required":["segmentId","ordinal","source","startMs","endMs","text"],"properties":{"segmentId":{"type":"string"},"ordinal":{"type":"integer"},"source":{"type":"string","enum":["me","system"]},"startMs":{"type":"integer","format":"int64"},"endMs":{"type":"integer","format":"int64"},"text":{"type":"string"}}},

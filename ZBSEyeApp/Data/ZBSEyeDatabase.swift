@@ -78,7 +78,7 @@ final class ZBSEyeDatabase: Sendable {
     /// Defensive downgrade guard: if the DB carries migration identifiers this binary doesn't know, it
     /// was written by a NEWER ZBS Eye. We never erase (the history is precious) — just log, so a
     /// downgrade is visible instead of silently mis-reading a future schema.
-    private static let knownMigrations: Set<String> =
+    static let knownMigrations: Set<String> =
         [
             "v1", "v2_vector", "v3_vec_e5_384", "v4_vec_transcripts",
             "v5_browser_visits", "v6_embed_queue", "v7_call_envelopes",
@@ -88,6 +88,8 @@ final class ZBSEyeDatabase: Sendable {
             "v13_call_processing_ready_event",
             "v14_protected_capture_vector_cleanup",
             "v15_capture_coverage",
+            "v16_review_summaries",
+            "v17_call_video",
         ]
     private static func warnIfNewerSchema(_ pool: DatabasePool) {
         let applied = (try? pool.read { db in
@@ -985,6 +987,121 @@ final class ZBSEyeDatabase: Sendable {
                 WHERE end_ms IS NULL;
                 CREATE INDEX idx_capture_coverage_overlap
                 ON capture_coverage_intervals(start_ms, end_ms);
+                """)
+        }
+        // v16: the latest successful Review for each exact period. Source
+        // excerpts are never stored here; only the user-visible Markdown and
+        // bounded provenance/usage metadata are retained.
+        m.registerMigration("v16_review_summaries") { db in
+            try db.execute(sql: """
+                CREATE TABLE review_summaries (
+                    id                       TEXT PRIMARY KEY NOT NULL,
+                    period_kind              TEXT NOT NULL CHECK (period_kind IN ('day', 'week')),
+                    period_start_ms          INTEGER NOT NULL,
+                    period_end_ms            INTEGER NOT NULL CHECK (period_end_ms >= period_start_ms),
+                    generated_at_ms          INTEGER NOT NULL,
+                    markdown                 TEXT NOT NULL,
+                    sessions                 INTEGER NOT NULL CHECK (sessions >= 0),
+                    total_captures           INTEGER NOT NULL CHECK (total_captures >= 0),
+                    provider_id              TEXT NOT NULL,
+                    model_id                 TEXT NOT NULL,
+                    executed_locally         INTEGER NOT NULL CHECK (executed_locally IN (0, 1)),
+                    broker_upstream          TEXT,
+                    prompt_version           TEXT NOT NULL,
+                    input_tokens             INTEGER,
+                    cached_input_tokens      INTEGER,
+                    output_tokens            INTEGER,
+                    reasoning_output_tokens  INTEGER,
+                    billing_amount           REAL,
+                    billing_unit             TEXT,
+                    rate_card_date           TEXT,
+                    source_truncated         INTEGER NOT NULL CHECK (source_truncated IN (0, 1)),
+                    context_truncated        INTEGER NOT NULL CHECK (context_truncated IN (0, 1)),
+                    output_truncated         INTEGER NOT NULL CHECK (output_truncated IN (0, 1)),
+                    coverage_incomplete      INTEGER NOT NULL CHECK (coverage_incomplete IN (0, 1)),
+                    trigger_kind             TEXT NOT NULL CHECK (trigger_kind IN ('manual', 'scheduled')),
+                    UNIQUE(period_kind, period_start_ms, period_end_ms)
+                );
+                CREATE INDEX idx_review_summaries_period
+                    ON review_summaries(period_start_ms, period_end_ms);
+                """)
+        }
+        // v17: first-class Call video. Audio remains the authoritative Call
+        // evidence and every older Call is explicitly audio-only.
+        m.registerMigration("v17_call_video") { db in
+            try db.execute(sql: """
+                ALTER TABLE calls ADD COLUMN initialRecordingMode TEXT NOT NULL DEFAULT 'audio'
+                    CHECK (initialRecordingMode IN ('off', 'audio', 'audio_video'));
+                ALTER TABLE calls ADD COLUMN recordingMode TEXT NOT NULL DEFAULT 'audio'
+                    CHECK (recordingMode IN ('off', 'audio', 'audio_video'));
+
+                CREATE TABLE call_video_spans (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    callId          INTEGER NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+                    mediaGeneration INTEGER NOT NULL CHECK (mediaGeneration >= 0),
+                    epoch           INTEGER NOT NULL CHECK (epoch >= 0),
+                    displayId       TEXT NOT NULL,
+                    startedAtMs     INTEGER NOT NULL,
+                    endedAtMs       INTEGER,
+                    width           INTEGER NOT NULL CHECK (width > 0 AND width <= 1920),
+                    height          INTEGER NOT NULL CHECK (height > 0 AND height <= 1920),
+                    fps             INTEGER NOT NULL CHECK (fps > 0 AND fps <= 15),
+                    codec           TEXT CHECK (codec IS NULL OR codec IN ('hevc', 'h264')),
+                    availability    TEXT NOT NULL CHECK (availability IN ('recording', 'available', 'unavailable', 'gap')),
+                    gapReason       TEXT,
+                    UNIQUE(callId, mediaGeneration, epoch),
+                    CHECK (endedAtMs IS NULL OR endedAtMs >= startedAtMs)
+                );
+                CREATE INDEX idx_call_video_spans_call_time
+                    ON call_video_spans(callId, startedAtMs, endedAtMs);
+
+                CREATE TABLE call_video_segments (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    callId          INTEGER NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+                    videoSpanId     INTEGER NOT NULL REFERENCES call_video_spans(id) ON DELETE CASCADE,
+                    mediaGeneration INTEGER NOT NULL CHECK (mediaGeneration >= 0),
+                    epoch           INTEGER NOT NULL CHECK (epoch >= 0),
+                    sequence        INTEGER NOT NULL CHECK (sequence >= 0),
+                    startMs         INTEGER NOT NULL,
+                    endMs           INTEGER NOT NULL CHECK (endMs >= startMs),
+                    relativePath    TEXT NOT NULL UNIQUE,
+                    bytes           INTEGER NOT NULL CHECK (bytes > 0),
+                    sha256          TEXT NOT NULL,
+                    width           INTEGER NOT NULL CHECK (width > 0 AND width <= 1920),
+                    height          INTEGER NOT NULL CHECK (height > 0 AND height <= 1920),
+                    fps             INTEGER NOT NULL CHECK (fps > 0 AND fps <= 15),
+                    codec           TEXT NOT NULL CHECK (codec IN ('hevc', 'h264')),
+                    finalized       INTEGER NOT NULL DEFAULT 0 CHECK (finalized IN (0, 1)),
+                    audioMuxed      INTEGER NOT NULL DEFAULT 0 CHECK (audioMuxed IN (0, 1)),
+                    UNIQUE(callId, mediaGeneration, epoch, sequence)
+                );
+                CREATE INDEX idx_call_video_segments_call_time
+                    ON call_video_segments(callId, startMs, endMs);
+
+                CREATE TABLE call_video_gaps (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    callId          INTEGER NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+                    mediaGeneration INTEGER NOT NULL CHECK (mediaGeneration >= 0),
+                    startMs         INTEGER NOT NULL,
+                    endMs           INTEGER NOT NULL CHECK (endMs >= startMs),
+                    reason          TEXT NOT NULL,
+                    createdAtMs     INTEGER NOT NULL
+                );
+                CREATE INDEX idx_call_video_gaps_call_time
+                    ON call_video_gaps(callId, startMs, endMs);
+
+                CREATE TRIGGER call_video_segments_generation_bi
+                BEFORE INSERT ON call_video_segments BEGIN
+                    SELECT CASE WHEN NOT EXISTS (
+                        SELECT 1 FROM calls c
+                        WHERE c.id = NEW.callId AND c.mediaGeneration = NEW.mediaGeneration
+                    ) THEN RAISE(ABORT, 'call video segment generation is stale') END;
+                    SELECT CASE WHEN NOT EXISTS (
+                        SELECT 1 FROM call_video_spans s
+                        WHERE s.id = NEW.videoSpanId AND s.callId = NEW.callId
+                          AND s.mediaGeneration = NEW.mediaGeneration AND s.epoch = NEW.epoch
+                    ) THEN RAISE(ABORT, 'call video segment span mismatch') END;
+                END;
                 """)
         }
         return m

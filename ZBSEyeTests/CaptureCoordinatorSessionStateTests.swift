@@ -2,6 +2,24 @@ import Foundation
 import XCTest
 
 final class CaptureCoordinatorSessionStateTests: XCTestCase {
+    func testCallAudioOwnsCaptureBudgetBeforePhysicalAudioStarts() throws {
+        let environment = try String(
+            contentsOf: projectRoot.appending(path: "ZBSEyeApp/App/AppEnvironment.swift"),
+            encoding: .utf8
+        )
+        let coordinator = try String(
+            contentsOf: projectRoot.appending(path: "ZBSEyeApp/Capture/CaptureCoordinator.swift"),
+            encoding: .utf8
+        )
+
+        let enter = try XCTUnwrap(environment.range(of: "coordinator?.enterCallAudioPriority()"))
+        let audioStart = try XCTUnwrap(environment.range(of: "audioCoordinator.beginExplicitCall"))
+        XCTAssertLessThan(enter.lowerBound, audioStart.lowerBound)
+        XCTAssertTrue(environment.contains("await audioCoordinator?.endExplicitCall()"))
+        XCTAssertTrue(environment.contains("await coordinator?.exitCallAudioPriority()"))
+        XCTAssertTrue(coordinator.contains("suspend(for: .callAudioPriority)"))
+    }
+
     private var projectRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

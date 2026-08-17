@@ -1,7 +1,75 @@
+import CryptoKit
 import XCTest
 import GRDB
 
 final class CallRecoveryTests: XCTestCase {
+    func testRecoveryLeavesHelperOwnedCallAndOpenChunkUntouchedUntilHelperReattaches() async throws {
+        let store = try CallRecoveryTestStore()
+        let repository = CallRepository(database: store.database)
+        let call = try await repository.createCall(
+            startedAtMs: 1_000,
+            idempotencyKey: "helper-active"
+        )
+        let callID = try XCTUnwrap(call.id)
+        let span = try await repository.recordSourceSpan(
+            CallSourceSpanDraft(
+                callId: callID,
+                source: .me,
+                epoch: 0,
+                sampleRate: 16_000,
+                startedAtMs: 1_000,
+                startSample: 0,
+                startHostTimeNs: 0,
+                availability: .available
+            )
+        )
+        let path = "calls/\(callID)/me/epoch-0000/chunk-000000.pcm"
+        try store.write(Data([1, 2, 3, 4]), relativePath: path)
+        let chunk = try await repository.recordAudioChunk(
+            CallAudioChunkDraft(
+                callId: callID,
+                sourceSpanId: try XCTUnwrap(span.id),
+                source: .me,
+                epoch: 0,
+                sequence: 0,
+                mediaGeneration: 0,
+                startSample: 0,
+                endSample: 0,
+                startMs: 1_000,
+                endMs: 1_000,
+                relativePath: path,
+                bytes: 0,
+                sha256: nil,
+                finalized: false
+            )
+        )
+        let recovery = CallRecoveryService(
+            repository: repository,
+            mediaRoot: store.mediaRoot
+        )
+
+        let report = try await recovery.recover(
+            nowMs: 2_000,
+            excludingActiveCallID: callID
+        )
+        let protected = try await store.database.pool.read { db in
+            (
+                call: try XCTUnwrap(CallRow.fetchOne(db, key: callID)),
+                chunk: try XCTUnwrap(CallAudioChunkRow.fetchOne(db, key: chunk.id))
+            )
+        }
+        XCTAssertEqual(protected.call.state, .recording)
+        XCTAssertFalse(protected.chunk.finalized)
+        XCTAssertEqual(report.callsInterrupted, 0)
+        XCTAssertEqual(report.chunksFinalized, 0)
+
+        try await recovery.recoverAudioChunks(callID: callID, nowMs: 2_100)
+        let resumed = try await repository.audioResumePoint(callID: callID)
+        XCTAssertEqual(resumed.meEndSample, 2)
+        XCTAssertEqual(resumed.meLastEpoch, 0)
+        XCTAssertEqual(resumed.meEndMs, 1_001)
+    }
+
     func testRecoveryDoesNotFreezePreparingBookmarkWithoutIngressCoverageMapping() async throws {
         let store = try CallRecoveryTestStore()
         let repository = CallRepository(database: store.database)
@@ -593,6 +661,164 @@ final class CallRecoveryTests: XCTestCase {
             )
         )
     }
+
+    func testRecoveryRestoresSilentVideoWhenMuxDatabaseCommitDidNotHappen() async throws {
+        let store = try CallRecoveryTestStore()
+        let repository = CallRepository(database: store.database)
+        let silent = Data("authoritative-silent-video".utf8)
+        let muxed = Data("replacement-muxed-video".utf8)
+        let fixture = try await installVideoSegmentForRecovery(
+            repository,
+            store: store,
+            key: "mux-before-db",
+            data: silent
+        )
+        let backupPath = fixture.relativePath + ".silent-backup"
+        try store.write(muxed, relativePath: fixture.relativePath)
+        try store.write(silent, relativePath: backupPath)
+
+        let recovery = CallRecoveryService(repository: repository, mediaRoot: store.mediaRoot)
+        _ = try await recovery.recover(nowMs: 5_000)
+        _ = try await recovery.recover(nowMs: 6_000)
+
+        XCTAssertEqual(try Data(contentsOf: store.url(for: fixture.relativePath)), silent)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.url(for: backupPath).path))
+        let row = try await store.database.pool.read { db in
+            try XCTUnwrap(CallVideoSegmentRow.fetchOne(db, key: fixture.segmentID))
+        }
+        XCTAssertFalse(row.audioMuxed)
+        XCTAssertEqual(row.bytes, Int64(silent.count))
+        XCTAssertEqual(row.sha256, videoRecoveryDigest(silent))
+    }
+
+    func testRecoveryKeepsCommittedMuxAndRemovesObsoleteSilentBackup() async throws {
+        let store = try CallRecoveryTestStore()
+        let repository = CallRepository(database: store.database)
+        let silent = Data("authoritative-silent-video".utf8)
+        let muxed = Data("committed-muxed-video".utf8)
+        let fixture = try await installVideoSegmentForRecovery(
+            repository,
+            store: store,
+            key: "db-after-mux",
+            data: silent
+        )
+        let backupPath = fixture.relativePath + ".silent-backup"
+        try store.write(muxed, relativePath: fixture.relativePath)
+        try store.write(silent, relativePath: backupPath)
+        try await repository.markVideoSegmentAudioMuxed(
+            id: fixture.segmentID,
+            mediaGeneration: 0,
+            bytes: Int64(muxed.count),
+            sha256: videoRecoveryDigest(muxed)
+        )
+
+        let recovery = CallRecoveryService(repository: repository, mediaRoot: store.mediaRoot)
+        _ = try await recovery.recover(nowMs: 5_000)
+        _ = try await recovery.recover(nowMs: 6_000)
+
+        XCTAssertEqual(try Data(contentsOf: store.url(for: fixture.relativePath)), muxed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.url(for: backupPath).path))
+        let row = try await store.database.pool.read { db in
+            try XCTUnwrap(CallVideoSegmentRow.fetchOne(db, key: fixture.segmentID))
+        }
+        XCTAssertTrue(row.audioMuxed)
+        XCTAssertEqual(row.bytes, Int64(muxed.count))
+        XCTAssertEqual(row.sha256, videoRecoveryDigest(muxed))
+    }
+
+    func testCommittedMuxClearsOnlyItsOwnTransientCallDegradation() async throws {
+        let store = try CallRecoveryTestStore()
+        let repository = CallRepository(database: store.database)
+        let fixture = try await installVideoSegmentForRecovery(
+            repository,
+            store: store,
+            key: "mux-clears-own-failure",
+            data: Data("silent-video".utf8)
+        )
+        try await repository.markCallDegraded(
+            callID: fixture.callID,
+            reason: "video_audio_mux_unavailable",
+            nowMs: 3_000
+        )
+
+        try await repository.markVideoSegmentAudioMuxed(
+            id: fixture.segmentID,
+            mediaGeneration: 0,
+            bytes: 42,
+            sha256: String(repeating: "a", count: 64)
+        )
+
+        let cleared = try await store.database.pool.read { db in
+            try XCTUnwrap(CallRow.fetchOne(db, key: fixture.callID)).degradationReason
+        }
+        XCTAssertNil(cleared)
+
+        try await repository.markCallDegraded(
+            callID: fixture.callID,
+            reason: "source_gap",
+            nowMs: 4_000
+        )
+        try await repository.markVideoSegmentAudioMuxed(
+            id: fixture.segmentID,
+            mediaGeneration: 0,
+            bytes: 43,
+            sha256: String(repeating: "b", count: 64)
+        )
+        let preserved = try await store.database.pool.read { db in
+            try XCTUnwrap(CallRow.fetchOne(db, key: fixture.callID)).degradationReason
+        }
+        XCTAssertEqual(preserved, "source_gap")
+    }
+
+    func testRecoveryPreservesUnknownVideoRollbackCopy() async throws {
+        let store = try CallRecoveryTestStore()
+        let repository = CallRepository(database: store.database)
+        let backupPath = "calls/unknown/orphan.mp4.silent-backup"
+        let bytes = Data("only-recovery-copy".utf8)
+        try store.write(bytes, relativePath: backupPath)
+
+        _ = try await CallRecoveryService(
+            repository: repository,
+            mediaRoot: store.mediaRoot
+        ).recover(nowMs: 5_000)
+
+        XCTAssertEqual(try Data(contentsOf: store.url(for: backupPath)), bytes)
+    }
+
+    func testRecoveryPreservesBothFilesWhenNeitherMatchesVideoRow() async throws {
+        let store = try CallRecoveryTestStore()
+        let repository = CallRepository(database: store.database)
+        let fixture = try await installVideoSegmentForRecovery(
+            repository,
+            store: store,
+            key: "mux-hash-mismatch",
+            data: Data("expected-segment".utf8)
+        )
+        let backupPath = fixture.relativePath + ".silent-backup"
+        let unexpectedCurrent = Data("unexpected-current".utf8)
+        let unexpectedBackup = Data("unexpected-backup".utf8)
+        try store.write(unexpectedCurrent, relativePath: fixture.relativePath)
+        try store.write(unexpectedBackup, relativePath: backupPath)
+
+        _ = try await CallRecoveryService(
+            repository: repository,
+            mediaRoot: store.mediaRoot
+        ).recover(nowMs: 5_000)
+
+        XCTAssertEqual(
+            try Data(contentsOf: store.url(for: fixture.relativePath)),
+            unexpectedCurrent
+        )
+        XCTAssertEqual(try Data(contentsOf: store.url(for: backupPath)), unexpectedBackup)
+        let degradation = try await store.database.pool.read { db in
+            try String.fetchOne(
+                db,
+                sql: "SELECT degradationReason FROM calls WHERE id = ?",
+                arguments: [fixture.callID]
+            )
+        }
+        XCTAssertEqual(degradation, "video_postprocess_recovery_mismatch")
+    }
 }
 
 private final class CallRecoveryTestStore {
@@ -640,6 +866,66 @@ private func makeEndedCall(
         endedAtMs: start + 1_000
     )
     return callID
+}
+
+private func installVideoSegmentForRecovery(
+    _ repository: CallRepository,
+    store: CallRecoveryTestStore,
+    key: String,
+    data: Data
+) async throws -> (callID: Int64, segmentID: Int64, relativePath: String) {
+    let call = try await repository.createCall(
+        startedAtMs: 1_000,
+        idempotencyKey: key,
+        recordingMode: .audioVideo
+    )
+    let callID = try XCTUnwrap(call.id)
+    let span = try await repository.beginVideoSpan(
+        callID: callID,
+        epoch: 0,
+        displayID: "1",
+        startedAtMs: 1_000,
+        width: 2,
+        height: 2,
+        fps: 15
+    )
+    let spanID = try XCTUnwrap(span.id)
+    let relativePath = "calls/\(callID)/video/0000.mp4"
+    try store.write(data, relativePath: relativePath)
+    let segment = try await repository.appendVideoSegment(CallVideoSegmentDraft(
+        callId: callID,
+        videoSpanId: spanID,
+        mediaGeneration: 0,
+        epoch: 0,
+        sequence: 0,
+        startMs: 1_000,
+        endMs: 2_000,
+        relativePath: relativePath,
+        bytes: Int64(data.count),
+        sha256: videoRecoveryDigest(data),
+        width: 2,
+        height: 2,
+        fps: 15,
+        codec: .h264,
+        audioMuxed: false
+    ))
+    try await repository.finishVideoSpan(
+        spanID: spanID,
+        endedAtMs: 2_000,
+        codec: .h264,
+        availability: .available,
+        reason: nil
+    )
+    _ = try await repository.endCall(
+        callID: callID,
+        idempotencyKey: "end-\(key)",
+        endedAtMs: 2_000
+    )
+    return (callID, try XCTUnwrap(segment.id), relativePath)
+}
+
+private func videoRecoveryDigest(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 }
 
 private func installReferencedChunk(

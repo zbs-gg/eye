@@ -70,8 +70,8 @@ final class SettingsPresentationTests: XCTestCase {
             XCTAssertTrue(surface.contains(help))
             XCTAssertTrue(surface.contains("env.recording.lowDiskPaused && env.recording.wantsRecording"))
         }
-        XCTAssertTrue(settings.contains("even while screen recording is stopped"))
-        XCTAssertTrue(normalizedReadme.contains("does not disarm microphone-triggered Calls"))
+        XCTAssertTrue(settings.contains("These Timeline settings do not change Calls"))
+        XCTAssertTrue(normalizedReadme.contains("do not disarm microphone-triggered Calls"))
 
         let pauseGuard = try XCTUnwrap(
             menu.range(of: #"if env.recording.pausedUntil == nil {"#)

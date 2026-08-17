@@ -1,7 +1,9 @@
 #!/bin/bash
-# Fail-closed release provenance gate. Production releases must come from a clean
-# checkout whose HEAD is the freshly fetched canonical GitHub main, with a new
-# semantic version and monotonically increasing build number.
+# Fail-closed release provenance gate. Public releases must come from a clean
+# checkout whose HEAD is the freshly fetched canonical GitHub main. An explicit
+# remote candidate ref may be used only to build the exact pre-merge notarized
+# artifact for physical qualification; it must descend from main and later land
+# on main without rewriting its source revision.
 set -euo pipefail
 
 SCRIPT_ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -19,6 +21,10 @@ usage() {
 Usage: scripts/release-preflight.sh [--verify-only]
 
 Production mode always fetches canonical origin/main and release tags.
+
+Pre-merge physical candidate (not permission to publish):
+  ZBSEYE_RELEASE_CANDIDATE_REF=codex/example \
+    scripts/release-preflight.sh
 
 Test-only hook:
   ZBSEYE_RELEASE_PREFLIGHT_FIXTURE=1 \
@@ -119,10 +125,22 @@ else
   FETCH_SOURCE="origin"
 fi
 
+CANDIDATE_REF="${ZBSEYE_RELEASE_CANDIDATE_REF:-}"
+if [ -n "${CANDIDATE_REF}" ]; then
+  [ "${CANDIDATE_REF}" != "main" ] || fail "draft candidate ref must not be main."
+  git check-ref-format "refs/heads/${CANDIDATE_REF}" >/dev/null 2>&1 || \
+    fail "draft candidate ref is not a valid branch name."
+fi
+
 echo "▸ Refreshing canonical main and release tags…"
-if ! git fetch --quiet --force --prune --prune-tags "${FETCH_SOURCE}" \
-  '+refs/heads/main:refs/remotes/origin/main' \
-  '+refs/tags/*:refs/tags/*'; then
+FETCH_REFS=(
+  '+refs/heads/main:refs/remotes/origin/main'
+  '+refs/tags/*:refs/tags/*'
+)
+if [ -n "${CANDIDATE_REF}" ]; then
+  FETCH_REFS+=("+refs/heads/${CANDIDATE_REF}:refs/remotes/origin/${CANDIDATE_REF}")
+fi
+if ! git fetch --quiet --force --prune --prune-tags "${FETCH_SOURCE}" "${FETCH_REFS[@]}"; then
   fail "fresh fetch of canonical main and release tags failed; release identity is ambiguous."
 fi
 
@@ -130,7 +148,17 @@ SOURCE_REVISION=$(git rev-parse --verify HEAD 2>/dev/null) || fail "candidate HE
 MAIN_REVISION=$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null) || \
   fail "fresh fetch did not produce origin/main."
 
-if [ "${SOURCE_REVISION}" != "${MAIN_REVISION}" ]; then
+QUALIFIED_SOURCE_LABEL="canonical main"
+if [ -n "${CANDIDATE_REF}" ]; then
+  REMOTE_CANDIDATE_REVISION=$(
+    git rev-parse --verify "refs/remotes/origin/${CANDIDATE_REF}" 2>/dev/null
+  ) || fail "fresh fetch did not produce origin/${CANDIDATE_REF}."
+  [ "${SOURCE_REVISION}" = "${REMOTE_CANDIDATE_REVISION}" ] || \
+    fail "candidate HEAD does not exactly match freshly fetched origin/${CANDIDATE_REF}."
+  git merge-base --is-ancestor "${MAIN_REVISION}" "${SOURCE_REVISION}" 2>/dev/null || \
+    fail "draft candidate origin/${CANDIDATE_REF} does not descend from freshly fetched origin/main."
+  QUALIFIED_SOURCE_LABEL="draft candidate origin/${CANDIDATE_REF}"
+elif [ "${SOURCE_REVISION}" != "${MAIN_REVISION}" ]; then
   if git merge-base --is-ancestor "${SOURCE_REVISION}" "${MAIN_REVISION}" 2>/dev/null; then
     fail "candidate HEAD is behind freshly fetched origin/main."
   elif git merge-base --is-ancestor "${MAIN_REVISION}" "${SOURCE_REVISION}" 2>/dev/null; then
@@ -244,8 +272,8 @@ read -r BASELINE_VERSION BASELINE_BUILD < <(read_identity "${BASELINE_PROJECT}" 
   fail "candidate build ${CANDIDATE_BUILD} must be newer than release baseline build ${BASELINE_BUILD}."
 
 if [ "${MODE}" = "verify-only" ]; then
-  echo "✅ release preflight verify-only passed: clean canonical main ${SOURCE_REVISION}, ${CANDIDATE_VERSION} (${CANDIDATE_BUILD}) > ${LATEST_TAG} (${BASELINE_BUILD})."
+  echo "✅ release preflight verify-only passed: clean ${QUALIFIED_SOURCE_LABEL} ${SOURCE_REVISION}, ${CANDIDATE_VERSION} (${CANDIDATE_BUILD}) > ${LATEST_TAG} (${BASELINE_BUILD})."
 else
-  echo "✅ release preflight passed: clean canonical main ${SOURCE_REVISION}, ${CANDIDATE_VERSION} (${CANDIDATE_BUILD}) > ${LATEST_TAG} (${BASELINE_BUILD})."
+  echo "✅ release preflight passed: clean ${QUALIFIED_SOURCE_LABEL} ${SOURCE_REVISION}, ${CANDIDATE_VERSION} (${CANDIDATE_BUILD}) > ${LATEST_TAG} (${BASELINE_BUILD})."
 fi
 echo "ZBSEYE_RELEASE_PREFLIGHT_IDENTITY=${CANDIDATE_VERSION}:${CANDIDATE_BUILD}:${SOURCE_REVISION}"

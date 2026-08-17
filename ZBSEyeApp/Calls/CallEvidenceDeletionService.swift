@@ -93,6 +93,7 @@ actor CallEvidenceDeletionService {
             pendingPaths.formUnion(decodePaths(mutation.oldRelativePathsJSON) ?? [])
             if let manifest = CallRedactionManifestV1.decode(mutation.newRelativePathsJSON) {
                 pendingPaths.formUnion(manifest.survivors.map(\.relativePath))
+                pendingPaths.formUnion((manifest.videoSurvivors ?? []).map(\.relativePath))
             }
         }
         pendingPaths.subtract(referencedPaths)
@@ -346,15 +347,22 @@ actor CallEvidenceDeletionService {
 
     private func resumeRedaction(
         mutationID: Int64,
-        manifest: CallRedactionManifestV1,
+        manifest inputManifest: CallRedactionManifestV1,
         initialState: CallMediaMutationState,
         nowMs: Int64
     ) async throws -> CallRedactionReport {
         let files = try CallRedactionFileStore(mediaRoot: mediaRoot)
+        var manifest = inputManifest
         var state = initialState
         if state == .staged {
             do {
                 try files.stageAndVerify(manifest)
+                manifest = try await files.stageVideoAndVerify(manifest)
+                try await repository.updateStagedRedactionManifest(
+                    mutationID: mutationID,
+                    manifest: manifest,
+                    nowMs: nowMs
+                )
                 try await repository.commitRedactionReferenceSwap(
                     mutationID: mutationID,
                     manifest: manifest,

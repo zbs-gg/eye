@@ -316,6 +316,16 @@ struct DeactivationIntent: Codable, Sendable, Equatable, Hashable {
     let expectedSelectionRevision: SelectionRevision
 }
 
+struct ReviewModelSelection: Codable, Sendable, Equatable, Hashable {
+    let providerID: String
+    let modelID: String
+
+    var isSubscriptionProvider: Bool {
+        providerID == AIProvider.codex.rawValue
+            || providerID == AIProvider.claudeCode.rawValue
+    }
+}
+
 /// Pure loading policy shared by the store and persistence tests. A corrupt
 /// current payload is never mistaken for an intentional reset: the most recent
 /// decodable snapshot is recovered when available, and the unreadable bytes are
@@ -377,7 +387,7 @@ enum AIProviderSettingsArchive {
 /// provider survives a round trip through an older build instead of being
 /// erased merely because the enum does not know it yet.
 struct AIProviderSettings: Codable, Sendable, Equatable {
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
 
     var schemaVersion: Int
     var active: String?
@@ -393,6 +403,9 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
     var selectionRevision: SelectionRevision
     var authorizationEpoch: AuthorizationEpoch
     var consentGrants: [String: ScopedAIConsentGrant]
+    /// Optional exact subscription-backed pair for Timeline Review. nil means
+    /// inherit the main pair, but only when that pair is itself Codex or Claude Code.
+    var reviewSelection: ReviewModelSelection?
 
     init(
         active: String? = nil,
@@ -404,6 +417,7 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
         selectionRevision: SelectionRevision = .zero,
         authorizationEpoch: AuthorizationEpoch = .zero,
         consentGrants: [String: ScopedAIConsentGrant]? = nil,
+        reviewSelection: ReviewModelSelection? = nil,
         schemaVersion: Int = currentSchemaVersion
     ) {
         self.schemaVersion = schemaVersion
@@ -418,6 +432,8 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
         self.selectionRevision = selectionRevision
         self.authorizationEpoch = authorizationEpoch
         self.consentGrants = consentGrants ?? Self.migrateLegacyConsent(cloudConsent)
+        self.reviewSelection = reviewSelection?.isSubscriptionProvider == true
+            ? reviewSelection : nil
     }
 
     var activeProvider: AIProvider? { active.flatMap(AIProvider.init(rawValue:)) }
@@ -432,6 +448,46 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
             selectionRevision: selectionRevision,
             authorizationEpoch: authorizationEpoch
         )
+    }
+
+    func selectionSnapshot(for consumer: AIConsumer) -> ProviderSelectionSnapshot? {
+        guard consumer == .manualSummary || consumer == .scheduledSummary else {
+            return selectionSnapshot
+        }
+        let pair: ReviewModelSelection
+        if let reviewSelection {
+            pair = reviewSelection
+        } else if let active, let activeModelID {
+            pair = ReviewModelSelection(providerID: active, modelID: activeModelID)
+        } else {
+            return nil
+        }
+        guard pair.isSubscriptionProvider,
+              !pair.modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return ProviderSelectionSnapshot(
+            providerID: pair.providerID,
+            modelID: pair.modelID,
+            selectionRevision: selectionRevision,
+            authorizationEpoch: authorizationEpoch
+        )
+    }
+
+    mutating func setReviewSelection(_ selection: ReviewModelSelection?) -> Bool {
+        guard selection?.isSubscriptionProvider != false else { return false }
+        let clean = selection.map {
+            ReviewModelSelection(
+                providerID: $0.providerID,
+                modelID: $0.modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        guard clean?.modelID.isEmpty != true else { return false }
+        guard reviewSelection != clean else { return true }
+        reviewSelection = clean
+        selectionRevision.advance()
+        authorizationEpoch.advance()
+        return true
     }
 
     func consentGrant(forProviderID providerID: String) -> ScopedAIConsentGrant? {
@@ -576,6 +632,7 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
         case selectionRevision
         case authorizationEpoch
         case consentGrants
+        case reviewSelection
     }
 
     private struct RawCodingKey: CodingKey {
@@ -600,7 +657,10 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
             (try? values.decodeIfPresent(type, forKey: key)) ?? fallback
         }
 
-        schemaVersion = lossy(Int.self, .schemaVersion, default: Self.currentSchemaVersion)
+        schemaVersion = max(
+            lossy(Int.self, .schemaVersion, default: Self.currentSchemaVersion),
+            Self.currentSchemaVersion
+        )
         active = (try? values.decodeIfPresent(String.self, forKey: .active)) ?? nil
         let decodedModels = lossy([String: String].self, .models, default: [:])
         models = decodedModels
@@ -637,6 +697,12 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
         } else {
             consentGrants = Self.migrateLegacyConsent(cloudConsent)
         }
+        let decodedReview = (try? values.decodeIfPresent(
+            ReviewModelSelection.self,
+            forKey: .reviewSelection
+        )) ?? nil
+        reviewSelection = decodedReview?.isSubscriptionProvider == true
+            ? decodedReview : nil
     }
 
     func encode(to encoder: Encoder) throws {
@@ -651,6 +717,7 @@ struct AIProviderSettings: Codable, Sendable, Equatable {
         try values.encode(selectionRevision, forKey: .selectionRevision)
         try values.encode(authorizationEpoch, forKey: .authorizationEpoch)
         try values.encode(consentGrants, forKey: .consentGrants)
+        try values.encodeIfPresent(reviewSelection, forKey: .reviewSelection)
     }
 
     private static func migrateLegacyConsent(

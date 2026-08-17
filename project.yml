@@ -70,11 +70,32 @@ targets:
   ZBSEye:
     type: application
     platform: macOS
+    info:
+      path: ZBSEyeApp/Info.plist
+      properties:
+        CFBundleDisplayName: "ZBS Eye"
+        CFBundleName: "ZBS Eye"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSMinimumSystemVersion: "15.0"
+        LSUIElement: false
+        NSAudioCaptureUsageDescription: "ZBS Eye records system audio locally during enabled Calls and Timeline audio capture, so conversations can be searched."
+        NSMicrophoneUsageDescription: "ZBS Eye records and transcribes audio locally, to make conversations searchable."
+        NSScreenCaptureUsageDescription: "ZBS Eye reads the screen for your activity history, timeline, and optional Call video. Everything stays on your device."
+        NSSpeechRecognitionUsageDescription: "ZBS Eye recognizes speech on-device to make audio searchable."
     sources:
       - path: ZBSEyeApp
       - path: BrowserExtension/Extension
         type: folder
         buildPhase: resources
+    postBuildScripts:
+      - name: Bundle Call Audio LaunchAgent
+        script: |
+          set -euo pipefail
+          agent_dir="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchAgents"
+          /bin/mkdir -p "${agent_dir}"
+          /bin/cp "${SRCROOT}/Support/gg.zbs.eye.call-audio.plist" "${agent_dir}/gg.zbs.eye.call-audio.plist"
+        basedOnDependencyAnalysis: false
     dependencies:
       - package: GRDB
         product: GRDB
@@ -104,20 +125,14 @@ targets:
         PRODUCT_NAME: "ZBS Eye"          # bundle = "ZBS Eye.app" (target/scheme — ZBSEye, no space)
         INFOPLIST_KEY_CFBundleDisplayName: "ZBS Eye"
         INFOPLIST_KEY_CFBundleName: "ZBS Eye"
-        GENERATE_INFOPLIST_FILE: YES
-        MARKETING_VERSION: "0.8.0"          # CFBundleShortVersionString
-        CURRENT_PROJECT_VERSION: "22"       # CFBundleVersion
+        MARKETING_VERSION: "0.9.0"          # CFBundleShortVersionString
+        CURRENT_PROJECT_VERSION: "40"       # CFBundleVersion
         CODE_SIGN_ENTITLEMENTS: ZBSEyeApp/ZBSEye.entitlements
         # Default — ad-hoc for development. scripts/build-release.sh can use the legacy self-signed
         # "ZBS Eye Dev" identity; distributable releases must use scripts/build-notarized.sh with the
         # configured Developer ID certificate. A stable identity preserves TCC permissions and Keychain ACLs.
         CODE_SIGN_IDENTITY: "-"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        INFOPLIST_KEY_NSScreenCaptureUsageDescription: "ZBS Eye reads the screen for your activity history and timeline, and (if enabled in settings) records system audio — calls, meetings, videos — to make conversations searchable. Everything stays on your device."
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: "ZBS Eye records and transcribes audio locally, to make conversations searchable."
-        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "ZBS Eye recognizes speech on-device to make audio searchable."
-        INFOPLIST_KEY_LSUIElement: "NO"
-        INFOPLIST_KEY_LSMinimumSystemVersion: "15.0"
 
   # Headless research tool. It shares no sources or linkage with the shipping app target.
   ScreenUnderstandingDatasetCLI:
@@ -187,6 +202,8 @@ targets:
       - path: ZBSEyeApp/Capture/BrowserCapturePolicy.swift
       - path: ZBSEyeApp/Capture/ScreenshotPriorityYieldGate.swift
       - path: ZBSEyeApp/Capture/ScreenshotHotkeyMonitor.swift
+      - path: ZBSEyeApp/Audio/AudioConfig.swift
+      - path: ZBSEyeApp/Audio/SystemAudioTapPCM.swift
       - path: ZBSEyeApp/Browser/BrowserSnapshot.swift
       - path: ZBSEyeApp/State/LowDiskGuard.swift
       - path: ZBSEyeApp/State/RecordingStore.swift
@@ -205,6 +222,8 @@ targets:
       - path: ZBSEyeApp/Server/KeychainStore.swift
       - path: ZBSEyeApp/Server/LocalPeerAuthenticator.swift
       - path: ZBSEyeApp/Automations/AutomationModels.swift
+      - path: ZBSEyeApp/Automations/DailySummaryService.swift
+      - path: ZBSEyeApp/Automations/ReviewSummaryRepository.swift
       - path: ZBSEyeApp/Automations/CallAutomationModels.swift
       - path: ZBSEyeApp/Automations/CallAutomationRepository.swift
       - path: ZBSEyeApp/Automations/CallAutomationDispatcher.swift
@@ -235,6 +254,9 @@ targets:
       - path: ZBSEyeApp/Calls/CallRepository.swift
       - path: ZBSEyeApp/Calls/CallRepository+AutomationTransitions.swift
       - path: ZBSEyeApp/Calls/CallRepository+EvidenceStorage.swift
+      - path: ZBSEyeApp/Calls/CallRepository+Video.swift
+      - path: ZBSEyeApp/Calls/CallVideoCaptureEngine.swift
+      - path: ZBSEyeApp/Calls/CallVideoPostProcessor.swift
       - path: ZBSEyeApp/Calls/CallRecoveryService.swift
       - path: ZBSEyeApp/Calls/CallPrivacyIntentJournal.swift
       - path: ZBSEyeApp/Calls/CallMediaMutationJournal.swift
@@ -321,8 +343,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.zbs.eye.tests
-        MARKETING_VERSION: "0.8.0"
-        CURRENT_PROJECT_VERSION: "22"
+        MARKETING_VERSION: "0.9.0"
+        CURRENT_PROJECT_VERSION: "40"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: ZBSEyeTests/Info.plist
         ZBS_EYE_MODEL_DIR: ""

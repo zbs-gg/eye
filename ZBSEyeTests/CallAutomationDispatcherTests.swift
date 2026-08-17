@@ -140,7 +140,9 @@ final class CallAutomationDispatcherTests: XCTestCase {
         await dispatcher.start()
         try await Task.sleep(for: .milliseconds(20))
         clock.set(3_101)
-        try await Task.sleep(for: .milliseconds(120))
+        try await waitUntil {
+            await transport.eventIDs == [eventID]
+        }
         await dispatcher.shutdown()
 
         let deliveredIDs = await transport.eventIDs
@@ -261,6 +263,19 @@ private func assertThrowsAsync(
     } catch {
         // Expected.
     }
+}
+
+private func waitUntil(
+    timeout: Duration = .seconds(5),
+    _ predicate: @escaping @Sendable () async -> Bool
+) async throws {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while clock.now < deadline {
+        if await predicate() { return }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    XCTFail("condition timed out")
 }
 
 private actor ScriptedCallAutomationTransport: CallAutomationTransport {

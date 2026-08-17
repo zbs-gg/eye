@@ -34,6 +34,11 @@ bash scripts/verify-call-automation.sh
 bash scripts/verify-capture-coexistence.sh --self-test
 ```
 
+Pull requests and pushes to `main` repeat the full unhosted suite, Debug GUI build, Call fixture contract, and
+capture-coexistence protocol self-test on GitHub's explicit `macos-26` runner with Xcode 26.5. CI never launches
+Eye, requests TCC, captures media, downloads models, signs, notarizes, installs, or publishes a release. A green
+hosted check is necessary but does not replace installed-app Calls and native-screenshot qualification.
+
 ## Architecture
 ```
 ZBSEyeApp/
@@ -41,7 +46,7 @@ ZBSEyeApp/
   Capture/    Persistent screen stream, latest-wins FramePipeline, SCKResourceCoordinator, screenshot priority, AXReader
   Audio/      AudioCoordinator, mic/system engines, VADSegmenter, TranscriptionService
   Meeting/    CoreAudio mic-owner listener, initiator/relay resolution, automatic Call detection
-  Calls/      CallCoordinator, lifecycle policy, dual-source spool, Calls projection, Whisper/diarization helpers
+  Calls/      CallCoordinator, launchd audio owner, dual-source spool, Call video, AAC post-process, projection, deletion
   Data/       ZBSEyeDatabase, StorageLocation, StorageManager, BackupManager, RetentionManager, IngestService
   Search/     SearchService (FTS+vector RRF), EmbeddingService (e5), TimelineService, VectorBackfill
   Server/     ZBSEyeHTTPServer (FlyingFox REST, 127.0.0.1, Bearer), KeychainStore
@@ -56,6 +61,21 @@ Swift 6 strict concurrency = `complete`. Deployment target macOS 15.0.
 See [`AGENTS.md`](AGENTS.md) for the architecture map, invariants, and gotchas.
 
 ## Call recorder runtime and model
+
+Calls have an independent persisted mode: `off`, `audio`, or `audio_video`. Video is a separate hardware-only
+ScreenCaptureKit/AVFoundation path capped at 1080p and 15 fps. It never owns or backpressures audio; finalized
+30-second MP4 fragments receive a background mixed AAC convenience track while the PCM sources remain authoritative.
+Starting another Call invalidates that background job without waiting for it; unfinished mux work retries only
+after physical Call audio has stopped. If the app dies between MP4 replacement and database publication, bootstrap
+uses the segment hash to restore the silent rollback copy or retain the already committed muxed bytes.
+The display is locked when authoritative Call audio starts. A native screenshot closes both Timeline and Call-video
+admission immediately; video resumes only after the shared helper-aware quiet gate opens, without restarting audio.
+The app bundle also contains `Contents/Library/LaunchAgents/gg.zbs.eye.call-audio.plist`. `SMAppService` registers
+that same-signed executable as the authoritative mic/Core Audio owner. Its mutually authenticated local XPC surface
+accepts only bounded Call lifecycle messages. It appends Call PCM/source-gap evidence through `CallRepository`,
+never runs migrations, and never writes Timeline, FTS, vector, or transcript state. A GUI crash leaves it recording;
+relaunch adopts the active Call. A helper restart reconciles its open PCM, records the interruption, and resumes in
+a new epoch. The installed physical gate must prove both failure paths; an unsigned build cannot qualify them.
 
 The shipping source pins two independent artifacts:
 
@@ -72,7 +92,9 @@ downloaded helper binary. It receives one immutable manifest and writes one boun
 GUI remains the only database writer.
 
 `scripts/verify-call-recording.sh --fixtures` is deterministic and does not launch the app, capture media,
-request TCC permissions, or download weights. Permission-sensitive qualification is deliberately separate:
+request TCC permissions, or download weights. Its DerivedData is temporary and removed on exit; set
+`ZBS_EYE_CALL_DERIVED_DATA_PATH` only when a persistent reusable cache is intentional. Permission-sensitive
+qualification is deliberately separate:
 
 ```bash
 ZBS_EYE_CALL_PHYSICAL_GATE=YES scripts/verify-call-recording.sh --physical-preflight
@@ -102,6 +124,11 @@ The listen-only shortcut observer never requests a new TCC permission. If the ex
 Eye fails open and yields through the later screenshot-helper process signal; manual shortcut freshness remains
 a required release check. Automated fixtures do not replace the physical shortcut matrix, lifecycle/recovery
 matrix, 30-minute churn, or two-hour installed soak.
+
+When physical qualification must happen before merge, pass the exact pushed PR branch to the notarized build:
+`ZBSEYE_RELEASE_CANDIDATE_REF=codex/<branch> bash scripts/build-notarized.sh`. This only admits a clean remote
+descendant of canonical `main`; publication still requires the same commit to land on `main` unchanged and a
+normal `scripts/release-preflight.sh --verify-only` with the variable unset.
 
 ### Optional speaker diarization
 

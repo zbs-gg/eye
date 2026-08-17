@@ -30,14 +30,14 @@ actor LLMAdapterRegistry: LLMAdapterRegistering {
 extension AIProviderStore: LLMSelectionSnapshotProviding {
     func currentSnapshot(for consumer: AIConsumer) async -> ProviderSelectionSnapshot? {
         guard activeConfig(for: consumer) != nil else { return nil }
-        return selectionSnapshot
+        return settings.selectionSnapshot(for: consumer)
     }
 }
 
 extension AIProviderStore: AIConsumerReadinessProviding {
     func currentExecutionContext(for consumer: AIConsumer) -> AIConsumerExecutionContext? {
         guard activeConfig(for: consumer) != nil,
-              let selection = selectionSnapshot,
+              let selection = settings.selectionSnapshot(for: consumer),
               let provider = AIProvider(rawValue: selection.providerID) else {
             return nil
         }

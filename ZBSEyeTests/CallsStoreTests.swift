@@ -91,7 +91,8 @@ final class CallsStoreTests: XCTestCase {
             participants: ["Olga"],
             sourceApp: "Telegram",
             bookmarkCount: 1,
-            speakerStatus: .ready
+            speakerStatus: .ready,
+            recordingMode: .audio
         )
     }
 }
@@ -141,7 +142,8 @@ private actor DelayedCallsListingFixture: CallLibraryQuerying {
                 participants: [],
                 sourceApp: nil,
                 bookmarkCount: 0,
-                speakerStatus: .ready
+                speakerStatus: .ready,
+                recordingMode: .audio
             )]
         )
     }

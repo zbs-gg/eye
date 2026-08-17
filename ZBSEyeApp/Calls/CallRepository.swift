@@ -68,7 +68,39 @@ actor CallRepository {
         evidenceStorage = CallRepositoryEvidenceStorage(database: database)
     }
 
-    func createCall(startedAtMs: Int64, idempotencyKey: String) async throws -> CallRow {
+    struct ActiveCallResumeState: Sendable {
+        let call: CallRow
+        let lastBookmarkEndMs: Int64
+        let bookmarkCount: Int
+    }
+
+    func activeCallResumeState(id: Int64) async throws -> ActiveCallResumeState? {
+        try await database.pool.read { db in
+            guard let call = try CallRow.fetchOne(db, key: id),
+                  call.state == .recording else { return nil }
+            let bookmarkCount = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM call_bookmarks WHERE callId = ?",
+                arguments: [id]
+            ) ?? 0
+            let lastBookmarkEndMs = try Int64.fetchOne(
+                db,
+                sql: "SELECT MAX(logicalEndMs) FROM call_bookmarks WHERE callId = ?",
+                arguments: [id]
+            ) ?? call.startTs
+            return ActiveCallResumeState(
+                call: call,
+                lastBookmarkEndMs: lastBookmarkEndMs,
+                bookmarkCount: bookmarkCount
+            )
+        }
+    }
+
+    func createCall(
+        startedAtMs: Int64,
+        idempotencyKey: String,
+        recordingMode: CallRecordingMode = .audio
+    ) async throws -> CallRow {
         try await database.pool.write { db in
             if let existing = try CallRow
                 .filter(Column("startIdempotencyKey") == idempotencyKey)
@@ -84,6 +116,8 @@ actor CallRepository {
                 state: .recording,
                 interrupted: false,
                 degradationReason: nil,
+                initialRecordingMode: recordingMode,
+                recordingMode: recordingMode,
                 mediaGeneration: 0,
                 preferredRevisionId: nil,
                 createdAtMs: startedAtMs,
@@ -101,9 +135,10 @@ actor CallRepository {
                 sql: """
                     SELECT
                         (SELECT COUNT(*) FROM call_audio_chunks WHERE callId = ?) +
+                        (SELECT COUNT(*) FROM call_video_segments WHERE callId = ?) +
                         (SELECT COUNT(*) FROM call_bookmarks WHERE callId = ?)
                     """,
-                arguments: [id, id]
+                arguments: [id, id, id]
             ) ?? 0
             guard evidenceCount == 0 else { return }
             try db.execute(
