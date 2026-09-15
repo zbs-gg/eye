@@ -1,5 +1,25 @@
 import Foundation
 
+enum CaptureError: Error, Equatable {
+    case noShareableApplications
+    case noDisplay
+    case encodeFailed
+    case staleGeneration
+    case streamStartFailed
+    case streamUpdateFailed
+    case streamStopUnconfirmed
+
+    /// Superseded work is normal. Every actual capture failure enters the
+    /// durable, bounded recovery path instead of leaving a green status behind.
+    var healthFailureReason: CaptureHealthReason? {
+        switch self {
+        case .staleGeneration: nil
+        case .streamStartFailed, .streamUpdateFailed, .streamStopUnconfirmed: .screenStreamStopped
+        case .noDisplay, .noShareableApplications, .encodeFailed: .screenRequestFailed
+        }
+    }
+}
+
 enum CaptureLeg: String, Codable, Sendable, Hashable, CaseIterable {
     case screen
     case systemAudio
@@ -100,6 +120,16 @@ struct CaptureLegHealth: Codable, Sendable, Equatable {
 }
 
 extension CaptureLegHealth {
+    /// Static/idle compositor events count; elapsed time since a saved image
+    /// does not. Never animate an unverified startup or an old health sample.
+    func hasRecentVerifiedProgress(at nowMs: Int64, maximumAgeMs: Int64 = 8_000) -> Bool {
+        guard state == .healthy, reason != .awaitingVerifiedProgress,
+              let lastVerifiedProgressAtMs else { return false }
+        return nowMs >= lastVerifiedProgressAtMs
+            && nowMs - lastVerifiedProgressAtMs <= maximumAgeMs
+    }
+
+
     var needsExplicitRepair: Bool {
         state == .repairRequired || (state == .recovering && attempt == 0)
     }

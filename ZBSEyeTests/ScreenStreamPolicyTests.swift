@@ -1,6 +1,28 @@
 import XCTest
 
 final class ScreenStreamPolicyTests: XCTestCase {
+    func testCancelledOrUnwrittenFrameCannotSuppressTheFirstSavedImage() {
+        var policy = ScreenFrameDeduplicationPolicy()
+        let pixels: [UInt64] = [0xff, 0xf0, 0x0f, 0xaa, 0x55]
+        XCTAssertFalse(policy.isDuplicate(pixels, displayID: 1, threshold: 3))
+        // Frame processing completed, but the coordinator discarded it after a
+        // focus/privacy edge. The next identical frame must still carry an image.
+        XCTAssertFalse(policy.isDuplicate(pixels, displayID: 1, threshold: 3))
+        policy.didSave(pixels, displayID: 1)
+        XCTAssertTrue(policy.isDuplicate(pixels, displayID: 1, threshold: 3))
+        XCTAssertFalse(policy.isDuplicate(pixels, displayID: 2, threshold: 3))
+        XCTAssertFalse(policy.isDuplicate([0, 0, 0, 0, 0], displayID: 1, threshold: 3))
+        policy.reset()
+        XCTAssertFalse(policy.isDuplicate(pixels, displayID: 1, threshold: 3))
+    }
+
+    func testSmallUnsavedChangesRemainComparedToTheLastCommittedImage() {
+        var policy = ScreenFrameDeduplicationPolicy()
+        policy.didSave([0], displayID: 1)
+        XCTAssertTrue(policy.isDuplicate([0b11], displayID: 1, threshold: 3))
+        XCTAssertFalse(policy.isDuplicate([0b1111], displayID: 1, threshold: 3))
+    }
+
     func testCaptureSourceAttestationRejectsAppWindowAndDisplayChanges() {
         let expected = CaptureSourceIdentity(
             processIdentifier: 42,

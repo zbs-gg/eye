@@ -35,6 +35,13 @@ struct UserIgnoredCaptureApplicationIdentity: Hashable, Sendable {
 
 typealias UserIgnoredCaptureApplicationSnapshot = Set<UserIgnoredCaptureApplicationIdentity>
 
+/// Exact app identity admitted by the positive ScreenCaptureKit filter.
+struct ScreenCaptureFilterApplication: Hashable, Sendable {
+    let processIdentifier: Int32
+    let bundleIdentifier: String
+    let applicationName: String
+}
+
 struct CaptureContentEpoch: Sendable, Equatable {
     private(set) var value: UInt64 = 0
 
@@ -206,6 +213,32 @@ enum CaptureSessionPolicy {
             revision: protectedApplicationEpoch.value,
             applications: applications
         )
+    }
+
+    /// Unknown/omitted processes never enter the inclusion list. Check both
+    /// SCK metadata and the independent NSWorkspace privacy snapshot so a
+    /// missing or inconsistent bundle/name cannot admit a protected PID.
+    static func mayIncludeApplication(
+        _ application: ScreenCaptureFilterApplication,
+        excludedBundleIDs: Set<String>,
+        protectedSnapshot: ProtectedCaptureApplicationSnapshot,
+        ignoredSnapshot: UserIgnoredCaptureApplicationSnapshot
+    ) -> Bool {
+        guard !excludedBundleIDs.contains(application.bundleIdentifier),
+              !isProtectedCaptureSurface(
+                bundleId: application.bundleIdentifier,
+                appName: application.applicationName
+              ),
+              !ScreenshotPriorityProcessPolicy.isNativeScreenshotApplication(
+                bundleIdentifier: application.bundleIdentifier
+              ),
+              !protectedSnapshot.applications.contains(where: {
+                $0.processIdentifier == application.processIdentifier
+              }),
+              !ignoredSnapshot.contains(where: {
+                $0.processIdentifier == application.processIdentifier
+              }) else { return false }
+        return true
     }
 
     /// ScreenCaptureKit must know about every protected process before a frame

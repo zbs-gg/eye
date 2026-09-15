@@ -38,6 +38,9 @@ private final class OCRCancellationToken: @unchecked Sendable {
 
 struct ProcessedFrame: Sendable {
     var heicData: Data
+    var hashes: [UInt64]
+    var contentEpoch: UInt64
+    var streamGeneration: Int64
     var phash: UInt64
     var fingerprint: String
     var isDuplicate: Bool
@@ -45,15 +48,6 @@ struct ProcessedFrame: Sendable {
     var height: Int
     var ocr: [OCRLine]
     var displayID: UInt32   // which display we actually captured (monitorId in the DB)
-}
-
-enum CaptureError: Error, Equatable {
-    case noDisplay
-    case encodeFailed
-    case staleGeneration
-    case streamStartFailed
-    case streamUpdateFailed
-    case streamStopUnconfirmed
 }
 
 /// FramePipelineActor (per Pro): capture + encode + hash + OCR in ONE isolation domain. CGImage/
@@ -67,6 +61,7 @@ actor FramePipeline {
         var width: Int
         var height: Int
         let excludedBundleIDs: Set<String>
+        let includedApplications: Set<ScreenCaptureFilterApplication>
         let protectedApplicationSnapshot: ProtectedCaptureApplicationSnapshot
         let userIgnoredApplicationSnapshot: UserIgnoredCaptureApplicationSnapshot
     }
@@ -98,11 +93,12 @@ actor FramePipeline {
         label: "com.zbseye.screen.samples",
         qos: .utility
     )
+    private var cachedContentAt: ContinuousClock.Instant?
     private var cachedContent: SCShareableContent?
     private var cachedProtectedApplicationSnapshot: ProtectedCaptureApplicationSnapshot?
     private var cachedUserIgnoredApplicationSnapshot: UserIgnoredCaptureApplicationSnapshot?
     private var contentEpoch = CaptureContentEpoch()
-    private var lastHashes: [Int: [UInt64]] = [:]   // [full, 4 quadrants] per display
+    private var deduplication = ScreenFrameDeduplicationPolicy()
     private var activeStream: ActiveStream?
     private var startingStream: StartingStream?
     private var stopOwnership = ScreenStreamStopOwnership<StreamIdentity>()
@@ -156,7 +152,7 @@ actor FramePipeline {
         cachedContent = nil
         cachedProtectedApplicationSnapshot = nil
         cachedUserIgnoredApplicationSnapshot = nil
-        lastHashes.removeAll(keepingCapacity: true)
+        deduplication.reset()
         return await stopPersistentStream(clearHashes: false)
     }
 
@@ -168,7 +164,7 @@ actor FramePipeline {
         cachedContent = nil
         cachedProtectedApplicationSnapshot = nil
         cachedUserIgnoredApplicationSnapshot = nil
-        lastHashes.removeAll(keepingCapacity: false)
+        deduplication.reset()
         return await stopPersistentStream(clearHashes: false)
     }
 
@@ -215,88 +211,24 @@ actor FramePipeline {
             cachedProtectedApplicationSnapshot = nil
             cachedUserIgnoredApplicationSnapshot = nil
         }
-        if let c = cachedContent {
-            guard Self.contentCoversExpectedPrivacyApplications(
-                c,
-                protectedApplicationSnapshot: protectedApplicationSnapshot,
-                userIgnoredApplicationSnapshot: userIgnoredApplicationSnapshot
-            ) else {
-                invalidateAfterPrivacyApplicationChange()
-                _ = await stopPersistentStream(clearHashes: false)
-                throw CaptureError.staleGeneration
-            }
-            return c
-        }
-        // Keep the complete application inventory. LocalAuthentication helpers
-        // are often long-lived with only offscreen windows, and therefore vanish
-        // from an on-screen-only inventory just before their sheet appears.
+        // An inclusion filter remains private when SCK omits a process. Refresh
+        // the inventory so newly shareable ordinary apps can join that filter.
+        if let c = cachedContent, let cachedContentAt,
+           ContinuousClock.now - cachedContentAt < .seconds(3) { return c }
         let c = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         guard contentEpoch.contains(expectedEpoch) else { throw CaptureError.staleGeneration }
-        guard Self.contentCoversExpectedPrivacyApplications(
-            c,
-            protectedApplicationSnapshot: protectedApplicationSnapshot,
-            userIgnoredApplicationSnapshot: userIgnoredApplicationSnapshot
-        ) else {
-            invalidateAfterPrivacyApplicationChange()
-            _ = await stopPersistentStream(clearHashes: false)
-            throw CaptureError.staleGeneration
-        }
+        cachedContentAt = .now
         cachedContent = c
         cachedProtectedApplicationSnapshot = protectedApplicationSnapshot
         cachedUserIgnoredApplicationSnapshot = userIgnoredApplicationSnapshot
         return c
     }
 
-    private static func contentCoversExpectedPrivacyApplications(
-        _ content: SCShareableContent,
-        protectedApplicationSnapshot: ProtectedCaptureApplicationSnapshot,
-        userIgnoredApplicationSnapshot: UserIgnoredCaptureApplicationSnapshot
-    ) -> Bool {
-        contentCoversProtectedApplications(
-            content,
-            expected: protectedApplicationSnapshot
-        ) && contentCoversUserIgnoredApplications(
-            content,
-            expected: userIgnoredApplicationSnapshot
-        )
-    }
-
-    private static func contentCoversProtectedApplications(
-        _ content: SCShareableContent,
-        expected: ProtectedCaptureApplicationSnapshot
-    ) -> Bool {
-        let represented: Set<ProtectedCaptureApplicationIdentity> = Set(
-            content.applications.compactMap { application -> ProtectedCaptureApplicationIdentity? in
-                guard CaptureSessionPolicy.isProtectedCaptureSurface(
-                    bundleId: application.bundleIdentifier,
-                    appName: application.applicationName
-                ) else { return nil }
-                return ProtectedCaptureApplicationIdentity(
-                    bundleIdentifier: application.bundleIdentifier,
-                    applicationName: application.applicationName,
-                    processIdentifier: Int32(application.processID)
-                )
-            }
-        )
-        return CaptureSessionPolicy.contentCoversProtectedApplications(
-            expected: expected,
-            represented: represented
-        )
-    }
-
-    private static func contentCoversUserIgnoredApplications(
-        _ content: SCShareableContent,
-        expected: UserIgnoredCaptureApplicationSnapshot
-    ) -> Bool {
-        let represented = Set(content.applications.map {
-            UserIgnoredCaptureApplicationIdentity(
-                processIdentifier: Int32($0.processID),
-                bundleIdentifier: $0.bundleIdentifier
-            )
-        })
-        return CaptureSessionPolicy.contentCoversUserIgnoredApplications(
-            expected: expected,
-            represented: represented
+    private static func filterIdentity(_ app: SCRunningApplication) -> ScreenCaptureFilterApplication {
+        ScreenCaptureFilterApplication(
+            processIdentifier: Int32(app.processID),
+            bundleIdentifier: app.bundleIdentifier,
+            applicationName: app.applicationName
         )
     }
 
@@ -319,24 +251,11 @@ actor FramePipeline {
 
     private func captureFilter(
         display: SCDisplay,
-        content: SCShareableContent,
-        excludedBundleIDs: Set<String>
+        includedApplications: [SCRunningApplication]
     ) -> SCContentFilter {
-        let excludedApplications = content.applications.filter {
-            excludedBundleIDs.contains($0.bundleIdentifier)
-                || ScreenshotPriorityProcessPolicy.isNativeScreenshotApplication(
-                    bundleIdentifier: $0.bundleIdentifier
-                )
-                || CaptureSessionPolicy.isProtectedCaptureSurface(
-                    bundleId: $0.bundleIdentifier,
-                    appName: $0.applicationName
-                )
-        }
-        return SCContentFilter(
-            display: display,
-            excludingApplications: excludedApplications,
-            exceptingWindows: []
-        )
+        // Positive inclusion also excludes protected/ignored processes missing
+        // from SCShareableContent, including windows they may create later.
+        SCContentFilter(display: display, including: includedApplications, exceptingWindows: [])
     }
 
     private func streamConfiguration(for display: SCDisplay) -> SCStreamConfiguration {
@@ -454,17 +373,23 @@ actor FramePipeline {
             )
             guard contentEpoch.contains(expectedEpoch),
                   await CaptureSessionPolicy.protectedRunningApplicationSnapshot()
-                    == protectedApplicationSnapshot,
-                  Self.contentCoversExpectedPrivacyApplications(
-                    content,
-                    protectedApplicationSnapshot: protectedApplicationSnapshot,
-                    userIgnoredApplicationSnapshot: userIgnoredApplicationSnapshot
-                  ) else {
+                    == protectedApplicationSnapshot else {
                 invalidateAfterPrivacyApplicationChange()
                 _ = await stopPersistentStream(clearHashes: false)
                 throw CaptureError.staleGeneration
             }
             let selectedDisplay = try display(matching: displayID, in: content)
+            let includedApplications = content.applications.filter {
+                CaptureSessionPolicy.mayIncludeApplication(
+                    Self.filterIdentity($0),
+                    excludedBundleIDs: excludedBundleIDs,
+                    protectedSnapshot: protectedApplicationSnapshot,
+                    ignoredSnapshot: userIgnoredApplicationSnapshot
+                )
+            }
+            guard !includedApplications.isEmpty else { throw CaptureError.noShareableApplications }
+            let includedIdentities = Set(includedApplications.map(Self.filterIdentity))
+
 
             if let activeStream {
                 guard streamOutput.isCurrentAndPublished(
@@ -477,11 +402,11 @@ actor FramePipeline {
                     }
                     throw CaptureError.streamStartFailed
                 }
-                guard activeStream.displayID != selectedDisplay.displayID else { return activeStream }
+                guard activeStream.displayID != selectedDisplay.displayID
+                    || activeStream.includedApplications != includedIdentities else { return activeStream }
                 let filter = captureFilter(
                     display: selectedDisplay,
-                    content: content,
-                    excludedBundleIDs: excludedBundleIDs
+                    includedApplications: includedApplications
                 )
                 let configuration = streamConfiguration(for: selectedDisplay)
                 let revision = controlRevision
@@ -516,12 +441,7 @@ actor FramePipeline {
                 guard !wasCancelled,
                       revision == controlRevision,
                       self.activeStream?.generation == activeStream.generation,
-                      contentEpoch.contains(expectedEpoch),
-                      Self.contentCoversExpectedPrivacyApplications(
-                        content,
-                        protectedApplicationSnapshot: protectedApplicationSnapshot,
-                        userIgnoredApplicationSnapshot: userIgnoredApplicationSnapshot
-                      ) else {
+                      contentEpoch.contains(expectedEpoch) else {
                     _ = await stopPersistentStream(clearHashes: false)
                     if wasCancelled { throw CancellationError() }
                     throw CaptureError.staleGeneration
@@ -534,6 +454,7 @@ actor FramePipeline {
                     width: configuration.width,
                     height: configuration.height,
                     excludedBundleIDs: activeStream.excludedBundleIDs,
+                    includedApplications: includedIdentities,
                     protectedApplicationSnapshot: activeStream.protectedApplicationSnapshot,
                     userIgnoredApplicationSnapshot: activeStream.userIgnoredApplicationSnapshot
                 )
@@ -566,8 +487,7 @@ actor FramePipeline {
 
             let filter = captureFilter(
                 display: selectedDisplay,
-                content: content,
-                excludedBundleIDs: excludedBundleIDs
+                includedApplications: includedApplications
             )
             let configuration = streamConfiguration(for: selectedDisplay)
             nextStreamGeneration &+= 1
@@ -647,12 +567,7 @@ actor FramePipeline {
                   startingStream?.generation == generation,
                   startingStream?.controlRevision == revision,
                   controlRevision == revision,
-                  contentEpoch.contains(expectedEpoch),
-                  Self.contentCoversExpectedPrivacyApplications(
-                    content,
-                    protectedApplicationSnapshot: protectedApplicationSnapshot,
-                    userIgnoredApplicationSnapshot: userIgnoredApplicationSnapshot
-                  ) else {
+                  contentEpoch.contains(expectedEpoch) else {
                 _ = await stopPersistentStream(clearHashes: false)
                 if wasCancelled { throw CancellationError() }
                 throw CaptureError.staleGeneration
@@ -665,6 +580,7 @@ actor FramePipeline {
                 width: configuration.width,
                 height: configuration.height,
                 excludedBundleIDs: excludedBundleIDs,
+                includedApplications: includedIdentities,
                 protectedApplicationSnapshot: protectedApplicationSnapshot,
                 userIgnoredApplicationSnapshot: userIgnoredApplicationSnapshot
             )
@@ -704,7 +620,7 @@ actor FramePipeline {
     private func stopPersistentStream(clearHashes: Bool) async -> Bool {
         controlRevision &+= 1
         streamOutput.cancelPendingFrame()
-        if clearHashes { lastHashes.removeAll(keepingCapacity: false) }
+        if clearHashes { deduplication.reset() }
 
         let candidate = activeStream.map {
             StreamIdentity(
@@ -835,7 +751,6 @@ actor FramePipeline {
             _ = await invalidateContent()
             return nil
         }
-        let dedupKey = Int(active.displayID)
         // Reclaim the CIContext's per-frame GPU caches on every exit path — otherwise IOSurface piles up (measured ~550MB).
         defer { ciContext.clearCaches() }
 
@@ -850,9 +765,9 @@ actor FramePipeline {
         let hashes = tileHashes(ciImage)
         let phash = hashes[0]
         let fingerprint = hashes.map { String($0, radix: 16) }.joined(separator: ":")
-        let prev = lastHashes[dedupKey]   // per-display dedup: a monitor switch isn't a "duplicate" of the previous one
-        let isDup = prev != nil && prev!.count == hashes.count &&
-            zip(prev!, hashes).allSatisfy { Self.hamming($0, $1) <= config.dedupHammingThreshold }
+        let isDup = deduplication.isDuplicate(
+            hashes, displayID: active.displayID, threshold: config.dedupHammingThreshold
+        )
         if isDup {
             guard contentEpoch.contains(expectedEpoch) else { return nil }
             guard await CaptureSessionPolicy.protectedRunningApplicationSnapshot()
@@ -861,8 +776,7 @@ actor FramePipeline {
                 return nil
             }
             guard contentEpoch.contains(expectedEpoch) else { return nil }
-            lastHashes[dedupKey] = hashes
-            return ProcessedFrame(heicData: Data(), phash: phash, fingerprint: fingerprint, isDuplicate: true,
+            return ProcessedFrame(heicData: Data(), hashes: hashes, contentEpoch: expectedEpoch, streamGeneration: active.generation, phash: phash, fingerprint: fingerprint, isDuplicate: true,
                                   width: capW, height: capH, ocr: [],
                                   displayID: active.displayID)
         }
@@ -893,10 +807,16 @@ actor FramePipeline {
             return nil
         }
         guard contentEpoch.contains(expectedEpoch) else { return nil }
-        lastHashes[dedupKey] = hashes
-        return ProcessedFrame(heicData: heic, phash: phash, fingerprint: fingerprint, isDuplicate: false,
+        return ProcessedFrame(heicData: heic, hashes: hashes, contentEpoch: expectedEpoch, streamGeneration: active.generation, phash: phash, fingerprint: fingerprint, isDuplicate: false,
                               width: capW, height: capH, ocr: ocr,
                               displayID: active.displayID)
+    }
+
+    func didSave(_ frame: ProcessedFrame) {
+        guard !frame.isDuplicate,
+              contentEpoch.contains(frame.contentEpoch),
+              activeStream?.generation == frame.streamGeneration else { return }
+        deduplication.didSave(frame.hashes, displayID: frame.displayID)
     }
 
     /// Longest-side cap preserving aspect ratio (integer pixels). No upscaling — returns the input if already within.

@@ -254,3 +254,24 @@ be described as passed.
 calendar automation, call maps, and CRM/call intelligence belong in another product, not Eye.
 
 Strategy and priorities — in [`ROADMAP.md`](../ROADMAP.md). Architecture and the contributor guide — in [`AGENTS.md`](../AGENTS.md).
+
+
+### Recording status and omitted system processes
+
+The Timeline header names the current state: **Screen recording**, startup, pause, recovery, or repair.
+The green dot pulses only while fresh complete/idle compositor events confirm the screen stream; it stops
+for unverified or failed capture and respects Reduce Motion. **Last saved** is read from the database at
+startup and advances only after a successful Timeline write. Static pixels can remain healthy without a
+new saved moment. The button explicitly says **Pause Timeline**; the separate **Calls** block labels the
+previous Call result and states when no Call is active.
+
+Timeline screen filtering includes only explicitly permitted applications. A protected background process
+missing from macOS's shareable-content inventory therefore stays outside the recording without blocking
+ordinary apps. The inventory refreshes at most once per three seconds; changes to the admitted app set
+update the existing physical stream and retire old frames. Protected/ignored process identity checks,
+session boundaries, native screenshot priority, and Call audio priority remain enforced. Actual capture
+errors enter the existing bounded recovery path and log an error category/code without content or paths.
+
+Screen deduplication compares against successfully committed images. A frame cancelled after processing,
+or rejected by storage, cannot suppress the next image as a duplicate. Small unsaved changes are compared
+to the saved baseline rather than accumulating an invisible chain of duplicate frames.

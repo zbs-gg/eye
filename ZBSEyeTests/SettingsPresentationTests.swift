@@ -19,7 +19,7 @@ final class SettingsPresentationTests: XCTestCase {
         )
 
         XCTAssertTrue(source.contains(#"String(localized: "Recording a Call")"#))
-        XCTAssertTrue(source.contains(#"String(localized: "Listening for microphone use")"#))
+        XCTAssertTrue(source.contains(#"String(localized: "No Call active · waiting for microphone use")"#))
         XCTAssertFalse(source.contains(#"text: "Recording this meeting""#))
         XCTAssertFalse(source.contains(#"text: "Listening for meetings""#))
     }

@@ -136,6 +136,13 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
   frame/audio segment is orphaned (outside the backup snapshot / outside the media copy).
 - **The AX tree is often empty on Electron apps** — hence adaptive AX-first + OCR-fallback per-app, not
   "we beat Electron". OCR is an equal path, not a rare fallback.
+- **Missing SCK apps must not freeze Timeline.** Screen capture uses a positive application-inclusion filter.
+  macOS can omit a long-lived authentication helper from `SCShareableContent`; requiring every protected
+  process to appear there caused endless dropped cycles with a false green status. Omitted processes stay
+  excluded by construction. Refresh the inventory within three seconds and rebind when the admitted app set
+  changes; retain the independent protected/ignored PID, session, and post-await attestations. Never replace
+  this with an exclusion filter built from an incomplete inventory. The live dot requires fresh verified
+  compositor progress; `Last saved` is separate and advances only after a committed Timeline write.
 - **Static pixels are healthy.** The persistent stream proves liveness from current complete/idle compositor
   events, not from pixel changes. A real stall or start/update/stop failure opens a durable coverage interval and
   bounded Eye-owned retries after 1/3/10 seconds; exhaustion becomes `repairRequired`. Repair never changes TCC,

@@ -246,10 +246,10 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
         XCTAssertTrue(source.contains("\\.runningApplications"))
         XCTAssertTrue(source.contains("CaptureSessionPolicy.recordProtectedApplicationInventoryChange"))
         XCTAssertTrue(pipeline.contains("onScreenWindowsOnly: false"))
-        XCTAssertTrue(pipeline.contains("contentCoversProtectedApplications"))
+        XCTAssertTrue(pipeline.contains("CaptureSessionPolicy.mayIncludeApplication"))
     }
 
-    func testStaleShareableContentMissingUserIgnoredHelperFailsClosed() throws {
+    func testStaleShareableContentUsesPositiveInclusionToKeepMissingHelpersPrivate() throws {
         let source = try coordinatorSource
         let pipeline = try String(
             contentsOf: projectRoot.appendingPathComponent("ZBSEyeApp/Capture/FramePipeline.swift"),
@@ -266,14 +266,12 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
             3
         )
         XCTAssertTrue(pipeline.contains("cachedUserIgnoredApplicationSnapshot"))
-        XCTAssertTrue(pipeline.contains("contentCoversExpectedPrivacyApplications"))
-        XCTAssertTrue(pipeline.contains("contentCoversUserIgnoredApplications"))
+        XCTAssertTrue(pipeline.contains("CaptureSessionPolicy.mayIncludeApplication"))
+        XCTAssertTrue(pipeline.contains("including: includedApplications, exceptingWindows: []"))
+        XCTAssertTrue(pipeline.contains("activeStream.includedApplications != includedIdentities"))
+        XCTAssertTrue(pipeline.contains("ContinuousClock.now - cachedContentAt"))
         XCTAssertTrue(policy.contains("expected.isSubset(of: represented)"))
-        XCTAssertGreaterThanOrEqual(
-            pipeline.components(separatedBy: "Self.contentCoversExpectedPrivacyApplications(").count - 1,
-            4,
-            "fresh content, active stream, update completion, and start completion must all fail closed"
-        )
+        XCTAssertFalse(pipeline.contains("excludingApplications:"))
     }
 
     func testUserIgnoredShareableContentIdentityRequiresExactPIDAndBundle() throws {
@@ -290,8 +288,8 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
         XCTAssertTrue(source.contains("case ignored(processIdentifier: Int32, bundleIdentifier: String)"))
         XCTAssertTrue(source.contains("guard case let .ignored(processIdentifier, bundleIdentifier) = identity"))
         XCTAssertTrue(policy.contains("struct UserIgnoredCaptureApplicationIdentity: Hashable, Sendable"))
-        XCTAssertTrue(pipeline.contains("processIdentifier: Int32($0.processID)"))
-        XCTAssertTrue(pipeline.contains("bundleIdentifier: $0.bundleIdentifier"))
+        XCTAssertTrue(pipeline.contains("processIdentifier: Int32(app.processID)"))
+        XCTAssertTrue(pipeline.contains("bundleIdentifier: app.bundleIdentifier"))
         XCTAssertTrue(
             policy.contains("typealias UserIgnoredCaptureApplicationSnapshot = Set<UserIgnoredCaptureApplicationIdentity>")
         )
@@ -375,7 +373,7 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
 
         XCTAssertFalse(source.contains("try? await pipeline.reconcilePersistentStream"))
         XCTAssertTrue(source.contains("reconcilePersistentStreamForIntentionalCycle"))
-        XCTAssertTrue(source.contains("case .streamStartFailed, .streamUpdateFailed, .streamStopUnconfirmed:"))
+        XCTAssertTrue(source.contains("captureError.healthFailureReason"))
         XCTAssertTrue(source.contains("healthController.recordScreenPipelineFailure("))
     }
 

@@ -10,6 +10,7 @@ struct CallControlView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
+            Text("Calls").font(.caption.weight(.medium)).foregroundStyle(.secondary)
             Picker("Call recording", selection: callModeBinding) {
                 ForEach(CallRecordingMode.allCases, id: \.self) { mode in
                     Text(mode.label).tag(mode)
@@ -69,7 +70,7 @@ struct CallControlView: View {
                     evidence: evidence,
                     modelState: env.speechModel.effectiveState
                 )
-                Label(presentation.title, systemImage: icon(for: presentation.kind))
+                Label(String(localized: "Last Call: \(presentation.title)"), systemImage: icon(for: presentation.kind))
                     .font(.caption)
                     .foregroundStyle(color(for: presentation.kind))
                     .lineLimit(2)

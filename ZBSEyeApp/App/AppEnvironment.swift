@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import AppKit
 import Observation
 import UserNotifications
@@ -690,6 +691,12 @@ final class AppEnvironment {
             self.storage = storage
             let db = try ZBSEyeDatabase(path: ZBSEyeDatabase.defaultURL().path)
             self.db = db
+            let lastScreenMs = try await db.pool.read { database in
+                try Int64.fetchOne(database, sql: "SELECT ts FROM screen_captures ORDER BY ts DESC LIMIT 1")
+            }
+            recording.restoreLastScreenCapture(at: lastScreenMs.map {
+                Date(timeIntervalSince1970: Double($0) / 1_000)
+            })
             // Keep Media migration is resolved only after the canonical root,
             // database, and captured-media tree are available. This one-time
             // reconciliation never calls RetentionManager; an uncertain result
@@ -1272,7 +1279,7 @@ final class AppEnvironment {
                 resourceCoordinator: sckResourceCoordinator
             )
             coordinator.onFrame = { [weak self, weak rec = recording] capturedAt in
-                rec?.noteFrame()
+                rec?.noteFrame(at: capturedAt)
                 Task { @MainActor [weak self] in
                     await self?.timelineStore?.noteFrameAvailable(at: capturedAt)
                 }

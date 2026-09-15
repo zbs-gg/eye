@@ -2,6 +2,31 @@ import XCTest
 
 @MainActor
 final class CaptureHealthControllerTests: XCTestCase {
+    func testOrdinaryScreenCyclesCannotBypassDurableRecoveryOrItsRetryDelay() {
+        var effects: [CaptureHealthEffect] = []
+        let controller = CaptureHealthController(nowMs: 0) { effects.append($0) }
+        XCTAssertTrue(controller.permitsScreenCycle())
+        controller.recordScreenPipelineFailure(.screenRequestFailed, nowMs: 1)
+        XCTAssertFalse(controller.permitsScreenCycle(), "Persist the gap before any retry")
+        let open = try! XCTUnwrap(effects.lastOpen)
+        controller.coverageDidOpen(open, nowMs: 2)
+        for _ in 1...3 {
+            XCTAssertFalse(controller.permitsScreenCycle(), "Ordinary ticks must respect retry delay")
+            let attempt = try! XCTUnwrap(effects.lastAttempt)
+            XCTAssertTrue(controller.markScreenRecoveryReady(attempt))
+            XCTAssertTrue(controller.permitsScreenCycle())
+            controller.recordScreenPipelineFailure(.screenRequestFailed, nowMs: 3)
+        }
+        XCTAssertEqual(controller.snapshot.legs[.screen]?.state, .repairRequired)
+        XCTAssertFalse(controller.permitsScreenCycle())
+        controller.repairRequested(.screen, nowMs: 4)
+        XCTAssertFalse(controller.permitsScreenCycle(), "Explicit repair must still drain before admission")
+        XCTAssertTrue(controller.markScreenRecoveryReady(try! XCTUnwrap(effects.lastAttempt)))
+        XCTAssertTrue(controller.permitsScreenCycle())
+        controller.setCallAudioPriority(true, nowMs: 5)
+        XCTAssertFalse(controller.permitsScreenCycle())
+    }
+
     func testCallPriorityPausesOnlyScreenAndKeepsSystemAudioObservable() {
         let controller = CaptureHealthController(
             nowMs: 1,

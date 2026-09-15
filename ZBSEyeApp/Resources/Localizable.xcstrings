@@ -1,6 +1,108 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Last Call: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last Call: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Прошлый звонок: %@"
+          }
+        }
+      }
+    },
+    "No Call active · waiting for microphone use": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Call active · waiting for microphone use"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Звонок не идёт · ожидание микрофона"
+          }
+        }
+      }
+    },
+    "Last saved: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last saved: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Последнее сохранение: %@"
+          }
+        }
+      }
+    },
+    "Screen capture unverified": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen capture unverified"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись экрана не подтверждена"
+          }
+        }
+      }
+    },
+    "Starting screen capture…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starting screen capture…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запускаю запись экрана…"
+          }
+        }
+      }
+    },
+    "Screen recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экран записывается"
+          }
+        }
+      }
+    },
     " ": {
       "localizations": {
         "ru": {
