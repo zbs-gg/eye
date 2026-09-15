@@ -275,3 +275,15 @@ errors enter the existing bounded recovery path and log an error category/code w
 Screen deduplication compares against successfully committed images. A frame cancelled after processing,
 or rejected by storage, cannot suppress the next image as a duplicate. Small unsaved changes are compared
 to the saved baseline rather than accumulating an invisible chain of duplicate frames.
+
+
+**Local qualification update, 2026-09-15:** installed build 43 subsequently saved new image-backed
+Timeline rows at 23:12:06 and 23:12:30 (local time). The user also reported a visible regression:
+macOS purple screen-sharing controls appear in application window title bars during capture and
+can disappear during app switching or native screenshots. The positive application filter is the
+suspected trigger; screenshot-triggered Timeline stream suspension is intentional. A metadata-only
+signed probe still finds LocalAuthentication UIAgent missing from the SCK inventory, so blindly
+restoring the previous exclusion filter would restore the original failure. No change that weakens
+privacy exclusion is qualified. Build 44 remains staged, not installed, because it uses the same
+filter. PR #86 remains draft pending a supported capture-mode correction and physical verification
+of both window controls and newly saved images. Passing CI does not close this visible regression.
