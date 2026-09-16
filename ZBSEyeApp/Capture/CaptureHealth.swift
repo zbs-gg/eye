@@ -2,6 +2,7 @@ import Foundation
 
 enum CaptureError: Error, Equatable {
     case noShareableApplications
+    case privacyInventoryIncomplete
     case noDisplay
     case encodeFailed
     case staleGeneration
@@ -13,7 +14,7 @@ enum CaptureError: Error, Equatable {
     /// durable, bounded recovery path instead of leaving a green status behind.
     var healthFailureReason: CaptureHealthReason? {
         switch self {
-        case .staleGeneration: nil
+        case .staleGeneration, .privacyInventoryIncomplete: nil
         case .streamStartFailed, .streamUpdateFailed, .streamStopUnconfirmed: .screenStreamStopped
         case .noDisplay, .noShareableApplications, .encodeFailed: .screenRequestFailed
         }

@@ -61,7 +61,7 @@ actor FramePipeline {
         var width: Int
         var height: Int
         let excludedBundleIDs: Set<String>
-        let includedApplications: Set<ScreenCaptureFilterApplication>
+        let excludedApplications: Set<ScreenCaptureFilterApplication>
         let protectedApplicationSnapshot: ProtectedCaptureApplicationSnapshot
         let userIgnoredApplicationSnapshot: UserIgnoredCaptureApplicationSnapshot
     }
@@ -211,8 +211,8 @@ actor FramePipeline {
             cachedProtectedApplicationSnapshot = nil
             cachedUserIgnoredApplicationSnapshot = nil
         }
-        // An inclusion filter remains private when SCK omits a process. Refresh
-        // the inventory so newly shareable ordinary apps can join that filter.
+        // Reconcile WindowServer window evidence independently of this cache.
+        // A newly created authentication window changes the snapshot immediately.
         if let c = cachedContent, let cachedContentAt,
            ContinuousClock.now - cachedContentAt < .seconds(3) { return c }
         let c = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
@@ -251,11 +251,12 @@ actor FramePipeline {
 
     private func captureFilter(
         display: SCDisplay,
-        includedApplications: [SCRunningApplication]
+        excludedApplications: [SCRunningApplication]
     ) -> SCContentFilter {
-        // Positive inclusion also excludes protected/ignored processes missing
-        // from SCShareableContent, including windows they may create later.
-        SCContentFilter(display: display, including: includedApplications, exceptingWindows: [])
+        // Display capture keeps macOS sharing controls out of each app's title
+        // bar. The caller must attest all privacy exclusions before constructing
+        // this filter; never silently fall back to application/window sharing.
+        SCContentFilter(display: display, excludingApplications: excludedApplications, exceptingWindows: [])
     }
 
     private func streamConfiguration(for display: SCDisplay) -> SCStreamConfiguration {
@@ -379,16 +380,37 @@ actor FramePipeline {
                 throw CaptureError.staleGeneration
             }
             let selectedDisplay = try display(matching: displayID, in: content)
-            let includedApplications = content.applications.filter {
-                CaptureSessionPolicy.mayIncludeApplication(
+            let excludedApplications = content.applications.filter {
+                !CaptureSessionPolicy.mayIncludeApplication(
                     Self.filterIdentity($0),
                     excludedBundleIDs: excludedBundleIDs,
                     protectedSnapshot: protectedApplicationSnapshot,
                     ignoredSnapshot: userIgnoredApplicationSnapshot
                 )
             }
-            guard !includedApplications.isEmpty else { throw CaptureError.noShareableApplications }
-            let includedIdentities = Set(includedApplications.map(Self.filterIdentity))
+            let representedProtected = Set(excludedApplications.map {
+                ProtectedCaptureApplicationIdentity(
+                    bundleIdentifier: $0.bundleIdentifier, applicationName: $0.applicationName,
+                    processIdentifier: Int32($0.processID)
+                )
+            })
+            let representedIgnored = Set(excludedApplications.map {
+                UserIgnoredCaptureApplicationIdentity(
+                    processIdentifier: Int32($0.processID), bundleIdentifier: $0.bundleIdentifier
+                )
+            })
+            guard CaptureSessionPolicy.contentCoversProtectedApplications(
+                expected: protectedApplicationSnapshot, represented: representedProtected
+            ), CaptureSessionPolicy.contentCoversUserIgnoredApplications(
+                expected: userIgnoredApplicationSnapshot, represented: representedIgnored
+            ) else {
+                invalidateAfterPrivacyApplicationChange()
+                guard await stopPersistentStream(clearHashes: false) else {
+                    throw CaptureError.streamStopUnconfirmed
+                }
+                throw CaptureError.privacyInventoryIncomplete
+            }
+            let excludedIdentities = Set(excludedApplications.map(Self.filterIdentity))
 
 
             if let activeStream {
@@ -403,10 +425,10 @@ actor FramePipeline {
                     throw CaptureError.streamStartFailed
                 }
                 guard activeStream.displayID != selectedDisplay.displayID
-                    || activeStream.includedApplications != includedIdentities else { return activeStream }
+                    || activeStream.excludedApplications != excludedIdentities else { return activeStream }
                 let filter = captureFilter(
                     display: selectedDisplay,
-                    includedApplications: includedApplications
+                    excludedApplications: excludedApplications
                 )
                 let configuration = streamConfiguration(for: selectedDisplay)
                 let revision = controlRevision
@@ -454,7 +476,7 @@ actor FramePipeline {
                     width: configuration.width,
                     height: configuration.height,
                     excludedBundleIDs: activeStream.excludedBundleIDs,
-                    includedApplications: includedIdentities,
+                    excludedApplications: excludedIdentities,
                     protectedApplicationSnapshot: activeStream.protectedApplicationSnapshot,
                     userIgnoredApplicationSnapshot: activeStream.userIgnoredApplicationSnapshot
                 )
@@ -487,7 +509,7 @@ actor FramePipeline {
 
             let filter = captureFilter(
                 display: selectedDisplay,
-                includedApplications: includedApplications
+                excludedApplications: excludedApplications
             )
             let configuration = streamConfiguration(for: selectedDisplay)
             nextStreamGeneration &+= 1
@@ -580,7 +602,7 @@ actor FramePipeline {
                 width: configuration.width,
                 height: configuration.height,
                 excludedBundleIDs: excludedBundleIDs,
-                includedApplications: includedIdentities,
+                excludedApplications: excludedIdentities,
                 protectedApplicationSnapshot: protectedApplicationSnapshot,
                 userIgnoredApplicationSnapshot: userIgnoredApplicationSnapshot
             )

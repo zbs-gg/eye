@@ -43,8 +43,7 @@ struct PermissionsSettingsView: View {
 
                 captureRepairGroup
                 audioGroup
-                autoCallExclusionsGroup
-                privacyGroup
+                AppExclusionsSettingsContent()
             }
             .padding(24)
             .frame(maxWidth: 720)
@@ -149,6 +148,20 @@ struct PermissionsSettingsView: View {
         }
     }
 
+
+}
+
+/// Both entry points edit the same stores; no second exclusion list.
+struct AppExclusionsSettingsContent: View {
+    @Environment(AppEnvironment.self) private var env
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            autoCallExclusionsGroup
+            privacyGroup
+        }
+    }
+
     private var autoCallExclusionsGroup: some View {
         SettingsGroup("Don’t auto-record these apps") {
             Text("These apps can still appear in screen history. This list only prevents them from automatically starting a Call when they use the microphone.")
@@ -211,6 +224,28 @@ struct PermissionsSettingsView: View {
             Divider()
             Button("Exclude an app…") { env.privacy.addAppViaPanel() }
         }
+    }
+}
+
+struct AppExclusionsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("App exclusions").font(.title2.weight(.semibold))
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(20)
+            Divider()
+            ScrollView {
+                AppExclusionsSettingsContent()
+                    .padding(20)
+            }
+        }
+        .frame(width: 560, height: 500)
     }
 }
 

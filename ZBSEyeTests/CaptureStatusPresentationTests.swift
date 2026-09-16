@@ -25,6 +25,7 @@ final class CaptureStatusPresentationTests: XCTestCase {
 
     func testActualCaptureErrorsEnterRecoveryWhileSupersededWorkDoesNot() {
         XCTAssertNil(CaptureError.staleGeneration.healthFailureReason)
+        XCTAssertNil(CaptureError.privacyInventoryIncomplete.healthFailureReason)
         for error in [CaptureError.noDisplay, .noShareableApplications, .encodeFailed] {
             XCTAssertEqual(error.healthFailureReason, .screenRequestFailed)
         }

@@ -1,6 +1,54 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "App exclusions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App exclusions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исключения приложений"
+          }
+        }
+      }
+    },
+    "App exclusions…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App exclusions…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исключения приложений…"
+          }
+        }
+      }
+    },
+    "Choose which apps can start Calls or appear in screen history.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose which apps can start Calls or appear in screen history."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите, какие приложения могут запускать запись звонков и попадать в историю экрана."
+          }
+        }
+      }
+    },
     "Last Call: %@": {
       "extractionState": "manual",
       "localizations": {

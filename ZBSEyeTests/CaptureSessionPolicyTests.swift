@@ -1,6 +1,63 @@
 import XCTest
+import CoreGraphics
 
 final class CaptureSessionPolicyTests: XCTestCase {
+    func testDormantAuthenticationHelperNeedsPositiveAllWindowEvidence() {
+        let helper = ProtectedCaptureApplicationIdentity(
+            bundleIdentifier: "com.apple.localauthentication.uiagent",
+            applicationName: "coreautha", processIdentifier: 101
+        )
+        let unknown = ProtectedCaptureApplicationSnapshot(revision: 1, applications: [helper])
+        XCTAssertFalse(CaptureSessionPolicy.contentCoversProtectedApplications(expected: unknown, represented: []))
+        let dormant = ProtectedCaptureApplicationSnapshot(revision: 1, applications: [helper], windows: [])
+        XCTAssertTrue(CaptureSessionPolicy.contentCoversProtectedApplications(expected: dormant, represented: []))
+        let windowed = ProtectedCaptureApplicationSnapshot(
+            revision: 1, applications: [helper],
+            windows: [.init(processIdentifier: 101, windowIdentifier: 200)]
+        )
+        XCTAssertFalse(CaptureSessionPolicy.contentCoversProtectedApplications(expected: windowed, represented: []))
+        XCTAssertTrue(CaptureSessionPolicy.contentCoversProtectedApplications(expected: windowed, represented: [helper]))
+        // Existing pre/post-await equality guards must reject a window created
+        // by the same long-lived process, without any app lifecycle change.
+        XCTAssertNotEqual(dormant, windowed)
+        XCTAssertNotEqual(windowed, ProtectedCaptureApplicationSnapshot(
+            revision: 1, applications: [helper],
+            windows: [.init(processIdentifier: 101, windowIdentifier: 201)]
+        ))
+        // An explicit user exclusion always requires the exact SCK process.
+        XCTAssertFalse(CaptureSessionPolicy.contentCoversUserIgnoredApplications(
+            expected: [.init(processIdentifier: 101, bundleIdentifier: "com.apple.localauthentication.uiagent")],
+            represented: []
+        ))
+    }
+
+    func testWindowlessExemptionDoesNotApplyToOtherProtectedProcesses() {
+        for bundle in ["com.apple.loginwindow", "com.apple.securityagent", "com.apple.screensaver.engine"] {
+            let snapshot = ProtectedCaptureApplicationSnapshot(
+                revision: 1,
+                applications: [.init(bundleIdentifier: bundle, applicationName: nil, processIdentifier: 101)],
+                windows: []
+            )
+            XCTAssertFalse(CaptureSessionPolicy.contentCoversProtectedApplications(expected: snapshot, represented: []))
+        }
+    }
+
+    func testIndependentWindowInventoryIncludesOffscreenAndFailsClosed() {
+        let owner = kCGWindowOwnerPID as String
+        let number = kCGWindowNumber as String
+        let rows: [[String: Any]] = [
+            [owner: 101, number: 200, kCGWindowIsOnscreen as String: false],
+            [owner: 42, number: 201]
+        ]
+        XCTAssertEqual(CaptureSessionPolicy.protectedWindowInventory(rows: rows, protectedPIDs: [101]),
+                       [.init(processIdentifier: 101, windowIdentifier: 200)])
+        XCTAssertEqual(CaptureSessionPolicy.protectedWindowInventory(rows: rows, protectedPIDs: [102]), [])
+        XCTAssertNil(CaptureSessionPolicy.protectedWindowInventory(rows: nil, protectedPIDs: [101]))
+        XCTAssertNil(CaptureSessionPolicy.protectedWindowInventory(rows: [], protectedPIDs: [101]))
+        XCTAssertNil(CaptureSessionPolicy.protectedWindowInventory(rows: [[owner: 101]], protectedPIDs: [101]))
+        XCTAssertNil(CaptureSessionPolicy.protectedWindowInventory(rows: [[number: 200]], protectedPIDs: [101]))
+    }
+
     func testInclusionKeepsRecordingWhenSCKOmitsAProtectedBackgroundProcess() {
         let omittedAuth = ProtectedCaptureApplicationIdentity(
             bundleIdentifier: "com.apple.localauthentication.uiagent",

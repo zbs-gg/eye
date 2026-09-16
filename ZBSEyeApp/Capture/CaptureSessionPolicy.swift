@@ -19,9 +19,16 @@ struct ProtectedCaptureApplicationIdentity: Hashable, Sendable {
     }
 }
 
+struct ProtectedCaptureWindowIdentity: Hashable, Sendable {
+    let processIdentifier: Int32
+    let windowIdentifier: UInt32
+}
+
 struct ProtectedCaptureApplicationSnapshot: Sendable, Equatable {
     let revision: UInt64
     let applications: Set<ProtectedCaptureApplicationIdentity>
+    // nil means enumeration failed: no windowless-process exemption is allowed.
+    var windows: Set<ProtectedCaptureWindowIdentity>? = nil
 }
 
 /// Exact identity of a running process whose bundle was put in the user's
@@ -35,7 +42,7 @@ struct UserIgnoredCaptureApplicationIdentity: Hashable, Sendable {
 
 typealias UserIgnoredCaptureApplicationSnapshot = Set<UserIgnoredCaptureApplicationIdentity>
 
-/// Exact app identity admitted by the positive ScreenCaptureKit filter.
+/// Exact app identity used by the ScreenCaptureKit privacy filter.
 struct ScreenCaptureFilterApplication: Hashable, Sendable {
     let processIdentifier: Int32
     let bundleIdentifier: String
@@ -209,10 +216,34 @@ enum CaptureSessionPolicy {
             )
             }
         )
+        let protectedPIDs = Set(applications.map(\.processIdentifier))
+        let windowRows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]]
+        let windows = protectedWindowInventory(rows: windowRows, protectedPIDs: protectedPIDs)
         return ProtectedCaptureApplicationSnapshot(
             revision: protectedApplicationEpoch.value,
-            applications: applications
+            applications: applications,
+            windows: windows
         )
+    }
+
+    /// Enumerate offscreen windows too. A dormant helper is exempt only when a
+    /// complete WindowServer inventory positively proves it owns no windows.
+    /// Malformed/failed queries never count as an empty inventory.
+    static func protectedWindowInventory(
+        rows: [[String: Any]]?, protectedPIDs: Set<Int32>
+    ) -> Set<ProtectedCaptureWindowIdentity>? {
+        guard let rows, !rows.isEmpty else { return nil }
+        var result: Set<ProtectedCaptureWindowIdentity> = []
+        for row in rows {
+            guard let rawPID = row[kCGWindowOwnerPID as String] as? Int,
+                  let rawWindowID = row[kCGWindowNumber as String] as? Int,
+                  let pid = Int32(exactly: rawPID),
+                  let windowID = UInt32(exactly: rawWindowID) else { return nil }
+            if protectedPIDs.contains(pid) {
+                result.insert(.init(processIdentifier: pid, windowIdentifier: windowID))
+            }
+        }
+        return result
     }
 
     /// Unknown/omitted processes never enter the inclusion list. Check both
@@ -241,16 +272,23 @@ enum CaptureSessionPolicy {
         return true
     }
 
-    /// ScreenCaptureKit must know about every protected process before a frame
-    /// filter is constructed. Authentication helpers can stay alive for hours
-    /// with an offscreen window, so process lifecycle notifications alone do not
-    /// prove that an on-screen-only SCK inventory is safe.
+    /// Require exact process exclusion for every protected surface. The one
+    /// observed SCK omission, dormant LocalAuthentication UIAgent, can be absent
+    /// only when independent all-window evidence proves it owns no window.
+    /// The complete snapshot (including window IDs) is reattested around every
+    /// asynchronous capture stage and before storage. User exclusions never
+    /// receive this exemption.
     static func contentCoversProtectedApplications(
         expected: ProtectedCaptureApplicationSnapshot,
         represented: Set<ProtectedCaptureApplicationIdentity>
     ) -> Bool {
         expected.applications.allSatisfy { expectedApplication in
-            represented.contains { representedApplication in
+            if expectedApplication.bundleIdentifier == "com.apple.localauthentication.uiagent",
+               let windows = expected.windows,
+               !windows.contains(where: { $0.processIdentifier == expectedApplication.processIdentifier }) {
+                return true
+            }
+            return represented.contains { representedApplication in
                 guard representedApplication.processIdentifier
                         == expectedApplication.processIdentifier else { return false }
                 if let expectedBundle = expectedApplication.bundleIdentifier {

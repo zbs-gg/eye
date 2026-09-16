@@ -899,6 +899,10 @@ final class CaptureCoordinator {
                 return
             }
         } catch let captureError as CaptureError {
+            if captureError == .privacyInventoryIncomplete {
+                healthController.recordScreenIntentional(.privacyExcluded, nowMs: Self.epochMs())
+                return
+            }
             guard let reason = captureError.healthFailureReason else { return }
             healthController.recordScreenPipelineFailure(reason, nowMs: Self.epochMs())
             Log.capture.error("screen_stream_cycle_failed reason=\(String(describing: captureError), privacy: .public)")
@@ -979,6 +983,10 @@ final class CaptureCoordinator {
         } catch is CancellationError {
             return false
         } catch let captureError as CaptureError {
+            if captureError == .privacyInventoryIncomplete {
+                healthController.recordScreenIntentional(.privacyExcluded, nowMs: Self.epochMs())
+                return false
+            }
             guard let reason = captureError.healthFailureReason else { return false }
             healthController.recordScreenPipelineFailure(reason, nowMs: Self.epochMs())
             Log.capture.error("screen_stream_reconcile_failed reason=\(String(describing: captureError), privacy: .public)")

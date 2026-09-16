@@ -249,7 +249,7 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
         XCTAssertTrue(pipeline.contains("CaptureSessionPolicy.mayIncludeApplication"))
     }
 
-    func testStaleShareableContentUsesPositiveInclusionToKeepMissingHelpersPrivate() throws {
+    func testDisplayFilterRequiresIndependentPrivacyAttestation() throws {
         let source = try coordinatorSource
         let pipeline = try String(
             contentsOf: projectRoot.appendingPathComponent("ZBSEyeApp/Capture/FramePipeline.swift"),
@@ -267,11 +267,14 @@ final class CaptureCoordinatorSessionStateTests: XCTestCase {
         )
         XCTAssertTrue(pipeline.contains("cachedUserIgnoredApplicationSnapshot"))
         XCTAssertTrue(pipeline.contains("CaptureSessionPolicy.mayIncludeApplication"))
-        XCTAssertTrue(pipeline.contains("including: includedApplications, exceptingWindows: []"))
-        XCTAssertTrue(pipeline.contains("activeStream.includedApplications != includedIdentities"))
+        XCTAssertTrue(pipeline.contains("excludingApplications: excludedApplications, exceptingWindows: []"))
+        XCTAssertTrue(pipeline.contains("activeStream.excludedApplications != excludedIdentities"))
         XCTAssertTrue(pipeline.contains("ContinuousClock.now - cachedContentAt"))
         XCTAssertTrue(policy.contains("expected.isSubset(of: represented)"))
-        XCTAssertFalse(pipeline.contains("excludingApplications:"))
+        XCTAssertFalse(pipeline.contains("including: includedApplications"))
+        XCTAssertTrue(pipeline.contains("throw CaptureError.privacyInventoryIncomplete"))
+        XCTAssertTrue(pipeline.contains("CaptureSessionPolicy.contentCoversProtectedApplications("))
+        XCTAssertTrue(pipeline.contains("CaptureSessionPolicy.contentCoversUserIgnoredApplications("))
     }
 
     func testUserIgnoredShareableContentIdentityRequiresExactPIDAndBundle() throws {
