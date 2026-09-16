@@ -19,9 +19,16 @@ struct ProtectedCaptureApplicationIdentity: Hashable, Sendable {
     }
 }
 
+struct ProtectedCaptureWindowIdentity: Hashable, Sendable {
+    let processIdentifier: Int32
+    let windowIdentifier: UInt32
+}
+
 struct ProtectedCaptureApplicationSnapshot: Sendable, Equatable {
     let revision: UInt64
     let applications: Set<ProtectedCaptureApplicationIdentity>
+    // nil means enumeration failed: no windowless-process exemption is allowed.
+    var windows: Set<ProtectedCaptureWindowIdentity>? = nil
 }
 
 /// Exact identity of a running process whose bundle was put in the user's
@@ -34,6 +41,13 @@ struct UserIgnoredCaptureApplicationIdentity: Hashable, Sendable {
 }
 
 typealias UserIgnoredCaptureApplicationSnapshot = Set<UserIgnoredCaptureApplicationIdentity>
+
+/// Exact app identity used by the ScreenCaptureKit privacy filter.
+struct ScreenCaptureFilterApplication: Hashable, Sendable {
+    let processIdentifier: Int32
+    let bundleIdentifier: String
+    let applicationName: String
+}
 
 struct CaptureContentEpoch: Sendable, Equatable {
     private(set) var value: UInt64 = 0
@@ -202,22 +216,79 @@ enum CaptureSessionPolicy {
             )
             }
         )
+        let protectedPIDs = Set(applications.map(\.processIdentifier))
+        let windowRows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]]
+        let windows = protectedWindowInventory(rows: windowRows, protectedPIDs: protectedPIDs)
         return ProtectedCaptureApplicationSnapshot(
             revision: protectedApplicationEpoch.value,
-            applications: applications
+            applications: applications,
+            windows: windows
         )
     }
 
-    /// ScreenCaptureKit must know about every protected process before a frame
-    /// filter is constructed. Authentication helpers can stay alive for hours
-    /// with an offscreen window, so process lifecycle notifications alone do not
-    /// prove that an on-screen-only SCK inventory is safe.
+    /// Enumerate offscreen windows too. A dormant helper is exempt only when a
+    /// complete WindowServer inventory positively proves it owns no windows.
+    /// Malformed/failed queries never count as an empty inventory.
+    static func protectedWindowInventory(
+        rows: [[String: Any]]?, protectedPIDs: Set<Int32>
+    ) -> Set<ProtectedCaptureWindowIdentity>? {
+        guard let rows, !rows.isEmpty else { return nil }
+        var result: Set<ProtectedCaptureWindowIdentity> = []
+        for row in rows {
+            guard let rawPID = row[kCGWindowOwnerPID as String] as? Int,
+                  let rawWindowID = row[kCGWindowNumber as String] as? Int,
+                  let pid = Int32(exactly: rawPID),
+                  let windowID = UInt32(exactly: rawWindowID) else { return nil }
+            if protectedPIDs.contains(pid) {
+                result.insert(.init(processIdentifier: pid, windowIdentifier: windowID))
+            }
+        }
+        return result
+    }
+
+    /// Unknown/omitted processes never enter the inclusion list. Check both
+    /// SCK metadata and the independent NSWorkspace privacy snapshot so a
+    /// missing or inconsistent bundle/name cannot admit a protected PID.
+    static func mayIncludeApplication(
+        _ application: ScreenCaptureFilterApplication,
+        excludedBundleIDs: Set<String>,
+        protectedSnapshot: ProtectedCaptureApplicationSnapshot,
+        ignoredSnapshot: UserIgnoredCaptureApplicationSnapshot
+    ) -> Bool {
+        guard !excludedBundleIDs.contains(application.bundleIdentifier),
+              !isProtectedCaptureSurface(
+                bundleId: application.bundleIdentifier,
+                appName: application.applicationName
+              ),
+              !ScreenshotPriorityProcessPolicy.isNativeScreenshotApplication(
+                bundleIdentifier: application.bundleIdentifier
+              ),
+              !protectedSnapshot.applications.contains(where: {
+                $0.processIdentifier == application.processIdentifier
+              }),
+              !ignoredSnapshot.contains(where: {
+                $0.processIdentifier == application.processIdentifier
+              }) else { return false }
+        return true
+    }
+
+    /// Require exact process exclusion for every protected surface. The one
+    /// observed SCK omission, dormant LocalAuthentication UIAgent, can be absent
+    /// only when independent all-window evidence proves it owns no window.
+    /// The complete snapshot (including window IDs) is reattested around every
+    /// asynchronous capture stage and before storage. User exclusions never
+    /// receive this exemption.
     static func contentCoversProtectedApplications(
         expected: ProtectedCaptureApplicationSnapshot,
         represented: Set<ProtectedCaptureApplicationIdentity>
     ) -> Bool {
         expected.applications.allSatisfy { expectedApplication in
-            represented.contains { representedApplication in
+            if expectedApplication.bundleIdentifier == "com.apple.localauthentication.uiagent",
+               let windows = expected.windows,
+               !windows.contains(where: { $0.processIdentifier == expectedApplication.processIdentifier }) {
+                return true
+            }
+            return represented.contains { representedApplication in
                 guard representedApplication.processIdentifier
                         == expectedApplication.processIdentifier else { return false }
                 if let expectedBundle = expectedApplication.bundleIdentifier {

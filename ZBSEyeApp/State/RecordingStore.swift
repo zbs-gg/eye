@@ -23,6 +23,7 @@ final class RecordingStore {
     private(set) var screenFrameCount = 0
     private(set) var audioChunkCount = 0
 
+    private(set) var lastScreenCaptureAt: Date?
     private(set) var lastAudioAt: Date?
     private(set) var lowDiskPaused = false
     /// Recording didn't start due to permissions — the reason for the UI (instead of a false "Recording").
@@ -395,7 +396,15 @@ final class RecordingStore {
         audio.reconfigure(mic: m, system: s)
     }
 
-    func noteFrame() { screenFrameCount += 1 }
+    func noteFrame(at date: Date = Date()) {
+        screenFrameCount += 1
+        restoreLastScreenCapture(at: date)
+    }
+
+    func restoreLastScreenCapture(at date: Date?) {
+        guard let date, lastScreenCaptureAt.map({ date > $0 }) ?? true else { return }
+        lastScreenCaptureAt = date
+    }
     func noteAudioChunk() { audioChunkCount += 1; lastAudioAt = Date() }
     func setLowDisk(_ paused: Bool) {
         lowDiskPaused = paused

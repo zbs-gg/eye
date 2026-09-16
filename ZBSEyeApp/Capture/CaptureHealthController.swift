@@ -330,6 +330,19 @@ final class CaptureHealthController {
         effects.forEach(emit)
     }
 
+    /// Ordinary ticks cannot bypass the retry delay or exhausted repair state.
+    /// Only a physically drained, controller-admitted recovery can reopen work.
+    func permitsScreenCycle() -> Bool {
+        guard pendingCoverageOpens[.screen] == nil,
+              snapshot.intent.screenEnabled,
+              snapshot.permissions[.screen] == .granted,
+              snapshot.suspension == nil,
+              let health = snapshot.legs[.screen] else { return false }
+        if health.state == .healthy { return true }
+        guard health.state == .recovering, let admission = screenRecoveryAdmission else { return false }
+        return isCurrentRecoveryAttempt(admission)
+    }
+
     func permitsSystemAudioStart() -> Bool {
         guard pendingCoverageOpens[.systemAudio] == nil,
               let state = snapshot.legs[.systemAudio]?.state else { return false }

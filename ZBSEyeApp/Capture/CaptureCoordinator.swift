@@ -714,6 +714,7 @@ final class CaptureCoordinator {
     // MARK: cycle
 
     private func runCycle() async {
+        guard healthController.permitsScreenCycle() else { return }
         let expectedFrontmostApplicationRevision = frontmostApplicationRevision
         if reconcileRunningPrivacyApplications() { return }
         let expectedPrivacyApplicationInventory = privacyApplicationInventory
@@ -864,6 +865,7 @@ final class CaptureCoordinator {
         // AX extraction suspends. Re-attest before asking ScreenCaptureKit for
         // pixels in case the session locked while AXReader was running.
         guard currentSessionStillAllowsCapture(),
+              healthController.permitsScreenCycle(),
               contentTopologyRevision == expectedContentTopologyRevision,
               privacyApplicationInventoryStillMatches(
                 expectedPrivacyApplicationInventory
@@ -897,18 +899,17 @@ final class CaptureCoordinator {
                 return
             }
         } catch let captureError as CaptureError {
-            if captureError == .streamStartFailed
-                || captureError == .streamUpdateFailed
-                || captureError == .streamStopUnconfirmed {
-                healthController.recordScreenPipelineFailure(
-                    .screenStreamStopped,
-                    nowMs: Self.epochMs()
-                )
+            if captureError == .privacyInventoryIncomplete {
+                healthController.recordScreenIntentional(.privacyExcluded, nowMs: Self.epochMs())
+                return
             }
-            Log.capture.error("screen_stream_cycle_failed")
+            guard let reason = captureError.healthFailureReason else { return }
+            healthController.recordScreenPipelineFailure(reason, nowMs: Self.epochMs())
+            Log.capture.error("screen_stream_cycle_failed reason=\(String(describing: captureError), privacy: .public)")
             return
         } catch {
-            Log.capture.error("screen_stream_cycle_failed")
+            healthController.recordScreenPipelineFailure(.screenRequestFailed, nowMs: Self.epochMs())
+            Log.capture.error("screen_stream_cycle_failed domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
             return
         }
         guard let frame else { return }
@@ -924,6 +925,7 @@ final class CaptureCoordinator {
         // Lock/display notifications can arrive while AX/SCK work is suspended at an await.
         // Re-read both tracked state and the current shell before committing any captured bytes.
         guard currentSessionStillAllowsCapture(),
+              healthController.permitsScreenCycle(),
               contentTopologyRevision == expectedContentTopologyRevision,
               privacyApplicationInventoryStillMatches(
                 expectedPrivacyApplicationInventory
@@ -944,18 +946,19 @@ final class CaptureCoordinator {
                 $0.contentHash != lastBrowserContentHash[bundleId]
             } ?? false
             if textChanged || browserIdentityChanged {
-                await write(bundleId: bundleId, appName: appName, ax: ax, browser: browser, ocr: [],
+                guard await write(bundleId: bundleId, appName: appName, ax: ax, browser: browser, ocr: [],
                             image: .none, width: frame.width, height: frame.height,
-                            monitorId: String(frame.displayID))
+                            monitorId: String(frame.displayID)) else { return }
                 lastContentText[bundleId] = contentText
                 lastBrowserContentHash[bundleId] = browser?.contentHash
             }
             return
         }
 
-        await write(bundleId: bundleId, appName: appName, ax: ax, browser: browser, ocr: frame.ocr,
+        guard await write(bundleId: bundleId, appName: appName, ax: ax, browser: browser, ocr: frame.ocr,
                     image: .heicData(frame.heicData), width: frame.width, height: frame.height,
-                    monitorId: String(frame.displayID))
+                    monitorId: String(frame.displayID)) else { return }
+        await pipeline.didSave(frame)
         lastContentText[bundleId] = browser?.text ?? ax.contentText
         lastBrowserContentHash[bundleId] = browser?.contentHash
     }
@@ -980,19 +983,17 @@ final class CaptureCoordinator {
         } catch is CancellationError {
             return false
         } catch let captureError as CaptureError {
-            switch captureError {
-            case .streamStartFailed, .streamUpdateFailed, .streamStopUnconfirmed:
-                healthController.recordScreenPipelineFailure(
-                    .screenStreamStopped,
-                    nowMs: Self.epochMs()
-                )
-            case .staleGeneration, .noDisplay, .encodeFailed:
-                break
+            if captureError == .privacyInventoryIncomplete {
+                healthController.recordScreenIntentional(.privacyExcluded, nowMs: Self.epochMs())
+                return false
             }
-            Log.capture.error("screen_stream_reconcile_failed")
+            guard let reason = captureError.healthFailureReason else { return false }
+            healthController.recordScreenPipelineFailure(reason, nowMs: Self.epochMs())
+            Log.capture.error("screen_stream_reconcile_failed reason=\(String(describing: captureError), privacy: .public)")
             return false
         } catch {
-            Log.capture.error("screen_stream_reconcile_failed")
+            healthController.recordScreenPipelineFailure(.screenRequestFailed, nowMs: Self.epochMs())
+            Log.capture.error("screen_stream_reconcile_failed domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
             return false
         }
     }
@@ -1184,7 +1185,7 @@ final class CaptureCoordinator {
     private func write(bundleId: String, appName: String, ax: AXExtraction,
                        browser: BrowserPageContent?, ocr: [OCRLine],
                        image: ImagePayload, width: Int, height: Int,
-                       monitorId: String) async {
+                       monitorId: String) async -> Bool {
         var blocks: [CapturedTextBlock] = []
         if let browser, !browser.text.isEmpty {
             blocks.append(CapturedTextBlock(source: .browserDOM, text: browser.text, confidence: 1.0))
@@ -1222,8 +1223,11 @@ final class CaptureCoordinator {
         do {
             _ = try await ingest.ingest(record)
             onFrame?(capturedAt)
+            return true
         } catch {
-            Log.ingest.error("screen_frame_ingest_failed")
+            healthController.recordScreenPipelineFailure(.screenRequestFailed, nowMs: Self.epochMs())
+            Log.ingest.error("screen_frame_ingest_failed domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
+            return false
         }
     }
 

@@ -1,6 +1,156 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "App exclusions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App exclusions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исключения приложений"
+          }
+        }
+      }
+    },
+    "App exclusions…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App exclusions…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исключения приложений…"
+          }
+        }
+      }
+    },
+    "Choose which apps can start Calls or appear in screen history.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose which apps can start Calls or appear in screen history."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите, какие приложения могут запускать запись звонков и попадать в историю экрана."
+          }
+        }
+      }
+    },
+    "Last Call: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last Call: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Прошлый звонок: %@"
+          }
+        }
+      }
+    },
+    "No Call active · waiting for microphone use": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Call active · waiting for microphone use"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Звонок не идёт · ожидание микрофона"
+          }
+        }
+      }
+    },
+    "Last saved: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last saved: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Последнее сохранение: %@"
+          }
+        }
+      }
+    },
+    "Screen capture unverified": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen capture unverified"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись экрана не подтверждена"
+          }
+        }
+      }
+    },
+    "Starting screen capture…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starting screen capture…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запускаю запись экрана…"
+          }
+        }
+      }
+    },
+    "Screen recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экран записывается"
+          }
+        }
+      }
+    },
     " ": {
       "localizations": {
         "ru": {

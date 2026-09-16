@@ -6,6 +6,7 @@ import SwiftUI
 /// Wrapped in SwiftUI.TimelineView (1s) — the frame age and staleness are live, not a frozen Date() in the body.
 struct RecordingStatusView: View {
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var compact = false
 
     var body: some View {
@@ -17,7 +18,6 @@ struct RecordingStatusView: View {
     @ViewBuilder
     private func statusBody(now: Date) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            CallControlView(compact: compact)
             if env.calls.isActive {
                 callSourceRows
                 if env.recording.isCapturing {
@@ -73,6 +73,12 @@ struct RecordingStatusView: View {
                     .font(.caption2).foregroundStyle(.orange)
                     .lineLimit(3)
             }
+            if let savedAt = env.recording.lastScreenCaptureAt {
+                Text("Last saved: \(savedAt.formatted(date: Calendar.current.isDateInToday(savedAt) ? .omitted : .abbreviated, time: .standard))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            CallControlView(compact: compact)
             if let error = env.calls.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.caption2)
@@ -131,14 +137,27 @@ struct RecordingStatusView: View {
     }
 
     private func screenRow(now: Date) -> some View {
-        _ = now
-        let state = env.captureHealth.legs[.screen]?.state ?? .paused
-        return sourceRow(
-            active: state == .healthy,
-            warn: state == .recovering || state == .repairRequired || state == .permissionBlocked,
-            icon: "display",
-            text: captureLabel(.screen, state: state)
-        )
+        let health = env.captureHealth.legs[.screen]
+        let state = health?.state ?? .paused
+        let live = health?.hasRecentVerifiedProgress(at: Int64(now.timeIntervalSince1970 * 1_000)) == true
+        let awaiting = state == .healthy && health?.reason == .awaitingVerifiedProgress
+        let warning = state == .recovering || state == .repairRequired
+            || state == .permissionBlocked || (state == .healthy && !live && !awaiting)
+        let label = live ? String(localized: "Screen recording")
+            : awaiting ? String(localized: "Starting screen capture…")
+            : state == .healthy ? String(localized: "Screen capture unverified")
+            : captureLabel(.screen, state: state)
+        return HStack(spacing: 6) {
+            Image(systemName: warning ? "exclamationmark.triangle.fill" : "circle.fill")
+                .font(.system(size: live ? 10 : 9))
+                .foregroundStyle(warning ? Color.orange : live ? Color.green : Color.secondary)
+                .symbolEffect(.pulse, options: .repeating, isActive: live && !reduceMotion)
+                .frame(width: 14)
+                .accessibilityHidden(true)
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(warning ? Color.orange : Color.primary)
+        }
     }
 
     private var micOn: Bool { env.audio?.micRunning ?? false }
@@ -205,7 +224,7 @@ struct RecordingStatusView: View {
                     active: false,
                     warn: false,
                     icon: "ear",
-                    text: String(localized: "Listening for microphone use")
+                    text: String(localized: "No Call active · waiting for microphone use")
                 )
             }
         }

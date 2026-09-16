@@ -577,3 +577,21 @@ struct ScreenStreamLivenessPolicy: Sendable, Equatable {
         failureReported = false
     }
 }
+
+
+/// Compare against committed images, never against a frame that may still be
+/// cancelled by privacy/focus checks or fail its database write.
+struct ScreenFrameDeduplicationPolicy: Sendable {
+    private var savedHashes: [UInt32: [UInt64]] = [:]
+
+    func isDuplicate(_ hashes: [UInt64], displayID: UInt32, threshold: Int) -> Bool {
+        guard let saved = savedHashes[displayID], saved.count == hashes.count else { return false }
+        return zip(saved, hashes).allSatisfy { ($0 ^ $1).nonzeroBitCount <= threshold }
+    }
+
+    mutating func didSave(_ hashes: [UInt64], displayID: UInt32) {
+        savedHashes[displayID] = hashes
+    }
+
+    mutating func reset() { savedHashes.removeAll() }
+}

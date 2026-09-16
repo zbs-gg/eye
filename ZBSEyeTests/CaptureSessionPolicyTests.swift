@@ -1,6 +1,103 @@
 import XCTest
+import CoreGraphics
 
 final class CaptureSessionPolicyTests: XCTestCase {
+    func testDormantAuthenticationHelperNeedsPositiveAllWindowEvidence() {
+        let helper = ProtectedCaptureApplicationIdentity(
+            bundleIdentifier: "com.apple.localauthentication.uiagent",
+            applicationName: "coreautha", processIdentifier: 101
+        )
+        let unknown = ProtectedCaptureApplicationSnapshot(revision: 1, applications: [helper])
+        XCTAssertFalse(CaptureSessionPolicy.contentCoversProtectedApplications(expected: unknown, represented: []))
+        let dormant = ProtectedCaptureApplicationSnapshot(revision: 1, applications: [helper], windows: [])
+        XCTAssertTrue(CaptureSessionPolicy.contentCoversProtectedApplications(expected: dormant, represented: []))
+        let windowed = ProtectedCaptureApplicationSnapshot(
+            revision: 1, applications: [helper],
+            windows: [.init(processIdentifier: 101, windowIdentifier: 200)]
+        )
+        XCTAssertFalse(CaptureSessionPolicy.contentCoversProtectedApplications(expected: windowed, represented: []))
+        XCTAssertTrue(CaptureSessionPolicy.contentCoversProtectedApplications(expected: windowed, represented: [helper]))
+        // Existing pre/post-await equality guards must reject a window created
+        // by the same long-lived process, without any app lifecycle change.
+        XCTAssertNotEqual(dormant, windowed)
+        XCTAssertNotEqual(windowed, ProtectedCaptureApplicationSnapshot(
+            revision: 1, applications: [helper],
+            windows: [.init(processIdentifier: 101, windowIdentifier: 201)]
+        ))
+        // An explicit user exclusion always requires the exact SCK process.
+        XCTAssertFalse(CaptureSessionPolicy.contentCoversUserIgnoredApplications(
+            expected: [.init(processIdentifier: 101, bundleIdentifier: "com.apple.localauthentication.uiagent")],
+            represented: []
+        ))
+    }
+
+    func testWindowlessExemptionDoesNotApplyToOtherProtectedProcesses() {
+        for bundle in ["com.apple.loginwindow", "com.apple.securityagent", "com.apple.screensaver.engine"] {
+            let snapshot = ProtectedCaptureApplicationSnapshot(
+                revision: 1,
+                applications: [.init(bundleIdentifier: bundle, applicationName: nil, processIdentifier: 101)],
+                windows: []
+            )
+            XCTAssertFalse(CaptureSessionPolicy.contentCoversProtectedApplications(expected: snapshot, represented: []))
+        }
+    }
+
+    func testIndependentWindowInventoryIncludesOffscreenAndFailsClosed() {
+        let owner = kCGWindowOwnerPID as String
+        let number = kCGWindowNumber as String
+        let rows: [[String: Any]] = [
+            [owner: 101, number: 200, kCGWindowIsOnscreen as String: false],
+            [owner: 42, number: 201]
+        ]
+        XCTAssertEqual(CaptureSessionPolicy.protectedWindowInventory(rows: rows, protectedPIDs: [101]),
+                       [.init(processIdentifier: 101, windowIdentifier: 200)])
+        XCTAssertEqual(CaptureSessionPolicy.protectedWindowInventory(rows: rows, protectedPIDs: [102]), [])
+        XCTAssertNil(CaptureSessionPolicy.protectedWindowInventory(rows: nil, protectedPIDs: [101]))
+        XCTAssertNil(CaptureSessionPolicy.protectedWindowInventory(rows: [], protectedPIDs: [101]))
+        XCTAssertNil(CaptureSessionPolicy.protectedWindowInventory(rows: [[owner: 101]], protectedPIDs: [101]))
+        XCTAssertNil(CaptureSessionPolicy.protectedWindowInventory(rows: [[number: 200]], protectedPIDs: [101]))
+    }
+
+    func testInclusionKeepsRecordingWhenSCKOmitsAProtectedBackgroundProcess() {
+        let omittedAuth = ProtectedCaptureApplicationIdentity(
+            bundleIdentifier: "com.apple.localauthentication.uiagent",
+            applicationName: "coreautha", processIdentifier: 101
+        )
+        let snapshot = ProtectedCaptureApplicationSnapshot(revision: 1, applications: [omittedAuth])
+        let editor = ScreenCaptureFilterApplication(
+            processIdentifier: 42, bundleIdentifier: "com.example.editor", applicationName: "Editor"
+        )
+        XCTAssertFalse(CaptureSessionPolicy.contentCoversProtectedApplications(expected: snapshot, represented: []))
+        XCTAssertTrue(CaptureSessionPolicy.mayIncludeApplication(
+            editor, excludedBundleIDs: [], protectedSnapshot: snapshot, ignoredSnapshot: []
+        ))
+        // The same missing process can later appear with incomplete SCK metadata.
+        // Its independent PID attestation still prevents its admission.
+        XCTAssertFalse(CaptureSessionPolicy.mayIncludeApplication(
+            .init(processIdentifier: 101, bundleIdentifier: "", applicationName: ""),
+            excludedBundleIDs: [], protectedSnapshot: snapshot, ignoredSnapshot: []
+        ))
+    }
+
+    func testInclusionRejectsProtectedNamesBundlesUserExclusionsAndNativeScreenshots() {
+        let empty = ProtectedCaptureApplicationSnapshot(revision: 0, applications: [])
+        let denied: [ScreenCaptureFilterApplication] = [
+            .init(processIdentifier: 1, bundleIdentifier: "com.apple.LocalAuthentication.UIAgent", applicationName: "Agent"),
+            .init(processIdentifier: 2, bundleIdentifier: "", applicationName: "SecurityAgent"),
+            .init(processIdentifier: 3, bundleIdentifier: "com.example.private", applicationName: "Private"),
+            .init(processIdentifier: 4, bundleIdentifier: "gg.zbs.eye", applicationName: "ZBS Eye"),
+            .init(processIdentifier: 5, bundleIdentifier: "com.apple.screencaptureui", applicationName: "Screenshot"),
+            .init(processIdentifier: 6, bundleIdentifier: "", applicationName: "Helper")
+        ]
+        for app in denied {
+            XCTAssertFalse(CaptureSessionPolicy.mayIncludeApplication(
+                app, excludedBundleIDs: ["com.example.private", "gg.zbs.eye"],
+                protectedSnapshot: empty,
+                ignoredSnapshot: [.init(processIdentifier: 6, bundleIdentifier: "com.example.private")]
+            ), "Unexpected admission: \(app)")
+        }
+    }
+
     func testCallAudioPriorityKeepsScreenClosedUntilCallEnds() {
         let duringCall = CaptureSessionPolicy.suspendedGate(
             previous: CaptureSessionGateState(reasons: []),

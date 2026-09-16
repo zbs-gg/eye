@@ -254,3 +254,70 @@ be described as passed.
 calendar automation, call maps, and CRM/call intelligence belong in another product, not Eye.
 
 Strategy and priorities — in [`ROADMAP.md`](../ROADMAP.md). Architecture and the contributor guide — in [`AGENTS.md`](../AGENTS.md).
+
+
+### Recording status and omitted system processes
+
+The Timeline header names the current state: **Screen recording**, startup, pause, recovery, or repair.
+The green dot pulses only while fresh complete/idle compositor events confirm the screen stream; it stops
+for unverified or failed capture and respects Reduce Motion. **Last saved** is read from the database at
+startup and advances only after a successful Timeline write. Static pixels can remain healthy without a
+new saved moment. The button explicitly says **Pause Timeline**; the separate **Calls** block labels the
+previous Call result and states when no Call is active.
+
+Timeline captures the display with protected and user-ignored applications excluded. This avoids macOS
+window-sharing controls replacing the title-bar buttons of each captured application. Every user-ignored
+process requires an exact ScreenCaptureKit exclusion. A dormant LocalAuthentication UIAgent omitted by SCK
+is accepted only when an independent complete WindowServer inventory proves it owns no windows, including
+offscreen windows. Missing or malformed evidence pauses capture. Window identities are rechecked around
+asynchronous capture and before saving; a change discards the frame and invalidates the stream. This closes
+the previously unobserved long-lived-helper window transition without relying on process launch alone.
+Native screenshot and Call audio priority remain enforced. Actual capture errors enter bounded recovery;
+a privacy exclusion is an intentional pause that can resume automatically when the exclusion is verified.
+
+Screen deduplication compares against successfully committed images. A frame cancelled after processing,
+or rejected by storage, cannot suppress the next image as a duplicate. Small unsaved changes are compared
+to the saved baseline rather than accumulating an invisible chain of duplicate frames.
+
+
+**Local qualification update, 2026-09-15:** installed build 43 subsequently saved new image-backed
+Timeline rows at 23:12:06 and 23:12:30 (local time). The user also reported a visible regression:
+macOS purple screen-sharing controls appear in application window title bars during capture and
+can disappear during app switching or native screenshots. The positive application filter is the
+suspected trigger; screenshot-triggered Timeline stream suspension is intentional. A metadata-only
+signed probe still finds LocalAuthentication UIAgent missing from the SCK inventory, so blindly
+restoring the previous exclusion filter would restore the original failure. No change that weakens
+privacy exclusion is qualified. Build 44 remains staged, not installed, because it uses the same
+filter. PR #86 remains draft pending a supported capture-mode correction and physical verification
+of both window controls and newly saved images. Passing CI does not close this visible regression.
+
+
+**Local correction and qualification, 2026-09-16:** a signed isolated probe reproduced the per-window
+purple controls and confirmed that disabling content repicking or including the menu bar does not remove
+them. Display capture with the independent protected-window checks above restored ordinary window
+buttons on installed build 45 while new image-backed Timeline rows were saved.
+
+Local Developer ID-signed **0.9.0 (47)** is installed with the same signing requirement and entitlements.
+Its source fingerprint includes the final Calls workspace, bookmark-range fallback, and participant-edit
+protection during retranscription. Those concurrent Calls changes are outside capture PR #86. The installed
+app reports healthy capture; new Timeline image rows were matched to nonempty HEIC files on disk. A
+title-bar-only probe while build 47 was capturing showed normal red/yellow/green buttons, without the
+purple per-window sharing control. The Call
+ended for the upgrade reached `ready`. Handy was added to this user's existing automatic-Call exclusions;
+this is a local preference, not a hardcoded product default.
+
+Validation: Release GUI build passed; 101 focused capture/Calls/settings tests passed with one skipped.
+The excluded-Handy-plus-Krisp case and the final participant-edit regression each passed separately.
+The isolated capture PR's full unhosted suite had 1,358 passed, 19 skipped, and one unchanged local
+Codex executable trust-policy failure. Native app-window capture verified the installed header. Actual
+exclusion-sheet components were rendered offscreen in English/Russian and light/dark with empty and Handy
+lists; this checks layout, not interaction acceptance. No desktop focus or mouse manipulation was used.
+This is local installed qualification, not notarization or a public release. The full long-running
+Call/video, lock/unlock, and screenshot contention matrix is not claimed.
+
+Application exclusions are accessible directly from **Calls → App exclusions…** and from
+**Settings → Recording & privacy**. Both entry points edit the same persisted settings. The first
+list prevents selected apps (for example, dictation tools such as Handy) from starting an automatic
+Call through microphone use. The second hides an app's screen/text history. These are independent;
+neither list is a mute control for audio inside an already active Call. Users can add apps with the
+native application picker and remove an exclusion to allow the app again.

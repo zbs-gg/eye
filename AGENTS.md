@@ -136,6 +136,17 @@ CLI modes (single binary): `--mcp-read-only` (new least-privilege MCP setup), le
   frame/audio segment is orphaned (outside the backup snapshot / outside the media copy).
 - **The AX tree is often empty on Electron apps** — hence adaptive AX-first + OCR-fallback per-app, not
   "we beat Electron". OCR is an equal path, not a rare fallback.
+- **Use display capture with attested exclusions.** Positive app/window inclusion makes macOS replace
+  application title-bar buttons with purple sharing controls; do not reintroduce it as an automatic fallback.
+  Keep exact SCK process exclusions for protected surfaces and every user-ignored process. The observed
+  dormant `com.apple.localauthentication.uiagent` omission is accepted only when an independent, successful
+  **all-window** WindowServer inventory proves that exact PID has no windows, including offscreen windows.
+  Failed/malformed/empty window enumeration is unknown, never evidence of absence. No other protected
+  process or explicit user exclusion receives this exemption. Protected window IDs are part of the snapshot
+  reattested before/after asynchronous capture and before writing; a changed snapshot invalidates the stream
+  and discards work. An unrepresentable private window pauses capture instead of exhausting repair retries.
+  Refresh SCK inventory within three seconds and rebind when exclusions change. The live dot requires fresh
+  verified compositor progress; `Last saved` advances only after a committed Timeline write.
 - **Static pixels are healthy.** The persistent stream proves liveness from current complete/idle compositor
   events, not from pixel changes. A real stall or start/update/stop failure opens a durable coverage interval and
   bounded Eye-owned retries after 1/3/10 seconds; exhaustion becomes `repairRequired`. Repair never changes TCC,

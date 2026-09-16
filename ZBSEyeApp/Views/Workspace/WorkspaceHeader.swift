@@ -85,8 +85,10 @@ struct WorkspaceHeader: View {
             } label: {
                 Label(recordingButtonTitle, systemImage: recordingButtonIcon)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(recordingButtonStopsIntent ? .red : .accentColor)
+            .labelStyle(.titleAndIcon)
+            .fixedSize()
+            .buttonStyle(.bordered)
+            .tint(recordingButtonStopsIntent ? .secondary : .accentColor)
             .help("Automatic Calls stay armed until Audio is Off or privacy pause is active.")
         }
     }
@@ -150,7 +152,7 @@ struct WorkspaceHeader: View {
     }
 
     private var recordingButtonIcon: String {
-        recordingButtonStopsIntent ? "stop.circle.fill" : "record.circle"
+        recordingButtonStopsIntent ? "pause.fill" : "record.circle"
     }
 
     private var recordingButtonStopsIntent: Bool {

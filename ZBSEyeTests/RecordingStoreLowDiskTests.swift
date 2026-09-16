@@ -20,6 +20,21 @@ final class RecordingStoreLowDiskTests: XCTestCase {
     }
 
     @MainActor
+    func testLastSavedTimeRestoresWithoutPretendingToCaptureAndAdvancesOnlyOnSave() {
+        let store = makeStore()
+        let prior = Date(timeIntervalSince1970: 100)
+        store.restoreLastScreenCapture(at: prior)
+        XCTAssertEqual(store.lastScreenCaptureAt, prior)
+        XCTAssertEqual(store.screenFrameCount, 0)
+        XCTAssertFalse(store.isCapturing)
+        store.noteFrame(at: Date(timeIntervalSince1970: 200))
+        store.restoreLastScreenCapture(at: prior)
+        store.restoreLastScreenCapture(at: nil)
+        XCTAssertEqual(store.lastScreenCaptureAt, Date(timeIntervalSince1970: 200))
+        XCTAssertEqual(store.screenFrameCount, 1)
+    }
+
+    @MainActor
     func testColdLaunchLowDiskBlocksAutostartButPreservesIntent() async {
         defaults.set(true, forKey: "zbseye.recording.enabled")
         let store = makeStore()

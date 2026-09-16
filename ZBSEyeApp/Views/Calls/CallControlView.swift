@@ -6,10 +6,19 @@ struct CallControlView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var evidence: CallEvidencePage?
     @State private var choosingOneCallMode = false
+    @State private var showingAppExclusions = false
     var compact = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text("Calls").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                Spacer()
+                Button("App exclusions…") { showingAppExclusions = true }
+                    .font(.caption)
+                    .buttonStyle(.borderless)
+                    .help("Choose which apps can start Calls or appear in screen history.")
+            }
             Picker("Call recording", selection: callModeBinding) {
                 ForEach(CallRecordingMode.allCases, id: \.self) { mode in
                     Text(mode.label).tag(mode)
@@ -29,6 +38,7 @@ struct CallControlView: View {
         .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 9))
         .accessibilityElement(children: .contain)
         .task(id: refreshKey) { await monitorEvidence() }
+        .sheet(isPresented: $showingAppExclusions) { AppExclusionsSheet() }
         .confirmationDialog(
             "Record this Call",
             isPresented: $choosingOneCallMode,
@@ -69,7 +79,7 @@ struct CallControlView: View {
                     evidence: evidence,
                     modelState: env.speechModel.effectiveState
                 )
-                Label(presentation.title, systemImage: icon(for: presentation.kind))
+                Label(String(localized: "Last Call: \(presentation.title)"), systemImage: icon(for: presentation.kind))
                     .font(.caption)
                     .foregroundStyle(color(for: presentation.kind))
                     .lineLimit(2)
